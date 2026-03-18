@@ -103,9 +103,14 @@ export interface ModelResponse {
 }
 
 export async function getModels() {
-  const res = await fetch(config.api.llmProxy.models, { signal: AbortSignal.timeout(5000) })
-  if (!res.ok) throw new Error('Failed to fetch models')
+  const res = await fetch(`${config.api.setup}/models`, { signal: AbortSignal.timeout(10000) })
+  if (!res.ok) throw new Error('Failed to fetch models: Connection to CLIProxy failed')
   return res.json() as Promise<ModelResponse>
+}
+
+export async function testConnection() {
+  const res = await fetch(`${config.api.setup}/test`, { signal: AbortSignal.timeout(10000) })
+  return res.json() as Promise<{ cliproxy: boolean; qdrant: boolean; dashboardApi: boolean; allPassed: boolean }>
 }
 
 export { ApiError }

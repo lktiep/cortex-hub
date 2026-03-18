@@ -57,3 +57,35 @@ keysRouter.delete('/:id', (c) => {
     return c.json({ error: String(error) }, 500)
   }
 })
+
+keysRouter.post('/verify', async (c) => {
+  try {
+    const body = await c.req.json()
+    const { token } = body
+    
+    if (!token) {
+      return c.json({ valid: false, error: 'Token is required' }, 400)
+    }
+
+    const hash = createHash('sha256').update(token).digest('hex')
+    const stmt = db.prepare('SELECT id, name, scope, key_hash FROM api_keys WHERE key_hash = ?')
+    const keyRecord = stmt.get(hash) as { id: string; name: string; scope: string; key_hash: string } | undefined
+
+    if (!keyRecord) {
+      return c.json({ valid: false, error: 'Invalid API key' }, 401)
+    }
+
+    // Update last_used_at
+    const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?')
+    updateStmt.run(keyRecord.id)
+
+    return c.json({
+      valid: true,
+      agentId: keyRecord.name,
+      scope: keyRecord.scope
+    }, 200)
+
+  } catch (error) {
+    return c.json({ valid: false, error: String(error) }, 500)
+  }
+})

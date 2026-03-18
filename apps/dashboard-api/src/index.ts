@@ -4,6 +4,8 @@ import { cors } from 'hono/cors'
 import { createLogger } from '@cortex/shared-utils'
 import { setupRouter } from './routes/setup.js'
 import { keysRouter } from './routes/keys.js'
+import { intelRouter } from './routes/intel.js'
+import { qualityRouter, sessionsRouter } from './routes/quality.js'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
@@ -28,6 +30,9 @@ app.get('/', (c) => {
 
 app.route('/api/setup', setupRouter)
 app.route('/api/keys', keysRouter)
+app.route('/api/intel', intelRouter)
+app.route('/api/quality', qualityRouter)
+app.route('/api/sessions', sessionsRouter)
 
 const port = Number(process.env['PORT'] ?? 4000)
 
