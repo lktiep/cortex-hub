@@ -132,9 +132,7 @@ services:
   # Dashboard API (Hono + SQLite)
   # ─────────────────────────────────────────────
   dashboard-api:
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile.dashboard-api
+    image: ghcr.io/lktiep/cortex-hub-api:latest
     container_name: cortex-dashboard-api
     restart: unless-stopped
     ports:
