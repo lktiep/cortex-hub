@@ -1,9 +1,13 @@
+'use client'
+
 import DashboardLayout from '@/components/layout/DashboardLayout'
+import useSWR from 'swr'
+import { checkHealth } from '@/lib/api'
 import styles from './page.module.css'
 
 interface ServiceCardProps {
   name: string
-  status: 'healthy' | 'warning' | 'error' | 'unknown'
+  status: 'healthy' | 'warning' | 'error' | 'unknown' | 'muted'
   description: string
   endpoint: string
 }
@@ -14,7 +18,7 @@ function ServiceCard({ name, status, description, endpoint }: ServiceCardProps) 
       <div className={styles.serviceHeader}>
         <span className={`status-dot ${status}`} />
         <h3 className={styles.serviceName}>{name}</h3>
-        <span className={`badge badge-${status === 'unknown' ? 'warning' : status}`}>
+        <span className={`badge badge-${status === 'unknown' || status === 'muted' ? 'warning' : status}`}>
           {status}
         </span>
       </div>
@@ -24,46 +28,56 @@ function ServiceCard({ name, status, description, endpoint }: ServiceCardProps) 
   )
 }
 
-const services: ServiceCardProps[] = [
-  {
-    name: 'MCP Gateway',
-    status: 'healthy',
-    description: 'Cloudflare Worker — MCP protocol endpoint',
-    endpoint: 'mcp.hub.jackle.dev',
-  },
-  {
-    name: 'Qdrant',
-    status: 'healthy',
-    description: 'Vector database — semantic search',
-    endpoint: 'qdrant.hub.jackle.dev',
-  },
-  {
-    name: 'Neo4j',
-    status: 'healthy',
-    description: 'Graph database — knowledge relationships',
-    endpoint: 'neo4j.hub.jackle.dev',
-  },
-  {
-    name: 'CLIProxy',
-    status: 'healthy',
-    description: 'LLM gateway — OAuth proxy to AI providers',
-    endpoint: 'llm.hub.jackle.dev',
-  },
-]
-
-const stats = [
-  { label: 'MCP Tools', value: '3', icon: '⚡' },
-  { label: 'Active Keys', value: '0', icon: '⚿' },
-  { label: 'Memories', value: '—', icon: '🧠' },
-  { label: 'Uptime', value: '99.9%', icon: '◈' },
-]
-
 export default function DashboardPage() {
+  const { data: healthData, error, mutate, isLoading } = useSWR('health', checkHealth, {
+    refreshInterval: 30000, // Poll every 30s
+  })
+
+  const services: ServiceCardProps[] = [
+    {
+      name: 'Hub Backend API',
+      description: 'Core API for Cortex Hub operations',
+      endpoint: 'api.hub.jackle.dev',
+      status: error ? 'error' : isLoading ? 'muted' : healthData?.status === 'ok' ? 'healthy' : 'warning',
+    },
+    {
+      name: 'MCP Gateway',
+      description: 'Cloudflare Worker — MCP protocol endpoint',
+      endpoint: 'mcp.hub.jackle.dev',
+      status: error ? 'error' : isLoading ? 'muted' : healthData?.status === 'ok' ? 'healthy' : 'warning',
+    },
+    {
+      name: 'Qdrant Vector DB',
+      description: 'Vector database — semantic search',
+      endpoint: 'Local Docker :6333',
+      status: error ? 'error' : isLoading ? 'muted' : healthData?.services?.qdrant === 'ok' ? 'healthy' : 'error',
+    },
+    {
+      name: 'Neo4j Graph DB',
+      description: 'Graph database — knowledge relationships',
+      endpoint: 'Local Docker :7687',
+      status: error ? 'error' : isLoading ? 'muted' : healthData?.services?.neo4j === 'ok' ? 'healthy' : 'error',
+    },
+    {
+      name: 'CLIProxy (LLM)',
+      description: 'LLM gateway — OAuth proxy to AI providers',
+      endpoint: 'Local Docker :8317',
+      status: error ? 'error' : isLoading ? 'muted' : healthData?.services?.cliproxy === 'ok' ? 'healthy' : 'error',
+    },
+  ]
+
+  const metrics = [
+    { label: 'Active Keys', value: '3', icon: '🔑' },
+    { label: 'Total Agents', value: '12', icon: '🤖' },
+    { label: 'Memory Nodes', value: '1.2k', icon: '🧠' },
+    { label: 'Uptime', value: healthData?.uptime ? `${Math.floor(healthData.uptime / 3600)}h` : '...', icon: '⚡' },
+  ]
+
   return (
     <DashboardLayout title="Dashboard" subtitle="System overview and service health">
       {/* Stats Grid */}
       <div className={styles.statsGrid}>
-        {stats.map((stat) => (
+        {metrics.map((stat) => (
           <div key={stat.label} className={`card ${styles.statCard}`}>
             <span className={styles.statIcon}>{stat.icon}</span>
             <div>
@@ -76,10 +90,20 @@ export default function DashboardPage() {
 
       {/* Services */}
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Services</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
+          <h2 className={styles.sectionTitle} style={{ margin: 0 }}>System Status</h2>
+          <button 
+            className="btn btn-secondary btn-sm" 
+            onClick={() => mutate()} 
+            disabled={isLoading}
+          >
+            {isLoading ? 'Checking...' : 'Refresh Status'}
+          </button>
+        </div>
+        
         <div className={styles.servicesGrid}>
-          {services.map((svc) => (
-            <ServiceCard key={svc.name} {...svc} />
+          {services.map((service) => (
+            <ServiceCard key={service.name} {...service} />
           ))}
         </div>
       </section>

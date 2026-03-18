@@ -134,7 +134,9 @@ h4 { font-size: 1rem; }
 
 /* ── Utility Classes ── */
 .card {
-  background: var(--bg-card);
+  background: rgba(18, 20, 29, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
@@ -326,4 +328,35 @@ h4 { font-size: 1rem; }
 
 .animate-slide-in {
   animation: slide-in-left 0.3s ease-out both;
+}
+
+.glow-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.glow-btn::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: conic-gradient(transparent, rgba(255, 255, 255, 0.3), transparent 30%);
+  animation: rotate-glow 4s linear infinite;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.glow-btn:hover::before {
+  opacity: 1;
+}
+
+.glow-btn span {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes rotate-glow {
+  100% { transform: rotate(1turn); }
 }

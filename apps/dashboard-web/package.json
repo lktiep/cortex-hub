@@ -15,11 +15,15 @@
     "@cortex/shared-utils": "workspace:*",
     "next": "^15.2.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "swr": "^2.4.1"
   },
   "devDependencies": {
+    "@cloudflare/next-on-pages": "^1.13.16",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.7.0"
+    "eslint-plugin-next-on-pages": "^1.13.16",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.75.0"
   }
 }

@@ -45,7 +45,7 @@ async function apiFetch<T = unknown>(path: string, options: ApiOptions = {}): Pr
 
 // ── Health ──
 export async function checkHealth() {
-  return apiFetch<{ status: string; services?: Record<string, unknown> }>('/health')
+  return apiFetch<{ status: string; services?: Record<string, unknown>; uptime?: number }>('/health')
 }
 
 // ── API Keys ──
@@ -96,6 +96,16 @@ export async function completeSetup(data: {
   models: string[]
 }) {
   return apiFetch('/api/setup/complete', { method: 'POST', body: data })
+}
+
+export interface ModelResponse {
+  data: { id: string }[]
+}
+
+export async function getModels() {
+  const res = await fetch(config.api.llmProxy.models, { signal: AbortSignal.timeout(5000) })
+  if (!res.ok) throw new Error('Failed to fetch models')
+  return res.json() as Promise<ModelResponse>
 }
 
 export { ApiError }

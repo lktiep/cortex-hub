@@ -2,6 +2,8 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { createLogger } from '@cortex/shared-utils'
+import { setupRouter } from './routes/setup.js'
+import { keysRouter } from './routes/keys.js'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
@@ -23,6 +25,9 @@ app.get('/', (c) => {
     version: '0.1.0',
   })
 })
+
+app.route('/api/setup', setupRouter)
+app.route('/api/keys', keysRouter)
 
 const port = Number(process.env['PORT'] ?? 4000)
 

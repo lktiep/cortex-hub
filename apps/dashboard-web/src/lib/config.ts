@@ -7,6 +7,13 @@ export const config = {
     health: `${API_BASE}/health`,
     keys: `${API_BASE}/api/keys`,
     setup: `${API_BASE}/api/setup`,
+    mcp: {
+      endpoint: `${MCP_BASE}/mcp`,
+      health: `${MCP_BASE}/health`,
+    },
+    llmProxy: {
+      models: `${process.env.NEXT_PUBLIC_CLIPROXY_URL || 'http://localhost:8317'}/v1/models`,
+    }
   },
   mcp: {
     base: MCP_BASE,
