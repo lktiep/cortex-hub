@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="30" y1="30" x2="90" y2="90" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="50%" stop-color="#6ee7b7"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="120" height="120" rx="24" fill="url(#bg)"/>
+  <!-- Brain/Neural icon -->
+  <g transform="translate(60,60)">
+    <!-- Central node -->
+    <circle r="8" fill="url(#glow)" opacity="0.9"/>
+    <!-- Neural connections -->
+    <line x1="0" y1="-8" x2="0" y2="-28" stroke="#34d399" stroke-width="2" opacity="0.7"/>
+    <line x1="0" y1="8" x2="0" y2="28" stroke="#34d399" stroke-width="2" opacity="0.7"/>
+    <line x1="-8" y1="0" x2="-28" y2="0" stroke="#a78bfa" stroke-width="2" opacity="0.7"/>
+    <line x1="8" y1="0" x2="28" y2="0" stroke="#a78bfa" stroke-width="2" opacity="0.7"/>
+    <line x1="-6" y1="-6" x2="-20" y2="-20" stroke="#6ee7b7" stroke-width="1.5" opacity="0.5"/>
+    <line x1="6" y1="-6" x2="20" y2="-20" stroke="#6ee7b7" stroke-width="1.5" opacity="0.5"/>
+    <line x1="-6" y1="6" x2="-20" y2="20" stroke="#6ee7b7" stroke-width="1.5" opacity="0.5"/>
+    <line x1="6" y1="6" x2="20" y2="20" stroke="#6ee7b7" stroke-width="1.5" opacity="0.5"/>
+    <!-- Outer nodes -->
+    <circle cx="0"   cy="-30" r="5" fill="#34d399" opacity="0.8"/>
+    <circle cx="0"   cy="30"  r="5" fill="#34d399" opacity="0.8"/>
+    <circle cx="-30" cy="0"   r="5" fill="#a78bfa" opacity="0.8"/>
+    <circle cx="30"  cy="0"   r="5" fill="#a78bfa" opacity="0.8"/>
+    <circle cx="-22" cy="-22" r="4" fill="#6ee7b7" opacity="0.6"/>
+    <circle cx="22"  cy="-22" r="4" fill="#6ee7b7" opacity="0.6"/>
+    <circle cx="-22" cy="22"  r="4" fill="#6ee7b7" opacity="0.6"/>
+    <circle cx="22"  cy="22"  r="4" fill="#6ee7b7" opacity="0.6"/>
+  </g>
+</svg>

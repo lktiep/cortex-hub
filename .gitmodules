@@ -1,0 +1,4 @@
+[submodule ".antigravity/plugins/production-grade"]
+	path = .antigravity/plugins/production-grade
+	url = https://github.com/buiphucminhtam/forgewright.git
+	branch = main
