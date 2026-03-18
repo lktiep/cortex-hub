@@ -3,6 +3,9 @@ import { createMcpHandler } from 'agents/mcp'
 
 import { registerHealthTools } from './tools/health'
 import { registerMemoryTools } from './tools/memory'
+import { registerKnowledgeTools } from './tools/knowledge'
+import { registerCodeTools } from './tools/code'
+import { registerQualityTools } from './tools/quality'
 import { validateApiKey } from './middleware/auth'
 
 /**
@@ -17,21 +20,7 @@ import { validateApiKey } from './middleware/auth'
  * Deployed to: mcp.hub.jackle.dev
  */
 
-// MCP handler for /mcp endpoint
-const mcpHandler = createMcpHandler(
-  (env: Env) => {
-    const server = new McpServer({
-      name: env.MCP_SERVER_NAME ?? 'cortex-hub',
-      version: env.MCP_SERVER_VERSION ?? '0.1.0',
-    })
 
-    // Register tools
-    registerHealthTools(server, env)
-    registerMemoryTools(server, env)
-
-    return server
-  }
-)
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -62,6 +51,11 @@ export default {
             'cortex.health',
             'cortex.memory.store',
             'cortex.memory.search',
+            'cortex.knowledge.search',
+            'cortex.code.search',
+            'cortex.code.impact',
+            'cortex.quality.report',
+            'cortex.session.start'
           ],
         }),
         { headers: { 'Content-Type': 'application/json' } }
@@ -71,7 +65,7 @@ export default {
     // MCP endpoint — requires auth
     if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
       // Validate API key
-      const auth = validateApiKey(request, env)
+      const auth = await validateApiKey(request, env)
       if (!auth.valid) {
         return new Response(
           JSON.stringify({ error: auth.error }),
@@ -79,7 +73,20 @@ export default {
         )
       }
 
-      // Delegate to MCP handler
+      // Create stateless MCP Server & Handler for this request
+      const server = new McpServer({
+        name: env.MCP_SERVER_NAME ?? 'cortex-hub',
+        version: env.MCP_SERVER_VERSION ?? '0.1.0',
+      })
+
+      // Register tools
+      registerHealthTools(server, env)
+      registerMemoryTools(server, env)
+      registerKnowledgeTools(server, env)
+      registerCodeTools(server, env)
+      registerQualityTools(server, env)
+
+      const mcpHandler = createMcpHandler(server as any)
       return mcpHandler(request, env, ctx)
     }
 

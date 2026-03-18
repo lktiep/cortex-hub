@@ -1,13 +1,13 @@
 /**
  * API key authentication middleware for MCP requests.
  *
- * For v1: Simple bearer token validation against env var.
- * Future: KV-backed API key management with per-key permissions.
+ * Verifies the Bearer token by pinging the Dashboard API
+ * which validates the hashed token against the SQLite database.
  */
-export function validateApiKey(
+export async function validateApiKey(
   request: Request,
   env: Env
-): { valid: boolean; error?: string; agentId?: string } {
+): Promise<{ valid: boolean; error?: string; agentId?: string; scope?: string }> {
   // Allow health checks without auth
   const url = new URL(request.url)
   if (url.pathname === '/health') {
@@ -26,21 +26,30 @@ export function validateApiKey(
     return { valid: false, error: 'Invalid Authorization format. Use: Bearer <API_KEY>' }
   }
 
-  // v1: Validate against environment variable
-  // Future: Look up in KV/D1 for per-key permissions
-  const validKeys = (env.API_KEYS ?? '').split(',').filter(Boolean)
+  try {
+    const res = await fetch(`${env.DASHBOARD_API_URL}/api/keys/verify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ token }),
+    })
 
-  // If no keys configured, allow all (development mode)
-  if (validKeys.length === 0) {
-    return { valid: true, agentId: 'anonymous' }
+    if (!res.ok) {
+      if (res.status === 401) {
+        return { valid: false, error: 'Invalid API key' }
+      }
+      return { valid: false, error: `Authentication service returned ${res.status}` }
+    }
+
+    const data = await res.json() as { valid: boolean; agentId?: string; scope?: string; error?: string }
+
+    if (data.valid) {
+      return { valid: true, agentId: data.agentId, scope: data.scope }
+    } else {
+      return { valid: false, error: data.error || 'Authentication failed' }
+    }
+  } catch (err) {
+    return { valid: false, error: `Failed to contact authentication service: ${String(err)}` }
   }
-
-  if (!validKeys.includes(token)) {
-    return { valid: false, error: 'Invalid API key' }
-  }
-
-  // Extract agent ID from key prefix if format is: agentId:secret
-  const agentId = token.includes(':') ? token.split(':')[0] : 'default'
-
-  return { valid: true, agentId }
 }

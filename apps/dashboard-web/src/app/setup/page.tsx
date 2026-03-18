@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { getModels, completeSetup } from '@/lib/api'
+import { getModels, completeSetup, testConnection } from '@/lib/api'
 import styles from './page.module.css'
 
 type Step = 'provider' | 'auth' | 'models' | 'complete'
@@ -58,10 +58,22 @@ function SetupWizard() {
 
   async function handleTestConnection() {
     setTesting(true)
-    // Simulate connection test
-    await new Promise((r) => setTimeout(r, 1500))
-    setTestResult('success')
-    setTesting(false)
+    setModelError('')
+    try {
+      const res = await testConnection()
+      if (res.allPassed) {
+        setTestResult('success')
+      } else {
+        setTestResult('error')
+        const failed = Object.entries(res).filter(([k, v]) => !v && k !== 'allPassed').map(([k]) => k).join(', ')
+        setModelError(`Connection failed to: ${failed}`)
+      }
+    } catch (e: unknown) {
+      setTestResult('error')
+      setModelError(`Connection check error: ${e instanceof Error ? e.message : 'Unknown'}`)
+    } finally {
+      setTesting(false)
+    }
   }
 
   function startOAuthFlow() {
@@ -96,10 +108,19 @@ function SetupWizard() {
       setModelError(message || 'Failed to fetch models from CLIProxy. Make sure it is running.')
     } finally {
       setIsFetchingModels(false)
+      if (detectedModels.length === 0) {
+        setTestResult('error')
+      }
     }
   }
 
   async function finishSetup() {
+    // ensure user runs connection test successfully, though disabled button handles it usually
+    if (testResult !== 'success' && detectedModels.length > 0) {
+      setModelError("Please run 'Test Connection' successfully before completing setup.")
+      return
+    }
+
     try {
       // Call Dashboard API to persist setup status
       await completeSetup({
@@ -247,12 +268,15 @@ function SetupWizard() {
             {testResult === 'success' && (
               <span className={styles.testSuccess}>✓ Connection verified</span>
             )}
+            {testResult === 'error' && (
+              <span className={styles.testError} style={{ color: 'var(--danger)', marginLeft: '1rem' }}>✗ Connection failed</span>
+            )}
           </div>
 
           <button
             className="btn btn-primary btn-lg glow-btn"
             onClick={finishSetup}
-            disabled={detectedModels.length > 0 && selectedModels.length === 0}
+            disabled={detectedModels.length === 0 || selectedModels.length === 0 || testResult !== 'success'}
             style={{ marginTop: 'var(--space-6)', width: '100%' }}
           >
             Complete Setup →
