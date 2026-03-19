@@ -2,7 +2,7 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: var(--space-4);
-  margin-bottom: var(--space-8);
+  margin-bottom: var(--space-6);
 }
 
 .statCard {
@@ -38,6 +38,117 @@
   margin-top: 2px;
 }
 
+/* Insights Grid */
+.insightsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.insightCard {
+  padding: var(--space-5);
+}
+
+.insightTitle {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0 0 var(--space-4) 0;
+}
+
+/* Latency Bars */
+.latencyBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.latencyBar:last-child {
+  margin-bottom: 0;
+}
+
+.latencyLabel {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  width: 28px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.latencyTrack {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-primary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.latencyFill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), var(--accent-secondary));
+  border-radius: 4px;
+  transition: width 0.3s ease;
+  min-width: 4px;
+}
+
+.latencyValue {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  font-weight: 600;
+  width: 50px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* Score Distribution Chart */
+.distChart {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  height: 80px;
+}
+
+.distBar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  position: relative;
+}
+
+.distFill {
+  width: 100%;
+  background: linear-gradient(180deg, var(--primary), color-mix(in srgb, var(--primary) 40%, transparent));
+  border-radius: 3px 3px 0 0;
+  flex-shrink: 0;
+  min-height: 2px;
+  margin-top: auto;
+  transition: height 0.3s ease;
+}
+
+.distLabel {
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
+.distCount {
+  font-size: 0.625rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  position: absolute;
+  top: -2px;
+}
+
 /* Section */
 .section {
   margin-bottom: var(--space-8);
@@ -50,11 +161,72 @@
   margin-bottom: var(--space-4);
 }
 
+.headerActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 .sectionTitle {
   font-size: 1.125rem;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
+}
+
+/* Filter Bar */
+.filterBar {
+  display: flex;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.filterSelect {
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  outline: none;
+  cursor: pointer;
+  min-width: 140px;
+}
+
+.filterSelect:focus {
+  border-color: var(--primary);
+}
+
+.filterTabs {
+  display: flex;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.filterTab {
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.filterTab:last-child {
+  border-right: none;
+}
+
+.filterTab:hover {
+  background: var(--bg-primary);
+}
+
+.filterTabActive {
+  background: var(--primary);
+  color: white;
 }
 
 /* Table */
@@ -100,9 +272,7 @@
   border-bottom: none;
 }
 
-.cellCenter {
-  text-align: center;
-}
+.cellCenter { text-align: center; }
 
 .cellMono {
   font-family: var(--font-mono);
@@ -130,9 +300,7 @@
   color: var(--accent-primary);
 }
 
-.muted {
-  color: var(--text-tertiary);
-}
+.muted { color: var(--text-tertiary); }
 
 /* States */
 .emptyState {
@@ -151,7 +319,6 @@
 
 /* Responsive */
 @media (max-width: 1024px) {
-  .statsGrid {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  .statsGrid { grid-template-columns: repeat(2, 1fr); }
+  .insightsGrid { grid-template-columns: 1fr; }
 }

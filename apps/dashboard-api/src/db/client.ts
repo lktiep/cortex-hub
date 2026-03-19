@@ -2,6 +2,10 @@ import Database, { Database as SqliteDatabase } from 'better-sqlite3'
 import { join } from 'path'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 const dbPath = process.env.DATABASE_PATH ?? join(process.cwd(), 'data', 'cortex.db')
 const dbDir = dirname(dbPath)
@@ -17,8 +21,8 @@ const db: SqliteDatabase = new Database(dbPath, {
 // Enable WAL mode for better concurrency
 db.pragma('journal_mode = WAL')
 
-// Initialize schema
-const schemaPath = join(process.cwd(), 'src', 'db', 'schema.sql')
+// Initialize schema — resolve relative to THIS file, not cwd()
+const schemaPath = join(__dirname, 'schema.sql')
 if (existsSync(schemaPath)) {
   const schema = readFileSync(schemaPath, 'utf8')
   db.exec(schema)

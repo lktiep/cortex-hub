@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     name TEXT NOT NULL,
     key_hash TEXT NOT NULL,    -- sha256 hash of the actual key
     scope TEXT NOT NULL,       -- e.g., 'all', 'knowledge', 'hub'
+    project_id TEXT,           -- optional scope to a project
     created_at TEXT DEFAULT (datetime('now')),
     expires_at TEXT,
     last_used_at TEXT
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS query_logs (
     latency_ms INTEGER,
     status TEXT DEFAULT 'ok',
     error TEXT,
+    project_id TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -35,9 +37,53 @@ CREATE TABLE IF NOT EXISTS session_handoffs (
     priority INTEGER DEFAULT 5,
     status TEXT DEFAULT 'pending',
     claimed_by TEXT,
+    project_id TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     expires_at TEXT
 );
 
+-- ── Organizations ──
+CREATE TABLE IF NOT EXISTS organizations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    description TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- ── Projects ──
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES organizations(id),
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    description TEXT,
+    git_repo_url TEXT,
+    git_provider TEXT,              -- 'github', 'gitlab', 'bitbucket', 'local'
+    indexed_at TEXT,
+    indexed_symbols INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(org_id, slug)
+);
+
+-- ── Usage Logs ──
+CREATE TABLE IF NOT EXISTS usage_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    project_id TEXT,
+    request_type TEXT DEFAULT 'chat',  -- 'chat', 'embedding', 'tool'
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Insert default uncompleted setup status
 INSERT OR IGNORE INTO setup_status (id, completed) VALUES (1, 0);
+
+-- Insert default organization
+INSERT OR IGNORE INTO organizations (id, name, slug, description) 
+VALUES ('org-default', 'Personal', 'personal', 'Default personal organization');

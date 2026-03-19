@@ -39,6 +39,44 @@
   color: var(--text-primary);
 }
 
+/* Tunnel Card */
+.tunnelCard {
+  padding: var(--space-5);
+}
+
+.tunnelGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+}
+
+.tunnelItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tunnelLabel {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+.tunnelLink {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--primary);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.tunnelLink:hover {
+  color: var(--accent-secondary);
+  text-decoration: underline;
+}
+
 /* Services Card */
 .servicesCard {
   padding: 0;
@@ -120,6 +158,190 @@
   line-height: 1.7;
 }
 
+/* Danger Zone */
+.dangerCard {
+  padding: 0;
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+  overflow: hidden;
+}
+
+.dangerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dangerRow:last-child {
+  border-bottom: none;
+}
+
+.dangerInfo {
+  flex: 1;
+}
+
+.dangerLabel {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 4px 0;
+}
+
+.dangerDesc {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Modal / Dialog */
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease;
+}
+
+.dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  width: min(420px, 90vw);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.dialogTitle {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 var(--space-3) 0;
+}
+
+.dialogMessage {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0 0 var(--space-5) 0;
+}
+
+.dialogInput {
+  margin-bottom: var(--space-5);
+}
+
+.dialogLabel {
+  display: block;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-2);
+}
+
+.confirmInput {
+  width: 100%;
+  padding: var(--space-3);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.confirmInput:focus {
+  border-color: var(--primary);
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+/* Toast */
+.toast {
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid;
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-6);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-secondary);
+  font-size: 0.875rem;
+  animation: slideDown 0.2s ease;
+}
+
+.toastClose {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+/* About */
+.aboutCard {
+  padding: var(--space-6);
+}
+
+.aboutBrand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.aboutLogo {
+  font-size: 2rem;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-glow);
+  border-radius: var(--radius-md);
+}
+
+.aboutName {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.aboutVersion {
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+}
+
+.aboutLinks {
+  display: flex;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.aboutLink {
+  font-size: 0.8125rem;
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.aboutLink:hover {
+  text-decoration: underline;
+}
+
 /* States */
 .loading {
   padding: var(--space-8);
@@ -136,9 +358,20 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* Responsive */
 @media (max-width: 768px) {
-  .envGrid {
-    grid-template-columns: 1fr;
-  }
+  .envGrid { grid-template-columns: 1fr; }
+  .tunnelGrid { grid-template-columns: repeat(2, 1fr); }
+  .dangerRow { flex-direction: column; align-items: flex-start; }
 }

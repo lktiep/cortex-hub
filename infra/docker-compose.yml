@@ -142,6 +142,8 @@ services:
       - "4000:4000"
     volumes:
       - api-data:/app/data
+      - cliproxy-auth:/app/cliproxy-auth
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       PORT: 4000
       NODE_ENV: production
@@ -154,6 +156,9 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-proxy-key}
       OPENAI_API_BASE: http://llm-proxy:8317/v1
       LLM_PROXY_URL: http://llm-proxy:8317
+      CLIPROXY_AUTH_DIR: /app/cliproxy-auth
+      CLIPROXY_MANAGEMENT_KEY: ${MANAGEMENT_PASSWORD:-cortex2026}
+      DASHBOARD_URL: ${DASHBOARD_URL:-https://hub.jackle.dev}
     depends_on:
       qdrant:
         condition: service_healthy

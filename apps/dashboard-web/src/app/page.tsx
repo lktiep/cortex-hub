@@ -37,32 +37,38 @@ export default function DashboardPage() {
     {
       name: 'Hub Backend API',
       description: 'Core API for Cortex Hub operations',
-      endpoint: 'api.hub.jackle.dev',
-      status: error ? 'error' : isLoading ? 'muted' : healthData?.status === 'ok' ? 'healthy' : 'warning',
+      endpoint: 'cortex-api.jackle.dev',
+      status: isLoading ? 'muted' : error ? 'error' : healthData?.status === 'ok' || healthData?.status === 'degraded' ? 'healthy' : 'error',
     },
     {
       name: 'MCP Gateway',
       description: 'Cloudflare Worker — MCP protocol endpoint',
-      endpoint: 'mcp.hub.jackle.dev',
-      status: error ? 'error' : isLoading ? 'muted' : healthData?.status === 'ok' ? 'healthy' : 'warning',
+      endpoint: 'cortex-mcp.jackle.dev',
+      status: isLoading ? 'muted' : 'warning', // Checked separately via MCP health
     },
     {
       name: 'Qdrant Vector DB',
       description: 'Vector database — semantic search',
       endpoint: 'Local Docker :6333',
-      status: error ? 'error' : isLoading ? 'muted' : healthData?.services?.qdrant === 'ok' ? 'healthy' : 'error',
+      status: isLoading ? 'muted' : healthData?.services?.qdrant === 'ok' ? 'healthy' : 'error',
     },
     {
       name: 'Neo4j Graph DB',
       description: 'Graph database — knowledge relationships',
       endpoint: 'Local Docker :7687',
-      status: error ? 'error' : isLoading ? 'muted' : healthData?.services?.neo4j === 'ok' ? 'healthy' : 'error',
+      status: isLoading ? 'muted' : healthData?.services?.neo4j === 'ok' ? 'healthy' : 'error',
     },
     {
       name: 'CLIProxy (LLM)',
       description: 'LLM gateway — OAuth proxy to AI providers',
       endpoint: 'Local Docker :8317',
-      status: error ? 'error' : isLoading ? 'muted' : healthData?.services?.cliproxy === 'ok' ? 'healthy' : 'error',
+      status: isLoading ? 'muted' : healthData?.services?.cliproxy === 'ok' ? 'healthy' : 'error',
+    },
+    {
+      name: 'mem0 Memory',
+      description: 'Agent memory — persistent knowledge store',
+      endpoint: 'Local Docker :8050',
+      status: isLoading ? 'muted' : healthData?.services?.mem0 === 'ok' ? 'healthy' : 'error',
     },
   ]
 

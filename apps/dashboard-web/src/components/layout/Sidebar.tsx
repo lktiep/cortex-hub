@@ -6,7 +6,10 @@ import styles from './Sidebar.module.css'
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: '◈' },
+  { href: '/orgs', label: 'Organizations', icon: '🏢' },
   { href: '/keys', label: 'API Keys', icon: '⚿' },
+  { href: '/providers', label: 'LLM Providers', icon: '⬡' },
+  { href: '/usage', label: 'Usage', icon: '📊' },
   { href: '/quality', label: 'Quality', icon: '✦' },
   { href: '/sessions', label: 'Sessions', icon: '⇄' },
   { href: '/settings', label: 'Settings', icon: '⚙' },
