@@ -58,7 +58,7 @@ function CreateDialog({
             ) : (
               <input
                 className={styles.dialogInput}
-                type="text"
+                type={field.type || "text"}
                 placeholder={field.placeholder}
                 value={values[field.key] ?? ''}
                 onChange={(e) => setValues((v) => ({ ...v, [field.key]: e.target.value }))}
