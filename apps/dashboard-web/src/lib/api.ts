@@ -266,3 +266,73 @@ export async function deleteProject(id: string) {
   return apiFetch<{ success: boolean }>(`/api/projects/${id}`, { method: 'DELETE' })
 }
 
+// ── Dashboard Stats ──
+export interface DashboardStats {
+  activeKeys: number
+  totalAgents: number
+  memoryNodes: number
+  uptime: number
+  totalQueries: number
+  totalSessions: number
+  organizations: number
+  projects: number
+  today: { queries: number; tokens: number }
+}
+
+export async function getDashboardStats() {
+  return apiFetch<DashboardStats>('/api/stats/overview')
+}
+
+// ── Activity Feed ──
+export interface ActivityEvent {
+  type: 'query' | 'session'
+  agent_id: string
+  detail: string
+  status: string
+  latency_ms: number | null
+  created_at: string
+}
+
+export async function getActivityFeed(limit = 30) {
+  return apiFetch<{ activity: ActivityEvent[] }>(`/api/stats/activity?limit=${limit}`)
+}
+
+// ── Budget ──
+export interface BudgetData {
+  daily_limit: number
+  monthly_limit: number
+  alert_threshold: number
+  dailyUsed: number
+  monthlyUsed: number
+  dailyAlert: boolean
+  monthlyAlert: boolean
+}
+
+export async function getBudget() {
+  return apiFetch<BudgetData>('/api/stats/budget')
+}
+
+export async function setBudget(data: { dailyLimit: number; monthlyLimit: number; alertThreshold?: number }) {
+  return apiFetch<{ success: boolean }>('/api/stats/budget', { method: 'POST', body: data })
+}
+
+// ── Admin ──
+export async function restartService(service: string) {
+  return apiFetch<{ success: boolean; message: string }>(`/api/stats/admin/restart/${service}`, { method: 'POST' })
+}
+
+// ── Per-Project Analytics ──
+export interface ProjectAnalytics {
+  projectId: string
+  queries: number
+  sessions: number
+  apiKeys: number
+  totalTokens: number
+  avgLatency: number
+  errorRate: number
+  trend: { day: string; count: number }[]
+}
+
+export async function getProjectAnalytics(projectId: string) {
+  return apiFetch<ProjectAnalytics>(`/api/stats/projects/${projectId}/analytics`)
+}

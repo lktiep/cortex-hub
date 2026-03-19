@@ -1,6 +1,6 @@
 .statsGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: var(--space-4);
   margin-bottom: var(--space-8);
 }
@@ -86,6 +86,89 @@
   color: var(--text-tertiary);
 }
 
+/* Activity Feed */
+.activityCard {
+  padding: 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.activityList {
+  display: flex;
+  flex-direction: column;
+}
+
+.activityRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background 0.15s ease;
+}
+
+.activityRow:last-child {
+  border-bottom: none;
+}
+
+.activityRow:hover {
+  background: var(--accent-glow);
+}
+
+.activityIcon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.activityInfo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activityDetail {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activityMeta {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+.activityRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.activityTime {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.emptyActivity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-8);
+  color: var(--text-tertiary);
+  font-size: 0.8125rem;
+}
+
+.emptyActivity span {
+  font-size: 2rem;
+}
+
 /* Connect Card */
 .connectCard {
   padding: var(--space-6);
@@ -114,3 +197,8 @@
   .statsGrid { grid-template-columns: repeat(2, 1fr); }
   .servicesGrid { grid-template-columns: 1fr; }
 }
+
+@media (max-width: 640px) {
+  .statsGrid { grid-template-columns: 1fr; }
+}
+

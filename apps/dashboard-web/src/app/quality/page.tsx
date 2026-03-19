@@ -76,6 +76,8 @@ export default function QualityPage() {
   const [filterAgent, setFilterAgent] = useState('')
   const [filterTool, setFilterTool] = useState('')
   const [filterStatus, setFilterStatus] = useState<'all' | 'ok' | 'error'>('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
 
   const allLogs = data?.logs ?? []
 
@@ -89,9 +91,11 @@ export default function QualityPage() {
       if (filterAgent && l.agent_id !== filterAgent) return false
       if (filterTool && l.tool !== filterTool) return false
       if (filterStatus !== 'all' && l.status !== filterStatus) return false
+      if (dateFrom && l.created_at && l.created_at < `${dateFrom}T00:00:00`) return false
+      if (dateTo && l.created_at && l.created_at > `${dateTo}T23:59:59`) return false
       return true
     })
-  }, [allLogs, filterAgent, filterTool, filterStatus])
+  }, [allLogs, filterAgent, filterTool, filterStatus, dateFrom, dateTo])
 
   // Stats
   const totalLogs = logs.length
@@ -259,6 +263,23 @@ export default function QualityPage() {
                 {s === 'all' ? 'All' : s === 'ok' ? '✓ OK' : '✗ Error'}
               </button>
             ))}
+          </div>
+          <div className={styles.dateRange}>
+            <input
+              type="date"
+              className={styles.filterSelect}
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              title="From date"
+            />
+            <span style={{ color: 'var(--text-tertiary)', fontSize: '0.75rem' }}>→</span>
+            <input
+              type="date"
+              className={styles.filterSelect}
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              title="To date"
+            />
           </div>
         </div>
 

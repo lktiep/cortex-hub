@@ -2,7 +2,7 @@
 
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import useSWR from 'swr'
-import { checkHealth } from '@/lib/api'
+import { checkHealth, getDashboardStats, getActivityFeed, type ActivityEvent } from '@/lib/api'
 import styles from './page.module.css'
 
 interface ServiceCardProps {
@@ -28,9 +28,52 @@ function ServiceCard({ name, status, description, endpoint }: ServiceCardProps) 
   )
 }
 
+function formatNumber(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return n.toString()
+}
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+function ActivityRow({ event }: { event: ActivityEvent }) {
+  const icon = event.type === 'query' ? '🔍' : '📋'
+  const statusClass = event.status === 'ok' || event.status === 'completed' ? 'healthy' : event.status === 'error' ? 'error' : 'warning'
+  return (
+    <div className={styles.activityRow}>
+      <span className={styles.activityIcon}>{icon}</span>
+      <div className={styles.activityInfo}>
+        <span className={styles.activityDetail}>{event.detail}</span>
+        <span className={styles.activityMeta}>
+          {event.agent_id}
+          {event.latency_ms ? ` · ${event.latency_ms}ms` : ''}
+        </span>
+      </div>
+      <div className={styles.activityRight}>
+        <span className={`badge badge-${statusClass}`}>{event.status}</span>
+        <span className={styles.activityTime}>{timeAgo(event.created_at)}</span>
+      </div>
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const { data: healthData, error, mutate, isLoading } = useSWR('health', checkHealth, {
-    refreshInterval: 30000, // Poll every 30s
+    refreshInterval: 30000,
+  })
+  const { data: statsData } = useSWR('dashboard-stats', getDashboardStats, {
+    refreshInterval: 30000,
+  })
+  const { data: activityData } = useSWR('activity', () => getActivityFeed(20), {
+    refreshInterval: 15000,
   })
 
   const services: ServiceCardProps[] = [
@@ -44,7 +87,7 @@ export default function DashboardPage() {
       name: 'MCP Gateway',
       description: 'Cloudflare Worker — MCP protocol endpoint',
       endpoint: 'cortex-mcp.jackle.dev',
-      status: isLoading ? 'muted' : 'warning', // Checked separately via MCP health
+      status: isLoading ? 'muted' : 'warning',
     },
     {
       name: 'Qdrant Vector DB',
@@ -73,10 +116,12 @@ export default function DashboardPage() {
   ]
 
   const metrics = [
-    { label: 'Active Keys', value: '3', icon: '🔑' },
-    { label: 'Total Agents', value: '12', icon: '🤖' },
-    { label: 'Memory Nodes', value: '1.2k', icon: '🧠' },
-    { label: 'Uptime', value: healthData?.uptime ? `${Math.floor(healthData.uptime / 3600)}h` : '...', icon: '⚡' },
+    { label: 'Active Keys', value: statsData ? formatNumber(statsData.activeKeys) : '...', icon: '🔑' },
+    { label: 'Total Agents', value: statsData ? formatNumber(statsData.totalAgents) : '...', icon: '🤖' },
+    { label: 'Memory Nodes', value: statsData ? formatNumber(statsData.memoryNodes) : '...', icon: '🧠' },
+    { label: 'Uptime', value: statsData ? `${Math.floor(statsData.uptime / 3600)}h` : '...', icon: '⚡' },
+    { label: 'Queries Today', value: statsData ? formatNumber(statsData.today.queries) : '...', icon: '📊' },
+    { label: 'Organizations', value: statsData ? formatNumber(statsData.organizations) : '...', icon: '🏢' },
   ]
 
   return (
@@ -98,19 +143,38 @@ export default function DashboardPage() {
       <section className={styles.section}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
           <h2 className={styles.sectionTitle} style={{ margin: 0 }}>System Status</h2>
-          <button 
-            className="btn btn-secondary btn-sm" 
-            onClick={() => mutate()} 
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => mutate()}
             disabled={isLoading}
           >
             {isLoading ? 'Checking...' : 'Refresh Status'}
           </button>
         </div>
-        
+
         <div className={styles.servicesGrid}>
           {services.map((service) => (
             <ServiceCard key={service.name} {...service} />
           ))}
+        </div>
+      </section>
+
+      {/* Activity Feed */}
+      <section className={styles.section}>
+        <h2 className={styles.sectionTitle}>Recent Activity</h2>
+        <div className={`card ${styles.activityCard}`}>
+          {activityData?.activity && activityData.activity.length > 0 ? (
+            <div className={styles.activityList}>
+              {activityData.activity.map((event, i) => (
+                <ActivityRow key={`${event.created_at}-${i}`} event={event} />
+              ))}
+            </div>
+          ) : (
+            <div className={styles.emptyActivity}>
+              <span>📭</span>
+              <p>No activity yet. Events appear when agents make API calls.</p>
+            </div>
+          )}
         </div>
       </section>
 
@@ -119,7 +183,7 @@ export default function DashboardPage() {
         <h2 className={styles.sectionTitle}>Quick Connect</h2>
         <div className={`card ${styles.connectCard}`}>
           <p className={styles.connectText}>
-            Add Cortex Hub to your AI agent's MCP config:
+            Add Cortex Hub to your AI agent&apos;s MCP config:
           </p>
           <pre className={styles.codeBlock}>
 {`{

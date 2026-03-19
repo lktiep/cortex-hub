@@ -1,9 +1,9 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import useSWR from 'swr'
-import { getQualityLogs } from '@/lib/api'
+import { getQualityLogs, getBudget, setBudget } from '@/lib/api'
 import styles from './page.module.css'
 
 // ── Types ──
@@ -36,6 +36,103 @@ function estimateCost(tokens: number): string {
   // Rough estimate: $0.005 per 1K tokens (blended GPT-4o rate)
   const cost = (tokens / 1000) * 0.005
   return cost < 0.01 ? '< $0.01' : `$${cost.toFixed(2)}`
+}
+
+// ── Budget Alert Component ──
+function BudgetAlert() {
+  const { data: budget, mutate } = useSWR('budget', getBudget, { refreshInterval: 60000 })
+  const [showConfig, setShowConfig] = useState(false)
+  const [dailyLimit, setDailyLimit] = useState('')
+  const [monthlyLimit, setMonthlyLimit] = useState('')
+
+  if (!budget) return null
+
+  const hasAlerts = budget.dailyAlert || budget.monthlyAlert
+  const hasLimits = budget.daily_limit > 0 || budget.monthly_limit > 0
+
+  async function handleSave() {
+    await setBudget({
+      dailyLimit: Number(dailyLimit) || 0,
+      monthlyLimit: Number(monthlyLimit) || 0,
+    })
+    mutate()
+    setShowConfig(false)
+  }
+
+  return (
+    <>
+      {hasAlerts && (
+        <div className={styles.budgetAlert}>
+          <span>⚠️</span>
+          <div>
+            {budget.dailyAlert && (
+              <p>Daily token usage at {formatNumber(budget.dailyUsed)}/{formatNumber(budget.daily_limit)} ({Math.round(budget.dailyUsed / budget.daily_limit * 100)}%)</p>
+            )}
+            {budget.monthlyAlert && (
+              <p>Monthly token usage at {formatNumber(budget.monthlyUsed)}/{formatNumber(budget.monthly_limit)} ({Math.round(budget.monthlyUsed / budget.monthly_limit * 100)}%)</p>
+            )}
+          </div>
+        </div>
+      )}
+      <div className={styles.budgetRow}>
+        {hasLimits && (
+          <div className={styles.budgetBars}>
+            {budget.daily_limit > 0 && (
+              <div className={styles.budgetBarGroup}>
+                <span className={styles.budgetLabel}>Daily: {formatNumber(budget.dailyUsed)} / {formatNumber(budget.daily_limit)}</span>
+                <div className={styles.budgetTrack}>
+                  <div
+                    className={styles.budgetFill}
+                    style={{
+                      width: `${Math.min(100, (budget.dailyUsed / budget.daily_limit) * 100)}%`,
+                      background: budget.dailyAlert ? 'var(--danger)' : 'var(--primary)',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+            {budget.monthly_limit > 0 && (
+              <div className={styles.budgetBarGroup}>
+                <span className={styles.budgetLabel}>Monthly: {formatNumber(budget.monthlyUsed)} / {formatNumber(budget.monthly_limit)}</span>
+                <div className={styles.budgetTrack}>
+                  <div
+                    className={styles.budgetFill}
+                    style={{
+                      width: `${Math.min(100, (budget.monthlyUsed / budget.monthly_limit) * 100)}%`,
+                      background: budget.monthlyAlert ? 'var(--danger)' : 'var(--primary)',
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        <button className="btn btn-secondary btn-sm" onClick={() => {
+          setDailyLimit(String(budget.daily_limit || ''))
+          setMonthlyLimit(String(budget.monthly_limit || ''))
+          setShowConfig(true)
+        }}>
+          ⚙️ Budget Settings
+        </button>
+      </div>
+
+      {showConfig && (
+        <div className={styles.budgetDialog}>
+          <div className={styles.budgetDialogInner}>
+            <h3>Token Budget Settings</h3>
+            <label>Daily Limit (tokens, 0 = unlimited)</label>
+            <input type="number" value={dailyLimit} onChange={(e) => setDailyLimit(e.target.value)} className={styles.budgetInput} placeholder="e.g. 100000" />
+            <label>Monthly Limit (tokens, 0 = unlimited)</label>
+            <input type="number" value={monthlyLimit} onChange={(e) => setMonthlyLimit(e.target.value)} className={styles.budgetInput} placeholder="e.g. 1000000" />
+            <div className={styles.budgetActions}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowConfig(false)}>Cancel</button>
+              <button className="btn btn-primary btn-sm" onClick={handleSave}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
 
 export default function UsagePage() {
@@ -117,6 +214,9 @@ export default function UsagePage() {
 
   return (
     <DashboardLayout title="Usage" subtitle="Token consumption and API request analytics">
+      {/* Budget Alert */}
+      <BudgetAlert />
+
       {/* Stats Row */}
       <div className={styles.statsGrid}>
         <div className={`card ${styles.statCard}`}>

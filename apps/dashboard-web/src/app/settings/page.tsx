@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import useSWR from 'swr'
-import { getSettings } from '@/lib/api'
+import { getSettings, restartService } from '@/lib/api'
 import { config } from '@/lib/config'
 import styles from './page.module.css'
 
@@ -11,6 +11,12 @@ import styles from './page.module.css'
 type ServiceRowProps = {
   name: string
   url: string
+  icon: string
+}
+
+type DockerServiceProps = {
+  containerName: string
+  label: string
   icon: string
 }
 
@@ -104,10 +110,30 @@ export default function SettingsPage() {
   const { data, error, isLoading } = useSWR('settings', getSettings)
   const [showResetDialog, setShowResetDialog] = useState(false)
   const [showClearDialog, setShowClearDialog] = useState(false)
+  const [restartingService, setRestartingService] = useState<string | null>(null)
   const [actionStatus, setActionStatus] = useState<{
     type: 'success' | 'error'
     message: string
   } | null>(null)
+
+  const dockerServices: DockerServiceProps[] = [
+    { containerName: 'cortex-mem0', label: 'mem0 Memory', icon: '🧠' },
+    { containerName: 'cortex-llm-proxy', label: 'CLIProxy (LLM)', icon: '🤖' },
+    { containerName: 'cortex-qdrant', label: 'Qdrant Vector DB', icon: '🔮' },
+    { containerName: 'cortex-neo4j', label: 'Neo4j Graph DB', icon: '🕸️' },
+  ]
+
+  async function handleRestart(containerName: string) {
+    setRestartingService(containerName)
+    try {
+      const result = await restartService(containerName)
+      setActionStatus({ type: 'success', message: result.message })
+    } catch (err) {
+      setActionStatus({ type: 'error', message: `Restart failed: ${err instanceof Error ? err.message : String(err)}` })
+    } finally {
+      setRestartingService(null)
+    }
+  }
 
   async function handleResetSetup() {
     setShowResetDialog(false)
@@ -267,6 +293,29 @@ export default function SettingsPage() {
               />
             ))
           ) : null}
+        </div>
+      </div>
+
+      {/* Docker Services */}
+      <div className={styles.section}>
+        <h2 className={styles.sectionTitle}>Docker Services</h2>
+        <div className={`card ${styles.servicesCard}`}>
+          {dockerServices.map((svc) => (
+            <div key={svc.containerName} className={styles.serviceRow}>
+              <span className={styles.serviceIcon}>{svc.icon}</span>
+              <div className={styles.serviceInfo}>
+                <span className={styles.serviceName}>{svc.label}</span>
+                <code className={styles.serviceUrl}>{svc.containerName}</code>
+              </div>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => handleRestart(svc.containerName)}
+                disabled={restartingService === svc.containerName}
+              >
+                {restartingService === svc.containerName ? '⏳ Restarting...' : '🔄 Restart'}
+              </button>
+            </div>
+          ))}
         </div>
       </div>
 
