@@ -122,14 +122,32 @@ llmRouter.get('/models', async (c) => {
 llmRouter.post('/providers/:id/test', async (c) => {
   const providerId = c.req.param('id')
 
-  // Pick a lightweight model per provider
-  const testModels: Record<string, string> = {
-    openai: 'gpt-4o-mini',
-    gemini: 'gemini-2.0-flash',
-    anthropic: 'claude-sonnet-4-20250514',
+  // Pick a lightweight model — try to find one from available models first
+  let model = ''
+  try {
+    const modelsRes = await fetch(`${CLIPROXY_URL()}/v1/models`, {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (modelsRes.ok) {
+      const modelsData = (await modelsRes.json()) as { data: { id: string }[] }
+      // Prefer small/mini models for testing
+      const preferred = modelsData.data.find((m) =>
+        m.id.includes('mini') || m.id.includes('flash')
+      )
+      model = preferred?.id ?? modelsData.data[0]?.id ?? ''
+    }
+  } catch {
+    // fallback to static defaults
   }
 
-  const model = testModels[providerId] ?? 'gpt-4o-mini'
+  if (!model) {
+    const fallback: Record<string, string> = {
+      openai: 'gpt-5.4-mini',
+      gemini: 'gemini-2.5-flash',
+      anthropic: 'claude-sonnet-4-20250514',
+    }
+    model = fallback[providerId] ?? 'gpt-5.4-mini'
+  }
   const startTime = Date.now()
 
   try {
