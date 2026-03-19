@@ -1,6 +1,7 @@
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { logger as honoLogger } from 'hono/logger'
 import { createLogger } from '@cortex/shared-utils'
 import { setupRouter } from './routes/setup.js'
 import { keysRouter } from './routes/keys.js'
@@ -15,6 +16,7 @@ const app = new Hono()
 const logger = createLogger('dashboard-api')
 
 app.use('*', cors())
+app.use('*', honoLogger())
 
 app.get('/health', async (c) => {
   const startTime = Date.now()
