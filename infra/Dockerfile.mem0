@@ -1,0 +1,119 @@
+# ──────────────────────────────────────────────
+# Dockerfile — mem0 API Server (built from pip)
+# For x86_64 compatibility (official image is ARM-only)
+# ──────────────────────────────────────────────
+
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir mem0ai uvicorn fastapi
+
+WORKDIR /app
+
+# Create a minimal FastAPI wrapper for mem0
+RUN cat > server.py << 'EOF'
+"""Minimal mem0 REST API server for Cortex Hub."""
+import os
+import json
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Optional
+
+app = FastAPI(title="mem0 Memory API", version="0.1.0")
+
+# Lazy init to let env vars be set before import
+_memory = None
+
+def get_memory():
+    global _memory
+    if _memory is None:
+        from mem0 import Memory
+        config = {
+            "llm": {
+                "provider": "openai",
+                "config": {
+                    "model": os.environ.get("MEM0_LLM_MODEL", "gpt-4o-mini"),
+                    "api_key": os.environ.get("OPENAI_API_KEY", "proxy-key"),
+                }
+            },
+            "embedder": {
+                "provider": "openai",
+                "config": {
+                    "model": os.environ.get("MEM0_EMBEDDING_MODEL", "text-embedding-3-small"),
+                    "api_key": os.environ.get("OPENAI_API_KEY", "proxy-key"),
+                }
+            },
+            "vector_store": {
+                "provider": "qdrant",
+                "config": {
+                    "host": os.environ.get("MEM0_QDRANT_HOST", "qdrant"),
+                    "port": int(os.environ.get("MEM0_QDRANT_PORT", "6333")),
+                    "collection_name": "cortex_memories",
+                }
+            },
+        }
+
+        # Set OpenAI base URL if provided (for CLIProxy)
+        base_url = os.environ.get("OPENAI_BASE_URL")
+        if base_url:
+            config["llm"]["config"]["openai_base_url"] = base_url
+            config["embedder"]["config"]["openai_base_url"] = base_url
+
+        _memory = Memory.from_config(config)
+    return _memory
+
+class AddMemoryRequest(BaseModel):
+    messages: list[dict]
+    user_id: str
+    agent_id: Optional[str] = None
+    metadata: Optional[dict] = None
+
+class SearchRequest(BaseModel):
+    query: str
+    user_id: str
+    agent_id: Optional[str] = None
+    limit: int = 10
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "service": "mem0"}
+
+@app.post("/v1/memories/")
+def add_memory(req: AddMemoryRequest):
+    try:
+        m = get_memory()
+        result = m.add(
+            messages=req.messages,
+            user_id=req.user_id,
+            agent_id=req.agent_id,
+            metadata=req.metadata,
+        )
+        return {"results": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/v1/memories/search/")
+def search_memories(req: SearchRequest):
+    try:
+        m = get_memory()
+        results = m.search(
+            query=req.query,
+            user_id=req.user_id,
+            agent_id=req.agent_id,
+            limit=req.limit,
+        )
+        return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/v1/memories/")
+def get_all_memories(user_id: str, agent_id: Optional[str] = None):
+    try:
+        m = get_memory()
+        results = m.get_all(user_id=user_id, agent_id=agent_id)
+        return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+EOF
+
+EXPOSE 8000
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -92,7 +92,10 @@ services:
   # Routes AI calls through CLIProxyAPI
   # ─────────────────────────────────────────────
   mem0:
-    image: mem0/mem0-api-server:latest
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.mem0
+    image: cortex-mem0:latest
     container_name: cortex-mem0
     restart: unless-stopped
     ports:
