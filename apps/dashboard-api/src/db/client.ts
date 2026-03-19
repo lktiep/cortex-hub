@@ -23,6 +23,17 @@ db.pragma('journal_mode = WAL')
 
 // Initialize schema — resolve relative to THIS file, not cwd()
 const schemaPath = join(__dirname, 'schema.sql')
+const schemaStr = readFileSync(schemaPath, 'utf-8')
+db.exec(schemaStr)
+
+// Safe migrations for early schema changes without drop
+try {
+  db.exec('ALTER TABLE projects ADD COLUMN git_username TEXT')
+} catch (e) { /* ignore if exists */ }
+
+try {
+  db.exec('ALTER TABLE projects ADD COLUMN git_token TEXT')
+} catch (e) { /* ignore if exists */ }
 if (existsSync(schemaPath)) {
   const schema = readFileSync(schemaPath, 'utf8')
   db.exec(schema)

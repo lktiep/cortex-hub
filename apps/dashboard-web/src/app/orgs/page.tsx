@@ -171,6 +171,8 @@ function OrgSection({ org, onDeleted }: { org: Organization; onDeleted: () => vo
           description: data.description,
           gitRepoUrl: data.gitRepoUrl,
           gitProvider: data.gitProvider,
+          gitUsername: data.gitUsername,
+          gitToken: data.gitToken,
         })
         setShowCreateProject(false)
         mutateProjects()
@@ -264,7 +266,9 @@ function OrgSection({ org, onDeleted }: { org: Organization; onDeleted: () => vo
             { key: 'name', label: 'Project Name', placeholder: 'my-app', required: true },
             { key: 'description', label: 'Description', placeholder: 'Project description...', type: 'textarea', required: false },
             { key: 'gitRepoUrl', label: 'Git Repository URL', placeholder: 'https://github.com/user/repo', required: false },
-            { key: 'gitProvider', label: 'Git Provider', placeholder: 'github / gitlab / bitbucket', required: false },
+            { key: 'gitProvider', label: 'Git Provider', placeholder: 'github / gitlab / bitbucket / azure', required: false },
+            { key: 'gitUsername', label: 'Git Username (Optional)', placeholder: 'username', required: false },
+            { key: 'gitToken', label: 'Git Token / PAT (Optional)', placeholder: 'Personal Access Token', type: 'password', required: false },
           ]}
           onSubmit={handleCreateProject}
           onCancel={() => setShowCreateProject(false)}

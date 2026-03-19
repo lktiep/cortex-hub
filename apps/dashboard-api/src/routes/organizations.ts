@@ -126,11 +126,13 @@ orgsRouter.post('/:id/projects', async (c) => {
   const { id: orgId } = c.req.param()
   try {
     const body = await c.req.json()
-    const { name, description, gitRepoUrl, gitProvider } = body as {
+    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken } = body as {
       name: string
       description?: string
       gitRepoUrl?: string
       gitProvider?: string
+      gitUsername?: string
+      gitToken?: string
     }
 
     if (!name || name.trim().length === 0) {
@@ -145,9 +147,9 @@ orgsRouter.post('/:id/projects', async (c) => {
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
     db.prepare(
-      `INSERT INTO projects (id, org_id, name, slug, description, git_repo_url, git_provider)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(projectId, orgId, name.trim(), slug, description ?? null, gitRepoUrl ?? null, gitProvider ?? null)
+      `INSERT INTO projects (id, org_id, name, slug, description, git_repo_url, git_provider, git_username, git_token)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(projectId, orgId, name.trim(), slug, description ?? null, gitRepoUrl ?? null, gitProvider ?? null, gitUsername ?? null, gitToken ?? null)
 
     return c.json({
       id: projectId,
@@ -157,6 +159,7 @@ orgsRouter.post('/:id/projects', async (c) => {
       description: description ?? null,
       gitRepoUrl: gitRepoUrl ?? null,
       gitProvider: gitProvider ?? null,
+      gitUsername: gitUsername ?? null,
     }, 201)
   } catch (error) {
     if (String(error).includes('UNIQUE constraint')) {
@@ -201,11 +204,13 @@ projectsRouter.put('/:id', async (c) => {
   const { id } = c.req.param()
   try {
     const body = await c.req.json()
-    const { name, description, gitRepoUrl, gitProvider } = body as {
+    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken } = body as {
       name?: string
       description?: string
       gitRepoUrl?: string
       gitProvider?: string
+      gitUsername?: string
+      gitToken?: string
     }
 
     const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(id)
@@ -222,9 +227,20 @@ projectsRouter.put('/:id', async (c) => {
         description = COALESCE(?, description),
         git_repo_url = COALESCE(?, git_repo_url),
         git_provider = COALESCE(?, git_provider),
+        git_username = COALESCE(?, git_username),
+        git_token = COALESCE(?, git_token),
         updated_at = datetime('now')
        WHERE id = ?`
-    ).run(name ?? null, slug, description ?? null, gitRepoUrl ?? null, gitProvider ?? null, id)
+    ).run(
+      name ?? null,
+      slug,
+      description ?? null,
+      gitRepoUrl ?? null,
+      gitProvider ?? null,
+      gitUsername ?? null,
+      gitToken ?? null,
+      id
+    )
 
     return c.json({ success: true })
   } catch (error) {

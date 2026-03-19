@@ -209,6 +209,8 @@ export type Project = {
   description: string | null
   git_repo_url: string | null
   git_provider: string | null
+  git_username?: string | null
+  git_token?: string | null
   indexed_at: string | null
   indexed_symbols: number
   org_name?: string
@@ -243,6 +245,8 @@ export async function createProject(orgId: string, data: {
   description?: string
   gitRepoUrl?: string
   gitProvider?: string
+  gitUsername?: string
+  gitToken?: string
 }) {
   return apiFetch<Project>(`/api/orgs/${orgId}/projects`, { method: 'POST', body: data })
 }
@@ -258,6 +262,8 @@ export async function updateProject(id: string, data: {
   description?: string
   gitRepoUrl?: string
   gitProvider?: string
+  gitUsername?: string
+  gitToken?: string
 }) {
   return apiFetch<{ success: boolean }>(`/api/projects/${id}`, { method: 'PUT', body: data })
 }
@@ -280,7 +286,7 @@ export interface DashboardStats {
 }
 
 export async function getDashboardStats() {
-  return apiFetch<DashboardStats>('/api/stats/overview')
+  return apiFetch<DashboardStats>('/api/metrics/overview')
 }
 
 // ── Activity Feed ──
@@ -294,7 +300,7 @@ export interface ActivityEvent {
 }
 
 export async function getActivityFeed(limit = 30) {
-  return apiFetch<{ activity: ActivityEvent[] }>(`/api/stats/activity?limit=${limit}`)
+  return apiFetch<{ activity: ActivityEvent[] }>(`/api/metrics/activity?limit=${limit}`)
 }
 
 // ── Budget ──
@@ -309,16 +315,16 @@ export interface BudgetData {
 }
 
 export async function getBudget() {
-  return apiFetch<BudgetData>('/api/stats/budget')
+  return apiFetch<BudgetData>('/api/metrics/budget')
 }
 
 export async function setBudget(data: { dailyLimit: number; monthlyLimit: number; alertThreshold?: number }) {
-  return apiFetch<{ success: boolean }>('/api/stats/budget', { method: 'POST', body: data })
+  return apiFetch<{ success: boolean }>('/api/metrics/budget', { method: 'POST', body: data })
 }
 
 // ── Admin ──
 export async function restartService(service: string) {
-  return apiFetch<{ success: boolean; message: string }>(`/api/stats/admin/restart/${service}`, { method: 'POST' })
+  return apiFetch<{ success: boolean; message: string }>(`/api/metrics/admin/restart/${service}`, { method: 'POST' })
 }
 
 // ── Per-Project Analytics ──
@@ -334,5 +340,5 @@ export interface ProjectAnalytics {
 }
 
 export async function getProjectAnalytics(projectId: string) {
-  return apiFetch<ProjectAnalytics>(`/api/stats/projects/${projectId}/analytics`)
+  return apiFetch<ProjectAnalytics>(`/api/metrics/projects/${projectId}/analytics`)
 }

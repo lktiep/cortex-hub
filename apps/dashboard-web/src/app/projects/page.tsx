@@ -11,6 +11,7 @@ const GIT_PROVIDERS = [
   { value: 'github', label: 'GitHub', icon: '🐙' },
   { value: 'gitlab', label: 'GitLab', icon: '🦊' },
   { value: 'bitbucket', label: 'Bitbucket', icon: '🪣' },
+  { value: 'azure', label: 'Azure', icon: '☁️' },
   { value: 'local', label: 'Local', icon: '💻' },
 ]
 
@@ -27,13 +28,15 @@ function ProjectContent() {
   const [showEditGit, setShowEditGit] = useState(false)
   const [gitUrl, setGitUrl] = useState('')
   const [gitProvider, setGitProvider] = useState('')
+  const [gitUsername, setGitUsername] = useState('')
+  const [gitToken, setGitToken] = useState('')
   const [saving, setSaving] = useState(false)
 
   const handleSaveGit = useCallback(async () => {
     if (!projectId) return
     setSaving(true)
     try {
-      await updateProject(projectId, { gitRepoUrl: gitUrl, gitProvider })
+      await updateProject(projectId, { gitRepoUrl: gitUrl, gitProvider, gitUsername, gitToken })
       mutate()
       setShowEditGit(false)
     } catch {
@@ -110,6 +113,8 @@ function ProjectContent() {
               onClick={() => {
                 setGitUrl(project.git_repo_url ?? '')
                 setGitProvider(project.git_provider ?? '')
+                setGitUsername(project.git_username ?? '')
+                setGitToken(project.git_token ?? '')
                 setShowEditGit(true)
               }}
             >
@@ -234,6 +239,26 @@ function ProjectContent() {
                 placeholder="https://github.com/user/repo"
                 value={gitUrl}
                 onChange={(e) => setGitUrl(e.target.value)}
+              />
+            </div>
+            <div className={styles.dialogField}>
+              <label className={styles.dialogLabel}>Git Username (Optional)</label>
+              <input
+                className={styles.dialogInput}
+                type="text"
+                placeholder="username"
+                value={gitUsername}
+                onChange={(e) => setGitUsername(e.target.value)}
+              />
+            </div>
+            <div className={styles.dialogField}>
+              <label className={styles.dialogLabel}>Git Token / PAT (Optional)</label>
+              <input
+                className={styles.dialogInput}
+                type="password"
+                placeholder="ghp_xxxx or Personal Access Token"
+                value={gitToken}
+                onChange={(e) => setGitToken(e.target.value)}
               />
             </div>
             <div className={styles.dialogActions}>

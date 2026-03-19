@@ -60,7 +60,9 @@ CREATE TABLE IF NOT EXISTS projects (
     slug TEXT NOT NULL,
     description TEXT,
     git_repo_url TEXT,
-    git_provider TEXT,              -- 'github', 'gitlab', 'bitbucket', 'local'
+    git_provider TEXT,              -- 'github', 'gitlab', 'bitbucket', 'azure', 'local'
+    git_username TEXT,
+    git_token TEXT,
     indexed_at TEXT,
     indexed_symbols INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
