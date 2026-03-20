@@ -20,11 +20,11 @@
 - [x] MCP branch-aware tools (memory.store/search + code.search/impact with projectId/branch)
 - [x] 3 new backend endpoints (branches listing, diff, per-branch index summary)
 - [x] Universal Installation & Onboarding (`install.sh`, `install-hub.sh`, `onboard.sh`)
+- [x] Onboarding stabilization (non-interactive support, idempotent /onboard) ✅
 - [x] Cortex Skill Set integration (GSD + Forgewright Golden Standard)
 - [x] Hub MCP Session Enforcement & Mission Briefs
 - [x] mem0 Gemini Embedding Fallback (100% reliability)
 - [x] Docker rebuilt and deployed with latest code
-
 ## Recent Decisions
 - mem0 branch scope: `project-{id}:branch-{name}` for branch, `project-{id}` for project fallback
 - Branch diff uses `git diff --name-status origin/base...origin/branch`
@@ -33,6 +33,6 @@
 - Mission Briefs: session-start protocol for standard enforcement (SOLID, etc.)
 
 ## Quality Status
-- Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-20T17:06+07:00)
+- Quality status: Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-20T17:35+07:00)
 - Docker ✅ (container recreated 2026-03-20T03:38Z)
 - All 4 services healthy: qdrant, neo4j, cliproxy, mem0
