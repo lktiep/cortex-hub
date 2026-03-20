@@ -21,6 +21,7 @@
 - [x] 3 new backend endpoints (branches listing, diff, per-branch index summary)
 - [x] Universal Installation & Onboarding (`install.sh`, `install-hub.sh`, `onboard.sh`)
 - [x] Onboarding stabilization (non-interactive support, idempotent /onboard) ✅
+- [x] API Key Persistence (SQLite + SWR + permissions) ✅
 - [x] Cortex Skill Set integration (GSD + Forgewright Golden Standard)
 - [x] Hub MCP Session Enforcement & Mission Briefs
 - [x] mem0 Gemini Embedding Fallback (100% reliability)

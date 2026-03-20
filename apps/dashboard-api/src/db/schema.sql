@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     name TEXT NOT NULL,
     key_hash TEXT NOT NULL,    -- sha256 hash of the actual key
     scope TEXT NOT NULL,       -- e.g., 'all', 'knowledge', 'hub'
+    permissions TEXT,          -- JSON string of permissions
     project_id TEXT,           -- optional scope to a project
     created_at TEXT DEFAULT (datetime('now')),
     expires_at TEXT,

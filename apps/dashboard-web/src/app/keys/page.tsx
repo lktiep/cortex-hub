@@ -4,28 +4,8 @@ import { useState } from 'react'
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import styles from './page.module.css'
 
-interface ApiKeyDisplay {
-  id: string
-  name: string
-  prefix: string
-  scope: string
-  permissions: string[]
-  createdAt: string
-  expiresAt: string | null
-}
-
-// Demo data (will be replaced by API calls)
-const demoKeys: ApiKeyDisplay[] = [
-  {
-    id: '1',
-    name: 'development-agent',
-    prefix: 'ctx_sk_dev...a4f2',
-    scope: 'All Projects',
-    permissions: ['cortex.health', 'cortex.memory.store', 'cortex.memory.search'],
-    createdAt: '2025-03-18',
-    expiresAt: null,
-  },
-]
+import useSWR from 'swr'
+import { listApiKeys, createApiKey, revokeApiKey } from '@/lib/api'
 
 const allPermissions = [
   { id: 'cortex.health', label: 'Health Check', group: 'System' },
@@ -35,9 +15,11 @@ const allPermissions = [
 ]
 
 export default function KeysPage() {
-  const [keys, setKeys] = useState<ApiKeyDisplay[]>(demoKeys)
+  const { data, mutate } = useSWR('api_keys', listApiKeys)
+  const keys = data?.keys ?? []
   const [showCreate, setShowCreate] = useState(false)
   const [newKeyResult, setNewKeyResult] = useState<string | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
 
   // Create key form state
   const [keyName, setKeyName] = useState('')
@@ -49,30 +31,36 @@ export default function KeysPage() {
     setKeyPerms((prev) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id])
   }
 
-  function handleCreate() {
-    // Simulate key creation
-    const newPrefix = `ctx_sk_${Math.random().toString(36).slice(2, 8)}...${Math.random().toString(36).slice(2, 6)}`
-    const fullKey = `ctx_sk_${Math.random().toString(36).slice(2, 30)}`
-
-    setKeys((prev) => [
-      ...prev, {
-        id: String(prev.length + 1),
+  async function handleCreate() {
+    setIsCreating(true)
+    try {
+      const result = await createApiKey({
         name: keyName,
-        prefix: newPrefix,
-        scope: keyScope === 'all' ? 'All Projects' : keyScope,
+        scope: keyScope,
         permissions: keyPerms,
-        createdAt: new Date().toISOString().slice(0, 10),
-        expiresAt: keyExpiry === 'never' ? null : `${keyExpiry} days`,
-      },
-    ])
+        expiresInDays: keyExpiry === 'never' ? undefined : parseInt(keyExpiry),
+      })
 
-    setNewKeyResult(fullKey)
-    setShowCreate(false)
-    setKeyName('')
+      setNewKeyResult(result.key)
+      setShowCreate(false)
+      setKeyName('')
+      mutate() // Refresh list
+    } catch (err) {
+      alert(`Failed to create key: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setIsCreating(false)
+    }
   }
 
-  function handleRevoke(id: string) {
-    setKeys((prev) => prev.filter((k) => k.id !== id))
+  async function handleRevoke(id: string) {
+    if (!confirm('Are you sure you want to revoke this key? This action cannot be undone.')) return
+    
+    try {
+      await revokeApiKey(id)
+      mutate() // Refresh list
+    } catch (err) {
+      alert(`Failed to revoke key: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   return (
@@ -166,10 +154,10 @@ export default function KeysPage() {
               </button>
               <button
                 className="btn btn-primary"
-                disabled={!keyName}
+                disabled={!keyName || isCreating}
                 onClick={handleCreate}
               >
-                Generate Key
+                {isCreating ? 'Generating...' : 'Generate Key'}
               </button>
             </div>
           </div>

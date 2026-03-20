@@ -14,6 +14,8 @@ out/
 
 # Data volumes
 infra/data/
+apps/dashboard-api/data/
+*.tsbuildinfo
 
 # GitNexus index (regenerated)
 .gitnexus/
