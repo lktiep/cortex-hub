@@ -1,7 +1,11 @@
 import { Hono } from 'hono'
 import { randomUUID } from 'crypto'
+import { existsSync } from 'fs'
+import { join } from 'path'
 import { db } from '../db/client.js'
-import { startIndexing, cancelJob } from '../services/indexer.js'
+import { startIndexing, cancelJob, buildAuthUrl } from '../services/indexer.js'
+
+const REPOS_DIR = process.env.REPOS_DIR ?? '/data/repos'
 
 export const indexingRouter = new Hono()
 
@@ -139,3 +143,127 @@ indexingRouter.post('/:id/index/cancel', (c) => {
     return c.json({ error: String(error) }, 500)
   }
 })
+
+// ── List Remote Branches ──
+indexingRouter.get('/:id/branches', async (c) => {
+  const projectId = c.req.param('id')
+
+  try {
+    const project = db.prepare(
+      'SELECT git_repo_url, git_username, git_token FROM projects WHERE id = ?'
+    ).get(projectId) as { git_repo_url: string | null; git_username: string | null; git_token: string | null } | undefined
+
+    if (!project?.git_repo_url) return c.json({ branches: [], error: 'No git repository URL' })
+
+    const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
+
+    // Use git ls-remote to list branches without cloning
+    const { execSync } = await import('child_process')
+    const output = execSync(`git ls-remote --heads "${authUrl}" 2>/dev/null`, {
+      timeout: 15000,
+      encoding: 'utf-8',
+    })
+
+    const branches = output
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const ref = line.split('\t')[1] ?? ''
+        return ref.replace('refs/heads/', '')
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        // main/master first, then alphabetical
+        if (a === 'main' || a === 'master') return -1
+        if (b === 'main' || b === 'master') return 1
+        return a.localeCompare(b)
+      })
+
+    return c.json({ branches })
+  } catch (error) {
+    return c.json({ branches: [], error: `Failed to list branches: ${String(error).slice(0, 200)}` })
+  }
+})
+
+// ── Branch Diff (files changed vs base branch) ──
+indexingRouter.get('/:id/branches/diff', async (c) => {
+  const projectId = c.req.param('id')
+  const branch = c.req.query('branch')
+  const base = c.req.query('base') ?? 'main'
+
+  if (!branch) return c.json({ error: 'branch query param required' }, 400)
+  if (branch === base) return c.json({ diff: [], message: 'Same branch' })
+
+  try {
+    const repoDir = join(REPOS_DIR, projectId)
+
+    if (!existsSync(repoDir)) {
+      return c.json({ diff: [], message: 'Repository not cloned yet. Run indexing on main first.' })
+    }
+
+    const { execSync } = await import('child_process')
+
+    // Fetch the branch if not already available
+    try {
+      execSync(`git fetch origin ${branch} 2>/dev/null`, { cwd: repoDir, timeout: 15000 })
+    } catch {
+      // Branch may already be local
+    }
+
+    // Get diff summary: files changed between base and branch
+    const output = execSync(
+      `git diff --name-status origin/${base}...origin/${branch} 2>/dev/null || echo ""`,
+      { cwd: repoDir, encoding: 'utf-8', timeout: 10000 }
+    )
+
+    const diff = output
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [status, ...fileParts] = line.split('\t')
+        const file = fileParts.join('\t')
+        return {
+          status: status === 'A' ? 'added' : status === 'D' ? 'deleted' : status === 'M' ? 'modified' : status ?? 'unknown',
+          file,
+        }
+      })
+      .filter((d) => d.file)
+
+    const summary = {
+      added: diff.filter((d) => d.status === 'added').length,
+      modified: diff.filter((d) => d.status === 'modified').length,
+      deleted: diff.filter((d) => d.status === 'deleted').length,
+      total: diff.length,
+    }
+
+    return c.json({ branch, base, diff, summary })
+  } catch (error) {
+    return c.json({ diff: [], error: `Diff failed: ${String(error).slice(0, 200)}` })
+  }
+})
+
+// ── Per-Branch Index Summary ──
+indexingRouter.get('/:id/index/branches', (c) => {
+  const projectId = c.req.param('id')
+
+  try {
+    // Get the latest job per branch
+    const jobs = db.prepare(
+      `SELECT branch, status, progress, total_files, symbols_found, completed_at, created_at
+       FROM index_jobs
+       WHERE project_id = ?
+         AND id IN (
+           SELECT id FROM (
+             SELECT id, ROW_NUMBER() OVER (PARTITION BY branch ORDER BY created_at DESC) as rn
+             FROM index_jobs WHERE project_id = ?
+           ) WHERE rn = 1
+         )
+       ORDER BY created_at DESC`
+    ).all(projectId, projectId)
+
+    return c.json({ branches: jobs })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+

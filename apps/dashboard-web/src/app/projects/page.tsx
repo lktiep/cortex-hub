@@ -7,7 +7,8 @@ import useSWR from 'swr'
 import {
   getProject, updateProject,
   startIndexing, getIndexStatus, getIndexHistory, cancelIndexing,
-  type IndexStatus, type IndexJobSummary
+  listBranches, getBranchDiff, getBranchIndexSummary,
+  type IndexStatus, type IndexJobSummary, type BranchIndexStatus,
 } from '@/lib/api'
 import styles from './page.module.css'
 
@@ -34,6 +35,7 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
   const [starting, setStarting] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [showLog, setShowLog] = useState(false)
+  const [showDiff, setShowDiff] = useState(false)
 
   const { data: status, mutate: mutateStatus } = useSWR<IndexStatus>(
     `index-status-${projectId}`,
@@ -47,13 +49,30 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
     { refreshInterval: 15000 }
   )
 
+  const { data: branchesData } = useSWR(
+    hasGitUrl ? `branches-${projectId}` : null,
+    () => listBranches(projectId),
+    { refreshInterval: 60000 }
+  )
+
+  const { data: branchIndexData } = useSWR(
+    `branch-index-${projectId}`,
+    () => getBranchIndexSummary(projectId),
+    { refreshInterval: 10000 }
+  )
+
+  const { data: diffData } = useSWR(
+    branch && branch !== 'main' && branch !== 'master' ? `diff-${projectId}-${branch}` : null,
+    () => getBranchDiff(projectId, branch),
+  )
+
   const isActive = status && ['pending', 'cloning', 'analyzing', 'ingesting'].includes(status.status)
 
-  // Poll faster when active
+  // Poll faster when active (1.5s)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   useEffect(() => {
     if (isActive) {
-      pollRef.current = setInterval(() => { mutateStatus() }, 2000)
+      pollRef.current = setInterval(() => { mutateStatus() }, 1500)
     }
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [isActive, mutateStatus])
@@ -85,8 +104,9 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
   }, [projectId, mutateStatus, mutateHistory])
 
   const statusInfo = STATUS_CONFIG[status?.status ?? 'none'] ?? { label: 'Unknown', color: '#666', icon: '—' }
-
   const history = historyData?.jobs ?? []
+  const branches = branchesData?.branches ?? []
+  const indexedBranches = branchIndexData?.branches ?? []
 
   return (
     <div className={`card ${styles.indexingCard}`}>
@@ -142,14 +162,27 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
         <div className={styles.indexingActions}>
           <div className={styles.branchInput}>
             <label className={styles.branchLabel}>Branch:</label>
-            <input
-              className={styles.branchField}
-              type="text"
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              placeholder="main"
-              disabled={isActive}
-            />
+            {branches.length > 0 ? (
+              <select
+                className={styles.branchField}
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                disabled={isActive}
+              >
+                {branches.map((b: string) => (
+                  <option key={b} value={b}>{b}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className={styles.branchField}
+                type="text"
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                placeholder="main"
+                disabled={isActive}
+              />
+            )}
           </div>
           {isActive ? (
             <button
@@ -178,6 +211,67 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
         </div>
       )}
 
+      {/* Branch Diff (when non-main branch selected) */}
+      {diffData && diffData.summary && diffData.summary.total > 0 && (
+        <div className={styles.diffSection}>
+          <button
+            className={styles.diffToggle}
+            onClick={() => setShowDiff(!showDiff)}
+          >
+            {showDiff ? '▼' : '▶'} Branch Diff vs {diffData.base ?? 'main'}:
+            <span className={styles.diffBadge} style={{ background: '#27ae60' }}>+{diffData.summary.added}</span>
+            <span className={styles.diffBadge} style={{ background: '#f5a623' }}>~{diffData.summary.modified}</span>
+            <span className={styles.diffBadge} style={{ background: '#e74c3c' }}>-{diffData.summary.deleted}</span>
+            <span className={styles.diffTotal}>{diffData.summary.total} files</span>
+          </button>
+          {showDiff && (
+            <div className={styles.diffList}>
+              {diffData.diff.slice(0, 50).map((d: { status: string; file: string }, i: number) => (
+                <div key={i} className={styles.diffRow}>
+                  <span className={styles.diffStatus} data-status={d.status}>
+                    {d.status === 'added' ? '+' : d.status === 'deleted' ? '−' : '~'}
+                  </span>
+                  <span className={styles.diffFile}>{d.file}</span>
+                </div>
+              ))}
+              {diffData.diff.length > 50 && (
+                <div className={styles.diffMore}>... and {diffData.diff.length - 50} more files</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Per-Branch Index Status */}
+      {indexedBranches.length > 0 && (
+        <div className={styles.branchStatusSection}>
+          <h4 className={styles.historyTitle}>Indexed Branches</h4>
+          <div className={styles.branchStatusGrid}>
+            {indexedBranches.map((b: BranchIndexStatus) => {
+              const bStatus = STATUS_CONFIG[b.status] ?? { label: b.status, color: '#666', icon: '?' }
+              return (
+                <div key={b.branch} className={styles.branchStatusCard}>
+                  <div className={styles.branchStatusName}>
+                    <span className={styles.branchDot} style={{ background: bStatus.color }} />
+                    {b.branch}
+                  </div>
+                  <div className={styles.branchStatusMeta}>
+                    <span>{bStatus.icon} {bStatus.label}</span>
+                    <span>{b.symbols_found} symbols</span>
+                    <span>{b.total_files} files</span>
+                  </div>
+                  {b.completed_at && (
+                    <div className={styles.branchStatusDate}>
+                      {new Date(b.completed_at).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* History */}
       {history.length > 0 && (
         <div className={styles.indexingHistory}>
@@ -190,7 +284,7 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
               <span>Files</span>
               <span>Date</span>
             </div>
-            {history.slice(0, 5).map((job: IndexJobSummary) => {
+            {history.slice(0, 10).map((job: IndexJobSummary) => {
               const jobStatus = STATUS_CONFIG[job.status] ?? { label: 'Unknown', color: '#666', icon: '—' }
               return (
                 <div key={job.id} className={styles.historyRow}>

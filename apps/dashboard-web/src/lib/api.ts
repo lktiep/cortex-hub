@@ -393,3 +393,38 @@ export async function cancelIndexing(projectId: string) {
     { method: 'POST' }
   )
 }
+
+// ── Branches ──
+export async function listBranches(projectId: string) {
+  return apiFetch<{ branches: string[]; error?: string }>(`/api/projects/${projectId}/branches`)
+}
+
+export interface BranchDiff {
+  branch: string
+  base: string
+  diff: { status: string; file: string }[]
+  summary: { added: number; modified: number; deleted: number; total: number }
+  message?: string
+  error?: string
+}
+
+export async function getBranchDiff(projectId: string, branch: string, base = 'main') {
+  return apiFetch<BranchDiff>(
+    `/api/projects/${projectId}/branches/diff?branch=${encodeURIComponent(branch)}&base=${encodeURIComponent(base)}`
+  )
+}
+
+export interface BranchIndexStatus {
+  branch: string
+  status: string
+  progress: number
+  total_files: number
+  symbols_found: number
+  completed_at: string | null
+  created_at: string
+}
+
+export async function getBranchIndexSummary(projectId: string) {
+  return apiFetch<{ branches: BranchIndexStatus[] }>(`/api/projects/${projectId}/index/branches`)
+}
+

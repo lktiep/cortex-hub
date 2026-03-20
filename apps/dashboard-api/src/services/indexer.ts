@@ -23,7 +23,7 @@ interface ProjectRow {
  * Build authenticated git URL for private repos.
  * Supports: https://user:token@host/path.git
  */
-function buildAuthUrl(url: string, username?: string | null, token?: string | null): string {
+export function buildAuthUrl(url: string, username?: string | null, token?: string | null): string {
   if (!token) return url
 
   try {

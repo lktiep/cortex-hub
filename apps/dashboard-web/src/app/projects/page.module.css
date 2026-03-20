@@ -553,10 +553,152 @@
   color: var(--text-tertiary);
 }
 
+/* ── Diff Section ── */
+.diffSection {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.diffToggle {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  padding: var(--space-2) 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+}
+
+.diffToggle:hover { color: var(--text-primary); }
+
+.diffBadge {
+  display: inline-flex;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: white;
+  font-family: var(--font-mono);
+}
+
+.diffTotal {
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  margin-left: var(--space-1);
+}
+
+.diffList {
+  margin-top: var(--space-2);
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.diffRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  border-radius: 2px;
+}
+
+.diffRow:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.diffStatus {
+  font-weight: 700;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.diffStatus[data-status="added"] { color: #27ae60; }
+.diffStatus[data-status="modified"] { color: #f5a623; }
+.diffStatus[data-status="deleted"] { color: #e74c3c; }
+
+.diffFile {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diffMore {
+  padding: var(--space-2);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+}
+
+/* ── Branch Status Grid ── */
+.branchStatusSection {
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.branchStatusGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.branchStatusCard {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.branchStatusName {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  margin-bottom: var(--space-1);
+  font-family: var(--font-mono);
+}
+
+.branchDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.branchStatusMeta {
+  display: flex;
+  gap: var(--space-3);
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  flex-wrap: wrap;
+}
+
+.branchStatusDate {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  margin-top: var(--space-1);
+}
+
 @media (max-width: 1024px) {
   .statsGrid { grid-template-columns: repeat(2, 1fr); }
   .infoGrid { grid-template-columns: 1fr; }
   .providerGrid { grid-template-columns: repeat(2, 1fr); }
   .historyHeaderRow,
   .historyRow { grid-template-columns: 1fr 1fr 0.7fr 0.7fr 1fr; }
+  .branchStatusGrid { grid-template-columns: 1fr; }
 }
+
