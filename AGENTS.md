@@ -12,7 +12,7 @@
 
 1. **Read `STATE.md`** → current task & progress
 2. **Read `.forgewright/project-profile.json`** → `verify` commands & fingerprint
-3. **Run `/onboard`** (if first session) → sync MCP, rules, and local audit
+3. **Run `/onboard`** (only if first session or Hub credentials missing/broken) → sync MCP, rules, and local audit
 4. **Acknowledge context:** "Phase X, resuming: [task]. Standards: SOLID, Clean Architecture. Verify: [profile commands]"
 
 ### At Session End — ALWAYS do:

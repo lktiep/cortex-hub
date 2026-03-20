@@ -20,9 +20,20 @@ echo -e "${BLUE}>>> Detecting project context for: ${GIT_REPO}${NC}"
 echo -e "${BLUE}>>> Connecting to Cortex Hub...${NC}"
 MCP_URL="https://cortex-mcp.jackle.dev"
 
-# Prompt for API Key if not provided
+# 1. Support for passing key as argument
+if [ -n "$1" ]; then
+    HUB_API_KEY="$1"
+fi
+
+# 2. Prompt for API Key if not provided via environment or argument
 if [ -z "$HUB_API_KEY" ]; then
-    read -rp "Enter your Cortex Hub API Key: " HUB_API_KEY
+    # Only prompt if we have a TTY (interactive)
+    if [ -t 0 ]; then
+        read -rp "Enter your Cortex Hub API Key: " HUB_API_KEY
+    else
+        echo -e "${RED}>>> Error: HUB_API_KEY not provided and no TTY detected.${NC}"
+        exit 1
+    fi
 fi
 
 # Inject into global mcp_config.json
