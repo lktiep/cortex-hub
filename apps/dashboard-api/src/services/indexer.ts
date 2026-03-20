@@ -89,10 +89,48 @@ const SYMBOL_PATTERNS: Record<string, RegExp[]> = {
   '.sql': [/CREATE\s+(?:OR\s+REPLACE\s+)?(?:TABLE|VIEW|FUNCTION|PROCEDURE|INDEX)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:\w+\.)?(\w+)/gi],
   // CSS
   '.css': [/\.([a-zA-Z][\w-]+)\s*\{/g],
+  // C# (.NET)
+  '.cs': [/(?:public|private|protected|internal)?\s*(?:static\s+)?(?:async\s+)?(?:class|interface|struct|enum|record)\s+(\w+)/g, /(?:public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?[\w<>\[\]]+\s+(\w+)\s*\(/g],
+  // Swift
+  '.swift': [/(?:public\s+|private\s+|internal\s+|open\s+)?(?:class|struct|enum|protocol|func)\s+(\w+)/g],
+  // Dart
+  '.dart': [/(?:class|mixin|extension|enum)\s+(\w+)/g, /(?:Future|void|int|String|bool|double|dynamic)\s+(\w+)\s*\(/g],
+  // Scala
+  '.scala': [/(?:class|object|trait|def)\s+(\w+)/g],
+  // Elixir
+  '.ex':  [/def(?:p)?\s+(\w+)/g, /defmodule\s+([\w.]+)/g],
+  '.exs': [/def(?:p)?\s+(\w+)/g, /defmodule\s+([\w.]+)/g],
+  // Lua
+  '.lua': [/function\s+(?:[\w.:]*)(\w+)/g, /local\s+function\s+(\w+)/g],
+  // R
+  '.r': [/(\w+)\s*<-\s*function/gi],
+  // C / C++
+  '.c':   [/^\w[\w\s*]+\s+(\w+)\s*\([^)]*\)\s*\{/gm, /^(?:typedef\s+)?struct\s+(\w+)/gm],
+  '.h':   [/^\w[\w\s*]+\s+(\w+)\s*\([^)]*\)/gm, /^(?:typedef\s+)?struct\s+(\w+)/gm],
+  '.cpp': [/^\w[\w\s*:]+\s+(\w+)\s*\([^)]*\)\s*(?:const\s*)?\{/gm, /^class\s+(\w+)/gm],
+  '.hpp': [/^class\s+(\w+)/gm, /^\w[\w\s*:]+\s+(\w+)\s*\([^)]*\)/gm],
+  // Objective-C
+  '.m':   [/@(?:interface|implementation|protocol)\s+(\w+)/g, /^[-+]\s*\([^)]+\)\s*(\w+)/gm],
+  // Shell
+  '.sh':  [/^(\w+)\s*\(\)/gm, /^function\s+(\w+)/gm],
+  // Perl
+  '.pl':  [/^sub\s+(\w+)/gm, /^package\s+(\w+)/gm],
+  '.pm':  [/^sub\s+(\w+)/gm, /^package\s+(\w+)/gm],
 }
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.turbo', 'coverage', '.cache', 'vendor'])
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.turbo', 'coverage', '.cache', 'vendor', '.pnpm-store', 'bin', 'obj', 'packages', '.vs', '.idea'])
 const SOURCE_EXTENSIONS = new Set(Object.keys(SYMBOL_PATTERNS))
+// Count ALL source/config files for total file count (broader than symbol extraction)
+const ALL_SOURCE_EXTENSIONS = new Set([
+  ...SOURCE_EXTENSIONS,
+  '.md', '.json', '.yaml', '.yml', '.html', '.toml', '.env', '.sh', '.bash',
+  '.xml', '.graphql', '.gql', '.proto', '.dockerfile', '.tf', '.hcl',
+  '.svelte', '.astro', '.mdx', '.prisma', '.lock', '.conf', '.cfg', '.ini',
+  '.csproj', '.sln', '.xaml', '.resx', '.props', '.targets', '.fsproj', '.vbproj',
+  '.gradle', '.pom', '.cmake', '.makefile', '.mk',
+  '.plist', '.storyboard', '.xib', '.pbxproj',
+  '.txt', '.rst', '.adoc', '.csv', '.tsv',
+])
 const MAX_FILE_SIZE = 512 * 1024 // 512KB
 
 /**
@@ -126,17 +164,18 @@ function extractSymbolsFromDir(dir: string): { totalFiles: number; symbolsFound:
         walk(fullPath)
       } else if (stat.isFile()) {
         const ext = extname(entry).toLowerCase()
-        if (!SOURCE_EXTENSIONS.has(ext)) continue
+        if (!ALL_SOURCE_EXTENSIONS.has(ext)) continue
         if (stat.size > MAX_FILE_SIZE) continue
 
         totalFiles++
+
+        // Only extract symbols from code files (not config/docs)
         const patterns = SYMBOL_PATTERNS[ext]
         if (!patterns) continue
 
         try {
           const content = readFileSync(fullPath, 'utf-8')
           for (const pattern of patterns) {
-            // Reset regex lastIndex for reuse
             const regex = new RegExp(pattern.source, pattern.flags)
             let match
             while ((match = regex.exec(content)) !== null) {
@@ -247,17 +286,17 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
     updateJob(jobId, { status: 'ingesting', progress: 80 })
     logger.info(`[${jobId}] Ingesting to mem0 (branch-scoped)`)
 
+    let mem0Status = 'skipped'
     try {
       const mem0Url = process.env.MEM0_URL ?? 'http://mem0:8000'
-      const summary = `Project ${project.id} indexed on branch "${branch}": ${symbolsFound} symbols across ${totalFiles} files. Repository: ${project.git_repo_url}`
+      const symbolSample = symbolNames.length > 0 ? `\nKey symbols: ${symbolNames.slice(0, 50).join(', ')}` : ''
+      const summary = `Project ${project.id} indexed on branch "${branch}": ${symbolsFound} symbols across ${totalFiles} files. Repository: ${project.git_repo_url}${symbolSample}`
 
-      // Branch-scoped memory: user_id = "project-{id}:branch-{name}"
-      // This enables branch-level isolation when searching
       const branchUserId = `project-${projectId}:branch-${branch}`
       const baseUserId = `project-${projectId}`
 
       // Store branch-specific memory
-      await fetch(`${mem0Url}/v1/memories/`, {
+      const branchRes = await fetch(`${mem0Url}/v1/memories/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -275,8 +314,8 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
         signal: AbortSignal.timeout(15000),
       })
 
-      // Also store a base project-level memory (for fallback queries without branch)
-      await fetch(`${mem0Url}/v1/memories/`, {
+      // Also store a base project-level memory
+      const baseRes = await fetch(`${mem0Url}/v1/memories/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -294,10 +333,16 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
         signal: AbortSignal.timeout(15000),
       })
 
-      appendLog(jobId, `mem0 ingest OK (branch-scoped: ${branchUserId})`)
+      if (branchRes.ok && baseRes.ok) {
+        mem0Status = 'ok'
+        appendLog(jobId, `✅ mem0 ingest OK (branch: ${branchUserId}, base: ${baseUserId})`)
+      } else {
+        mem0Status = 'partial'
+        appendLog(jobId, `⚠️ mem0 partial: branch=${branchRes.status} base=${baseRes.status}`)
+      }
     } catch (err) {
-      // mem0 failure is non-fatal — log but continue
-      appendLog(jobId, `[warn] mem0 ingest failed: ${err}`)
+      mem0Status = 'failed'
+      appendLog(jobId, `❌ mem0 ingest failed: ${err}`)
       logger.warn(`[${jobId}] mem0 ingest failed (non-fatal): ${err}`)
     }
 
