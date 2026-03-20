@@ -17,3 +17,16 @@ debug: false
 remote-management:
   allow-remote: true
   secret-key: ${MANAGEMENT_PASSWORD:-cortex2026}
+
+# OpenAI-compatible endpoints (enables /v1/embeddings for mem0)
+# API key is synced from Codex OAuth by dashboard-api startup
+openai-compatibility:
+  - name: "cortex-openai"
+    base-url: "https://api.openai.com/v1"
+    api-key-entries:
+      - api-key: "${OPENAI_API_KEY:-placeholder}"
+    models:
+      - name: "text-embedding-3-small"
+        alias: "text-embedding-3-small"
+      - name: "text-embedding-3-large"
+        alias: "text-embedding-3-large"

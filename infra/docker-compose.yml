@@ -89,7 +89,8 @@ services:
 
   # ─────────────────────────────────────────────
   # mem0 — Agent Memory Service
-  # Routes AI calls through CLIProxyAPI
+  # LLM (chat) routes through CLIProxy; embeddings direct to OpenAI
+  # (CLIProxy v6.8.55 does not support /v1/embeddings)
   # ─────────────────────────────────────────────
   mem0:
     build:
@@ -100,10 +101,13 @@ services:
     restart: unless-stopped
     ports:
       - "8050:8000"
+    volumes:
+      - cliproxy-auth:/app/cliproxy-auth:ro
     environment:
       MEM0_API_KEY: ${MEM0_API_KEY:-local}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-proxy-key}
       OPENAI_BASE_URL: http://llm-proxy:8317/v1
+      CLIPROXY_AUTH_DIR: /app/cliproxy-auth
       MEM0_VECTOR_STORE: qdrant
       MEM0_QDRANT_HOST: qdrant
       MEM0_QDRANT_PORT: 6333
