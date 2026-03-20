@@ -167,7 +167,7 @@ Inspired by [Forgewright](https://github.com/buiphucminhtam/forgewright-agents)'
 ### One-Command Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<org>/cortex-hub/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/install.sh | bash
 ```
 
 ### Manual Setup

@@ -18,19 +18,28 @@ if [ ! -d ".git" ]; then
     cd cortex-hub
 fi
 
-# 2. Execute Admin Installation
-if [ -f "scripts/install-hub.sh" ]; then
-    bash scripts/install-hub.sh
+echo -e "${GREEN}>>> Welcome to Cortex Hub!${NC}"
+echo "Choose your role:"
+echo "1) Administrator (Full installation: Docker stack, Hub API, and Onboarding)"
+echo "2) Member (Project Onboarding only: Connect local agent to existing Hub)"
+read -rp "Select option [1-2]: " role
+
+if [ "$role" == "1" ]; then
+    # 2. Execute Admin Installation
+    if [ -f "scripts/install-hub.sh" ]; then
+        bash scripts/install-hub.sh
+    else
+        echo "Error: scripts/install-hub.sh not found."
+        exit 1
+    fi
 else
-    echo "Error: scripts/install-hub.sh not found."
-    exit 1
+    # 3. Execute Member Onboarding Only
+    if [ -f "scripts/onboard.sh" ]; then
+        bash scripts/onboard.sh
+    else
+        echo "Error: scripts/onboard.sh not found."
+        exit 1
+    fi
 fi
 
-# 3. Offer immediate onboarding
-echo -e "${GREEN}>>> Installation Finished! Shall we onboard the current workspace? (y/n)${NC}"
-read -r response
-if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-    bash scripts/onboard.sh
-fi
-
-echo -e "${BLUE}>>> Setup complete. Check README.md for dashboard access.${NC}"
+echo -e "${BLUE}>>> Operation complete. Happy Coding!${NC}"
