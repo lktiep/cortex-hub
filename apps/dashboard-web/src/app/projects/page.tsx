@@ -7,7 +7,7 @@ import useSWR from 'swr'
 import {
   getProject, updateProject,
   startIndexing, getIndexStatus, getIndexHistory, cancelIndexing,
-  listBranches, getBranchDiff, getBranchIndexSummary,
+  listBranches, getBranchDiff, getBranchIndexSummary, testGitConnection,
   type IndexStatus, type IndexJobSummary, type BranchIndexStatus,
 } from '@/lib/api'
 import styles from './page.module.css'
@@ -36,6 +36,7 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
   const [cancelling, setCancelling] = useState(false)
   const [showLog, setShowLog] = useState(false)
   const [showDiff, setShowDiff] = useState(false)
+  const [branchesLoading, setBranchesLoading] = useState(false)
 
   const { data: status, mutate: mutateStatus } = useSWR<IndexStatus>(
     `index-status-${projectId}`,
@@ -49,11 +50,20 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
     { refreshInterval: 15000 }
   )
 
-  const { data: branchesData } = useSWR(
+  const { data: branchesData, mutate: mutateBranches } = useSWR(
     hasGitUrl ? `branches-${projectId}` : null,
     () => listBranches(projectId),
     { refreshInterval: 60000 }
   )
+
+  const handleRefreshBranches = useCallback(async () => {
+    setBranchesLoading(true)
+    try {
+      await mutateBranches()
+    } finally {
+      setBranchesLoading(false)
+    }
+  }, [mutateBranches])
 
   const { data: branchIndexData } = useSWR(
     `branch-index-${projectId}`,
@@ -183,6 +193,14 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
                 disabled={isActive}
               />
             )}
+            <button
+              className={styles.refreshBtn}
+              onClick={handleRefreshBranches}
+              disabled={branchesLoading || isActive}
+              title="Refresh branches from remote"
+            >
+              {branchesLoading ? '⏳' : '🔄'}
+            </button>
           </div>
           {isActive ? (
             <button
@@ -323,6 +341,22 @@ function ProjectContent() {
   const [gitUsername, setGitUsername] = useState('')
   const [gitToken, setGitToken] = useState('')
   const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null)
+
+  const handleTestConnection = useCallback(async () => {
+    if (!projectId) return
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const result = await testGitConnection(projectId)
+      setTestResult(result)
+    } catch (err) {
+      setTestResult({ success: false, error: String(err) })
+    } finally {
+      setTesting(false)
+    }
+  }, [projectId])
 
   const handleSaveGit = useCallback(async () => {
     if (!projectId) return
@@ -439,6 +473,20 @@ function ProjectContent() {
                   <span className={styles.gitValue}>
                     {new Date(project.indexed_at).toLocaleString()}
                   </span>
+                </div>
+              )}
+              <div className={styles.gitActions}>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleTestConnection}
+                  disabled={testing}
+                >
+                  {testing ? '⏳ Testing...' : '🔌 Test Connection'}
+                </button>
+              </div>
+              {testResult && (
+                <div className={styles.testResult} data-success={testResult.success}>
+                  {testResult.success ? '✅' : '❌'} {testResult.message ?? testResult.error}
                 </div>
               )}
             </div>

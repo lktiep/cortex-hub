@@ -399,6 +399,13 @@ export async function listBranches(projectId: string) {
   return apiFetch<{ branches: string[]; error?: string }>(`/api/projects/${projectId}/branches`)
 }
 
+export async function testGitConnection(projectId: string) {
+  return apiFetch<{ success: boolean; message?: string; error?: string; branchCount?: number; defaultBranch?: string }>(
+    `/api/projects/${projectId}/git/test`,
+    { method: 'POST' }
+  )
+}
+
 export interface BranchDiff {
   branch: string
   base: string

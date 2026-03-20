@@ -135,7 +135,7 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
     updateJob(jobId, { progress: 25 })
     logger.info(`[${jobId}] Clone complete`)
 
-    // ── Step 2: GitNexus Analyze ──
+    // ── Step 2: GitNexus Analyze (non-fatal) ──
     updateJob(jobId, { status: 'analyzing', progress: 30 })
     logger.info(`[${jobId}] Running gitnexus analyze`)
 
@@ -152,15 +152,27 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
     if (fileMatch?.[1]) totalFiles = parseInt(fileMatch[1], 10)
 
     if (analyzeResult.code !== 0) {
-      updateJob(jobId, {
-        status: 'error',
-        error: `gitnexus analyze failed (exit ${analyzeResult.code})`,
-        progress: 30,
-        symbols_found: symbolsFound,
-        total_files: totalFiles,
-        completed_at: new Date().toISOString()
-      })
-      return
+      // GitNexus failed (e.g. GLIBC mismatch) — graceful degradation
+      appendLog(jobId, `[warn] gitnexus failed (exit ${analyzeResult.code}), falling back to file counting`)
+      logger.warn(`[${jobId}] GitNexus failed (non-fatal): exit ${analyzeResult.code}`)
+
+      // Fallback: count files ourselves
+      try {
+        const fallbackResult = await runCommand('find', [
+          '.', '-type', 'f',
+          '(', '-name', '*.ts', '-o', '-name', '*.js', '-o', '-name', '*.tsx', '-o', '-name', '*.jsx',
+          '-o', '-name', '*.py', '-o', '-name', '*.go', '-o', '-name', '*.rs', '-o', '-name', '*.java',
+          '-o', '-name', '*.rb', '-o', '-name', '*.php', '-o', '-name', '*.vue', '-o', '-name', '*.svelte',
+          '-o', '-name', '*.css', '-o', '-name', '*.html', '-o', '-name', '*.json', '-o', '-name', '*.yaml',
+          '-o', '-name', '*.yml', '-o', '-name', '*.md', '-o', '-name', '*.sql', ')',
+          '-not', '-path', '*/node_modules/*', '-not', '-path', '*/.git/*', '-not', '-path', '*/dist/*',
+          '-not', '-path', '*/build/*', '-not', '-path', '*/.next/*',
+        ], repoDir, jobId)
+        totalFiles = fallbackResult.stdout.split('\n').filter(Boolean).length
+        appendLog(jobId, `Fallback file count: ${totalFiles} source files`)
+      } catch {
+        appendLog(jobId, `[warn] File counting also failed, continuing with 0`)
+      }
     }
 
     updateJob(jobId, { progress: 70, symbols_found: symbolsFound, total_files: totalFiles })

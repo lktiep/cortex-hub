@@ -144,6 +144,49 @@ indexingRouter.post('/:id/index/cancel', (c) => {
   }
 })
 
+// ── Test Git Connection ──
+indexingRouter.post('/:id/git/test', async (c) => {
+  const projectId = c.req.param('id')
+
+  try {
+    const project = db.prepare(
+      'SELECT git_repo_url, git_username, git_token FROM projects WHERE id = ?'
+    ).get(projectId) as { git_repo_url: string | null; git_username: string | null; git_token: string | null } | undefined
+
+    if (!project?.git_repo_url) return c.json({ success: false, error: 'No git repository URL configured' })
+
+    const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
+
+    const { execFileSync } = await import('child_process')
+    try {
+      const output = execFileSync('git', ['ls-remote', '--heads', authUrl], {
+        timeout: 15000,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+
+      const branchCount = output.split('\n').filter(Boolean).length
+      const defaultBranch = output.split('\n').filter(Boolean)
+        .map((l) => l.split('\t')[1]?.replace('refs/heads/', '') ?? '')
+        .find((b) => b === 'main' || b === 'master') ?? 'unknown'
+
+      return c.json({
+        success: true,
+        message: `Connected successfully! Found ${branchCount} branch(es).`,
+        branchCount,
+        defaultBranch,
+      })
+    } catch (err: unknown) {
+      const stderr = (err as { stderr?: string })?.stderr ?? String(err)
+      // Sanitize: remove auth tokens from error output
+      const sanitized = stderr.replace(/\/\/[^@]+@/g, '//<redacted>@')
+      return c.json({ success: false, error: sanitized.slice(0, 500) })
+    }
+  } catch (error) {
+    return c.json({ success: false, error: String(error).slice(0, 300) })
+  }
+})
+
 // ── List Remote Branches ──
 indexingRouter.get('/:id/branches', async (c) => {
   const projectId = c.req.param('id')
@@ -157,12 +200,20 @@ indexingRouter.get('/:id/branches', async (c) => {
 
     const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
 
-    // Use git ls-remote to list branches without cloning
-    const { execSync } = await import('child_process')
-    const output = execSync(`git ls-remote --heads "${authUrl}" 2>/dev/null`, {
-      timeout: 15000,
-      encoding: 'utf-8',
-    })
+    // Use execFileSync (no shell) to avoid URL injection issues with @, :, etc.
+    const { execFileSync } = await import('child_process')
+    let output: string
+    try {
+      output = execFileSync('git', ['ls-remote', '--heads', authUrl], {
+        timeout: 15000,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+    } catch (err: unknown) {
+      const stderr = (err as { stderr?: string })?.stderr ?? String(err)
+      const sanitized = stderr.replace(/\/\/[^@]+@/g, '//<redacted>@')
+      return c.json({ branches: [], error: sanitized.slice(0, 300) })
+    }
 
     const branches = output
       .split('\n')

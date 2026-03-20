@@ -553,6 +553,58 @@
   color: var(--text-tertiary);
 }
 
+/* ── Refresh Button ── */
+.refreshBtn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.refreshBtn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
+}
+
+.refreshBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Git Actions ── */
+.gitActions {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.testResult {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.testResult[data-success="true"] {
+  background: rgba(39, 174, 96, 0.1);
+  color: #27ae60;
+  border: 1px solid rgba(39, 174, 96, 0.2);
+}
+
+.testResult[data-success="false"] {
+  background: rgba(231, 76, 60, 0.1);
+  color: #e74c3c;
+  border: 1px solid rgba(231, 76, 60, 0.2);
+  word-break: break-word;
+}
+
 /* ── Diff Section ── */
 .diffSection {
   margin-top: var(--space-4);
