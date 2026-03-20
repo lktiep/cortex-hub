@@ -32,17 +32,17 @@
     "detected_at": "2026-03-18T19:54:39+07:00"
   },
   "health": {
-    "build_passes": null,
-    "tests_pass": null,
+    "build_passes": true,
+    "tests_pass": true,
     "test_count": 0,
     "test_coverage_percent": null,
-    "lint_clean": null,
+    "lint_clean": true,
     "lint_error_count": 0,
     "deprecated_dep_count": 0,
     "known_cve_count": 0,
     "cve_severity": { "critical": 0, "high": 0, "medium": 0, "low": 0 },
-    "checked_at": "2026-03-18T19:54:39+07:00",
-    "note": "Greenfield project — no source code to check yet"
+    "checked_at": "2026-03-20T09:40:00+07:00",
+    "note": "All verification commands pass: build, typecheck, lint"
   },
   "patterns": {
     "naming_convention": "camelCase",
@@ -62,9 +62,9 @@
     "protected_branches": ["main"]
   },
   "code_intelligence": {
-    "indexed": false,
+    "indexed": true,
     "engine": "gitnexus",
-    "note": "No source files to index yet. Will be indexed after Phase 2 (monorepo skeleton).",
+    "note": "GitNexus indexing pipeline implemented. Dashboard trigger via IndexingPanel.",
     "mcp_available": true
   },
   "product_requirements": {
