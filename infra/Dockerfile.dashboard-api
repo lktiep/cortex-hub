@@ -39,7 +39,7 @@ COPY --from=builder /app/packages/shared-utils/package.json ./packages/shared-ut
 COPY --from=builder /app/packages/shared-types/package.json ./packages/shared-types/package.json
 
 # Install production deps only (hoisted to root)
-RUN pnpm install --frozen-lockfile --prod
+RUN HUSKY=0 pnpm install --frozen-lockfile --prod
 
 # Verify hono is present
 RUN ls node_modules/@hono/node-server/package.json && echo "✅ PROD_HONO_OK"
