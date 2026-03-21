@@ -21,11 +21,6 @@ RUN pnpm install --frozen-lockfile --prod=false
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/packages/shared-types/node_modules ./packages/shared-types/node_modules
-COPY --from=deps /app/packages/shared-utils/node_modules ./packages/shared-utils/node_modules
-COPY --from=deps /app/apps/dashboard-api/node_modules ./apps/dashboard-api/node_modules
-COPY --from=deps /app/apps/dashboard-web/node_modules ./apps/dashboard-web/node_modules
-COPY --from=deps /app/apps/hub-mcp/node_modules ./apps/hub-mcp/node_modules
 COPY . .
 RUN pnpm --filter @cortex/shared-types build \
  && pnpm --filter @cortex/shared-utils build \
