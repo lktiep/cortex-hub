@@ -36,7 +36,7 @@ COPY apps/dashboard-api/package.json ./apps/dashboard-api/
 COPY apps/dashboard-web/package.json ./apps/dashboard-web/
 COPY apps/hub-mcp/package.json ./apps/hub-mcp/
 # Force hoisted linker for production to ensure real folders in runner
-RUN echo "node-linker=hoisted" >> .npmrc && pnpm install --frozen-lockfile --prod
+RUN echo "node-linker=hoisted" >> .npmrc && pnpm install --frozen-lockfile --prod --ignore-scripts
 
 # ── 4. Production Runner ──────────────────────
 FROM debian:trixie-slim AS runner
