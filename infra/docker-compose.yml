@@ -80,7 +80,6 @@ services:
       PORT: 4000
       NODE_ENV: production
       DATABASE_PATH: /app/data/cortex.db
-      COMMIT_SHA: ${COMMIT_SHA:-dev}
       QDRANT_URL: http://qdrant:6333
       OPENAI_API_KEY: ${OPENAI_API_KEY:-proxy-key}
       OPENAI_API_BASE: http://llm-proxy:8317/v1
