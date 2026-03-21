@@ -452,9 +452,100 @@
   to { transform: translateX(0); opacity: 1; }
 }
 
+/* ── Active Config Panel ── */
+.activeConfigGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.activeCard {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  transition: border-color var(--transition-fast);
+}
+
+.activeCard:hover {
+  border-color: var(--border-hover);
+}
+
+.activeCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-1);
+}
+
+.activeCardTitle {
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.activeCardDesc {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-bottom: var(--space-4);
+}
+
+.activeModel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+}
+
+.activeModelIcon {
+  font-size: 1.25rem;
+}
+
+.activeModelName {
+  font-weight: 600;
+  font-size: 0.875rem;
+  font-family: var(--font-mono, monospace);
+}
+
+.activeModelProvider {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+.activeEmpty {
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  font-size: 0.8125rem;
+  text-align: center;
+  margin-bottom: var(--space-3);
+}
+
+.activeSelect {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  outline: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+
+.activeSelect:focus {
+  border-color: var(--accent-primary);
+}
+
 /* Responsive */
 @media (max-width: 1024px) {
   .configGrid { grid-template-columns: 1fr; }
+  .activeConfigGrid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 768px) {

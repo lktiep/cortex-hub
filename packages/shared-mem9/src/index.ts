@@ -30,4 +30,6 @@ export type {
   HistoryEntry,
   QdrantPoint,
   QdrantSearchResult,
+  ModelSlot,
+  FallbackConfig,
 } from './types.js'

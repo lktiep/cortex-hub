@@ -1,39 +1,114 @@
 /**
- * Gemini / OpenAI embedding client
+ * Embedding client — with fallback chain support
  *
- * Routes to the correct provider based on config.
- * - Gemini: native REST API with ?key= auth
- * - OpenAI: /v1/embeddings with Bearer auth
+ * Routes to Gemini or OpenAI-compatible providers.
+ * Supports retry + fallback across multiple provider slots.
  */
 
-import type { EmbedderConfig } from './types.js'
+import type { EmbedderConfig, ModelSlot } from './types.js'
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
+/** HTTP status codes that trigger retry */
+const RETRYABLE_CODES = new Set([429, 502, 503, 504])
+
+/** Sleep for ms */
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
 export class Embedder {
-  constructor(private readonly config: EmbedderConfig) {}
+  private readonly config: EmbedderConfig
+  private readonly chain: ModelSlot[]
+  private readonly maxRetries: number
+  private readonly baseDelay: number
+
+  constructor(
+    config: EmbedderConfig,
+    chain?: ModelSlot[],
+    opts?: { maxRetries?: number; retryDelayMs?: number }
+  ) {
+    this.config = config
+    this.chain = chain ?? []
+    this.maxRetries = opts?.maxRetries ?? 2
+    this.baseDelay = opts?.retryDelayMs ?? 1000
+  }
 
   /** Embed a single text string → float vector */
   async embed(text: string): Promise<number[]> {
-    if (this.config.provider === 'gemini') {
-      return this.embedGemini(text)
+    // If chain is configured, use fallback logic
+    if (this.chain.length > 0) {
+      return this.embedWithFallback(text)
     }
-    return this.embedOpenAI(text)
+    // Legacy: use config directly
+    if (this.config.provider === 'gemini') {
+      return this.embedGemini(text, this.config.apiKey, this.config.model)
+    }
+    return this.embedOpenAI(text, this.config.apiKey, this.config.model)
   }
 
   /** Embed multiple texts in batch */
   async embedBatch(texts: string[]): Promise<number[][]> {
-    // Gemini supports batch via embedContent with multiple parts
-    if (this.config.provider === 'gemini') {
-      return Promise.all(texts.map((t) => this.embedGemini(t)))
+    return Promise.all(texts.map((t) => this.embed(t)))
+  }
+
+  /* ── Fallback chain logic ────────────────────────────── */
+
+  private async embedWithFallback(text: string): Promise<number[]> {
+    const errors: string[] = []
+
+    for (const slot of this.chain) {
+      for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+        try {
+          const isGemini = slot.baseUrl.includes('generativelanguage.googleapis.com')
+          const result = isGemini
+            ? await this.embedGemini(text, slot.apiKey ?? '', slot.model)
+            : await this.embedOpenAI(text, slot.apiKey ?? '', slot.model, slot.baseUrl)
+
+          return result
+        } catch (err) {
+          const msg = String(err)
+          // Check if retryable
+          const isRetryable = RETRYABLE_CODES.has(this.extractStatusCode(msg))
+            || msg.includes('fetch failed')
+            || msg.includes('ECONNREFUSED')
+
+          if (isRetryable && attempt < this.maxRetries) {
+            const delay = this.baseDelay * Math.pow(2, attempt)
+            console.warn(
+              `[embedder] ${slot.model}@${slot.accountId} failed, ` +
+              `retry ${attempt + 1}/${this.maxRetries} in ${delay}ms`
+            )
+            await sleep(delay)
+            continue
+          }
+          errors.push(`${slot.model}: ${msg.slice(0, 100)}`)
+          break
+        }
+      }
     }
-    return Promise.all(texts.map((t) => this.embedOpenAI(t)))
+
+    // If chain exhausted, fall back to legacy config
+    try {
+      if (this.config.provider === 'gemini') {
+        return await this.embedGemini(text, this.config.apiKey, this.config.model)
+      }
+      return await this.embedOpenAI(text, this.config.apiKey, this.config.model)
+    } catch (err) {
+      errors.push(`legacy-${this.config.provider}: ${String(err).slice(0, 100)}`)
+    }
+
+    throw new Error(`All embedding slots exhausted: ${errors.join(' | ')}`)
+  }
+
+  /** Extract HTTP status from error message */
+  private extractStatusCode(msg: string): number {
+    const match = msg.match(/\((\d{3})\)/)
+    return match ? Number(match[1]) : 0
   }
 
   /* ── Gemini native API ───────────────────────────────── */
 
-  private async embedGemini(text: string): Promise<number[]> {
-    const url = `${GEMINI_BASE}/models/${this.config.model}:embedContent?key=${this.config.apiKey}`
+  private async embedGemini(text: string, apiKey: string, model: string): Promise<number[]> {
+    const url = `${GEMINI_BASE}/models/${model}:embedContent?key=${apiKey}`
 
     const res = await fetch(url, {
       method: 'POST',
@@ -54,19 +129,23 @@ export class Embedder {
 
   /* ── OpenAI-compatible API ───────────────────────────── */
 
-  private async embedOpenAI(text: string): Promise<number[]> {
-    // OpenAI-compatible providers need a separate baseUrl config
-    // For now this path is unused (Gemini is default), but kept for future flexibility
-    const res = await fetch('https://api.openai.com/v1/embeddings', {
+  private async embedOpenAI(
+    text: string,
+    apiKey: string,
+    model: string,
+    baseUrl?: string,
+  ): Promise<number[]> {
+    const url = baseUrl
+      ? `${baseUrl.replace(/\/$/, '')}/embeddings`
+      : 'https://api.openai.com/v1/embeddings'
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+
+    const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.config.model,
-        input: text,
-      }),
+      headers,
+      body: JSON.stringify({ model, input: text }),
     })
 
     if (!res.ok) {

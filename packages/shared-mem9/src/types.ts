@@ -120,3 +120,29 @@ export interface HistoryEntry {
   userId: string
   timestamp: string
 }
+
+/* ── Fallback Engine ────────────────────────────────────── */
+
+/** A single slot in a fallback chain */
+export interface ModelSlot {
+  /** Reference to provider_accounts.id */
+  accountId: string
+  /** API base URL */
+  baseUrl: string
+  /** API key (null for OAuth/CLIProxy) */
+  apiKey?: string
+  /** Model name (e.g. gpt-5.4-mini) */
+  model: string
+}
+
+/** Fallback chain configuration */
+export interface FallbackConfig {
+  /** Ordered fallback slots for chat/LLM */
+  chat: ModelSlot[]
+  /** Ordered fallback slots for embedding */
+  embedding: ModelSlot[]
+  /** Max retries per slot before moving to next (default: 2) */
+  maxRetries?: number
+  /** Base delay for exponential backoff in ms (default: 1000) */
+  retryDelayMs?: number
+}

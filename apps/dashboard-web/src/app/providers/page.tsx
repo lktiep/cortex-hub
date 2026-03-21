@@ -181,6 +181,116 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
+// ── Active Config Panel ──
+interface ChainSlot { accountId: string; model: string; accountName?: string }
+interface ActiveConfig { purpose: string; chain: ChainSlot[] }
+interface ActiveConfigResponse { config: ActiveConfig[]; totalAccounts: number }
+
+async function fetchActiveConfig(): Promise<ActiveConfigResponse> {
+  const res = await fetch(`${config.api.base}/api/accounts/routing/active`, {
+    signal: AbortSignal.timeout(5000),
+  })
+  if (!res.ok) throw new Error('Failed to fetch routing config')
+  return res.json()
+}
+
+function ActiveConfigPanel({ accounts }: { accounts: ProviderAccount[] }) {
+  const { data, mutate: mutateRouting } = useSWR('routing-active', fetchActiveConfig, {
+    refreshInterval: 0,
+    revalidateOnFocus: false,
+  })
+
+  const [saving, setSaving] = useState<string | null>(null)
+
+  const purposes = [
+    { key: 'chat', label: '💬 Chat Model', desc: 'Used for conversations, fact extraction, memory dedup' },
+    { key: 'embedding', label: '🧠 Embedding Model', desc: 'Used for vector search, semantic similarity' },
+  ]
+
+  // Get current model for a purpose
+  const getActive = (purpose: string): ChainSlot | null => {
+    const entry = data?.config?.find((c) => c.purpose === purpose)
+    return entry?.chain?.[0] ?? null
+  }
+
+  // Build options: all enabled accounts + their cached models  
+  const enabledAccounts = accounts.filter((a) => a.status === 'enabled')
+
+  const handleChange = async (purpose: string, accountId: string, model: string) => {
+    setSaving(purpose)
+    try {
+      await fetch(`${config.api.base}/api/accounts/routing/chains`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          purpose,
+          chain: [{ accountId, model }],
+        }),
+        signal: AbortSignal.timeout(5000),
+      })
+      mutateRouting()
+    } catch { /* ignore */ }
+    setSaving(null)
+  }
+
+  return (
+    <div className={styles.activeConfigGrid}>
+      {purposes.map(({ key, label, desc }) => {
+        const active = getActive(key)
+        return (
+          <div key={key} className={styles.activeCard}>
+            <div className={styles.activeCardHeader}>
+              <span className={styles.activeCardTitle}>{label}</span>
+              {saving === key && <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>saving...</span>}
+            </div>
+            <p className={styles.activeCardDesc}>{desc}</p>
+            {active ? (
+              <div className={styles.activeModel}>
+                <span className={styles.activeModelIcon}>{TYPE_ICONS[enabledAccounts.find(a => a.id === active.accountId)?.type ?? ''] ?? '📦'}</span>
+                <div>
+                  <div className={styles.activeModelName}>{active.model}</div>
+                  <div className={styles.activeModelProvider}>{active.accountName ?? 'Unknown'}</div>
+                </div>
+              </div>
+            ) : (
+              <div className={styles.activeEmpty}>No model assigned</div>
+            )}
+            <select
+              className={styles.activeSelect}
+              value={active ? `${active.accountId}|${active.model}` : ''}
+              onChange={(e) => {
+                const [accId, mod] = e.target.value.split('|')
+                if (accId && mod) handleChange(key, accId, mod)
+              }}
+            >
+              <option value="">— Select model —</option>
+              {enabledAccounts.map((acc) => {
+                const models: string[] = Array.isArray(acc.models) ? acc.models : []
+                const relevantModels = key === 'embedding'
+                  ? models.filter((m) => m.includes('embed'))
+                  : models.filter((m) => !m.includes('embed'))
+                if (relevantModels.length === 0 && models.length > 0) {
+                  // Show all models if no match — user can pick whatever
+                  return models.map((m) => (
+                    <option key={`${acc.id}|${m}`} value={`${acc.id}|${m}`}>
+                      {TYPE_ICONS[acc.type] ?? '📦'} {acc.name} → {m}
+                    </option>
+                  ))
+                }
+                return (relevantModels.length > 0 ? relevantModels : models).map((m) => (
+                  <option key={`${acc.id}|${m}`} value={`${acc.id}|${m}`}>
+                    {TYPE_ICONS[acc.type] ?? '📦'} {acc.name} → {m}
+                  </option>
+                ))
+              })}
+            </select>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── Add Provider Dialog (multi-step: Config → Test → Models → Save) ──
 type DialogStep = 'config' | 'testing' | 'models' | 'saving'
 
@@ -637,6 +747,11 @@ export default function ProvidersPage() {
           <p>Failed to load providers. Is the backend API running?</p>
           <button className="btn btn-primary btn-sm" onClick={() => mutate()}>Retry</button>
         </div>
+      )}
+
+      {/* Active Config */}
+      {!error && accounts.length > 0 && (
+        <ActiveConfigPanel accounts={accounts} />
       )}
 
       {/* Table */}
