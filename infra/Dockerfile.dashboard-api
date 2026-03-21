@@ -17,7 +17,8 @@ RUN pnpm install --frozen-lockfile
 RUN pnpm build
 # Use pnpm deploy to create a standalone, production folder for the main app
 # This folder will contain full copies of workspace dependencies in node_modules
-RUN pnpm --filter @cortex/dashboard-api --prod deploy /app/deploy
+# For pnpm v10+, the --legacy flag is required for this standalone behavior
+RUN pnpm --filter @cortex/dashboard-api --prod deploy --legacy /app/deploy
 
 # ── 2. Production Runner ──────────────────────
 FROM debian:trixie-slim AS runner
