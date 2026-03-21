@@ -18,19 +18,27 @@ echo -e "${BLUE}>>> Detecting project context for: ${GIT_REPO}${NC}"
 
 # 2. MCP Gateway Connection & Secret Injection
 echo -e "${BLUE}>>> Connecting to Cortex Hub...${NC}"
-MCP_URL="https://cortex-mcp.jackle.dev"
 
-# 1. Support for passing key as argument
+# Support for passing API Key as first argument
 if [ -n "$1" ]; then
     HUB_API_KEY="$1"
 fi
 
-# 2. Prompt for API Key if not provided via environment or argument
-if [ -z "$HUB_API_KEY" ]; then
-    # Only prompt if we have a TTY (interactive)
-    if [ -t 0 ]; then
-        read -rp "Enter your Cortex Hub API Key: " HUB_API_KEY
-    else
+# Interactive prompt if TTY is available
+if [ -t 0 ]; then
+    # 1. Prompt for MCP URL (with default)
+    read -rp "Enter your Cortex Hub MCP URL [https://cortex-mcp.jackle.dev]: " INPUT_URL
+    MCP_URL=${INPUT_URL:-"https://cortex-mcp.jackle.dev"}
+    
+    # 2. Prompt for API Key (masked)
+    if [ -z "$HUB_API_KEY" ]; then
+        read -rsp "Enter your Cortex Hub API Key: " HUB_API_KEY
+        echo "" # Newline after masked input
+    fi
+else
+    # Non-interactive defaults
+    MCP_URL=${HUB_API_URL:-"https://cortex-mcp.jackle.dev"}
+    if [ -z "$HUB_API_KEY" ]; then
         echo -e "${RED}>>> Error: HUB_API_KEY not provided and no TTY detected.${NC}"
         exit 1
     fi
@@ -48,7 +56,7 @@ with open(path, 'r') as f: config = json.load(f)
 if 'mcpServers' not in config: config['mcpServers'] = {}
 config['mcpServers']['cortex-hub'] = {
     'command': 'npx',
-    'args': ['-y', '@cortex/mcp-gateway'],
+    'args': ['-y', '@cortex/mcp-gateway', '--url', '$MCP_URL'],
     'env': {'HUB_API_KEY': '$HUB_API_KEY'}
 }
 with open(path, 'w') as f: json.dump(config, f, indent=2)
