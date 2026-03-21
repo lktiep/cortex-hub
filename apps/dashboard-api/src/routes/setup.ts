@@ -28,8 +28,6 @@ setupRouter.get('/status', (c) => {
 })
 
 setupRouter.post('/complete', async (c) => {
-  const MEM0_URL = process.env.MEM0_URL || 'http://mem0:8050'
-
   try {
     // Mark setup as complete in DB
     const stmt = db.prepare(
@@ -37,32 +35,34 @@ setupRouter.post('/complete', async (c) => {
     )
     stmt.run()
 
-    // Auto-configure mem0 in background
-    let mem0Status: 'ok' | 'unreachable' | 'error' = 'unreachable'
+    // Check mem9 dependencies (Qdrant + CLIProxy)
+    let mem9Status: 'ok' | 'partial' | 'error' = 'error'
+    let qdrantOk = false
+    let cliproxyOk = false
+
     try {
-      const healthRes = await fetch(`${MEM0_URL}/health`, {
-        signal: AbortSignal.timeout(5000),
-      })
-      if (healthRes.ok) {
-        mem0Status = 'ok'
-        console.log('[Setup] mem0 is healthy and ready')
-      } else {
-        console.warn(`[Setup] mem0 returned ${healthRes.status}`)
-        mem0Status = 'error'
-      }
-    } catch (err) {
-      console.warn('[Setup] mem0 unreachable during setup:', err)
-      mem0Status = 'unreachable'
-    }
+      const qdrantRes = await fetch(`${QDRANT_URL()}/`, { signal: AbortSignal.timeout(3000) })
+      qdrantOk = qdrantRes.ok
+    } catch { /* qdrant unreachable */ }
+
+    try {
+      const cliproxyRes = await fetch(`${CLIPROXY_URL()}/v1/models`, { signal: AbortSignal.timeout(3000) })
+      cliproxyOk = cliproxyRes.ok || cliproxyRes.status === 401
+    } catch { /* cliproxy unreachable */ }
+
+    if (qdrantOk && cliproxyOk) mem9Status = 'ok'
+    else if (qdrantOk || cliproxyOk) mem9Status = 'partial'
 
     return c.json({
       success: true,
-      mem0: {
-        status: mem0Status,
-        message:
-          mem0Status === 'ok'
-            ? 'mem0 memory service is configured and ready'
-            : 'mem0 is not available yet — it will auto-connect when the container starts',
+      mem9: {
+        status: mem9Status,
+        qdrant: qdrantOk,
+        cliproxy: cliproxyOk,
+        geminiKey: !!process.env.GEMINI_API_KEY,
+        message: mem9Status === 'ok'
+          ? 'mem9 dependencies are ready'
+          : 'Some mem9 dependencies are not yet available',
       },
     })
   } catch (error) {
@@ -70,34 +70,42 @@ setupRouter.post('/complete', async (c) => {
   }
 })
 
-// ── Configure mem0 ──
-setupRouter.post('/configure-mem0', async (c) => {
-  const MEM0_URL = process.env.MEM0_URL || 'http://mem0:8050'
-
+// ── Configure mem9 (Gemini API key) ──
+setupRouter.post('/configure-mem9', async (c) => {
   try {
     const body = await c.req.json()
-    const { provider, models } = body
+    const { geminiApiKey } = body
 
-    // Check if mem0 is reachable
-    const healthRes = await fetch(`${MEM0_URL}/health`, {
-      signal: AbortSignal.timeout(5000),
-    })
-
-    if (!healthRes.ok) {
-      return c.json({ success: false, error: 'mem0 is not reachable' }, 502)
+    if (!geminiApiKey) {
+      return c.json({ success: false, error: 'geminiApiKey is required' }, 400)
     }
 
-    // Log the configuration
-    console.log(`[Setup] Configured mem0 with provider=${provider}, models=${(models as string[]).join(',')}`)
+    // Test the Gemini embedding endpoint
+    const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent?key=${geminiApiKey}`
+    const testRes = await fetch(testUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: { parts: [{ text: 'test' }] } }),
+      signal: AbortSignal.timeout(10000),
+    })
+
+    if (!testRes.ok) {
+      const err = await testRes.text()
+      return c.json({ success: false, error: `Gemini API key test failed: ${err}` }, 400)
+    }
+
+    // Store the key as env var
+    process.env.GEMINI_API_KEY = geminiApiKey
+    console.log('[Setup] Gemini API key configured and tested successfully')
 
     return c.json({
       success: true,
-      message: 'mem0 configured successfully',
-      provider,
-      modelCount: (models as string[]).length,
+      message: 'Gemini embedding API key configured successfully',
+      provider: 'gemini',
+      model: 'gemini-embedding-2-preview',
     })
   } catch (err) {
-    console.error('[Setup] mem0 configuration failed:', err)
+    console.error('[Setup] Gemini API key configuration failed:', err)
     return c.json({ success: false, error: String(err) }, 502)
   }
 })
@@ -154,10 +162,10 @@ setupRouter.get('/settings', (c) => {
     services: {
       cliproxy: CLIPROXY_URL(),
       qdrant: QDRANT_URL(),
-      neo4j: process.env.NEO4J_URL || 'bolt://localhost:7687',
-      mem0: process.env.MEM0_URL || 'http://localhost:8050',
+      mem9: 'in-process (Gemini + CLIProxy)',
       dashboardApi: `http://localhost:${process.env.PORT || 4000}`,
     },
+    geminiApiKey: process.env.GEMINI_API_KEY ? 'configured' : 'not set',
     database: process.env.DATABASE_PATH || 'data/cortex.db',
     version: '0.1.0',
   })

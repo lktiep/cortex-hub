@@ -41,6 +41,9 @@ importers:
       '@cortex/hub-mcp':
         specifier: workspace:*
         version: link:../hub-mcp
+      '@cortex/shared-mem9':
+        specifier: workspace:*
+        version: link:../../packages/shared-mem9
       '@cortex/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
