@@ -166,22 +166,10 @@ export default function DashboardPage() {
       status: isLoading ? 'muted' : healthData?.services?.qdrant === 'ok' ? 'healthy' : 'error',
     },
     {
-      name: 'Neo4j Graph DB',
-      description: 'Graph database — knowledge relationships',
-      endpoint: 'Local Docker :7687',
-      status: isLoading ? 'muted' : healthData?.services?.neo4j === 'ok' ? 'healthy' : 'error',
-    },
-    {
       name: 'CLIProxy (LLM)',
       description: 'LLM gateway — OAuth proxy to AI providers',
       endpoint: 'Local Docker :8317',
       status: isLoading ? 'muted' : healthData?.services?.cliproxy === 'ok' ? 'healthy' : 'error',
-    },
-    {
-      name: 'mem0 Memory',
-      description: 'Agent memory — persistent knowledge store',
-      endpoint: 'Local Docker :8050',
-      status: isLoading ? 'muted' : healthData?.services?.mem0 === 'ok' ? 'healthy' : 'error',
     },
   ]
 

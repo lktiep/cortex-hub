@@ -35,14 +35,12 @@ app.get('/health', async (c) => {
     }
   }
 
-  const [qdrant, neo4j, cliproxy, mem0] = await Promise.all([
+  const [qdrant, cliproxy] = await Promise.all([
     checkService('qdrant', `${process.env['QDRANT_URL'] || 'http://qdrant:6333'}/healthz`),
-    checkService('neo4j', `http://${process.env['NEO4J_URL']?.replace('bolt://', '').replace(':7687', '') || 'neo4j'}:7474/`),
     checkService('cliproxy', `${process.env['LLM_PROXY_URL'] || 'http://llm-proxy:8317'}/v1/models`),
-    checkService('mem0', `${process.env['MEM0_URL'] || 'http://mem0:8050'}/health`),
   ])
 
-  const services = { qdrant, neo4j, cliproxy, mem0 }
+  const services = { qdrant, cliproxy }
   const allOk = Object.values(services).every(s => s === 'ok')
 
   return c.json({

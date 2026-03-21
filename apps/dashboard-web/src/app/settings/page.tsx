@@ -93,16 +93,12 @@ function ConfirmDialog({
 const SERVICE_ICONS: Record<string, string> = {
   cliproxy: '🤖',
   qdrant: '🔮',
-  neo4j: '🕸️',
-  mem0: '🧠',
   dashboardApi: '📡',
 }
 
 const SERVICE_LABELS: Record<string, string> = {
   cliproxy: 'CLIProxy (LLM Gateway)',
   qdrant: 'Qdrant Vector DB',
-  neo4j: 'Neo4j Graph DB',
-  mem0: 'mem0 Memory Service',
   dashboardApi: 'Dashboard API',
 }
 
@@ -117,10 +113,8 @@ export default function SettingsPage() {
   } | null>(null)
 
   const dockerServices: DockerServiceProps[] = [
-    { containerName: 'cortex-mem0', label: 'mem0 Memory', icon: '🧠' },
     { containerName: 'cortex-llm-proxy', label: 'CLIProxy (LLM)', icon: '🤖' },
     { containerName: 'cortex-qdrant', label: 'Qdrant Vector DB', icon: '🔮' },
-    { containerName: 'cortex-neo4j', label: 'Neo4j Graph DB', icon: '🕸️' },
   ]
 
   async function handleRestart(containerName: string) {
