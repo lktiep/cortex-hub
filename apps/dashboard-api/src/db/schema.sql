@@ -105,9 +105,10 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,                                  -- "OpenAI (Personal)"
     type TEXT NOT NULL,                                  -- "openai_compat" | "gemini" | "anthropic"
+    auth_type TEXT DEFAULT 'api_key',                    -- "oauth" | "api_key"
     api_base TEXT NOT NULL,                              -- "http://llm-proxy:8317/v1"
     api_key TEXT,                                        -- stored for runtime use (TODO: encrypt)
-    status TEXT DEFAULT 'enabled',                       -- "enabled" | "disabled"
+    status TEXT DEFAULT 'enabled',                       -- "enabled" | "disabled" | "error"
     capabilities TEXT DEFAULT '["chat"]',                -- JSON: ["chat", "embedding", "code"]
     models TEXT DEFAULT '[]',                            -- cached JSON array of model IDs
     created_at TEXT DEFAULT (datetime('now')),

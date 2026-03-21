@@ -1,6 +1,6 @@
 .wizard {
   width: 100%;
-  max-width: 560px;
+  max-width: 680px;
   animation: fade-in 0.5s ease-out;
 }
 
@@ -88,15 +88,18 @@
 /* Provider Grid */
 .providerGrid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: var(--space-3);
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: var(--space-1);
 }
 
 .providerCard {
   background: var(--bg-card);
   border: 2px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: var(--space-5);
+  padding: var(--space-4);
   text-align: center;
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -116,19 +119,19 @@
 }
 
 .providerIcon {
-  font-size: 2rem;
+  font-size: 1.5rem;
   display: block;
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 .providerName {
   font-weight: 600;
-  font-size: 0.9375rem;
+  font-size: 0.8125rem;
   margin-bottom: var(--space-1);
 }
 
 .providerDesc {
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: var(--text-tertiary);
 }
 
