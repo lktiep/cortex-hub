@@ -1,9 +1,8 @@
 /**
- * Cloudflare Worker environment bindings.
- * These correspond to [vars] in wrangler.toml.
+ * Hub MCP Environment configuration.
  */
-interface Env {
-  // Backend service URLs (via Cloudflare Tunnel)
+export interface Env {
+  // Backend service URLs
   QDRANT_URL: string
   NEO4J_URL: string
   MEM0_URL: string

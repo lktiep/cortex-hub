@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { Env } from '../types.js'
 
 /**
  * Register memory tools.

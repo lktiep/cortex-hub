@@ -136,17 +136,18 @@ services:
       start_period: 15s
 
   # ─────────────────────────────────────────────
-  # Dashboard API (Hono + SQLite)
+  # Cortex Hub All-in-One (API + MCP + Web)
   # ─────────────────────────────────────────────
-  dashboard-api:
+  cortex-hub:
     build:
       context: ..
       dockerfile: infra/Dockerfile.dashboard-api
-    image: ghcr.io/lktiep/cortex-hub-api:latest
-    container_name: cortex-dashboard-api
+    image: ghcr.io/lktiep/cortex-hub:latest
+    container_name: cortex-hub
     restart: unless-stopped
     ports:
       - "4000:4000"
+      - "3000:4000" # Backward compatibility for dashboard port
     volumes:
       - api-data:/app/data
       - cliproxy-auth:/app/cliproxy-auth
@@ -166,6 +167,10 @@ services:
       CLIPROXY_AUTH_DIR: /app/cliproxy-auth
       CLIPROXY_MANAGEMENT_KEY: ${MANAGEMENT_PASSWORD:-cortex2026}
       DASHBOARD_URL: ${DASHBOARD_URL:-https://hub.jackle.dev}
+      # MCP Gateway Config
+      MCP_SERVER_NAME: "cortex-hub"
+      MCP_SERVER_VERSION: "0.1.0"
+      DASHBOARD_API_URL: http://localhost:4000
     depends_on:
       qdrant:
         condition: service_healthy
@@ -174,38 +179,13 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/health && curl -f http://localhost:4000/mcp/health"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 10s
-
-  # ─────────────────────────────────────────────
-  # Dashboard Web (Next.js Static Export + nginx)
-  # ─────────────────────────────────────────────
-  dashboard-web:
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile.dashboard-web
-    image: ghcr.io/lktiep/cortex-hub-web:latest
-    container_name: cortex-dashboard-web
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: ${DASHBOARD_API_URL:-https://cortex-api.jackle.dev}
-    deploy:
-      resources:
-        limits:
-          memory: 64M
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
+      start_period: 15s
 
   # ─────────────────────────────────────────────
   # Watchtower — Auto-update containers

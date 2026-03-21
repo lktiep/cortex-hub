@@ -5,13 +5,15 @@ on:
     branches: [master]
     paths:
       - 'apps/dashboard-api/**'
+      - 'apps/dashboard-web/**'
+      - 'apps/hub-mcp/**'
       - 'packages/**'
       - 'infra/Dockerfile.dashboard-api'
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-api
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:

@@ -14,9 +14,7 @@
     "deployment": "cloudflare-workers+cloudflare-pages",
     "monorepo": true,
     "services": [
-      "hub-mcp (Cloudflare Worker — MCP gateway)",
-      "dashboard-api (Hono + SQLite — backend API)",
-      "dashboard-web (Next.js 15 — frontend)"
+      "cortex-hub (All-in-One: Dashboard API + MCP Gateway + Dashboard Web)"
     ],
     "shared_packages": [
       "@cortex/shared-types",
@@ -97,9 +95,7 @@
       { "name": "Test", "cmd": "pnpm test" }
     ],
     "deploy": {
-      "dashboard-web": "cd apps/dashboard-web && pnpm build && npx wrangler pages deploy out --project-name cortex-hub --branch main",
-      "hub-mcp": "cd apps/hub-mcp && npx wrangler deploy",
-      "dashboard-api": "docker compose -f infra/docker-compose.yml build dashboard-api && docker compose up -d dashboard-api"
+      "cortex-hub": "docker compose -f infra/docker-compose.yml build cortex-hub && docker compose up -d cortex-hub"
     },
     "setup": {
       "install": "./scripts/install-hub.sh",

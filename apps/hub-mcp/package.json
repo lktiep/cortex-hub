@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
-    "build": "wrangler deploy --dry-run --outdir dist",
+    "start:node": "tsx src/node.ts",
+    "build": "tsc",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
@@ -13,6 +16,7 @@
   "dependencies": {
     "@cortex/shared-types": "workspace:*",
     "@cortex/shared-utils": "workspace:*",
+    "@hono/node-server": "^1.19.11",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "agents": "^0.7.6",
     "hono": "^4.7.0",
@@ -20,6 +24,8 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",
+    "@types/node": "^22.19.15",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.0",
     "wrangler": "^4.0.0"
   }

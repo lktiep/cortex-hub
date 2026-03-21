@@ -38,6 +38,9 @@ importers:
 
   apps/dashboard-api:
     dependencies:
+      '@cortex/hub-mcp':
+        specifier: workspace:*
+        version: link:../hub-mcp
       '@cortex/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
@@ -115,6 +118,9 @@ importers:
       '@cortex/shared-utils':
         specifier: workspace:*
         version: link:../../packages/shared-utils
+      '@hono/node-server':
+        specifier: ^1.19.11
+        version: 1.19.11(hono@4.12.8)
       '@modelcontextprotocol/sdk':
         specifier: ^1.27.1
         version: 1.27.1(@cfworker/json-schema@4.1.1)(zod@4.3.6)
@@ -131,6 +137,12 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.0.0
         version: 4.20260317.1
+      '@types/node':
+        specifier: ^22.19.15
+        version: 22.19.15
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

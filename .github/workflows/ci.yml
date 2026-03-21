@@ -33,7 +33,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm build --filter='@cortex/shared-*'
+        run: pnpm build --filter @cortex/shared-types --filter @cortex/shared-utils --filter @cortex/hub-mcp --filter @cortex/dashboard-api
 
       - name: Typecheck
         run: pnpm typecheck

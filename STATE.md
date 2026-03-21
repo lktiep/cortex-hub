@@ -25,6 +25,10 @@
 - [x] Cortex Skill Set integration (GSD + Forgewright Golden Standard)
 - [x] Hub MCP Session Enforcement & Mission Briefs
 - [x] mem0 Gemini Embedding Fallback (100% reliability)
+- [x] Moved MCP Gateway to All-in-One Docker Hub (Node.js) ✅
+- [x] Integrated Dashboard Web serving into Dashboard API ✅
+- [x] Unified `Dockerfile.dashboard-api` for all-in-one deployment ✅
+- [x] Updated `docker-compose.yml` (consolidated `cortex-hub` service) ✅
 - [x] Docker rebuilt and deployed with latest code
 ## Recent Decisions
 - mem0 branch scope: `project-{id}:branch-{name}` for branch, `project-{id}` for project fallback

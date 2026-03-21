@@ -1,6 +1,6 @@
 # ──────────────────────────────────────────────
-# Dockerfile — Dashboard API (Hono + SQLite)
-# Multi-stage build for minimal production image
+# Dockerfile — Cortex Hub All-in-One
+# (Dashboard API + MCP Gateway + Dashboard Web)
 # ──────────────────────────────────────────────
 
 FROM node:22-slim AS base
@@ -13,6 +13,8 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY packages/shared-types/package.json ./packages/shared-types/
 COPY packages/shared-utils/package.json ./packages/shared-utils/
 COPY apps/dashboard-api/package.json ./apps/dashboard-api/
+COPY apps/dashboard-web/package.json ./apps/dashboard-web/
+COPY apps/hub-mcp/package.json ./apps/hub-mcp/
 RUN pnpm install --frozen-lockfile --prod=false
 
 # ── Build ────────────────────────────────────
@@ -22,14 +24,16 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/packages/shared-types/node_modules ./packages/shared-types/node_modules
 COPY --from=deps /app/packages/shared-utils/node_modules ./packages/shared-utils/node_modules
 COPY --from=deps /app/apps/dashboard-api/node_modules ./apps/dashboard-api/node_modules
+COPY --from=deps /app/apps/dashboard-web/node_modules ./apps/dashboard-web/node_modules
+COPY --from=deps /app/apps/hub-mcp/node_modules ./apps/hub-mcp/node_modules
 COPY . .
 RUN pnpm --filter @cortex/shared-types build \
  && pnpm --filter @cortex/shared-utils build \
- && pnpm --filter @cortex/dashboard-api build
+ && pnpm --filter @cortex/hub-mcp build \
+ && pnpm --filter @cortex/dashboard-api build \
+ && pnpm --filter @cortex/dashboard-web build
 
-# ── Production (Debian Trixie for GLIBC 2.39 — required by gitnexus native binary) ──
-# node:22-slim uses Bookworm (GLIBC 2.36) which is too old.
-# Trixie-slim is ~30MB base — lighter than ubuntu:24.04.
+# ── Production Runner ────────────────────────
 FROM debian:trixie-slim AS runner
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends curl ca-certificates gnupg docker.io git \
@@ -40,23 +44,23 @@ RUN npm install -g gitnexus
 
 WORKDIR /app
 ENV NODE_ENV=production
+ENV PORT=4000
 
-# Copy workspace config for pnpm module resolution
+# Copy workspace config
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
-
-# Copy root node_modules (hoisted deps like @hono/node-server)
 COPY --from=builder /app/node_modules ./node_modules
 
-COPY --from=builder /app/packages/shared-types/dist ./packages/shared-types/dist
-COPY --from=builder /app/packages/shared-types/package.json ./packages/shared-types/
-COPY --from=builder /app/packages/shared-utils/dist ./packages/shared-utils/dist
-COPY --from=builder /app/packages/shared-utils/package.json ./packages/shared-utils/
+# Copy built packages
+COPY --from=builder /app/packages/shared-types ./packages/shared-types
+COPY --from=builder /app/packages/shared-utils ./packages/shared-utils
 COPY --from=builder /app/apps/dashboard-api/dist ./apps/dashboard-api/dist
-COPY --from=builder /app/apps/dashboard-api/src/db/schema.sql ./apps/dashboard-api/src/db/schema.sql
-COPY --from=builder /app/apps/dashboard-api/src/db/schema.sql ./apps/dashboard-api/dist/db/schema.sql
 COPY --from=builder /app/apps/dashboard-api/package.json ./apps/dashboard-api/
-COPY --from=builder /app/apps/dashboard-api/node_modules ./apps/dashboard-api/node_modules
+COPY --from=builder /app/apps/dashboard-api/src/db/schema.sql ./apps/dashboard-api/dist/db/schema.sql
+COPY --from=builder /app/apps/hub-mcp ./apps/hub-mcp
+
+# Copy static frontend to public folder for Hono to serve
+COPY --from=builder /app/apps/dashboard-web/out ./public
 
 RUN mkdir -p /app/data /data/repos
 

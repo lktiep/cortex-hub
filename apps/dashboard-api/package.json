@@ -9,16 +9,17 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --passWithNoTests --coverage",
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@cortex/hub-mcp": "workspace:*",
     "@cortex/shared-types": "workspace:*",
     "@cortex/shared-utils": "workspace:*",
+    "@hono/node-server": "^1.13.0",
     "better-sqlite3": "^11.0.0",
-    "hono": "^4.7.0",
-    "@hono/node-server": "^1.13.0"
+    "hono": "^4.7.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.0.0",

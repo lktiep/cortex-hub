@@ -1,3 +1,4 @@
+import type { Env } from '../types.js'
 /**
  * API key authentication middleware for MCP requests.
  *

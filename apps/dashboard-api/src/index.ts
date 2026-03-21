@@ -1,4 +1,5 @@
 import { serve } from '@hono/node-server'
+import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger as honoLogger } from 'hono/logger'
@@ -13,6 +14,7 @@ import { indexingRouter } from './routes/indexing.js'
 import { usageRouter } from './routes/usage.js'
 import { statsRouter as metricsRouter } from './routes/stats.js'
 import { systemRouter } from './routes/system.js'
+import mcpApp from '@cortex/hub-mcp'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
@@ -71,10 +73,20 @@ app.route('/api/orgs', orgsRouter)
 app.route('/api/projects', projectsRouter)
 app.route('/api/projects', indexingRouter)
 app.route('/api/usage', usageRouter)
-app.route('/api/metrics', metricsRouter)
 app.route('/api/system', systemRouter)
+app.route('/api/indexing', indexingRouter)
 
-const port = Number(process.env['PORT'] ?? 4000)
+// Mount MCP Gateway (Stateless)
+app.route('/mcp', mcpApp)
+
+// Serve Dashboard Web static files
+// In Docker, these will be at ./public
+app.use('/*', serveStatic({ 
+  root: './public',
+  rewriteRequestPath: (path) => (path === '/' ? '/index.html' : path)
+}))
+
+const port = Number(process.env.PORT) || 4000
 
 serve({ fetch: app.fetch, port }, () => {
   logger.info(`Dashboard API running on http://localhost:${port}`)

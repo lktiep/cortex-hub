@@ -1,115 +1,97 @@
+import { Hono } from 'hono'
+import { cors } from 'hono/cors'
+import { logger } from 'hono/logger'
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { createMcpHandler } from 'agents/mcp'
 
-import { registerHealthTools } from './tools/health'
-import { registerMemoryTools } from './tools/memory'
-import { registerKnowledgeTools } from './tools/knowledge'
-import { registerCodeTools } from './tools/code'
-import { registerQualityTools } from './tools/quality'
-import { registerSessionTools } from './tools/session'
-import { validateApiKey } from './middleware/auth'
+import { registerCodeTools } from './tools/code.js'
+import { registerHealthTools } from './tools/health.js'
+import { registerKnowledgeTools } from './tools/knowledge.js'
+import { registerMemoryTools } from './tools/memory.js'
+import { registerQualityTools } from './tools/quality.js'
+import { registerSessionTools } from './tools/session.js'
+import { validateApiKey } from './middleware/auth.js'
+import type { Env } from './types.js'
 
-/**
- * Cortex Hub MCP Server
- *
- * A stateless Cloudflare Worker that exposes MCP tools for:
- * - Service health monitoring
- * - Agent memory (store + search via mem0)
- * - Code intelligence (future: GitNexus proxy)
- *
- * Architecture: createMcpHandler() → stateless, no Durable Objects.
- * Deployed to: mcp.hub.jackle.dev
- */
+const app = new Hono<{ Bindings: Env }>()
 
+// Health endpoint (no auth required)
+app.get('/health', (c) => {
+  return c.json({
+    status: 'healthy',
+    service: 'hub-mcp',
+    version: c.env.MCP_SERVER_VERSION ?? '0.1.0',
+    timestamp: new Date().toISOString(),
+  })
+})
 
+// Session Start endpoint (REST)
+app.post('/session/start', async (c) => {
+  const auth = await validateApiKey(c.req.raw, c.env)
+  if (!auth.valid) return c.json({ error: auth.error }, 401)
+  
+  const sessionData = await c.req.json() as any
+  return c.json({ 
+    session_id: `sess_${Math.random().toString(36).substr(2, 9)}`,
+    status: 'active',
+    repo: sessionData.repo,
+    mission_brief: 'Refined Phase 6 objectives loaded. SOLID and Clean Architecture enforced.',
+  })
+})
 
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url)
+// Root endpoint — server info
+app.get('/', (c) => {
+  return c.json({
+    name: 'Cortex Hub MCP Server',
+    version: c.env.MCP_SERVER_VERSION ?? '0.1.0',
+    mcp: '/mcp',
+    health: '/health',
+    tools: [
+      'cortex.health',
+      'cortex.memory.store',
+      'cortex.memory.search',
+      'cortex.knowledge.search',
+      'cortex.code.search',
+      'cortex.code.impact',
+      'cortex.quality.report',
+      'cortex.session.start'
+    ],
+  })
+})
 
-    // Health endpoint (no auth required)
-    if (url.pathname === '/health') {
-      return new Response(
-        JSON.stringify({
-          status: 'healthy',
-          service: 'hub-mcp',
-          version: env.MCP_SERVER_VERSION ?? '0.1.0',
-          timestamp: new Date().toISOString(),
-        }),
-        { headers: { 'Content-Type': 'application/json' } }
-      )
-    }
+// MCP endpoint — requires auth
+app.all('/mcp', (c) => {
+  const url = new URL(c.req.url)
+  if (!url.pathname.endsWith('/')) {
+    return c.redirect(url.pathname + '/')
+  }
+  return c.notFound()
+})
 
-    // Session Start endpoint (REST)
-    if (url.pathname === '/session/start' && request.method === 'POST') {
-      const auth = await validateApiKey(request, env)
-      if (!auth.valid) return new Response(JSON.stringify({ error: auth.error }), { status: 401 })
-      
-      const sessionData = await request.json() as any
-      return new Response(JSON.stringify({ 
-        session_id: `sess_${Math.random().toString(36).substr(2, 9)}`,
-        status: 'active',
-        repo: sessionData.repo,
-        mission_brief: 'Refined Phase 6 objectives loaded. SOLID and Clean Architecture enforced.',
-      }), { headers: { 'Content-Type': 'application/json' } })
-    }
+app.all('/mcp/*', async (c) => {
+  // Validate API key
+  const auth = await validateApiKey(c.req.raw, c.env)
+  if (!auth.valid) {
+    return c.json({ error: auth.error }, 401)
+  }
 
-    // Root endpoint — server info
-    if (url.pathname === '/' && request.method === 'GET') {
-      return new Response(
-        JSON.stringify({
-          name: 'Cortex Hub MCP Server',
-          version: env.MCP_SERVER_VERSION ?? '0.1.0',
-          mcp: '/mcp',
-          health: '/health',
-          tools: [
-            'cortex.health',
-            'cortex.memory.store',
-            'cortex.memory.search',
-            'cortex.knowledge.search',
-            'cortex.code.search',
-            'cortex.code.impact',
-            'cortex.quality.report',
-            'cortex.session.start'
-          ],
-        }),
-        { headers: { 'Content-Type': 'application/json' } }
-      )
-    }
+  // Create stateless MCP Server & Handler for this request
+  const server = new McpServer({
+    name: c.env.MCP_SERVER_NAME ?? 'cortex-hub',
+    version: c.env.MCP_SERVER_VERSION ?? '0.1.0',
+  })
 
-    // MCP endpoint — requires auth
-    if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
-      // Validate API key
-      const auth = await validateApiKey(request, env)
-      if (!auth.valid) {
-        return new Response(
-          JSON.stringify({ error: auth.error }),
-          { status: 401, headers: { 'Content-Type': 'application/json' } }
-        )
-      }
+  // Register tools
+  registerHealthTools(server, c.env)
+  registerMemoryTools(server, c.env)
+  registerKnowledgeTools(server, c.env)
+  registerCodeTools(server, c.env)
+  registerQualityTools(server, c.env)
+  registerSessionTools(server, c.env)
 
-      // Create stateless MCP Server & Handler for this request
-      const server = new McpServer({
-        name: env.MCP_SERVER_NAME ?? 'cortex-hub',
-        version: env.MCP_SERVER_VERSION ?? '0.1.0',
-      })
+  const mcpHandler = createMcpHandler(server as any)
+  return mcpHandler(c.req.raw, c.env, c.executionCtx)
+})
 
-      // Register tools
-      registerHealthTools(server, env)
-      registerMemoryTools(server, env)
-      registerKnowledgeTools(server, env)
-      registerCodeTools(server, env)
-      registerQualityTools(server, env)
-      registerSessionTools(server, env)
-
-      const mcpHandler = createMcpHandler(server as any)
-      return mcpHandler(request, env, ctx)
-    }
-
-    // 404 for any unmatched routes
-    return new Response(
-      JSON.stringify({ error: 'Not found', available: ['/', '/health', '/mcp'] }),
-      { status: 404, headers: { 'Content-Type': 'application/json' } }
-    )
-  },
-}
+export default app
