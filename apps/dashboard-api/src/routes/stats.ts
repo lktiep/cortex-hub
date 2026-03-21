@@ -147,7 +147,7 @@ statsRouter.post('/budget', async (c) => {
 // ── Admin: Restart Docker service ──
 statsRouter.post('/admin/restart/:service', async (c) => {
   const service = c.req.param('service')
-  const allowed = ['cortex-mem0', 'cortex-llm-proxy', 'cortex-qdrant', 'cortex-neo4j']
+  const allowed = ['cortex-llm-proxy', 'cortex-qdrant']
 
   if (!allowed.includes(service)) {
     return c.json({ error: `Cannot restart "${service}". Allowed: ${allowed.join(', ')}` }, 400)
