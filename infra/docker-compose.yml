@@ -114,15 +114,16 @@ services:
   # Watchtower — Auto-update containers
   # ─────────────────────────────────────────────
   watchtower:
-    image: containrrr/watchtower
+    image: containrrr/watchtower:latest
     container_name: cortex-watchtower
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       WATCHTOWER_CLEANUP: "true"
-      WATCHTOWER_POLL_INTERVAL: 86400
+      WATCHTOWER_POLL_INTERVAL: 300
       WATCHTOWER_LABEL_ENABLE: "false"
+      DOCKER_API_VERSION: "1.43"
     deploy:
       resources:
         limits:
