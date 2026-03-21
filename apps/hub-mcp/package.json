@@ -24,7 +24,6 @@
     "@cortex/shared-utils": "workspace:*",
     "@hono/node-server": "^1.19.11",
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "agents": "^0.7.6",
     "hono": "^4.7.0",
     "zod": "^4.3.6"
   },

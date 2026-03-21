@@ -1,9 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
-
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { createMcpHandler } from 'agents/mcp'
 
 import { registerCodeTools } from './tools/code.js'
 import { registerHealthTools } from './tools/health.js'
@@ -15,6 +13,9 @@ import { validateApiKey } from './middleware/auth.js'
 import type { Env } from './types.js'
 
 const app = new Hono<{ Bindings: Env }>()
+
+app.use('*', cors())
+app.use('*', logger())
 
 // Health endpoint (no auth required)
 app.get('/health', (c) => {
@@ -76,7 +77,7 @@ app.all('/mcp/*', async (c) => {
     return c.json({ error: auth.error }, 401)
   }
 
-  // Create stateless MCP Server & Handler for this request
+  // Create stateless MCP Server
   const server = new McpServer({
     name: c.env.MCP_SERVER_NAME ?? 'cortex-hub',
     version: c.env.MCP_SERVER_VERSION ?? '0.1.0',
@@ -90,8 +91,20 @@ app.all('/mcp/*', async (c) => {
   registerQualityTools(server, c.env)
   registerSessionTools(server, c.env)
 
-  const mcpHandler = createMcpHandler(server as any)
-  return mcpHandler(c.req.raw, c.env, c.executionCtx)
+  // Implement the MCP handler logic directly for Node.js
+  try {
+    const request = await c.req.json()
+    // The McpServer class in @modelcontextprotocol/sdk/server/mcp.js 
+    // uses server.server.handleMessage(request) for the underlying JSON-RPC
+    const result = await (server as any).server.handleMessage(request)
+    return c.json(result)
+  } catch (error: any) {
+    return c.json({ 
+      jsonrpc: '2.0', 
+      error: { code: -32603, message: error.message },
+      id: null 
+    }, 500)
+  }
 })
 
 export default app
