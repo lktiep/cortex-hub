@@ -9,7 +9,7 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 # ── Install dependencies ─────────────────────
 FROM base AS deps
 WORKDIR /app
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY packages/shared-types/package.json ./packages/shared-types/
 COPY packages/shared-utils/package.json ./packages/shared-utils/
 COPY apps/dashboard-api/package.json ./apps/dashboard-api/
