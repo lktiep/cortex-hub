@@ -34,6 +34,16 @@ try {
 try {
   db.exec('ALTER TABLE projects ADD COLUMN git_token TEXT')
 } catch (e) { /* ignore if exists */ }
+
+// Add missing columns to api_keys (added after initial schema)
+try {
+  db.exec('ALTER TABLE api_keys ADD COLUMN permissions TEXT')
+} catch (e) { /* ignore if exists */ }
+
+try {
+  db.exec('ALTER TABLE api_keys ADD COLUMN project_id TEXT')
+} catch (e) { /* ignore if exists */ }
+
 if (existsSync(schemaPath)) {
   const schema = readFileSync(schemaPath, 'utf8')
   db.exec(schema)
