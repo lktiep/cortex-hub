@@ -191,7 +191,7 @@ function AddProviderDialog({
   onClose: () => void
   onSaved: () => void
 }) {
-  const defaultType = PROVIDER_TYPES[0]!
+  const defaultType = PROVIDER_TYPES[0] as ProviderTypeDef
   const [step, setStep] = useState<DialogStep>('config')
   const [selectedType, setSelectedType] = useState<ProviderTypeDef>(defaultType)
   const [name, setName] = useState(defaultType.label)
@@ -323,8 +323,7 @@ function AddProviderDialog({
       } catch { /* ignore */ }
     }, 3000)
     return () => { clearInterval(interval); setOauthChecking(false) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [oauthUrl])
+  }, [oauthUrl]) // eslint-disable-line
 
   const isOAuth = selectedType.authType === 'oauth'
 
