@@ -82,6 +82,13 @@ app.use('/*', serveStatic({
   rewriteRequestPath: (path) => (path === '/' ? '/index.html' : path)
 }))
 
+// SPA fallback: serve index.html for client-side routes (e.g., /keys, /settings)
+// This must come AFTER API routes and static files
+app.get('*', serveStatic({
+  root: './public',
+  rewriteRequestPath: () => '/index.html'
+}))
+
 const port = Number(process.env.PORT) || 4000
 
 // In All-in-One Hub, we listen on multiple ports for Cloudflare Tunnel compatibility
