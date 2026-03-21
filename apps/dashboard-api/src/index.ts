@@ -70,20 +70,27 @@ app.route('/api/projects', projectsRouter)
 app.route('/api/projects', indexingRouter)
 app.route('/api/usage', usageRouter)
 app.route('/api/system', systemRouter)
+app.route('/api/metrics', metricsRouter)
 app.route('/api/indexing', indexingRouter)
 
 // Mount MCP Gateway (Stateless)
 app.route('/mcp', mcpApp)
 
-// Serve Dashboard Web static files
-// In Docker, these will be at ./public
+// Serve Dashboard Web static files (Next.js static export)
+// Clean URLs: /keys → /keys.html, / → /index.html
 app.use('/*', serveStatic({ 
   root: './public',
-  rewriteRequestPath: (path) => (path === '/' ? '/index.html' : path)
+  rewriteRequestPath: (path) => {
+    if (path === '/') return '/index.html'
+    // If path has no extension and doesn't start with /api or /mcp, try .html
+    if (!path.includes('.') && !path.startsWith('/api/') && !path.startsWith('/mcp/') && !path.startsWith('/_next/')) {
+      return `${path}.html`
+    }
+    return path
+  }
 }))
 
-// SPA fallback: serve index.html for client-side routes (e.g., /keys, /settings)
-// This must come AFTER API routes and static files
+// SPA fallback: serve index.html for unmatched client-side routes
 app.get('*', serveStatic({
   root: './public',
   rewriteRequestPath: () => '/index.html'
