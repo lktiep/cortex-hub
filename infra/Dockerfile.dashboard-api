@@ -34,6 +34,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=4000
 
+# Copy root metadata for ESM resolution
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/pnpm-workspace.yaml ./
+
 # Copy prod dependencies (flat and self-contained)
 COPY --from=builder /app/node_modules ./node_modules
 
