@@ -13,8 +13,8 @@ description: Write code following project-specific quality gates from project-pr
 
 ### 1. Load Context
 - Read `STATE.md` → current phase + active tasks
-- Read `.forgewright/project-profile.json` → verify commands + patterns
-- Read `.forgewright/code-conventions.md` → naming, imports, error handling
+- Read `.cortex/project-profile.json` → verify commands + patterns
+- Read `.cortex/code-conventions.md` → naming, imports, error handling
 
 ### 2. Plan
 - Identify files to create/modify/delete
@@ -31,11 +31,11 @@ Write code following project conventions:
 - ✅ No `any` without explicit comment
 - ✅ Co-located tests: `foo.ts` → `foo.test.ts`
 
-### 4. Verify (from project-profile.json → verify.pre_commit)
-Run each command sequentially. ALL must pass:
+### 4. Verify (MANDATORY — from .cortex/project-profile.json)
+Run ALL verify commands. ALL must pass before committing:
 // turbo
 ```bash
-pnpm build --filter='@cortex/shared-*'
+pnpm build
 ```
 // turbo
 ```bash
@@ -46,16 +46,21 @@ pnpm typecheck
 pnpm lint
 ```
 
+> ⚠️ ALWAYS run `pnpm build` (FULL build). NEVER use `--filter`.
+> The pre-commit hook (Lefthook) will BLOCK the commit if these fail.
+
 ### 5. Fix Issues
 If any verify step fails:
 - Fix the issue
-- Re-run the failed command
+- Re-run ALL verify commands (not just the failed one)
 - Continue until all pass
+- Max retries: 2
 
-### 6. Update & Commit
+### 6. Commit & Push
 - Update `STATE.md` with progress
-- Commit with conventional prefix: `feat:`, `fix:`, `docs:`, `chore:`
-- Push to remote
+- `git commit` → Lefthook pre-commit runs automatically
+- `git push` → Lefthook pre-push double-checks
+- Conventional prefix: `feat:`, `fix:`, `docs:`, `chore:`
 
 ### 7. Report
 ```
