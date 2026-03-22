@@ -122,6 +122,27 @@ CREATE TABLE IF NOT EXISTS model_routing (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
+-- ── Change Events (cross-agent change awareness) ──
+CREATE TABLE IF NOT EXISTS change_events (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    branch TEXT NOT NULL,
+    agent_id TEXT,
+    commit_sha TEXT,
+    commit_message TEXT,
+    files_changed TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- ── Agent Acknowledgements ──
+CREATE TABLE IF NOT EXISTS agent_ack (
+    agent_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    last_seen_event_id TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (agent_id, project_id)
+);
+
 -- Insert default uncompleted setup status
 INSERT OR IGNORE INTO setup_status (id, completed) VALUES (1, 0);
 

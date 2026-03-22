@@ -14,6 +14,6 @@ export async function apiCall(
   const baseUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
   return fetch(`${baseUrl}${path}`, {
     ...init,
-    signal: init?.signal ?? AbortSignal.timeout(10000),
+    signal: init?.signal ?? AbortSignal.timeout(30000),
   })
 }
