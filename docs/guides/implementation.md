@@ -130,7 +130,7 @@ NODE_ENV=production
 CF_ACCOUNT_ID=<your-account-id>
 CF_API_TOKEN=<your-api-token>
 
-# OpenAI (for mem0 embeddings)
+# OpenAI (for mem9 embeddings)
 OPENAI_API_KEY=<your-key>
 
 # Hub MCP Auth
@@ -210,7 +210,7 @@ npx wrangler deploy
 npx wrangler secret put HUB_API_KEY_ANTIGRAVITY
 npx wrangler secret put HUB_API_KEY_GOCLAW
 npx wrangler secret put GITNEXUS_URL
-npx wrangler secret put MEM0_URL
+npx wrangler secret put MEM9_URL
 npx wrangler secret put QDRANT_URL
 ```
 

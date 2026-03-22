@@ -22,7 +22,7 @@ cortex-hub/
 │   │       ├── logger.ts              # Structured logging (pino)
 │   │       ├── validation.ts          # Zod schemas (shared)
 │   │       └── index.ts
-│   ├── shared-mem9/                    # Memory engine (replaces mem0)
+│   ├── shared-mem9/                    # Memory engine (in-process)
 │   │   └── src/
 │   │       ├── types.ts               # Mem9Config, MemoryItem, etc.
 │   │       ├── embedder.ts            # Gemini/OpenAI embedding client

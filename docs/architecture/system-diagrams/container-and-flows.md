@@ -39,7 +39,7 @@ sequenceDiagram
     participant Agent as AI Agent
     participant HubMCP as Hub MCP Server<br/>(CF Worker)
     participant Tunnel as CF Tunnel
-    participant Service as Backend Service<br/>(GitNexus/mem0/Qdrant)
+    participant Service as Backend Service<br/>(GitNexus/mem9/Qdrant)
 
     Agent->>HubMCP: MCP tool call (API key)
     HubMCP->>HubMCP: Validate API key

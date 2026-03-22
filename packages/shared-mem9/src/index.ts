@@ -1,7 +1,7 @@
 /**
  * @cortex/shared-mem9 — Cortex Memory Engine
  *
- * In-process TypeScript replacement for mem0.
+ * In-process TypeScript memory engine.
  * - LLM: CLIProxy (Codex OAuth)
  * - Embeddings: Gemini API (GCP key)
  * - Vector Store: Qdrant REST

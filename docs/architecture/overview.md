@@ -28,7 +28,7 @@ graph TB
 
     subgraph "Backend Services — Docker on Server"
         GN["GitNexus<br/>Code Graph + AST"]
-        M0["mem0<br/>Long-term Memory"]
+        M9["mem9<br/>Long-term Memory"]
         QD["Qdrant<br/>Vector Search"]
         API["Dashboard API<br/>Hono + SQLite"]
     end
@@ -40,9 +40,9 @@ graph TB
     AG & GC & FN --> AUTH
     AUTH --> CODE & MEM & KB & QA & SESS
     CODE --> GN
-    MEM --> M0
+    MEM --> M9
     KB --> QD
-    M0 --> QD
+    M9 --> QD
     QA & SESS --> API
     DASH --> API
 ```
@@ -58,7 +58,7 @@ The central gateway. All agents connect to this single endpoint. It handles auth
 | Tool Group | Backend | Purpose |
 |---|---|---|
 | `code.query`, `code.context`, `code.impact` | GitNexus | AST-aware code search, symbol context, blast radius |
-| `memory.add`, `memory.search` | mem0 | Persistent agent memory across sessions |
+| `memory.add`, `memory.search` | mem9 | Persistent agent memory across sessions |
 | `knowledge.search`, `knowledge.contribute` | Qdrant | Shared knowledge base with vector search |
 | `quality.report`, `quality.trends` | SQLite | Quality score tracking and enforcement |
 | `session.handoff`, `session.pickup` | SQLite | Cross-agent task continuity |
@@ -73,7 +73,7 @@ Provides deep code understanding via Tree-sitter AST parsing and graph analysis:
 - **Community detection** — Leiden algorithm clusters related code
 - **Symbol context** — 360° view of any function, class, or method
 
-### 3. mem0 (Agent Memory)
+### 3. mem9 (Agent Memory)
 
 Long-term memory for AI agents, backed by Qdrant (vectors):
 
@@ -123,7 +123,7 @@ Internet
   └── Cloudflare Tunnel ──┬── :4000  Dashboard API
                           ├── :3000  Dashboard Web
                           ├── :3200  GitNexus
-                          ├── :8080  mem0
+                          ├── :8080  mem9
                           └── :6333  Qdrant
 ```
 

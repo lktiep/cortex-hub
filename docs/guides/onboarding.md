@@ -6,12 +6,12 @@
 
 ## How It Works
 
-Cortex Hub uses **CLIProxy** as the LLM gateway. CLIProxy wraps your existing AI subscriptions (ChatGPT Plus, Gemini, Claude) via OAuth — **no API key required**. All services (mem0, dashboard, MCP) route through this proxy automatically.
+Cortex Hub uses **CLIProxy** as the LLM gateway. CLIProxy wraps your existing AI subscriptions (ChatGPT Plus, Gemini, Claude) via OAuth — **no API key required**. All services (mem9, dashboard, MCP) route through this proxy automatically.
 
 ```
 Your Browser → OAuth Login → CLIProxy → OpenAI/Gemini/Claude
                                 ↓
-                         mem0, Dashboard API, MCP Server
+                         mem9, Dashboard API, MCP Server
                          (all route through CLIProxy)
 ```
 
