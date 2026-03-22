@@ -1,19 +1,22 @@
-# Stage 1: Build
-FROM node:22-slim AS builder
+# syntax=docker/dockerfile:1
+# ──────────────────────────────────────────────
+# Cortex Hub — Optimized Multi-stage Build
+# Target: < 2 min with BuildKit cache
+# ──────────────────────────────────────────────
+
+# Stage 1: Base with tools (shared by builder + prod-deps)
+FROM node:22-slim AS base
+RUN corepack enable && \
+    apt-get update && apt-get install -y --no-install-recommends python3 make g++ && \
+    rm -rf /var/lib/apt/lists/*
+RUN echo "node-linker=hoisted" > /root/.npmrc && echo "shamefully-hoist=true" >> /root/.npmrc
+
+# Stage 2: Install ALL deps (cached pnpm store)
+FROM base AS deps
 WORKDIR /app
 
-# Build-time metadata
-ARG COMMIT_SHA=unknown
-ARG BUILD_DATE=unknown
-
-# Install pnpm + turbo
-RUN corepack enable && npm install -g turbo
-
-# Create .npmrc (not tracked in git)
-RUN echo "node-linker=hoisted" > .npmrc && echo "shamefully-hoist=true" >> .npmrc
-
-# Copy package manifests first (better cache)
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# Copy manifests first for cache
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY apps/dashboard-api/package.json ./apps/dashboard-api/
 COPY apps/dashboard-web/package.json ./apps/dashboard-web/
 COPY apps/hub-mcp/package.json ./apps/hub-mcp/
@@ -21,31 +24,34 @@ COPY packages/shared-utils/package.json ./packages/shared-utils/
 COPY packages/shared-types/package.json ./packages/shared-types/
 COPY packages/shared-mem9/package.json ./packages/shared-mem9/
 
-# Install build tools for native modules (better-sqlite3 needs python3/make/g++)
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+# Create .npmrc
+RUN echo "node-linker=hoisted" > .npmrc && echo "shamefully-hoist=true" >> .npmrc
 
-# Install all deps (hoisted to /app/node_modules)
-RUN pnpm install --no-frozen-lockfile
+# pnpm install with BuildKit cache mount (survives between builds)
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --no-frozen-lockfile
 
-# Copy source code
+# Stage 3: Build source
+FROM deps AS builder
+WORKDIR /app
+
+ARG COMMIT_SHA=unknown
+ARG BUILD_DATE=unknown
+
+# Copy source code (deps already in node_modules)
 COPY . .
 
-# Build both apps
-RUN pnpm build --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web
+# Build all apps
+RUN npx turbo build --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web
 
 # Verify hono is hoisted
 RUN ls node_modules/@hono/node-server/package.json && echo "✅ HONO_OK"
 
-# Stage 2: Production deps only
-FROM node:22-slim AS prod-deps
+# Stage 4: Production deps only (reuse cached pnpm store)
+FROM base AS prod-deps
 WORKDIR /app
 
-RUN corepack enable
-
-# Create .npmrc for hoisting
-RUN echo "node-linker=hoisted" > .npmrc && echo "shamefully-hoist=true" >> .npmrc
-
-# Copy package manifests
+# Copy manifests
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=builder /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
@@ -55,16 +61,16 @@ COPY --from=builder /app/packages/shared-utils/package.json ./packages/shared-ut
 COPY --from=builder /app/packages/shared-types/package.json ./packages/shared-types/package.json
 COPY --from=builder /app/packages/shared-mem9/package.json ./packages/shared-mem9/package.json
 
-# Install build tools for native modules
-RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+RUN echo "node-linker=hoisted" > .npmrc && echo "shamefully-hoist=true" >> .npmrc
 
-# Install production deps only (skip husky prepare)
-RUN pnpm install --no-frozen-lockfile --prod --ignore-scripts
+# Install prod deps only — reuses cached pnpm store
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --no-frozen-lockfile --prod --ignore-scripts
 
-# Rebuild native modules that need compilation
+# Rebuild only native modules that need compilation
 RUN cd node_modules/better-sqlite3 && npx --yes prebuild-install || npx --yes node-gyp rebuild --release
 
-# Stage 3: Runner
+# Stage 5: Runner (minimal image)
 FROM node:22-slim AS runner
 WORKDIR /app
 

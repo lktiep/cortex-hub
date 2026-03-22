@@ -1,14 +1,41 @@
-# Docker build context exclusions
-node_modules
+# ── Git & IDE ──
 .git
-*.tsbuildinfo
-.next
-out
-dist
-.turbo
-.env*
-docs
-Antigravity-Production-Grade-Suite
+.gitignore
+.vscode
+.idea
+.cursor
+.cortex
+.gemini
 .forgewright
+
+# ── Node (rebuilt in container) ──
+node_modules
+**/node_modules
+**/.turbo
+*.tsbuildinfo
+
+# ── Build outputs (rebuilt in container) ──
+**/dist
+**/out
+**/.next
+
+# ── Dev/CI ──
+.github
+lefthook.yml
+.env*
+Antigravity-Production-Grade-Suite
+
+# ── Docs (not needed in image) ──
+docs
 *.md
-!README.md
+!apps/dashboard-api/src/db/schema.sql
+
+# ── Docker (avoid recursive copy) ──
+infra/Dockerfile.*
+infra/docker-compose*.yml
+
+# ── Testing ──
+**/*.test.ts
+**/*.spec.ts
+**/vitest.config.ts
+coverage
