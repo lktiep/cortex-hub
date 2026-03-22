@@ -251,6 +251,14 @@ verify = profile.get('verify', {})
 pre_commit = verify.get('pre_commit', [])
 full_cmds = verify.get('full', [])
 
+def cmd_to_key(cmd_str, index):
+    \"\"\"Convert a command string to a unique YAML key name.\"\"\"
+    # Replace spaces/slashes with underscores, strip unsafe chars
+    key = cmd_str.replace(' ', '_').replace('/', '_').replace('-', '_').lower()
+    # Remove leading/trailing underscores
+    key = key.strip('_')
+    return key or f'step_{index}'
+
 lines = []
 
 # Pre-commit hooks
@@ -264,7 +272,7 @@ if pre_commit:
             name = cmd.get('name', f'step_{i}').lower().replace(' ', '_')
             run_cmd = cmd.get('cmd', '')
         else:
-            name = cmd.split()[0].replace('/', '_') if cmd else f'step_{i}'
+            name = cmd_to_key(cmd, i)
             run_cmd = cmd
         lines.append(f'    {name}:')
         lines.append(f'      run: {run_cmd}')
@@ -281,7 +289,7 @@ if push_cmds:
             name = cmd.get('name', f'step_{i}').lower().replace(' ', '_')
             run_cmd = cmd.get('cmd', '')
         else:
-            name = cmd.split()[0].replace('/', '_') if cmd else f'step_{i}'
+            name = cmd_to_key(cmd, i)
             run_cmd = cmd
         lines.append(f'    {name}:')
         lines.append(f'      run: {run_cmd}')
