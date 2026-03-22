@@ -61,7 +61,22 @@ app.get('/', (c) => {
   })
 })
 
-// MCP endpoint — requires auth
+// Helper: create MCP server with tools registered
+function createMcpServer(env: Env) {
+  const server = new McpServer({
+    name: env.MCP_SERVER_NAME ?? 'cortex-hub',
+    version: env.MCP_SERVER_VERSION ?? '0.1.0',
+  })
+  registerHealthTools(server, env)
+  registerMemoryTools(server, env)
+  registerKnowledgeTools(server, env)
+  registerCodeTools(server, env)
+  registerQualityTools(server, env)
+  registerSessionTools(server, env)
+  return server
+}
+
+// MCP endpoint — redirect /mcp to /mcp/
 app.all('/mcp', (c) => {
   const url = new URL(c.req.url)
   if (!url.pathname.endsWith('/')) {
@@ -70,41 +85,67 @@ app.all('/mcp', (c) => {
   return c.notFound()
 })
 
-app.all('/mcp/*', async (c) => {
+// MCP Stateless JSON-RPC handler
+// Uses a fresh server per request (stateless mode)
+app.post('/mcp/*', async (c) => {
   // Validate API key
   const auth = await validateApiKey(c.req.raw, c.env)
   if (!auth.valid) {
     return c.json({ error: auth.error }, 401)
   }
 
-  // Create stateless MCP Server
-  const server = new McpServer({
-    name: c.env.MCP_SERVER_NAME ?? 'cortex-hub',
-    version: c.env.MCP_SERVER_VERSION ?? '0.1.0',
-  })
+  const server = createMcpServer(c.env)
 
-  // Register tools
-  registerHealthTools(server, c.env)
-  registerMemoryTools(server, c.env)
-  registerKnowledgeTools(server, c.env)
-  registerCodeTools(server, c.env)
-  registerQualityTools(server, c.env)
-  registerSessionTools(server, c.env)
-
-  // Implement the MCP handler logic directly for Node.js
   try {
-    const request = await c.req.json()
-    // The McpServer class in @modelcontextprotocol/sdk/server/mcp.js 
-    // uses server.server.handleMessage(request) for the underlying JSON-RPC
-    const result = await (server as any).server.handleMessage(request)
+    const body = await c.req.json()
+    
+    // Handle JSON-RPC directly via the internal Server instance
+    // McpServer wraps a Server at .server which has ._handleMessage()
+    const innerServer = (server as any).server
+    
+    // The SDK's Server needs to be connected to process messages
+    // We create a minimal in-memory transport
+    const responsePromise = new Promise<any>((resolve) => {
+      const transport = {
+        start: async () => {},
+        close: async () => {},
+        send: async (message: any) => { resolve(message) },
+        onmessage: null as any,
+        onerror: null as any,
+        onclose: null as any,
+        sessionId: undefined as string | undefined,
+      }
+      
+      innerServer.connect(transport).then(() => {
+        // Once connected, dispatch the message
+        if (transport.onmessage) {
+          transport.onmessage(body)
+        }
+      })
+    })
+
+    const result = await Promise.race([
+      responsePromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('MCP handler timeout')), 10000))
+    ])
+
     return c.json(result)
   } catch (error: any) {
     return c.json({ 
       jsonrpc: '2.0', 
-      error: { code: -32603, message: error.message },
+      error: { code: -32603, message: error.message || 'Internal error' },
       id: null 
     }, 500)
   }
+})
+
+// Handle GET /mcp/* for SSE (not supported in stateless mode)
+app.get('/mcp/*', (c) => {
+  return c.json({
+    jsonrpc: '2.0',
+    error: { code: -32000, message: 'SSE not supported. Use POST for JSON-RPC requests.' },
+    id: null,
+  }, 405)
 })
 
 export default app
