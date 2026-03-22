@@ -9,6 +9,7 @@ on:
       - 'apps/hub-mcp/**'
       - 'packages/**'
       - 'infra/Dockerfile.dashboard-api'
+      - 'infra/Dockerfile.hub-mcp'
   workflow_dispatch:
 
 env:
@@ -33,11 +34,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
+      - name: Extract metadata for cortex-api
+        id: meta-api
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/lktiep/cortex-api
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Extract metadata for cortex-mcp
+        id: meta-mcp
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/lktiep/cortex-mcp
           tags: |
             type=raw,value=latest
             type=sha
@@ -45,7 +55,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push Docker image
+      - name: Build and push cortex-api
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -54,7 +64,21 @@ jobs:
           build-args: |
             COMMIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-api.outputs.tags }}
+          labels: ${{ steps.meta-api.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push cortex-mcp
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/Dockerfile.hub-mcp
+          push: true
+          build-args: |
+            COMMIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          tags: ${{ steps.meta-mcp.outputs.tags }}
+          labels: ${{ steps.meta-mcp.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
