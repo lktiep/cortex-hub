@@ -23,16 +23,15 @@ pre-push:
 post-push:
   commands:
     notify_cortex:
-      run: >
+      run: |
         if [ -n "$CORTEX_API_URL" ]; then
-        BRANCH=$(git rev-parse --abbrev-ref HEAD);
-        REPO=$(git remote get-url origin 2>/dev/null || echo "");
-        SHA=$(git rev-parse HEAD);
-        MSG=$(git log -1 --pretty=%s);
-        FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | python3 -c "import sys,json; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))" 2>/dev/null || echo "[]");
-        curl -s -X POST "$CORTEX_API_URL/api/webhooks/push"
-        -H "Content-Type: application/json"
-        -H "Authorization: Bearer ${HUB_API_KEY:-}"
-        -d "{\"repo\":\"$REPO\",\"branch\":\"$BRANCH\",\"commitSha\":\"$SHA\",\"commitMessage\":\"$MSG\",\"filesChanged\":$FILES}"
-        > /dev/null 2>&1 || true;
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          REPO=$(git remote get-url origin 2>/dev/null || echo "")
+          COMMIT_SHA=$(git rev-parse HEAD)
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | jq -R -s 'split("\n") | map(select(. != ""))' 2>/dev/null || echo "[]")
+          curl -s -X POST "$CORTEX_API_URL/api/webhooks/local-push" \
+            -H "Content-Type: application/json" \
+            -d "{\"repo\":\"$REPO\",\"branch\":\"$BRANCH\",\"commitSha\":\"$COMMIT_SHA\",\"commitMessage\":\"$COMMIT_MSG\",\"filesChanged\":$FILES}" \
+            > /dev/null 2>&1 || true
         fi
