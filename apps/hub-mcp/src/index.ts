@@ -20,7 +20,7 @@ const app = new Hono<{ Bindings: Env }>()
 //  In Node.js, c.env is empty — this middleware fills it from process.env.)
 app.use('*', async (c, next) => {
   const envKeys: (keyof Env)[] = [
-    'QDRANT_URL', 'NEO4J_URL', 'MEM0_URL', 'CLIPROXY_URL',
+    'QDRANT_URL', 'NEO4J_URL', 'CLIPROXY_URL',
     'DASHBOARD_API_URL', 'MCP_SERVER_NAME', 'MCP_SERVER_VERSION', 'API_KEYS',
   ]
   for (const key of envKeys) {

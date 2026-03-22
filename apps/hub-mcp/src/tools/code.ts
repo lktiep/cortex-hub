@@ -8,6 +8,8 @@ import type { Env } from '../types.js'
  * Proxies AST graph, impact analysis, and code search requests to the Dashboard API
  * which routes them natively to the GitNexus backend on the server.
  * Supports project + branch scoping for multi-branch knowledge.
+ *
+ * Gracefully degrades when Neo4j/GitNexus is not configured.
  */
 export function registerCodeTools(server: McpServer, env: Env) {
   // code.search — query codebase concepts and workflows
@@ -21,6 +23,23 @@ export function registerCodeTools(server: McpServer, env: Env) {
       limit: z.number().optional().describe('Maximum flows to return (default: 5)'),
     },
     async ({ query, projectId, branch, limit }) => {
+      // Check if Neo4j is configured
+      if (!env.NEO4J_URL) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                status: 'not_configured',
+                message: 'Code search requires Neo4j/GitNexus which is not currently deployed. Use the dashboard to index a project first, or configure NEO4J_URL.',
+                query,
+                suggestion: 'Try cortex_memory_search or cortex_knowledge_search as alternatives.',
+              }, null, 2),
+            },
+          ],
+        }
+      }
+
       try {
         const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
         const response = await fetch(`${apiUrl}/api/intel/search`, {
@@ -82,6 +101,22 @@ export function registerCodeTools(server: McpServer, env: Env) {
       direction: z.enum(['upstream', 'downstream']).optional().describe('Direction to analyze (default: downstream)'),
     },
     async ({ target, projectId, branch, direction }) => {
+      // Check if Neo4j is configured
+      if (!env.NEO4J_URL) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                status: 'not_configured',
+                message: 'Impact analysis requires Neo4j/GitNexus which is not currently deployed. Configure NEO4J_URL to enable this feature.',
+                target,
+              }, null, 2),
+            },
+          ],
+        }
+      }
+
       try {
         const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
         const response = await fetch(`${apiUrl}/api/intel/impact`, {

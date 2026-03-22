@@ -12,6 +12,7 @@ import { qualityRouter, sessionsRouter } from './routes/quality.js'
 import { orgsRouter, projectsRouter } from './routes/organizations.js'
 import { indexingRouter } from './routes/indexing.js'
 import { usageRouter } from './routes/usage.js'
+import { mem9ProxyRouter } from './routes/mem9-proxy.js'
 import { statsRouter as metricsRouter } from './routes/stats.js'
 import { systemRouter } from './routes/system.js'
 import { accountsRouter } from './routes/accounts.js'
@@ -74,6 +75,7 @@ app.route('/api/system', systemRouter)
 app.route('/api/metrics', metricsRouter)
 app.route('/api/accounts', accountsRouter)
 app.route('/api/indexing', indexingRouter)
+app.route('/api/mem9', mem9ProxyRouter)
 
 // Mount MCP Gateway (Stateless)
 app.route('/mcp', mcpApp)

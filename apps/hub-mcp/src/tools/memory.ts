@@ -5,7 +5,7 @@ import type { Env } from '../types.js'
 
 /**
  * Register memory tools.
- * Proxies to mem0 API for agent memory storage and retrieval.
+ * Proxies to dashboard-api mem9 endpoints for agent memory storage and retrieval.
  * Supports branch-scoped knowledge via user_id namespacing:
  *   - project-{id}:branch-{name} → branch-specific memories
  *   - project-{id} → project-level memories (fallback)
@@ -42,15 +42,17 @@ export function registerMemoryTools(server: McpServer, env: Env) {
           ...(branch ? { branch } : {}),
         }
 
-        const response = await fetch(`${env.MEM0_URL}/v1/memories/`, {
+        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
+        const response = await fetch(`${apiUrl}/api/mem9/store`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             messages: [{ role: 'user', content }],
-            user_id: userId,
+            userId,
+            agentId: agentId ?? 'default',
             metadata: meta,
           }),
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(30000),
         })
 
         if (!response.ok) {
@@ -107,6 +109,7 @@ export function registerMemoryTools(server: McpServer, env: Env) {
     async ({ query, agentId, projectId, branch, limit }) => {
       try {
         const maxResults = limit ?? 5
+        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
         const allMemories: unknown[] = []
 
         // Branch hierarchy search: branch → project → agent (fallback chain)
@@ -124,26 +127,24 @@ export function registerMemoryTools(server: McpServer, env: Env) {
           if (allMemories.length >= maxResults) break
 
           const remaining = maxResults - allMemories.length
-          const response = await fetch(
-            `${env.MEM0_URL}/v1/memories/search/`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                query,
-                user_id: userId,
-                limit: remaining,
-              }),
-              signal: AbortSignal.timeout(10000),
-            }
-          )
+          const response = await fetch(`${apiUrl}/api/mem9/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              query,
+              userId,
+              limit: remaining,
+            }),
+            signal: AbortSignal.timeout(30000),
+          })
 
           if (response.ok) {
-            const memories = await response.json()
+            const data = (await response.json()) as { memories?: unknown[] }
+            const memories = data.memories ?? []
             if (Array.isArray(memories)) {
               allMemories.push(
-                ...memories.map((m: Record<string, unknown>) => ({
-                  ...m,
+                ...memories.map((m: unknown) => ({
+                  ...(m as Record<string, unknown>),
                   _scope: userId,
                 }))
               )

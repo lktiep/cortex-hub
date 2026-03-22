@@ -6,6 +6,7 @@ import type { Env } from '../types.js'
 /**
  * Register health check tool.
  * Pings all backend services and returns their status.
+ * Skips services with undefined/empty URLs.
  */
 export function registerHealthTools(server: McpServer, env: Env) {
   server.tool(
@@ -14,12 +15,21 @@ export function registerHealthTools(server: McpServer, env: Env) {
     {},
     async () => {
       const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
-      const services = [
+
+      // Build service list, skipping undefined/empty URLs
+      const services: Array<{ name: string; url: string }> = [
         { name: 'qdrant', url: `${env.QDRANT_URL}/healthz` },
-        { name: 'neo4j', url: `${env.NEO4J_URL}` },
-        { name: 'cliproxy', url: `${env.CLIPROXY_URL}/` },
         { name: 'dashboard-api', url: `${apiUrl}/health` },
+        { name: 'mem9', url: `${apiUrl}/api/mem9/health` },
       ]
+
+      // Only add optional services if configured
+      if (env.CLIPROXY_URL) {
+        services.push({ name: 'cliproxy', url: `${env.CLIPROXY_URL}/v1/models` })
+      }
+      if (env.NEO4J_URL) {
+        services.push({ name: 'neo4j', url: env.NEO4J_URL })
+      }
 
       const results = await Promise.allSettled(
         services.map(async (svc) => {

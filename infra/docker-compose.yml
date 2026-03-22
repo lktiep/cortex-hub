@@ -95,6 +95,9 @@ services:
       MCP_SERVER_NAME: "cortex-hub"
       MCP_SERVER_VERSION: "0.1.0"
       DASHBOARD_API_URL: http://localhost:4000
+      # Hub-MCP backend URLs (used by MCP tools)
+      CLIPROXY_URL: http://llm-proxy:8317
+      NEO4J_URL: ""
     depends_on:
       qdrant:
         condition: service_healthy

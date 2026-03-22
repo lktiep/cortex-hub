@@ -5,7 +5,6 @@ export interface Env {
   // Backend service URLs
   QDRANT_URL: string
   NEO4J_URL: string
-  MEM0_URL: string
   CLIPROXY_URL: string
   DASHBOARD_API_URL: string
 
