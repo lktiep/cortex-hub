@@ -1,108 +1,14 @@
 {
   "schema_version": "1.0",
   "project_name": "cortex-hub",
-  "tagline": "The Neural Intelligence Platform for AI Agent Orchestration",
   "fingerprint": {
-    "language": "typescript",
-    "framework": "next.js@15",
     "package_manager": "pnpm",
-    "architecture": "monorepo",
-    "monorepo_tool": "turborepo",
-    "test_framework": "vitest",
-    "lint_tool": "eslint+prettier",
-    "ci_system": "github-actions",
-    "deployment": "cloudflare-workers+cloudflare-pages",
-    "monorepo": true,
-    "services": [
-      "cortex-hub (All-in-One: Dashboard API + MCP Gateway + Dashboard Web)"
-    ],
-    "shared_packages": [
-      "@cortex/shared-types",
-      "@cortex/shared-utils",
-      "@cortex/shared-mem9",
-      "@cortex/ui-components"
-    ],
-    "backend_services_docker": [
-      "qdrant (vector search)",
-      "gitnexus (code intelligence)"
-    ],
-    "detected_at": "2026-03-18T19:54:39+07:00"
-  },
-  "health": {
-    "build_passes": true,
-    "tests_pass": true,
-    "test_count": 0,
-    "test_coverage_percent": null,
-    "lint_clean": true,
-    "lint_error_count": 0,
-    "deprecated_dep_count": 0,
-    "known_cve_count": 0,
-    "cve_severity": { "critical": 0, "high": 0, "medium": 0, "low": 0 },
-    "checked_at": "2026-03-20T09:40:00+07:00",
-    "note": "All verification commands pass: build, typecheck, lint"
-  },
-  "patterns": {
-    "naming_convention": "camelCase",
-    "naming_confidence": "planned",
-    "component_pattern": "feature-based",
-    "error_handling": "custom-error-classes",
-    "import_style": "path-aliases (@cortex/*)",
-    "state_management": "to-be-determined",
-    "api_pattern": "hono-routes",
-    "file_organization": "monorepo-packages"
-  },
-  "risk": {
-    "tech_debt_score": 0,
-    "overall_risk_score": 0,
-    "critical_risks": [],
-    "protected_paths": [".env*", "infra/data/**", ".github/**", "*.key", "*.pem"],
-    "protected_branches": ["main"]
-  },
-  "code_intelligence": {
-    "indexed": true,
-    "engine": "gitnexus",
-    "note": "GitNexus indexing pipeline implemented. Dashboard trigger via IndexingPanel.",
-    "mcp_available": true
-  },
-  "product_requirements": {
-    "onboarding_ux": {
-      "oauth_quickstart": "User provides OpenAI key → instant setup via OAuth flow",
-      "github_repo_import": "Web UI to import public/private repos (own + team + external)",
-      "minimal_clicks": "Streamlined flow — minimal steps to value"
-    },
-    "api_key_management": {
-      "per_agent_keys": "Create/revoke API keys for each agent or teammate",
-      "usage_tracking": "Monitor usage per key — requests, tools used, latency",
-      "access_controls": "Fine-grained permissions per key"
-    },
-    "logging": {
-      "realtime": "WebSocket-based real-time log streaming",
-      "per_agent": "Filter by agent, tool, project, time range",
-      "analytics": "Usage trends, popular tools, error rates"
-    }
+    "detected_at": "2026-03-22T06:31:34Z"
   },
   "verify": {
-    "pre_commit": [
-      { "name": "Full Build", "cmd": "pnpm build" },
-      { "name": "Typecheck", "cmd": "pnpm typecheck" },
-      { "name": "Lint + Prettier", "cmd": "pnpm lint" }
-    ],
-    "full": [
-      { "name": "Full Build", "cmd": "pnpm build" },
-      { "name": "Typecheck", "cmd": "pnpm typecheck" },
-      { "name": "Lint + Prettier", "cmd": "pnpm lint" },
-      { "name": "Test", "cmd": "pnpm test" }
-    ],
-    "deploy": {
-      "cortex-hub": "docker compose -f infra/docker-compose.yml build cortex-hub && docker compose up -d cortex-hub"
-    },
-    "setup": {
-      "install": "./scripts/install-hub.sh",
-      "onboard": "./scripts/onboard.sh"
-    }
-  },
-  "cortex": {
-    "version": "1.0.0",
-    "onboarded_at": "2026-03-22T10:00:00+07:00"
+    "pre_commit": ["pnpm build","pnpm typecheck","pnpm lint"],
+    "full": ["pnpm build","pnpm typecheck","pnpm lint","pnpm test"],
+    "auto_fix": true,
+    "max_retries": 2
   }
 }

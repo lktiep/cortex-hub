@@ -93,38 +93,72 @@ app.post('/*', async (c) => {
   try {
     const body = await c.req.json()
     
-    // Handle JSON-RPC directly via the internal Server instance
-    // McpServer wraps a Server at .server which has ._handleMessage()
+    // McpServer wraps an internal Server instance
     const innerServer = (server as any).server
     
-    // The SDK's Server needs to be connected to process messages
-    // We create a minimal in-memory transport
-    const responsePromise = new Promise<any>((resolve) => {
-      const transport = {
-        start: async () => {},
-        close: async () => {},
-        send: async (message: any) => { resolve(message) },
-        onmessage: null as any,
-        onerror: null as any,
-        onclose: null as any,
-        sessionId: undefined as string | undefined,
-      }
-      
-      innerServer.connect(transport).then(() => {
-        // Once connected, dispatch the message
-        if (transport.onmessage) {
-          transport.onmessage(body)
-        }
+    // Collect all responses from the transport
+    const responses: any[] = []
+    
+    const transport = {
+      start: async () => {},
+      close: async () => {},
+      send: async (message: any) => { responses.push(message) },
+      onmessage: null as any,
+      onerror: null as any,
+      onclose: null as any,
+      sessionId: undefined as string | undefined,
+    }
+    
+    await innerServer.connect(transport)
+    
+    // MCP SDK requires initialize handshake before accepting any requests.
+    // For stateless HTTP, we auto-initialize on every request.
+    const initRequest = {
+      jsonrpc: '2.0' as const,
+      id: '__init__',
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'cortex-http-client', version: '1.0.0' },
+      },
+    }
+    
+    // Send initialize request
+    if (transport.onmessage) {
+      await transport.onmessage(initRequest)
+    }
+    
+    // Send initialized notification (required to complete handshake)
+    if (transport.onmessage) {
+      await transport.onmessage({
+        jsonrpc: '2.0',
+        method: 'notifications/initialized',
       })
-    })
-
-    const result = await Promise.race([
-      responsePromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('MCP handler timeout')), 10000))
-    ])
-
-    return c.json(result)
+    }
+    
+    // Clear init responses — we don't need them
+    responses.length = 0
+    
+    // Now dispatch the actual client request
+    if (transport.onmessage) {
+      await transport.onmessage(body)
+    }
+    
+    // Return the response for the actual request
+    const result = responses[0]
+    
+    if (result) {
+      return c.json(result)
+    }
+    
+    return c.json({
+      jsonrpc: '2.0',
+      error: { code: -32603, message: 'No response from MCP server' },
+      id: body.id ?? null,
+    }, 500)
   } catch (error: any) {
+    console.error('[MCP Handler Error]', error)
     return c.json({ 
       jsonrpc: '2.0', 
       error: { code: -32603, message: error.message || 'Internal error' },

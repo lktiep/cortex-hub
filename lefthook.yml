@@ -1,21 +1,21 @@
 pre-commit:
   parallel: true
   commands:
-    full_build:
+    pnpm_build:
       run: pnpm build
-    typecheck:
+    pnpm_typecheck:
       run: pnpm typecheck
-    lint_+_prettier:
+    pnpm_lint:
       run: pnpm lint
 
 pre-push:
   parallel: true
   commands:
-    full_build:
+    pnpm_build:
       run: pnpm build
-    typecheck:
+    pnpm_typecheck:
       run: pnpm typecheck
-    lint_+_prettier:
+    pnpm_lint:
       run: pnpm lint
-    test:
+    pnpm_test:
       run: pnpm test
