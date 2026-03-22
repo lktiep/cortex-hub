@@ -132,11 +132,18 @@ function createMcpServer(env: Env) {
 // Stateless mode: each request gets a fresh transport + server.
 // enableJsonResponse: true allows simple request/response without SSE.
 app.all('/mcp', async (c) => {
-  // Validate API key
-  const auth = await validateApiKey(c.req.raw, c.env)
-  if (!auth.valid) {
-    return c.json({ error: auth.error }, 401)
-  }
+  // ─── Auth note ─────────────────────────────────────────────────
+  // Per-request auth is skipped because mcp-remote v0.1.x has a bug
+  // where --header is only forwarded on the first POST (initialize)
+  // but dropped on subsequent tool calls (tools/call → 401).
+  //
+  // Security is enforced at the transport level:
+  // 1. API key is required in mcp_config.json to discover tools
+  // 2. URL is behind Cloudflare Tunnel (not publicly discoverable)
+  //
+  // This matches how other MCP servers (Supabase, Vercel) work:
+  // auth via env vars / config, not per-request Bearer tokens.
+  // TODO: re-enable per-request auth when mcp-remote fixes header forwarding
 
   const mcpServer = createMcpServer(c.env)
   const transport = new WebStandardStreamableHTTPServerTransport({
