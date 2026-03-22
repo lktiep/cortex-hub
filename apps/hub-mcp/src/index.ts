@@ -6,6 +6,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 
 import { registerCodeTools } from './tools/code.js'
 import { registerHealthTools } from './tools/health.js'
+import { registerIndexingTools } from './tools/indexing.js'
 import { registerKnowledgeTools } from './tools/knowledge.js'
 import { registerMemoryTools } from './tools/memory.js'
 import { registerQualityTools } from './tools/quality.js'
@@ -89,6 +90,7 @@ app.get('/', (c) => {
       'cortex_knowledge_search',
       'cortex_code_search',
       'cortex_code_impact',
+      'cortex_code_reindex',
       'cortex_quality_report',
       'cortex_session_start'
     ],
@@ -105,6 +107,7 @@ function createMcpServer(env: Env) {
   registerMemoryTools(server, env)
   registerKnowledgeTools(server, env)
   registerCodeTools(server, env)
+  registerIndexingTools(server, env)
   registerQualityTools(server, env)
   registerSessionTools(server, env)
   return server

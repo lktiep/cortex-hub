@@ -275,3 +275,28 @@ projectsRouter.get('/', (c) => {
     return c.json({ error: String(error) }, 500)
   }
 })
+
+// ── Lookup project by repo URL ──
+projectsRouter.get('/lookup', (c) => {
+  const repo = c.req.query('repo')
+  if (!repo) return c.json({ error: 'repo query param required' }, 400)
+
+  try {
+    // Try exact match first, then without .git suffix
+    const cleanRepo = repo.replace(/\.git$/, '')
+    const project = db
+      .prepare(
+        `SELECT id, name, git_repo_url, indexed_at, indexed_symbols
+         FROM projects
+         WHERE git_repo_url = ? OR REPLACE(git_repo_url, '.git', '') = ?
+         LIMIT 1`
+      )
+      .get(repo, cleanRepo) as Record<string, unknown> | undefined
+
+    if (!project) return c.json({ error: 'Project not found' }, 404)
+    return c.json(project)
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
