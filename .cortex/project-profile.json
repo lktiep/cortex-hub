@@ -83,12 +83,12 @@
   },
   "verify": {
     "pre_commit": [
-      { "name": "Build shared packages", "cmd": "pnpm build --filter='@cortex/shared-*'" },
+      { "name": "Full Build", "cmd": "pnpm build" },
       { "name": "Typecheck", "cmd": "pnpm typecheck" },
       { "name": "Lint + Prettier", "cmd": "pnpm lint" }
     ],
     "full": [
-      { "name": "Build shared packages", "cmd": "pnpm build --filter='@cortex/shared-*'" },
+      { "name": "Full Build", "cmd": "pnpm build" },
       { "name": "Typecheck", "cmd": "pnpm typecheck" },
       { "name": "Lint + Prettier", "cmd": "pnpm lint" },
       { "name": "Test", "cmd": "pnpm test" }
@@ -101,10 +101,8 @@
       "onboard": "./scripts/onboard.sh"
     }
   },
-  "forgewright": {
-    "version": "7.5.0",
-    "onboarded_at": "2026-03-18T19:54:39+07:00",
-    "last_session": null,
-    "total_sessions": 0
+  "cortex": {
+    "version": "1.0.0",
+    "onboarded_at": "2026-03-22T10:00:00+07:00"
   }
 }

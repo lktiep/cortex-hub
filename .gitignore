@@ -6,19 +6,36 @@ dist/
 out/
 .next/
 .turbo/
+*.d.ts.map
+*.js.map
+*.tsbuildinfo
 
 # Environment
 .env
 .env.local
 .env.*.local
 
-# Data volumes
-infra/data/
+# Data / Database
+data/
+*.db
+*.db-shm
+*.db-wal
 apps/dashboard-api/data/
-*.tsbuildinfo
 
 # GitNexus index (regenerated)
 .gitnexus/
+
+# Wrangler cache
+.wrangler/
+
+# Legacy / unused
+deploy-test/
+deploy-legacy-test/
+Antigravity-Production-Grade-Suite/
+.antigravity/
+.forgewright/
+schemas/
+api/
 
 # OS files
 .DS_Store
@@ -36,5 +53,3 @@ npm-debug.log*
 
 # Coverage
 coverage/
-deploy-test/data/
-deploy-legacy-test/data/

@@ -11,14 +11,14 @@
 ### At Session Start — ALWAYS do:
 
 1. **Read `STATE.md`** → current task & progress
-2. **Read `.forgewright/project-profile.json`** → `verify` commands & fingerprint
+2. **Read `.cortex/project-profile.json`** → `verify` commands & fingerprint
 3. **Run `/onboard`** (only if first session or Hub credentials missing/broken) → sync MCP, rules, and local audit
 4. **Acknowledge context:** "Phase X, resuming: [task]. Standards: SOLID, Clean Architecture. Verify: [profile commands]"
 
 ### At Session End — ALWAYS do:
 
-1. **Run verify commands** from `project-profile.json` → `verify.pre_commit`:
-   - `pnpm build --filter='@cortex/shared-*'`
+1. **Run full verify** from `project-profile.json` → `verify.pre_commit`:
+   - `pnpm build` **(FULL build, not --filter)**
    - `pnpm typecheck`
    - `pnpm lint`
 2. **Report quality:** `Build ✅/❌ | Typecheck ✅/❌ | Lint ✅/❌`
@@ -110,7 +110,7 @@ COMMIT   → Conventional commit, update STATE.md
 
 ## Code Conventions
 
-See: [.forgewright/code-conventions.md](.forgewright/code-conventions.md)
+See: [.cortex/code-conventions.md](.cortex/code-conventions.md)
 
 Key rules:
 - **camelCase** for variables/functions, **PascalCase** for types/components
@@ -127,7 +127,7 @@ Every code session MUST end with verification from `project-profile.json`:
 
 | Step | Command | Source |
 |------|---------|--------|
-| 1. Build shared | `pnpm build --filter='@cortex/shared-*'` | `verify.pre_commit[0]` |
+| 1. Full Build | `pnpm build` | `verify.pre_commit[0]` |
 | 2. Typecheck | `pnpm typecheck` | `verify.pre_commit[1]` |
 | 3. Lint + Prettier | `pnpm lint` | `verify.pre_commit[2]` |
 | 4. Test (deploy only) | `pnpm test` | `verify.full[3]` |
@@ -147,12 +147,9 @@ Every code session MUST end with verification from `project-profile.json`:
 | Document | Path |
 |----------|------|
 | **STATE.md** | `STATE.md` (read FIRST every session) |
-| **Project Profile** | `.forgewright/project-profile.json` (verify commands) |
-| **Code Conventions** | `.forgewright/code-conventions.md` |
-| BRD | `Antigravity-Production-Grade-Suite/product-manager/BRD/brd.md` |
-| Requirements Register | `Antigravity-Production-Grade-Suite/business-analyst/elicitation/requirements-register.md` |
-| Architecture Decisions | `Antigravity-Production-Grade-Suite/solution-architect/analysis/architecture-decisions.md` |
-| Gate Definitions | `Antigravity-Production-Grade-Suite/.protocols/gate-definitions.md` |
+| **Project Profile** | `.cortex/project-profile.json` (verify commands) |
+| **Code Conventions** | `.cortex/code-conventions.md` |
+| Database ERD | `docs/database/erd.md` |
 | Agent Quality Strategy | `docs/architecture/agent-quality-strategy.md` |
 | Docker Stack | `infra/docker-compose.yml` |
 
