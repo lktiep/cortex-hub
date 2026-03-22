@@ -27,8 +27,9 @@ echo -e "${GREEN}>>> Welcome to Cortex Hub!${NC}"
 echo "Choose your role:"
 echo "  1) Administrator (Full installation: Docker stack, Hub API, and Onboarding)"
 echo "  2) Member (Project Onboarding only: Connect local agent to existing Hub)"
+echo "  3) Uninstall (Clean remove all Cortex config for fresh start)"
 
-read -rp "  Select option [1-2]: " ROLE < /dev/tty
+read -rp "  Select option [1-3]: " ROLE < /dev/tty
 
 case "$ROLE" in
   1)
@@ -42,6 +43,12 @@ case "$ROLE" in
     curl -fsSL "$REPO_RAW/scripts/onboard.sh" -o "$TMP_DIR/onboard.sh"
     chmod +x "$TMP_DIR/onboard.sh"
     exec bash "$TMP_DIR/onboard.sh" < /dev/tty
+    ;;
+  3)
+    echo -e "${BLUE}>>> Downloading uninstall script...${NC}"
+    curl -fsSL "$REPO_RAW/scripts/uninstall.sh" -o "$TMP_DIR/uninstall.sh"
+    chmod +x "$TMP_DIR/uninstall.sh"
+    exec bash "$TMP_DIR/uninstall.sh" < /dev/tty
     ;;
   *)
     echo -e "${RED}>>> Invalid option. Exiting.${NC}"

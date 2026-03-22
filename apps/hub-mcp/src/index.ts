@@ -76,18 +76,12 @@ function createMcpServer(env: Env) {
   return server
 }
 
-// MCP endpoint — redirect /mcp to /mcp/
-app.all('/mcp', (c) => {
-  const url = new URL(c.req.url)
-  if (!url.pathname.endsWith('/')) {
-    return c.redirect(url.pathname + '/')
-  }
-  return c.notFound()
-})
+
 
 // MCP Stateless JSON-RPC handler
 // Uses a fresh server per request (stateless mode)
-app.post('/mcp/*', async (c) => {
+// Routes are relative — mounted at /mcp in dashboard-api → effective path: /mcp/
+app.post('/*', async (c) => {
   // Validate API key
   const auth = await validateApiKey(c.req.raw, c.env)
   if (!auth.valid) {
@@ -139,8 +133,8 @@ app.post('/mcp/*', async (c) => {
   }
 })
 
-// Handle GET /mcp/* for SSE (not supported in stateless mode)
-app.get('/mcp/*', (c) => {
+// Handle GET requests (SSE not supported in stateless mode)
+app.get('/*', (c) => {
   return c.json({
     jsonrpc: '2.0',
     error: { code: -32000, message: 'SSE not supported. Use POST for JSON-RPC requests.' },

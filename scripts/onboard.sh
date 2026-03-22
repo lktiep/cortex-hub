@@ -47,12 +47,15 @@ prompt_user_secret() {
     fi
 }
 
-# 1. Prompt for MCP URL (with default)
-if prompt_user -rp "Enter your Cortex Hub MCP URL [https://cortex-mcp.jackle.dev]: " INPUT_URL; then
-    MCP_URL=${INPUT_URL:-"https://cortex-mcp.jackle.dev"}
+# 1. Prompt for MCP URL (with default — use exactly as provided, no suffixes)
+if prompt_user -rp "Enter your Cortex Hub MCP URL [https://cortex-mcp.jackle.dev/mcp]: " INPUT_URL; then
+    MCP_URL=${INPUT_URL:-"https://cortex-mcp.jackle.dev/mcp"}
 else
-    MCP_URL=${HUB_API_URL:-"https://cortex-mcp.jackle.dev"}
+    MCP_URL=${HUB_API_URL:-"https://cortex-mcp.jackle.dev/mcp"}
 fi
+
+# Strip trailing slash for consistency
+MCP_URL="${MCP_URL%/}"
 
 # 2. Prompt for API Key (masked)
 if [ -z "$HUB_API_KEY" ]; then
@@ -66,7 +69,29 @@ if [ -z "$HUB_API_KEY" ]; then
     fi
 fi
 
-# Inject into global mcp_config.json
+# 3. Test MCP connection before proceeding
+echo -e "${BLUE}>>> Testing MCP connection...${NC}"
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -m 10 \
+    -X POST "$MCP_URL" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $HUB_API_KEY" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null || echo "000")
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo -e "${GREEN}>>> MCP connection successful! ✅${NC}"
+elif [ "$HTTP_CODE" = "401" ]; then
+    echo -e "${RED}>>> MCP connection failed: Invalid API Key (401).${NC}"
+    echo -e "${YELLOW}    Check your key on the Hub dashboard and try again.${NC}"
+    exit 1
+elif [ "$HTTP_CODE" = "000" ]; then
+    echo -e "${RED}>>> MCP connection failed: Cannot reach $MCP_URL${NC}"
+    echo -e "${YELLOW}    Check the URL and your network connection.${NC}"
+    exit 1
+else
+    echo -e "${YELLOW}>>> MCP responded with HTTP $HTTP_CODE — continuing anyway...${NC}"
+fi
+
+# 4. Inject into global mcp_config.json
 CONFIG_PATH="$HOME/.gemini/antigravity/mcp_config.json"
 if [ -f "$CONFIG_PATH" ]; then
     echo -e "${BLUE}>>> Injecting API Key into mcp_config.json...${NC}"
@@ -77,7 +102,7 @@ with open(path, 'r') as f: config = json.load(f)
 if 'mcpServers' not in config: config['mcpServers'] = {}
 config['mcpServers']['cortex-hub'] = {
     'command': 'npx',
-    'args': ['-y', 'mcp-remote', '$MCP_URL/mcp/mcp/', '--header', 'Authorization: Bearer $HUB_API_KEY']
+    'args': ['-y', 'mcp-remote', '$MCP_URL', '--header', 'Authorization: Bearer $HUB_API_KEY']
 }
 with open(path, 'w') as f: json.dump(config, f, indent=2)
 "
