@@ -106,10 +106,52 @@ sessionsRouter.post('/start', async (c) => {
 sessionsRouter.get('/all', (c) => {
   try {
     const limit = Number(c.req.query('limit') || '50')
-    const stmt = db.prepare('SELECT * FROM session_handoffs ORDER BY created_at DESC LIMIT ?')
-    const sessions = stmt.all(limit)
+    const status = c.req.query('status') // optional filter: active, completed
+    const stmt = status
+      ? db.prepare('SELECT * FROM session_handoffs WHERE status = ? ORDER BY created_at DESC LIMIT ?')
+      : db.prepare('SELECT * FROM session_handoffs ORDER BY created_at DESC LIMIT ?')
+    const sessions = status ? stmt.all(status, limit) : stmt.all(limit)
     return c.json({ sessions })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
 })
+
+/**
+ * PATCH /:id/complete — Close/complete a session
+ * Body: { task_summary?, status? }
+ */
+sessionsRouter.patch('/:id/complete', async (c) => {
+  const { id } = c.req.param()
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    const { task_summary, status } = body as { task_summary?: string; status?: string }
+
+    const existing = db.prepare('SELECT id FROM session_handoffs WHERE id = ?').get(id)
+    if (!existing) return c.json({ error: 'Session not found' }, 404)
+
+    db.prepare(
+      `UPDATE session_handoffs 
+       SET status = ?, task_summary = COALESCE(?, task_summary), updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(status ?? 'completed', task_summary ?? null, id)
+
+    return c.json({ success: true, id, status: status ?? 'completed' })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+/**
+ * DELETE /:id — Remove a session record
+ */
+sessionsRouter.delete('/:id', (c) => {
+  const { id } = c.req.param()
+  try {
+    db.prepare('DELETE FROM session_handoffs WHERE id = ?').run(id)
+    return c.json({ success: true })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+

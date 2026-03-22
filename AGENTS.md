@@ -10,6 +10,11 @@
 
 ### At Session Start — ALWAYS do:
 
+0. **Call `cortex_session_start`** → registers session with Cortex Hub, returns project context
+   ```
+   cortex_session_start({ repo: "<repo URL>", mode: "development" })
+   ```
+   Save the returned `sessionId` — needed for session close at end.
 1. **Read `STATE.md`** → current task & progress
 2. **Read `.cortex/project-profile.json`** → `verify` commands & fingerprint
 3. **Run `/onboard`** (only if first session or Hub credentials missing/broken) → sync MCP, rules, and local audit
@@ -24,6 +29,7 @@
 2. **Report quality:** `Build ✅/❌ | Typecheck ✅/❌ | Lint ✅/❌`
 3. **Update `STATE.md`** with progress, completed tasks, new decisions
 4. **Commit** with conventional prefix: `feat:`, `fix:`, `docs:`, `chore:`
+5. **Close session** — call `cortex_quality_report` with final gate status
 
 ### Before Deploy — ALWAYS do:
 
