@@ -11,7 +11,14 @@ description: Resume work from STATE.md context, auto-triggered by "continue", "t
 
 ## Steps
 
-### 1. Load Context
+### 1. Start Session (MANDATORY)
+Call the `cortex_session_start` MCP tool with the current repo URL and mode:
+```
+cortex_session_start({ repo: "<current repo URL>", mode: "development" })
+```
+This creates a session record and returns project context. If it fails or hangs, note the error and continue.
+
+### 2. Load Context
 Read `STATE.md` at project root. Identify:
 - Current active phase
 - First `[/]` (in-progress) task, or first `[ ]` uncompleted task
