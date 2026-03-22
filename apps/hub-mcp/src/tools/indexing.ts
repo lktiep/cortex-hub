@@ -36,11 +36,9 @@ export function registerIndexingTools(server: McpServer, env: Env) {
           const projectsRes = await apiCall(env, '/api/projects')
           if (projectsRes.ok) {
             const data = (await projectsRes.json()) as { projects?: Array<{ id: string; git_repo_url?: string }> }
+            const normalize = (url: string) => url.replace(/\.git$/, '').replace(/\/+$/, '')
             const match = data.projects?.find(
-              (p) => p.git_repo_url && (
-                p.git_repo_url === repo ||
-                p.git_repo_url.replace(/\.git$/, '') === repo.replace(/\.git$/, '')
-              )
+              (p) => p.git_repo_url && normalize(p.git_repo_url) === normalize(repo)
             )
             projectId = match?.id ?? null
           }
