@@ -106,13 +106,14 @@ app.post('/*', async (c) => {
     // McpServer wraps an internal Server instance
     const innerServer = (server as any).server
     
-    // Collect all responses from the transport
-    const responses: any[] = []
+    // Promise-based transport: resolves when send() is called
+    let resolveSend: (msg: any) => void
+    let sendPromise = new Promise<any>((resolve) => { resolveSend = resolve })
     
     const transport = {
       start: async () => {},
       close: async () => {},
-      send: async (message: any) => { responses.push(message) },
+      send: async (message: any) => { resolveSend!(message) },
       onmessage: null as any,
       onerror: null as any,
       onclose: null as any,
@@ -121,52 +122,52 @@ app.post('/*', async (c) => {
     
     await innerServer.connect(transport)
     
-    // MCP SDK requires initialize handshake before accepting any requests.
-    // For stateless HTTP, we auto-initialize on every request.
-    const initRequest = {
-      jsonrpc: '2.0' as const,
-      id: '__init__',
-      method: 'initialize',
-      params: {
-        protocolVersion: '2025-03-26',
-        capabilities: {},
-        clientInfo: { name: 'cortex-http-client', version: '1.0.0' },
-      },
+    // Auto-initialize: MCP SDK requires handshake before accepting requests
+    if (transport.onmessage) {
+      transport.onmessage({
+        jsonrpc: '2.0',
+        id: '__init__',
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-03-26',
+          capabilities: {},
+          clientInfo: { name: 'cortex-http-client', version: '1.0.0' },
+        },
+      })
     }
     
-    // Send initialize request
-    if (transport.onmessage) {
-      await transport.onmessage(initRequest)
-    }
+    // Wait for initialize response
+    await sendPromise
     
-    // Send initialized notification (required to complete handshake)
+    // Reset Promise for next message
+    sendPromise = new Promise<any>((resolve) => { resolveSend = resolve })
+    
+    // Send initialized notification (no response expected)
     if (transport.onmessage) {
-      await transport.onmessage({
+      transport.onmessage({
         jsonrpc: '2.0',
         method: 'notifications/initialized',
       })
     }
     
-    // Clear init responses — we don't need them
-    responses.length = 0
+    // Small delay to let notification process
+    await new Promise(r => setTimeout(r, 10))
     
-    // Now dispatch the actual client request
+    // Reset Promise for the actual client request
+    sendPromise = new Promise<any>((resolve) => { resolveSend = resolve })
+    
+    // Dispatch the actual client request
     if (transport.onmessage) {
-      await transport.onmessage(body)
+      transport.onmessage(body)
     }
     
-    // Return the response for the actual request
-    const result = responses[0]
+    // Wait for response with timeout
+    const result = await Promise.race([
+      sendPromise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('MCP handler timeout (10s)')), 10000))
+    ])
     
-    if (result) {
-      return c.json(result)
-    }
-    
-    return c.json({
-      jsonrpc: '2.0',
-      error: { code: -32603, message: 'No response from MCP server' },
-      id: body.id ?? null,
-    }, 500)
+    return c.json(result)
   } catch (error: any) {
     console.error('[MCP Handler Error]', error)
     return c.json({ 
