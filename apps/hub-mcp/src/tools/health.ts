@@ -13,11 +13,12 @@ export function registerHealthTools(server: McpServer, env: Env) {
     'Check health status of all Cortex Hub backend services',
     {},
     async () => {
+      const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
       const services = [
         { name: 'qdrant', url: `${env.QDRANT_URL}/healthz` },
         { name: 'neo4j', url: `${env.NEO4J_URL}` },
         { name: 'cliproxy', url: `${env.CLIPROXY_URL}/` },
-        { name: 'dashboard-api', url: `${env.DASHBOARD_API_URL}/health` },
+        { name: 'dashboard-api', url: `${apiUrl}/health` },
       ]
 
       const results = await Promise.allSettled(

@@ -22,7 +22,8 @@ export function registerCodeTools(server: McpServer, env: Env) {
     },
     async ({ query, projectId, branch, limit }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/intel/search`, {
+        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
+        const response = await fetch(`${apiUrl}/api/intel/search`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -82,7 +83,8 @@ export function registerCodeTools(server: McpServer, env: Env) {
     },
     async ({ target, projectId, branch, direction }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/intel/impact`, {
+        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
+        const response = await fetch(`${apiUrl}/api/intel/impact`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

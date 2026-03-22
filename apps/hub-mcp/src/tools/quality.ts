@@ -20,7 +20,8 @@ export function registerQualityTools(server: McpServer, env: Env) {
     },
     async ({ gate_name, passed, score, details }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/quality/report`, {
+        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
+        const response = await fetch(`${apiUrl}/api/quality/report`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ gate_name, passed, score, details }),
@@ -56,7 +57,8 @@ export function registerQualityTools(server: McpServer, env: Env) {
     },
     async ({ action, project }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/sessions/start`, {
+        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
+        const response = await fetch(`${apiUrl}/api/sessions/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action, project }),
