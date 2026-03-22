@@ -140,6 +140,7 @@ Create API keys with granular permissions:
 | API | https://api.hub.jackle.dev | 4000 |
 | MCP Server | https://mcp.hub.jackle.dev | 8787 |
 | LLM Proxy | https://llm.hub.jackle.dev | 8317 |
+| GitNexus (internal) | http://gitnexus:4848 | 4848 |
 
 ## Troubleshooting
 

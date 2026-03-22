@@ -137,7 +137,7 @@ start_services() {
   log "Waiting for health checks..."
   sleep 10
 
-  local services=("localhost:6333/healthz" "localhost:7474" "localhost:8080/health" "localhost:4000/health")
+  local services=("localhost:6333/healthz" "localhost:4848/health" "localhost:4000/health")
   for url in "${services[@]}"; do
     if curl -sf "http://$url" &>/dev/null; then
       ok "$url"
@@ -168,7 +168,7 @@ main() {
   echo ""
   echo "  Dashboard:    http://localhost:3000"
   echo "  API:          http://localhost:4000"
-  echo "  GitNexus:     http://localhost:3200"
+  echo "  GitNexus:     http://localhost:4848"
   echo "  Qdrant:       http://localhost:6333"
   echo ""
   echo "  Next steps:"

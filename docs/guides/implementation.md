@@ -84,7 +84,7 @@ ingress:
   - hostname: cortex.yourdomain.com
     service: http://localhost:3000
   - hostname: cortex-gn.yourdomain.com
-    service: http://localhost:3200
+    service: http://localhost:4848
   - service: http_status:404
 EOF
 
@@ -157,22 +157,16 @@ cd /opt/cortex-hub/infra
 docker compose up -d
 ```
 
-### 3.2 — Index Repositories with GitNexus
+### 3.2 — Verify GitNexus Service
+
+GitNexus runs as a standalone Docker service (eval-server mode on port 4848). It starts automatically with `docker compose up -d`.
 
 ```bash
-# Clone all project repos
-mkdir -p /opt/repos
-cd /opt/repos
-git clone https://github.com/<org>/project-a.git
-git clone https://github.com/<org>/project-b.git
+# Check GitNexus health (should list indexed repos)
+curl -s http://localhost:4848/health | jq .
 
-# Index each repo
-for repo in /opt/repos/*/; do
-  cd "$repo" && npx gitnexus analyze
-done
-
-# Start GitNexus server
-npx gitnexus serve --port 3200
+# Index repos via the Dashboard Indexing panel, or manually:
+# (GitNexus analyze runs inside the cortex-api container during indexing)
 ```
 
 ### 3.3 — Service Health Checks
@@ -181,20 +175,17 @@ npx gitnexus serve --port 3200
 # Qdrant
 curl -s http://localhost:6333/healthz | jq .
 
-# mem9 (runs in-process within Dashboard API)
-curl -s http://localhost:8080/health | jq .
+# GitNexus (eval-server HTTP API)
+curl -s http://localhost:4848/health | jq .
 
-# Dashboard API
+# Dashboard API (includes mem9 in-process)
 curl -s http://localhost:4000/health | jq .
-
-# GitNexus
-curl -s http://localhost:3200/status | jq .
 ```
 
 **Verification:**
-- [ ] All 5 services return healthy status
+- [ ] All services return healthy status
 - [ ] `docker compose ps` — all containers `running`
-- [ ] GitNexus shows indexed repos in `~/.gitnexus/registry.json`
+- [ ] GitNexus health shows indexed repos
 
 ---
 

@@ -51,7 +51,7 @@ cortex-hub/
 │   │       ├── router.ts             # Tool routing + registration
 │   │       ├── tools/                 # One file per tool group
 │   │       │   ├── base.ts            # Abstract BaseTool class
-│   │       │   ├── code.ts            # GitNexus proxy tools
+│   │       │   ├── code.ts            # GitNexus HTTP API proxy tools
 │   │       │   ├── memory.ts          # mem9 proxy tools
 │   │       │   ├── knowledge.ts       # Qdrant proxy tools
 │   │       │   ├── quality.ts         # Quality gate tools

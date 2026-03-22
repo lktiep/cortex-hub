@@ -10,6 +10,7 @@ on:
       - 'packages/**'
       - 'infra/Dockerfile.dashboard-api'
       - 'infra/Dockerfile.hub-mcp'
+      - 'infra/Dockerfile.gitnexus'
   workflow_dispatch:
 
 env:
@@ -52,6 +53,15 @@ jobs:
             type=raw,value=latest
             type=sha
 
+      - name: Extract metadata for cortex-gitnexus
+        id: meta-gitnexus
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/lktiep/cortex-gitnexus
+          tags: |
+            type=raw,value=latest
+            type=sha
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -80,5 +90,16 @@ jobs:
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
           tags: ${{ steps.meta-mcp.outputs.tags }}
           labels: ${{ steps.meta-mcp.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push cortex-gitnexus
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/Dockerfile.gitnexus
+          push: true
+          tags: ${{ steps.meta-gitnexus.outputs.tags }}
+          labels: ${{ steps.meta-gitnexus.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -17,7 +17,7 @@
 
 | Service | Technology | Version | License | Role |
 |---|---|---|---|---|
-| **Code Intelligence** | GitNexus | latest | MIT | AST parsing, graph analysis, impact detection |
+| **Code Intelligence** | GitNexus | latest | MIT | AST parsing, graph analysis, impact detection (Docker eval-server on :4848) |
 | **Vector Database** | Qdrant | 1.13+ | Apache 2.0 | Semantic search for knowledge + memory |
 | **Agent Memory** | mem9 (in-process) | latest | MIT | Long-term memory with vector embeddings |
 | **Application DB** | SQLite (WAL mode) | 3.x | Public Domain | Quality reports, sessions, query logs |

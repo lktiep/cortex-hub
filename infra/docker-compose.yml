@@ -1,8 +1,8 @@
 # Cortex Hub — Docker Compose Stack
-# Services: CLIProxy (LLM Gateway), Qdrant, Dashboard API
+# Services: CLIProxy (LLM Gateway), Qdrant, GitNexus, Dashboard API, Hub MCP
 # CLIProxy provides OpenAI-compatible API via OAuth — no API key required
 # mem9 runs in-process within the Dashboard API container
-# GitNexus runs natively (not Dockerized) — requires system-level git access
+# GitNexus runs as a standalone eval-server for code intelligence
 
 services:
   # ─────────────────────────────────────────────
@@ -59,6 +59,36 @@ services:
       start_period: 10s
 
   # ─────────────────────────────────────────────
+  # GitNexus — Code Intelligence Service
+  # API:  http://localhost:4848 (eval-server)
+  # Provides: AST graph search, impact analysis, symbol context
+  # ─────────────────────────────────────────────
+  gitnexus:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.gitnexus
+    image: ghcr.io/lktiep/cortex-gitnexus:latest
+    container_name: cortex-gitnexus
+    restart: unless-stopped
+    ports:
+      - "4848:4848"
+    volumes:
+      - api-data:/data
+      - gitnexus-data:/root/.gitnexus
+    environment:
+      PORT: 4848
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4848/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ─────────────────────────────────────────────
   # Cortex Dashboard API (+ Dashboard Web static)
   # ─────────────────────────────────────────────
   cortex-api:
@@ -93,8 +123,12 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-gpt-5.4-mini}
       MEM9_EMBEDDING_MODEL: ${MEM9_EMBEDDING_MODEL:-gemini-embedding-2-preview}
+      # GitNexus
+      GITNEXUS_URL: http://gitnexus:4848
     depends_on:
       qdrant:
+        condition: service_healthy
+      gitnexus:
         condition: service_healthy
     deploy:
       resources:
@@ -125,6 +159,7 @@ services:
       DASHBOARD_API_URL: http://cortex-api:4000
       QDRANT_URL: http://qdrant:6333
       CLIPROXY_URL: http://llm-proxy:8317
+      GITNEXUS_URL: http://gitnexus:4848
       MCP_SERVER_NAME: "cortex-hub"
       MCP_SERVER_VERSION: "0.1.0"
       API_KEYS: ${MCP_API_KEYS:-}
@@ -132,6 +167,8 @@ services:
       cortex-api:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      gitnexus:
         condition: service_healthy
     deploy:
       resources:
@@ -168,5 +205,7 @@ volumes:
     name: cortex-qdrant-data
   api-data:
     name: cortex-api-data
+  gitnexus-data:
+    name: cortex-gitnexus-data
   cliproxy-auth:
     name: cortex-cliproxy-auth

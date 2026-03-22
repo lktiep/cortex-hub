@@ -12,7 +12,7 @@ C4Container
         Container(dash_web, "Dashboard Web", "Next.js 15 / Cloudflare Pages", "Admin UI — logs, API keys, repos, quality trends")
         Container(dash_api, "Dashboard API", "Hono / Node.js", "REST API for dashboard — CRUD, WebSocket logs")
         ContainerDb(sqlite, "App Database", "SQLite WAL", "API keys, quality reports, sessions, logs")
-        Container(gitnexus, "GitNexus", "Docker", "Code intelligence — AST parsing, knowledge graph")
+        Container(gitnexus, "GitNexus", "Docker (eval-server :4848)", "Code intelligence — AST parsing, knowledge graph, HTTP API")
         Container(mem9, "mem9", "In-process / Node.js", "Agent memory — vector embeddings via Qdrant")
         ContainerDb(qdrant, "Qdrant", "Docker", "Vector database — semantic search for knowledge + memory")
     }
@@ -23,7 +23,7 @@ C4Container
     Rel(agent, hub_mcp, "MCP tool calls", "HTTPS + API Key")
     Rel(admin, dash_web, "Manages platform", "HTTPS + OAuth session")
     Rel(dash_web, dash_api, "API requests + WebSocket", "HTTPS / WSS")
-    Rel(hub_mcp, gitnexus, "code.* tools", "HTTP via CF Tunnel")
+    Rel(hub_mcp, gitnexus, "code.* tools", "HTTP POST /tool/* via Dashboard API")
     Rel(hub_mcp, dash_api, "memory.* + quality.* + session.* tools", "HTTP via CF Tunnel")
     Rel(hub_mcp, qdrant, "knowledge.* tools", "HTTP via CF Tunnel")
     Rel(dash_api, sqlite, "Reads/writes", "SQL")

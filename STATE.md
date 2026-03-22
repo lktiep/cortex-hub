@@ -53,7 +53,7 @@
 - [x] Dashboard Web — 8 pages, full-featured
 - [x] LLM API Gateway (multi-provider fallback, budget, usage logging)
 - [x] Usage page rewired to real `/api/usage` endpoints
-- [x] GitNexus indexing pipeline (clone → analyze → mem9 ingest)
+- [x] GitNexus as standalone Docker service (eval-server HTTP API on :4848, indexing via clone → analyze → mem9 ingest)
 - [x] Branch-scoped knowledge (mem9 user_id namespacing, fallback chain)
 - [x] MCP branch-aware tools (code.search/impact with branch param)
 - [x] Universal Installation & Onboarding (bootstrap.sh → onboard.sh)

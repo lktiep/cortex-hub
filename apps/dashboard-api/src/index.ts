@@ -36,12 +36,13 @@ app.get('/health', async (c) => {
     }
   }
 
-  const [qdrant, cliproxy] = await Promise.all([
+  const [qdrant, cliproxy, gitnexus] = await Promise.all([
     checkService('qdrant', `${process.env['QDRANT_URL'] || 'http://qdrant:6333'}/healthz`),
     checkService('cliproxy', `${process.env['LLM_PROXY_URL'] || 'http://llm-proxy:8317'}/v1/models`),
+    checkService('gitnexus', `${process.env['GITNEXUS_URL'] || 'http://gitnexus:4848'}/health`),
   ])
 
-  const services = { qdrant, cliproxy }
+  const services = { qdrant, cliproxy, gitnexus }
   const allOk = Object.values(services).every(s => s === 'ok')
 
   return c.json({

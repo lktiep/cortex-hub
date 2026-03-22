@@ -271,6 +271,8 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
     logger.info(`[${jobId}] Clone complete`)
 
     // ── Step 2: GitNexus Analyze (primary) + Pure JS (fallback) ──
+    // analyze runs as CLI because it needs filesystem access to the cloned repo.
+    // Query-time operations (search, impact, context) use the GitNexus HTTP service.
     updateJob(jobId, { status: 'analyzing', progress: 30 })
     logger.info(`[${jobId}] Running gitnexus analyze`)
 

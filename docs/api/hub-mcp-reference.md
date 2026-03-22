@@ -89,7 +89,7 @@ Execute raw Cypher queries against the code knowledge graph.
 
 ---
 
-### `memory.*` — Agent Memory (via mem0)
+### `memory.*` — Agent Memory (via mem9)
 
 #### `memory.add`
 

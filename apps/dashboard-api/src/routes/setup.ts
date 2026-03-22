@@ -162,6 +162,7 @@ setupRouter.get('/settings', (c) => {
     services: {
       cliproxy: CLIPROXY_URL(),
       qdrant: QDRANT_URL(),
+      gitnexus: process.env.GITNEXUS_URL || 'http://gitnexus:4848',
       mem9: 'in-process (Gemini + CLIProxy)',
       dashboardApi: `http://localhost:${process.env.PORT || 4000}`,
     },

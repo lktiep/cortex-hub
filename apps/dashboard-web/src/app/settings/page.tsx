@@ -93,12 +93,14 @@ function ConfirmDialog({
 const SERVICE_ICONS: Record<string, string> = {
   cliproxy: '🤖',
   qdrant: '🔮',
+  gitnexus: '🧬',
   dashboardApi: '📡',
 }
 
 const SERVICE_LABELS: Record<string, string> = {
   cliproxy: 'CLIProxy (LLM Gateway)',
   qdrant: 'Qdrant Vector DB',
+  gitnexus: 'GitNexus (Code Intelligence)',
   dashboardApi: 'Dashboard API',
 }
 
@@ -115,6 +117,7 @@ export default function SettingsPage() {
   const dockerServices: DockerServiceProps[] = [
     { containerName: 'cortex-llm-proxy', label: 'CLIProxy (LLM)', icon: '🤖' },
     { containerName: 'cortex-qdrant', label: 'Qdrant Vector DB', icon: '🔮' },
+    { containerName: 'cortex-gitnexus', label: 'GitNexus (Code Intelligence)', icon: '🧬' },
   ]
 
   async function handleRestart(containerName: string) {

@@ -65,13 +65,14 @@ The central gateway. All agents connect to this single endpoint. It handles auth
 
 ### 2. GitNexus (Code Intelligence)
 
-Provides deep code understanding via Tree-sitter AST parsing and graph analysis:
+Standalone Docker service running as an HTTP eval-server (port 4848). Provides deep code understanding via Tree-sitter AST parsing and graph analysis:
 
 - **Multi-repo indexing** — all project repos indexed into a single registry
 - **Execution flow tracing** — maps how code flows through the system
 - **Impact analysis** — blast radius calculation before any change
 - **Community detection** — Leiden algorithm clusters related code
 - **Symbol context** — 360° view of any function, class, or method
+- **HTTP API** — `POST /tool/query`, `/tool/impact`, `/tool/context`, `/tool/cypher`
 
 ### 3. mem9 (Agent Memory)
 
@@ -122,8 +123,7 @@ Internet
   │
   └── Cloudflare Tunnel ──┬── :4000  Dashboard API
                           ├── :3000  Dashboard Web
-                          ├── :3200  GitNexus
-                          ├── :8080  mem9
+                          ├── :4848  GitNexus (eval-server HTTP API)
                           └── :6333  Qdrant
 ```
 

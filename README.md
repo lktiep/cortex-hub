@@ -214,7 +214,7 @@ pnpm dev
 # All services healthy?
 curl http://localhost:4000/health     # Dashboard API
 curl http://localhost:6333/healthz    # Qdrant
-curl http://localhost:3200/status     # GitNexus
+curl http://localhost:4848/health     # GitNexus
 ```
 
 > **Full installation guide:** [`docs/guides/installation.md`](docs/guides/installation.md)

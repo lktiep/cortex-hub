@@ -22,6 +22,7 @@ export function registerHealthTools(server: McpServer, env: Env) {
         { name: 'qdrant', url: `${env.QDRANT_URL}/healthz` },
         { name: 'dashboard-api', apiPath: '/health' },
         { name: 'mem9', apiPath: '/api/mem9/health' },
+        { name: 'gitnexus', apiPath: '/api/intel/health' },
       ]
 
       if (env.CLIPROXY_URL) {
