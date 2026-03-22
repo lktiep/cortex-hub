@@ -46,32 +46,5 @@ export function registerQualityTools(server: McpServer, env: Env) {
       }
     }
   )
-
-  // session.start — Start task context
-  server.tool(
-    'cortex.session.start',
-    'Start a new execution session to track progress against product requirements.',
-    {
-      action: z.string().describe('The primary action (e.g., "Implement Provider Auth")'),
-      project: z.string().optional().describe('The specific project being worked on'),
-    },
-    async ({ action, project }) => {
-      try {
-        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
-        const response = await fetch(`${apiUrl}/api/sessions/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, project }),
-          signal: AbortSignal.timeout(10000),
-        })
-
-        if (!response.ok) return { content: [{ type: 'text' as const, text: `Fail: ${response.status}` }], isError: true }
-        
-        const data = await response.json() as { sessionId: string }
-        return { content: [{ type: 'text' as const, text: `Tracking session started. Session ID: ${data.sessionId}` }] }
-      } catch (error) {
-        return { content: [{ type: 'text' as const, text: `Network error: ${String(error)}` }], isError: true }
-      }
-    }
-  )
 }
+
