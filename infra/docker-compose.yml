@@ -115,7 +115,7 @@ services:
     container_name: cortex-mcp
     restart: unless-stopped
     ports:
-      - "8317:8317"
+      - "8318:8317"
     environment:
       PORT: 8317
       NODE_ENV: production
