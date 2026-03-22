@@ -63,6 +63,9 @@ ARG BUILD_DATE=unknown
 ENV COMMIT_SHA=${COMMIT_SHA}
 ENV BUILD_DATE=${BUILD_DATE}
 
+# Install git (required for test-connection, branch listing, repo cloning)
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
 # Copy production node_modules (hoisted, prod only)
 COPY --from=prod-deps /app/node_modules ./node_modules
 
