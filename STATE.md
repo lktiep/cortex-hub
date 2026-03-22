@@ -6,38 +6,51 @@
 - **Phase:** 6 (Polish, docs, testing, GA release)
 - **Gate Passed:** Gate 5 (Phase 5→6) on 2026-03-19
 
+## Next Task — Mobile-Responsive UI
+- [ ] Sidebar hamburger toggle + overlay (≤768px)
+- [ ] DashboardLayout responsive margin/padding
+- [ ] globals.css responsive tokens (breakpoints: ≤1024, ≤768, ≤480)
+- [ ] Page-level breakpoint polish (keys/, setup/, usage/, providers/)
+
+**Implementation plan:** Reviewed and approved. See `implementation_plan.md` in conversation `903f6fc6`.
+
+## MCP Server Status ✅
+- **Endpoint:** `POST https://cortex-mcp.jackle.dev/mcp`
+- **Auth:** Bearer token (`sk_ctx_...`)
+- **8 tools operational:** health, memory.store, memory.search, knowledge.search, code.search, code.impact, quality.report, session.start
+- **Agent workflow:** session.start → code.search → implement → quality.report
+
+### Missing Tools (Backlog)
+- `cortex.code.reindex` — Notify server of new push, trigger GitNexus re-index
+- `cortex.knowledge.store` — Agent contribute knowledge to Qdrant
+- These will enable agents to keep knowledge up-to-date after code changes
+
 ## In Progress
-- [/] Indexing pipeline testing on real repositories
-- [/] Agent quality strategy documentation
+- [x] MCP auth + handler fix chain (5 bugs fixed in `3df37dd`)
+- [x] Onboarding: `mcp-remote` + URL as-is + connection test
+- [x] Uninstall script + bootstrap option
+- [x] Lefthook YAML key fix
 
 ## Completed (Phase 6)
 - [x] Dashboard API — 9 real routes (no stubs)
 - [x] Dashboard Web — 8 pages, full-featured
+- [x] LLM API Gateway (multi-provider fallback, budget, usage logging)
+- [x] Usage page rewired to real `/api/usage` endpoints
 - [x] GitNexus indexing pipeline (clone → analyze → mem0 ingest)
-- [x] Workflow system (conventions, per-project profiles)
 - [x] Branch-scoped knowledge (mem0 user_id namespacing, fallback chain)
-- [x] Enhanced IndexingPanel (branch dropdown, diff view, per-branch status, 1.5s realtime polling)
-- [x] MCP branch-aware tools (memory.store/search + code.search/impact with projectId/branch)
-- [x] 3 new backend endpoints (branches listing, diff, per-branch index summary)
-- [x] Universal Installation & Onboarding (`install.sh`, `install-hub.sh`, `onboard.sh`)
-- [x] Onboarding stabilization (non-interactive support, idempotent /onboard) ✅
-- [x] API Key Persistence (SQLite + SWR + permissions) ✅
-- [x] Cortex Skill Set integration (GSD + Forgewright Golden Standard)
-- [x] Hub MCP Session Enforcement & Mission Briefs
-- [x] mem0 Gemini Embedding Fallback (100% reliability)
-- [x] Moved MCP Gateway to All-in-One Docker Hub (Node.js) ✅
-- [x] Integrated Dashboard Web serving into Dashboard API ✅
-- [x] Unified `Dockerfile.dashboard-api` for all-in-one deployment ✅
-- [x] Updated `docker-compose.yml` (consolidated `cortex-hub` service) ✅
-- [x] Docker rebuilt and deployed with latest code
+- [x] MCP branch-aware tools (code.search/impact with branch param)
+- [x] Universal Installation & Onboarding (bootstrap.sh → onboard.sh)
+- [x] API Key Persistence (SQLite + SWR + permissions)
+- [x] All-in-One Docker Hub (dashboard-api + hub-mcp + dashboard-web)
+- [x] Providers page (multi-provider LLM config UI)
+
 ## Recent Decisions
-- mem0 branch scope: `project-{id}:branch-{name}` for branch, `project-{id}` for project fallback
-- Branch diff uses `git diff --name-status origin/base...origin/branch`
-- Branch listing via `git ls-remote --heads` (no cloning required)
-- One-Command Philosophy: root `install.sh` for setup, `/onboard` for agent alignment
-- Mission Briefs: session-start protocol for standard enforcement (SOLID, etc.)
+- MCP handler uses in-memory transport with auto-initialize handshake per request
+- Onboard script: uses user-provided MCP URL as-is (no suffix), tests connection before proceeding
+- Hono stays for hub-mcp (consistent with dashboard-api, runs native on Node.js)
+- Uninstall cleans: mcp_config entry, .cortex/, lefthook, HUB_API_KEY
 
 ## Quality Status
-- Quality status: Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-21T12:15+07:00)
-- Docker ✅ (container recreated 2026-03-20T03:38Z)
-- All 4 services healthy: qdrant, neo4j, cliproxy, mem0
+- Build ✅ | Typecheck ✅ | Lint ✅ | Test ✅ (Verified 2026-03-22T14:00+07:00)
+- Docker ✅ (commit `3df37dd` deployed via Watchtower)
+- All services healthy via Cloudflare Tunnel
