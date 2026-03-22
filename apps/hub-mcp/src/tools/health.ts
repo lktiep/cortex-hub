@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register health check tool.
@@ -17,13 +18,12 @@ export function registerHealthTools(server: McpServer, env: Env) {
       const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
 
       // Build service list, skipping undefined/empty URLs
-      const services: Array<{ name: string; url: string }> = [
+      const services: Array<{ name: string; url?: string; apiPath?: string }> = [
         { name: 'qdrant', url: `${env.QDRANT_URL}/healthz` },
-        { name: 'dashboard-api', url: `${apiUrl}/health` },
-        { name: 'mem9', url: `${apiUrl}/api/mem9/health` },
+        { name: 'dashboard-api', apiPath: '/health' },
+        { name: 'mem9', apiPath: '/api/mem9/health' },
       ]
 
-      // Only add optional services if configured
       if (env.CLIPROXY_URL) {
         services.push({ name: 'cliproxy', url: `${env.CLIPROXY_URL}/v1/models` })
       }
@@ -35,7 +35,10 @@ export function registerHealthTools(server: McpServer, env: Env) {
         services.map(async (svc) => {
           const start = Date.now()
           try {
-            const res = await fetch(svc.url, { signal: AbortSignal.timeout(5000) })
+            // Use apiCall for internal routes, fetch for external URLs
+            const res = svc.apiPath
+              ? await apiCall(env, svc.apiPath)
+              : await fetch(svc.url!, { signal: AbortSignal.timeout(5000) })
             return {
               name: svc.name,
               status: res.ok ? 'healthy' : 'unhealthy',

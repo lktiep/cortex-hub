@@ -1,15 +1,13 @@
 import type { Env } from '../types.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register Session Tools
  *
  * cortex_session_start: Start a session and get project context.
- * Calls dashboard-api /api/sessions/start which:
- *   - Creates a real session record in SQLite
- *   - Looks up project by git_repo_url
- *   - Returns project info, recent quality, recent sessions
+ * Calls dashboard-api /api/sessions/start via apiCall (in-memory when co-located).
  */
 export function registerSessionTools(server: McpServer, env: Env) {
   server.tool(
@@ -21,12 +19,10 @@ export function registerSessionTools(server: McpServer, env: Env) {
     },
     async ({ repo, mode }) => {
       try {
-        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
-        const response = await fetch(`${apiUrl}/api/sessions/start`, {
+        const response = await apiCall(env, '/api/sessions/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ repo, mode }),
-          signal: AbortSignal.timeout(10000),
         })
 
         if (!response.ok) {

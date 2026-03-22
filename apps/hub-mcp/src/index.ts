@@ -14,6 +14,9 @@ import { registerSessionTools } from './tools/session.js'
 import { validateApiKey } from './middleware/auth.js'
 import type { Env } from './types.js'
 
+// Re-export for dashboard-api to inject internal fetch
+export { setInternalFetch } from './api-call.js'
+
 const app = new Hono<{ Bindings: Env }>()
 
 // Bridge process.env → c.env for Node.js runtime

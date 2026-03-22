@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register memory tools.
@@ -42,8 +43,7 @@ export function registerMemoryTools(server: McpServer, env: Env) {
           ...(branch ? { branch } : {}),
         }
 
-        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
-        const response = await fetch(`${apiUrl}/api/mem9/store`, {
+        const response = await apiCall(env, '/api/mem9/store', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -52,7 +52,6 @@ export function registerMemoryTools(server: McpServer, env: Env) {
             agentId: agentId ?? 'default',
             metadata: meta,
           }),
-          signal: AbortSignal.timeout(30000),
         })
 
         if (!response.ok) {
@@ -109,7 +108,7 @@ export function registerMemoryTools(server: McpServer, env: Env) {
     async ({ query, agentId, projectId, branch, limit }) => {
       try {
         const maxResults = limit ?? 5
-        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
+
         const allMemories: unknown[] = []
 
         // Branch hierarchy search: branch → project → agent (fallback chain)
@@ -127,7 +126,7 @@ export function registerMemoryTools(server: McpServer, env: Env) {
           if (allMemories.length >= maxResults) break
 
           const remaining = maxResults - allMemories.length
-          const response = await fetch(`${apiUrl}/api/mem9/search`, {
+          const response = await apiCall(env, '/api/mem9/search', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -135,7 +134,6 @@ export function registerMemoryTools(server: McpServer, env: Env) {
               userId,
               limit: remaining,
             }),
-            signal: AbortSignal.timeout(30000),
           })
 
           if (response.ok) {

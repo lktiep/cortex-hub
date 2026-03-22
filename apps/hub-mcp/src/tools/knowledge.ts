@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register knowledge tools.
@@ -30,12 +31,10 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
           vector = query_vector
         } else if (query) {
           // Auto-embed text query via mem9 proxy
-          const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
-          const embedRes = await fetch(`${apiUrl}/api/mem9/embed`, {
+          const embedRes = await apiCall(env, '/api/mem9/embed', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: query }),
-            signal: AbortSignal.timeout(15000),
           })
 
           if (!embedRes.ok) {

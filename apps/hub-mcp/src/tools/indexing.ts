@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register indexing tools.
@@ -21,9 +22,7 @@ export function registerIndexingTools(server: McpServer, env: Env) {
         const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
 
         // Step 1: Look up project by repo URL
-        const lookupRes = await fetch(`${apiUrl}/api/projects/lookup?repo=${encodeURIComponent(repo)}`, {
-          signal: AbortSignal.timeout(5000),
-        })
+        const lookupRes = await apiCall(env, `/api/projects/lookup?repo=${encodeURIComponent(repo)}`)
 
         let projectId: string | null = null
 
@@ -34,9 +33,7 @@ export function registerIndexingTools(server: McpServer, env: Env) {
 
         // Fallback: search all projects for matching repo URL
         if (!projectId) {
-          const projectsRes = await fetch(`${apiUrl}/api/projects`, {
-            signal: AbortSignal.timeout(5000),
-          })
+          const projectsRes = await apiCall(env, '/api/projects')
           if (projectsRes.ok) {
             const data = (await projectsRes.json()) as { projects?: Array<{ id: string; git_repo_url?: string }> }
             const match = data.projects?.find(
@@ -66,11 +63,10 @@ export function registerIndexingTools(server: McpServer, env: Env) {
         }
 
         // Step 2: Trigger re-index
-        const indexRes = await fetch(`${apiUrl}/api/projects/${projectId}/index`, {
+        const indexRes = await apiCall(env, `/api/projects/${projectId}/index`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ branch: branch ?? 'main' }),
-          signal: AbortSignal.timeout(10000),
         })
 
         const indexData = (await indexRes.json()) as Record<string, unknown>

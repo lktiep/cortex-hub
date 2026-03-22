@@ -16,10 +16,14 @@ import { mem9ProxyRouter } from './routes/mem9-proxy.js'
 import { statsRouter as metricsRouter } from './routes/stats.js'
 import { systemRouter } from './routes/system.js'
 import { accountsRouter } from './routes/accounts.js'
-import mcpApp from '@cortex/hub-mcp'
+import mcpApp, { setInternalFetch } from '@cortex/hub-mcp'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
+
+// Inject in-memory request handler into hub-mcp tools
+// This avoids HTTP self-fetch deadlock when MCP tools call dashboard-api routes
+setInternalFetch((path: string, init?: RequestInit) => Promise.resolve(app.request(path, init)))
 
 app.use('*', cors())
 app.use('*', honoLogger())
