@@ -367,13 +367,24 @@ done
 HAS_CLAUDE=false
 for t in "${SELECTED_TOOLS[@]}"; do [ "$t" = "claude" ] && HAS_CLAUDE=true; done
 
-if $HAS_CLAUDE && [ ! -f "CLAUDE.md" ]; then
-    echo -e "${BLUE}>>> Generating CLAUDE.md (auto MCP instructions for Claude Code)...${NC}"
+if $HAS_CLAUDE; then
     GIT_REPO_URL=$(git remote get-url origin 2>/dev/null || echo "unknown")
-    cat > CLAUDE.md <<CLAUDEEOF
-# Cortex Hub — Claude Code Instructions
+    CORTEX_MARKER="<!-- cortex-hub:auto-mcp -->"
 
-## Auto MCP (MANDATORY — every conversation)
+    # Check if cortex instructions already injected
+    if [ -f "CLAUDE.md" ] && grep -q "$CORTEX_MARKER" CLAUDE.md 2>/dev/null; then
+        echo -e "${GREEN}>>> CLAUDE.md already has Cortex Hub instructions — skipping${NC}"
+    else
+        if [ -f "CLAUDE.md" ]; then
+            echo -e "${BLUE}>>> Appending Cortex Hub instructions to existing CLAUDE.md...${NC}"
+        else
+            echo -e "${BLUE}>>> Creating CLAUDE.md with Cortex Hub instructions...${NC}"
+        fi
+
+        cat >> CLAUDE.md <<CLAUDEEOF
+
+$CORTEX_MARKER
+## Cortex Hub — Auto MCP (MANDATORY — every conversation)
 
 At the START of every conversation, before doing anything else:
 
@@ -389,7 +400,7 @@ At the START of every conversation, before doing anything else:
 
 3. Read \`STATE.md\` for current task progress (if it exists).
 
-## Before editing shared files
+### Before editing shared files
 
 Call \`cortex_changes\` to check if another agent modified the same files:
 \`\`\`
@@ -397,7 +408,7 @@ agentId: "claude-code"
 projectId: "<from session_start response>"
 \`\`\`
 
-## After pushing code
+### After pushing code
 
 Call \`cortex_code_reindex\` to update code intelligence:
 \`\`\`
@@ -405,14 +416,14 @@ repo: "$GIT_REPO_URL"
 branch: "<current branch>"
 \`\`\`
 
-## Quality gates
+### Quality gates
 
 Every session must end with verification commands from \`.cortex/project-profile.json\`.
 Call \`cortex_quality_report\` with results.
+$CORTEX_MARKER
 CLAUDEEOF
-    echo -e "${GREEN}>>> Generated CLAUDE.md${NC}"
-elif $HAS_CLAUDE; then
-    echo -e "${GREEN}>>> Found existing CLAUDE.md — skipping generation${NC}"
+        echo -e "${GREEN}>>> CLAUDE.md updated${NC}"
+    fi
 fi
 
 # ── Step 5: Scan & Detect Project Stack ──
