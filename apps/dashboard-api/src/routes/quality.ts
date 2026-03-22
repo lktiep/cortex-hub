@@ -132,7 +132,7 @@ sessionsRouter.patch('/:id/complete', async (c) => {
 
     db.prepare(
       `UPDATE session_handoffs 
-       SET status = ?, task_summary = COALESCE(?, task_summary), updated_at = datetime('now')
+       SET status = ?, task_summary = COALESCE(?, task_summary)
        WHERE id = ?`
     ).run(status ?? 'completed', task_summary ?? null, id)
 
