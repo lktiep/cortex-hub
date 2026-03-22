@@ -130,7 +130,7 @@ services:
       qdrant:
         condition: service_healthy
       gitnexus:
-        condition: service_healthy
+        condition: service_started
     deploy:
       resources:
         limits:
@@ -170,7 +170,7 @@ services:
       qdrant:
         condition: service_healthy
       gitnexus:
-        condition: service_healthy
+        condition: service_started
     deploy:
       resources:
         limits:
