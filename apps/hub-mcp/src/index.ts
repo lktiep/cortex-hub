@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 
 import { registerCodeTools } from './tools/code.js'
 import { registerHealthTools } from './tools/health.js'
@@ -86,11 +87,41 @@ function createMcpServer(env: Env) {
   return server
 }
 
+// ─── MCP Streamable HTTP handler ───────────────────────────────────
+// Supports both GET (SSE stream) and POST (JSON-RPC) as required by
+// the MCP Streamable HTTP transport spec. This is what mcp-remote expects.
+//
+// Stateless mode: each request gets a fresh transport + server.
+// enableJsonResponse: true allows simple request/response without SSE.
+app.all('/mcp', async (c) => {
+  // Validate API key
+  const auth = await validateApiKey(c.req.raw, c.env)
+  if (!auth.valid) {
+    return c.json({ error: auth.error }, 401)
+  }
 
+  const mcpServer = createMcpServer(c.env)
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined, // stateless mode
+    enableJsonResponse: true,
+  })
 
-// MCP Stateless JSON-RPC handler
-// Uses a fresh server per request (stateless mode)
-// Routes are relative — mounted at /mcp in dashboard-api → effective path: /mcp/
+  await mcpServer.connect(transport)
+
+  try {
+    const response = await transport.handleRequest(c.req.raw)
+    return response
+  } catch (error: any) {
+    console.error('[MCP Streamable Error]', error)
+    return c.json({
+      jsonrpc: '2.0',
+      error: { code: -32603, message: error.message || 'Internal error' },
+      id: null,
+    }, 500)
+  }
+})
+
+// Catch-all for other POST paths (legacy compat)
 app.post('/*', async (c) => {
   // Validate API key
   const auth = await validateApiKey(c.req.raw, c.env)
@@ -98,93 +129,25 @@ app.post('/*', async (c) => {
     return c.json({ error: auth.error }, 401)
   }
 
-  const server = createMcpServer(c.env)
+  const mcpServer = createMcpServer(c.env)
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  })
+
+  await mcpServer.connect(transport)
 
   try {
-    const body = await c.req.json()
-    
-    // McpServer wraps an internal Server instance
-    const innerServer = (server as any).server
-    
-    // Promise-based transport: resolves when send() is called
-    let resolveSend: (msg: any) => void
-    let sendPromise = new Promise<any>((resolve) => { resolveSend = resolve })
-    
-    const transport = {
-      start: async () => {},
-      close: async () => {},
-      send: async (message: any) => { resolveSend!(message) },
-      onmessage: null as any,
-      onerror: null as any,
-      onclose: null as any,
-      sessionId: undefined as string | undefined,
-    }
-    
-    await innerServer.connect(transport)
-    
-    // Auto-initialize: MCP SDK requires handshake before accepting requests
-    if (transport.onmessage) {
-      transport.onmessage({
-        jsonrpc: '2.0',
-        id: '__init__',
-        method: 'initialize',
-        params: {
-          protocolVersion: '2025-03-26',
-          capabilities: {},
-          clientInfo: { name: 'cortex-http-client', version: '1.0.0' },
-        },
-      })
-    }
-    
-    // Wait for initialize response
-    await sendPromise
-    
-    // Reset Promise for next message
-    sendPromise = new Promise<any>((resolve) => { resolveSend = resolve })
-    
-    // Send initialized notification (no response expected)
-    if (transport.onmessage) {
-      transport.onmessage({
-        jsonrpc: '2.0',
-        method: 'notifications/initialized',
-      })
-    }
-    
-    // Small delay to let notification process
-    await new Promise(r => setTimeout(r, 10))
-    
-    // Reset Promise for the actual client request
-    sendPromise = new Promise<any>((resolve) => { resolveSend = resolve })
-    
-    // Dispatch the actual client request
-    if (transport.onmessage) {
-      transport.onmessage(body)
-    }
-    
-    // Wait for response with timeout
-    const result = await Promise.race([
-      sendPromise,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('MCP handler timeout (10s)')), 10000))
-    ])
-    
-    return c.json(result)
+    const response = await transport.handleRequest(c.req.raw)
+    return response
   } catch (error: any) {
     console.error('[MCP Handler Error]', error)
-    return c.json({ 
-      jsonrpc: '2.0', 
+    return c.json({
+      jsonrpc: '2.0',
       error: { code: -32603, message: error.message || 'Internal error' },
-      id: null 
+      id: null,
     }, 500)
   }
-})
-
-// Handle GET requests (SSE not supported in stateless mode)
-app.get('/*', (c) => {
-  return c.json({
-    jsonrpc: '2.0',
-    error: { code: -32000, message: 'SSE not supported. Use POST for JSON-RPC requests.' },
-    id: null,
-  }, 405)
 })
 
 export default app
