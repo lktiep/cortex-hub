@@ -18,7 +18,7 @@ remote-management:
   allow-remote: true
   secret-key: ${MANAGEMENT_PASSWORD:-cortex2026}
 
-# OpenAI-compatible endpoints (enables /v1/embeddings for mem0)
+# OpenAI-compatible endpoints
 # API key is synced from Codex OAuth by dashboard-api startup
 openai-compatibility:
   - name: "cortex-openai"

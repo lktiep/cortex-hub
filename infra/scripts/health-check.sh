@@ -34,7 +34,7 @@ FAILURES=0
 
 check_service "Qdrant"        "http://localhost:6333/healthz"    || ((FAILURES++))
 check_service "Neo4j"         "http://localhost:7474"            || ((FAILURES++))
-check_service "mem0"          "http://localhost:8050/health"     || ((FAILURES++))
+
 check_service "Dashboard API" "http://localhost:4000/health"     || ((FAILURES++))
 
 echo ""

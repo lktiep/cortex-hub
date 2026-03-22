@@ -4,7 +4,7 @@ import { db } from '../db/client.js'
 export const statsRouter = new Hono()
 
 const QDRANT_URL = () => process.env['QDRANT_URL'] || 'http://qdrant:6333'
-const MEM0_URL = () => process.env['MEM0_URL'] || 'http://mem0:8000'
+
 
 // ── Dashboard Stats (real data) ──
 statsRouter.get('/overview', async (c) => {

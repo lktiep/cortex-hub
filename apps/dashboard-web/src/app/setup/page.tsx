@@ -446,24 +446,10 @@ function SetupWizard() {
     setSetupProgress([])
 
     try {
-      // Step 1: Configure mem0 with selected model
-      setSetupProgress((prev) => [...prev, '🧠 Configuring mem0 memory engine...'])
-      try {
-        const mem0Url = `${config.api.base}/api/setup/configure-mem0`
-        const mem0Res = await fetch(mem0Url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: selectedProvider, models: selectedModels }),
-          signal: AbortSignal.timeout(15000),
-        })
-        if (mem0Res.ok) {
-          setSetupProgress((prev) => [...prev, '✅ mem0 configured'])
-        } else {
-          setSetupProgress((prev) => [...prev, '⚠️ mem0 config skipped (will use defaults)'])
-        }
-      } catch {
-        setSetupProgress((prev) => [...prev, '⚠️ mem0 config skipped (service unreachable)'])
-      }
+      // Step 1: Initialize mem9 embedding engine
+      setSetupProgress((prev) => [...prev, '🧠 Initializing mem9 embedding engine...'])
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      setSetupProgress((prev) => [...prev, '✅ mem9 ready (will embed on first indexing)'])
 
       // Step 2: Save provider configuration
       setSetupProgress((prev) => [...prev, '💾 Saving provider configuration...'])

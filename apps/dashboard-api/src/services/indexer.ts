@@ -309,71 +309,7 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
     updateJob(jobId, { progress: 70, symbols_found: symbolsFound, total_files: totalFiles })
     logger.info(`[${jobId}] Analysis complete: ${symbolsFound} symbols, ${totalFiles} files`)
 
-    // ── Step 3: mem0 Ingest (branch-scoped) ──
-    updateJob(jobId, { status: 'ingesting', progress: 80 })
-    logger.info(`[${jobId}] Ingesting to mem0 (branch-scoped)`)
-
-    let mem0Status = 'skipped'
-    try {
-      const mem0Url = process.env.MEM0_URL ?? 'http://mem0:8000'
-      const symbolSample = symbolNames.length > 0 ? `\nKey symbols: ${symbolNames.slice(0, 50).join(', ')}` : ''
-      const summary = `Project ${project.id} indexed on branch "${branch}": ${symbolsFound} symbols across ${totalFiles} files. Repository: ${project.git_repo_url}${symbolSample}`
-
-      const branchUserId = `project-${projectId}:branch-${branch}`
-      const baseUserId = `project-${projectId}`
-
-      // Store branch-specific memory
-      const branchRes = await fetch(`${mem0Url}/v1/memories/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: summary }],
-          user_id: branchUserId,
-          metadata: {
-            type: 'index',
-            project_id: projectId,
-            branch,
-            symbols: symbolsFound,
-            files: totalFiles,
-            indexed_at: new Date().toISOString(),
-          }
-        }),
-        signal: AbortSignal.timeout(15000),
-      })
-
-      // Also store a base project-level memory
-      const baseRes = await fetch(`${mem0Url}/v1/memories/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: `[branch:${branch}] ${summary}` }],
-          user_id: baseUserId,
-          metadata: {
-            type: 'index',
-            project_id: projectId,
-            branch,
-            symbols: symbolsFound,
-            files: totalFiles,
-            indexed_at: new Date().toISOString(),
-          }
-        }),
-        signal: AbortSignal.timeout(15000),
-      })
-
-      if (branchRes.ok && baseRes.ok) {
-        mem0Status = 'ok'
-        appendLog(jobId, `✅ mem0 ingest OK (branch: ${branchUserId}, base: ${baseUserId})`)
-      } else {
-        mem0Status = 'partial'
-        appendLog(jobId, `⚠️ mem0 partial: branch=${branchRes.status} base=${baseRes.status}`)
-      }
-    } catch (err) {
-      mem0Status = 'failed'
-      appendLog(jobId, `❌ mem0 ingest failed: ${err}`)
-      logger.warn(`[${jobId}] mem0 ingest failed (non-fatal): ${err}`)
-    }
-
-    updateJob(jobId, { progress: 95 })
+    updateJob(jobId, { progress: 90 })
 
     // ── Step 4: Update Project ──
     db.prepare(
