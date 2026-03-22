@@ -14,7 +14,7 @@ import { z } from 'zod'
 export function registerSessionTools(server: McpServer, env: Env) {
   server.tool(
     'cortex_session_start',
-    '',
+    'Start a development session. Creates a session record and returns project context, recent quality logs, and session history.',
     {
       repo: z.string().describe('The URL of the repository being worked on'),
       mode: z.string().optional().describe('Session mode: development, onboarding, review'),
