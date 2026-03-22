@@ -95,14 +95,15 @@ export function registerChangeTools(server: McpServer, env: Env) {
       acknowledge: z
         .boolean()
         .optional()
-        .describe('Set true to mark these changes as seen (default: false)'),
+        .default(true)
+        .describe('Mark these changes as seen to avoid repeat noise (default: true)'),
     },
     async ({ agentId, projectId, acknowledge }) => {
       try {
         const { events, count } = await fetchUnseenChanges(env, agentId, projectId)
 
-        // Auto-acknowledge if requested
-        if (acknowledge && events.length > 0) {
+        // Auto-acknowledge (default: true) to reduce repeat noise
+        if (acknowledge !== false && events.length > 0) {
           const latestId = (events as ChangeEvent[])[0]?.id
           if (latestId) {
             await acknowledgeChanges(env, agentId, projectId, latestId)

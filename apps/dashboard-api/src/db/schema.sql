@@ -134,6 +134,9 @@ CREATE TABLE IF NOT EXISTS change_events (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE INDEX IF NOT EXISTS idx_change_events_project_created
+ON change_events(project_id, created_at DESC);
+
 -- ── Agent Acknowledgements ──
 CREATE TABLE IF NOT EXISTS agent_ack (
     agent_id TEXT NOT NULL,

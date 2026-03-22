@@ -63,4 +63,11 @@ if (existsSync(schemaPath)) {
   db.exec(schema)
 }
 
+// Auto-cleanup: remove change_events older than 24h (runs every hour)
+setInterval(() => {
+  try {
+    db.prepare(`DELETE FROM change_events WHERE created_at < datetime('now', '-1 day')`).run()
+  } catch { /* ignore */ }
+}, 60 * 60 * 1000)
+
 export { db }

@@ -8,116 +8,27 @@ const logger = createLogger('webhooks')
 
 export const webhooksRouter = new Hono()
 
-interface GitHubPushPayload {
-  ref: string
-  repository: {
-    clone_url: string
-    html_url: string
-    full_name: string
-  }
-  head_commit: {
-    id: string
-    message: string
-    author: { name: string; username?: string }
-    added: string[]
-    removed: string[]
-    modified: string[]
-  } | null
-  commits?: Array<{
-    id: string
-    message: string
-    added: string[]
-    removed: string[]
-    modified: string[]
-  }>
-  pusher: { name: string }
+// ── Auth: validate API key on protected endpoints ──
+function validateWebhookAuth(authHeader: string | undefined): boolean {
+  if (!authHeader) return false
+  const token = authHeader.replace('Bearer ', '')
+  const validKeys = (process.env['MCP_API_KEYS'] ?? '').split(',').map((k) => k.trim()).filter(Boolean)
+  return validKeys.includes(token)
 }
 
 /**
- * POST /github — GitHub webhook receiver for push events.
- * Records change_events and optionally triggers reindex.
- */
-webhooksRouter.post('/github', async (c) => {
-  try {
-    const event = c.req.header('X-GitHub-Event')
-    if (event !== 'push') {
-      return c.json({ ignored: true, reason: `event type: ${event}` })
-    }
-
-    const payload = await c.req.json() as GitHubPushPayload
-    const branch = payload.ref.replace('refs/heads/', '')
-    const repoUrl = payload.repository.clone_url || payload.repository.html_url
-
-    // Look up project by repo URL
-    const project = db.prepare(
-      `SELECT id FROM projects WHERE git_repo_url = ? OR git_repo_url = ?`
-    ).get(repoUrl, repoUrl.replace(/\.git$/, '')) as { id: string } | undefined
-
-    if (!project) {
-      return c.json({ ignored: true, reason: 'No matching project found' })
-    }
-
-    // Collect changed files from head_commit or all commits
-    const filesSet = new Set<string>()
-    const commits = payload.commits ?? (payload.head_commit ? [payload.head_commit] : [])
-    for (const commit of commits) {
-      for (const f of [...(commit.added ?? []), ...(commit.modified ?? []), ...(commit.removed ?? [])]) {
-        filesSet.add(f)
-      }
-    }
-
-    // Record change event
-    const eventId = `chg-${randomUUID().slice(0, 12)}`
-    db.prepare(
-      `INSERT INTO change_events (id, project_id, branch, agent_id, commit_sha, commit_message, files_changed)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      eventId,
-      project.id,
-      branch,
-      payload.pusher.name,
-      payload.head_commit?.id ?? '',
-      payload.head_commit?.message ?? '',
-      JSON.stringify([...filesSet])
-    )
-
-    logger.info(`Change event ${eventId}: ${filesSet.size} files on ${branch} by ${payload.pusher.name}`)
-
-    // Auto-trigger reindex
-    const jobId = `idx-${randomUUID().slice(0, 12)}`
-    const activeJob = db.prepare(
-      `SELECT id FROM index_jobs WHERE project_id = ? AND status IN ('pending', 'cloning', 'analyzing', 'ingesting')`
-    ).get(project.id) as { id: string } | undefined
-
-    let reindexStarted = false
-    if (!activeJob) {
-      db.prepare(
-        `INSERT INTO index_jobs (id, project_id, branch, status, progress) VALUES (?, ?, ?, 'pending', 0)`
-      ).run(jobId, project.id, branch)
-      startIndexing(project.id, jobId, branch).catch(() => {})
-      reindexStarted = true
-    }
-
-    return c.json({
-      received: true,
-      eventId,
-      projectId: project.id,
-      branch,
-      filesChanged: filesSet.size,
-      reindexStarted,
-    })
-  } catch (error) {
-    logger.error(`Webhook error: ${error}`)
-    return c.json({ error: String(error) }, 500)
-  }
-})
-
-/**
- * POST /local-push — Lightweight endpoint for local git hooks (lefthook).
+ * POST /push — Record a code push event from any source (lefthook, bot, CI).
+ * Authenticated via Bearer token (same API keys as MCP).
  * Body: { repo, branch, agentId?, commitSha?, commitMessage?, filesChanged? }
  */
-webhooksRouter.post('/local-push', async (c) => {
+webhooksRouter.post('/push', async (c) => {
   try {
+    // Auth check
+    const authHeader = c.req.header('Authorization')
+    if (!validateWebhookAuth(authHeader)) {
+      return c.json({ error: 'Unauthorized. Provide a valid Bearer token.' }, 401)
+    }
+
     const body = await c.req.json()
     const { repo, branch, agentId, commitSha, commitMessage, filesChanged } = body
 
@@ -149,8 +60,26 @@ webhooksRouter.post('/local-push', async (c) => {
       JSON.stringify(filesChanged ?? [])
     )
 
-    return c.json({ received: true, eventId, projectId: project.id })
+    logger.info(`Change event ${eventId}: ${(filesChanged ?? []).length} files on ${branch} by ${agentId ?? 'local'}`)
+
+    // Auto-trigger reindex
+    const activeJob = db.prepare(
+      `SELECT id FROM index_jobs WHERE project_id = ? AND status IN ('pending', 'cloning', 'analyzing', 'ingesting')`
+    ).get(project.id) as { id: string } | undefined
+
+    let reindexStarted = false
+    if (!activeJob) {
+      const jobId = `idx-${randomUUID().slice(0, 12)}`
+      db.prepare(
+        `INSERT INTO index_jobs (id, project_id, branch, status, progress) VALUES (?, ?, ?, 'pending', 0)`
+      ).run(jobId, project.id, branch)
+      startIndexing(project.id, jobId, branch).catch(() => {})
+      reindexStarted = true
+    }
+
+    return c.json({ received: true, eventId, projectId: project.id, reindexStarted })
   } catch (error) {
+    logger.error(`Push event error: ${error}`)
     return c.json({ error: String(error) }, 500)
   }
 })
@@ -176,11 +105,13 @@ webhooksRouter.get('/changes', (c) => {
 
     let events
     if (ack) {
-      // Get events newer than last seen, excluding own events
+      // Get events newer than last seen, excluding own events.
+      // COALESCE handles case where the ack'd event was already cleaned up by TTL.
       events = db.prepare(
         `SELECT * FROM change_events
-         WHERE project_id = ? AND agent_id != ? AND created_at > (
-           SELECT created_at FROM change_events WHERE id = ?
+         WHERE project_id = ? AND agent_id != ? AND created_at > COALESCE(
+           (SELECT created_at FROM change_events WHERE id = ?),
+           datetime('now', '-1 day')
          )
          ORDER BY created_at DESC LIMIT ?`
       ).all(projectId, agentId, ack.last_seen_event_id, limit)
@@ -219,21 +150,6 @@ webhooksRouter.post('/changes/ack', async (c) => {
     ).run(agentId, projectId, lastSeenEventId)
 
     return c.json({ acknowledged: true })
-  } catch (error) {
-    return c.json({ error: String(error) }, 500)
-  }
-})
-
-/**
- * DELETE /changes/cleanup — Remove change events older than 24 hours.
- */
-webhooksRouter.delete('/changes/cleanup', (c) => {
-  try {
-    const result = db.prepare(
-      `DELETE FROM change_events WHERE created_at < datetime('now', '-1 day')`
-    ).run()
-
-    return c.json({ deleted: result.changes })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }

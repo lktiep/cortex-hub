@@ -267,7 +267,7 @@ inject_mcp_config() {
         DASHBOARD_URL="${MCP_URL%/mcp}"
         DASHBOARD_URL="${DASHBOARD_URL/cortex-mcp/cortex-api}"
         echo -e "  Base URL:      ${GREEN}${DASHBOARD_URL:-http://localhost:4000}${NC}"
-        echo -e "  Webhooks:      POST /api/webhooks/local-push"
+        echo -e "  Push Events:   POST /api/webhooks/push"
         echo -e "  Changes:       GET  /api/webhooks/changes?agentId=BOT_ID&projectId=PROJ_ID"
         echo ""
         echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
