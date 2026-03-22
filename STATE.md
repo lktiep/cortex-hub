@@ -38,6 +38,7 @@
 - [x] Docker build optimization: cache mounts + shared base + .dockerignore (`35848b5`)
 - [x] session_start: real DB records + project context (`85e0fd7`)
 - [x] cortex_code_reindex tool + project lookup route (`0c0c45a`)
+- [x] Fix self-fetch deadlock: apiCall + setInternalFetch for in-memory routing (`bba043d`)
 
 ## Completed (Phase 6)
 - [x] Dashboard API — 9 real routes (no stubs)
@@ -55,12 +56,13 @@
 
 ## Recent Decisions
 - MCP handler now uses `WebStandardStreamableHTTPServerTransport` (stateless, enableJsonResponse) instead of custom Promise-based transport
+- **Self-fetch fix:** MCP tools use `apiCall()` with `setInternalFetch()` — Hono `app.request()` for in-memory routing instead of HTTP fetch to localhost (avoids single-process deadlock)
 - Onboard script: uses user-provided MCP URL as-is (no suffix), tests connection before proceeding
 - Hono stays for hub-mcp (consistent with dashboard-api, runs native on Node.js)
 - Uninstall cleans: mcp_config entry, .cortex/, lefthook, HUB_API_KEY
 - Mobile responsive: hamburger toggle + backdrop overlay at ≤768px, CSS-only breakpoints at 3 tiers
 
 ## Quality Status
-- Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-22T16:44+07:00)
-- Docker: `0c0c45a` deploying via Watchtower
-- MCP: 9 tools operational, mem9 healthy
+- Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-22T20:50+07:00)
+- Docker: `bba043d` deploying via Watchtower
+- MCP: 9 tools, all using in-memory routing (no more deadlock)
