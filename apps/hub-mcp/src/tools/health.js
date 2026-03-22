@@ -6,7 +6,6 @@ export function registerHealthTools(server, env) {
     server.tool('cortex.health', 'Check health status of all Cortex Hub backend services', {}, async () => {
         const services = [
             { name: 'qdrant', url: `${env.QDRANT_URL}/healthz` },
-            { name: 'neo4j', url: `${env.NEO4J_URL}` },
             { name: 'cliproxy', url: `${env.CLIPROXY_URL}/` },
             { name: 'dashboard-api', url: `${env.DASHBOARD_API_URL}/health` },
         ];

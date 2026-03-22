@@ -13,9 +13,8 @@ C4Container
         Container(dash_api, "Dashboard API", "Hono / Node.js", "REST API for dashboard — CRUD, WebSocket logs")
         ContainerDb(sqlite, "App Database", "SQLite WAL", "API keys, quality reports, sessions, logs")
         Container(gitnexus, "GitNexus", "Docker", "Code intelligence — AST parsing, knowledge graph")
-        Container(mem0, "mem0", "Docker / Python", "Agent memory — vector + graph storage")
+        Container(mem9, "mem9", "In-process / Node.js", "Agent memory — vector embeddings via Qdrant")
         ContainerDb(qdrant, "Qdrant", "Docker", "Vector database — semantic search for knowledge + memory")
-        ContainerDb(neo4j, "Neo4j", "Docker", "Graph database — relationship traversal for mem0")
     }
 
     System_Ext(github, "GitHub API", "Repository hosting + OAuth")
@@ -25,12 +24,10 @@ C4Container
     Rel(admin, dash_web, "Manages platform", "HTTPS + OAuth session")
     Rel(dash_web, dash_api, "API requests + WebSocket", "HTTPS / WSS")
     Rel(hub_mcp, gitnexus, "code.* tools", "HTTP via CF Tunnel")
-    Rel(hub_mcp, mem0, "memory.* tools", "HTTP via CF Tunnel")
+    Rel(hub_mcp, dash_api, "memory.* + quality.* + session.* tools", "HTTP via CF Tunnel")
     Rel(hub_mcp, qdrant, "knowledge.* tools", "HTTP via CF Tunnel")
-    Rel(hub_mcp, dash_api, "quality.* + session.* tools", "HTTP via CF Tunnel")
     Rel(dash_api, sqlite, "Reads/writes", "SQL")
-    Rel(mem0, qdrant, "Vector storage", "HTTP")
-    Rel(mem0, neo4j, "Graph storage", "Bolt")
+    Rel(dash_api, qdrant, "mem9 vector storage", "HTTP")
     Rel(dash_api, github, "Repo import + OAuth", "HTTPS")
     Rel(cf_tunnel, dash_api, "Tunneled traffic", "HTTP")
 ```

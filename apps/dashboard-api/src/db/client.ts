@@ -70,4 +70,14 @@ setInterval(() => {
   } catch { /* ignore */ }
 }, 60 * 60 * 1000)
 
+// Auto-cleanup: mark stale active sessions as completed (> 4 hours old)
+setInterval(() => {
+  try {
+    db.prepare(
+      `UPDATE session_handoffs SET status = 'completed'
+       WHERE status = 'active' AND created_at < datetime('now', '-4 hours')`
+    ).run()
+  } catch { /* ignore */ }
+}, 30 * 60 * 1000) // check every 30 minutes
+
 export { db }

@@ -27,9 +27,6 @@ export function registerHealthTools(server: McpServer, env: Env) {
       if (env.CLIPROXY_URL) {
         services.push({ name: 'cliproxy', url: `${env.CLIPROXY_URL}/v1/models` })
       }
-      if (env.NEO4J_URL) {
-        services.push({ name: 'neo4j', url: env.NEO4J_URL })
-      }
 
       const results = await Promise.allSettled(
         services.map(async (svc) => {

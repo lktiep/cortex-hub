@@ -19,8 +19,7 @@
 |---|---|---|---|---|
 | **Code Intelligence** | GitNexus | latest | MIT | AST parsing, graph analysis, impact detection |
 | **Vector Database** | Qdrant | 1.13+ | Apache 2.0 | Semantic search for knowledge + memory |
-| **Graph Database** | Neo4j Community | 5.x | GPL 3.0 | Relationship graph for mem0 |
-| **Agent Memory** | mem0 | latest | Apache 2.0 | Long-term memory with vector + graph |
+| **Agent Memory** | mem9 (in-process) | latest | MIT | Long-term memory with vector embeddings |
 | **Application DB** | SQLite (WAL mode) | 3.x | Public Domain | Quality reports, sessions, query logs |
 | **API Framework** | Hono | 4.x | MIT | Lightweight, edge-ready HTTP framework |
 

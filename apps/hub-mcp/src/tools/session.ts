@@ -11,6 +11,46 @@ import { fetchUnseenChanges, formatChangeSummary, acknowledgeChanges } from './c
  * Calls dashboard-api /api/sessions/start via apiCall (in-memory when co-located).
  */
 export function registerSessionTools(server: McpServer, env: Env) {
+  // End/complete a session
+  server.tool(
+    'cortex_session_end',
+    'End/complete the current session. Call this when your conversation is finishing to avoid leaving stale sessions.',
+    {
+      sessionId: z.string().describe('The session ID returned by cortex_session_start'),
+      summary: z.string().optional().describe('Brief summary of work done in this session'),
+    },
+    async ({ sessionId, summary }) => {
+      try {
+        const response = await apiCall(env, `/api/sessions/${sessionId}/complete`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            status: 'completed',
+            task_summary: summary,
+          }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          return {
+            content: [{ type: 'text' as const, text: `Session end failed: ${response.status} ${errorText}` }],
+            isError: true,
+          }
+        }
+
+        const result = await response.json()
+        return {
+          content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+        }
+      } catch (error) {
+        return {
+          content: [{ type: 'text' as const, text: `Session end error: ${error instanceof Error ? error.message : 'Unknown'}` }],
+          isError: true,
+        }
+      }
+    }
+  )
+
   server.tool(
     'cortex_session_start',
     'Start a development session. Creates a session record and returns project context, recent quality logs, session history, and unseen code changes from other agents.',

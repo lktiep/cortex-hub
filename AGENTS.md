@@ -48,7 +48,7 @@ Cortex Hub is a self-hosted, MCP-compliant platform that unifies code intelligen
 - **MCP Gateway:** Cloudflare Worker (Hono)
 - **Dashboard API:** Hono + SQLite (Node.js)
 - **Dashboard Web:** Next.js 15 + React 19
-- **Backend:** Qdrant, Neo4j, mem0, GitNexus (Docker Compose)
+- **Backend:** Qdrant, mem9, GitNexus (Docker Compose)
 - **Infra:** Cloudflare Tunnel, Watchtower
 
 ### Endpoints
@@ -81,7 +81,7 @@ Cortex Hub is a self-hosted, MCP-compliant platform that unifies code intelligen
 ### Completed Phases
 - [x] **Phase 1:** Server + Cloudflare Tunnel
 - [x] **Phase 2:** Monorepo skeleton + shared packages
-- [x] **Phase 3:** Docker stack (Qdrant, Neo4j, mem0, CLIProxy, Watchtower)
+- [x] **Phase 3:** Docker stack (Qdrant, CLIProxy, Watchtower)
 - [x] **Phase 4:** Hub MCP Server (Cloudflare Worker) — `apps/hub-mcp`
 - [x] **Phase 5:** Dashboard Frontend (Next.js) — `apps/dashboard-web`
 

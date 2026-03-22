@@ -170,7 +170,6 @@ main() {
   echo "  API:          http://localhost:4000"
   echo "  GitNexus:     http://localhost:3200"
   echo "  Qdrant:       http://localhost:6333"
-  echo "  Neo4j:        http://localhost:7474"
   echo ""
   echo "  Next steps:"
   echo "    1. Configure .env with your API keys"

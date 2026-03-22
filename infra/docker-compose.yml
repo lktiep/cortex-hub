@@ -125,7 +125,6 @@ services:
       DASHBOARD_API_URL: http://cortex-api:4000
       QDRANT_URL: http://qdrant:6333
       CLIPROXY_URL: http://llm-proxy:8317
-      NEO4J_URL: ""
       MCP_SERVER_NAME: "cortex-hub"
       MCP_SERVER_VERSION: "0.1.0"
       API_KEYS: ${MCP_API_KEYS:-}

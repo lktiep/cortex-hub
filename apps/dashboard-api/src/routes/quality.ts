@@ -41,13 +41,50 @@ sessionsRouter.post('/start', async (c) => {
   try {
     const body = await c.req.json()
     const { repo, mode, agentId } = body
-    const sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 
-    // Look up project by git_repo_url
+    // Normalize repo URL: strip .git suffix and trailing slash for consistent matching
+    const normalizedRepo = repo
+      ? repo.replace(/\.git$/, '').replace(/\/$/, '')
+      : 'unknown'
+
+    // Look up project by git_repo_url (handle .git suffix and trailing slash variants)
     let project: Record<string, unknown> | undefined
     if (repo) {
-      const stmt = db.prepare('SELECT * FROM projects WHERE git_repo_url = ?')
-      project = stmt.get(repo) as Record<string, unknown> | undefined
+      const stmt = db.prepare(
+        `SELECT * FROM projects
+         WHERE git_repo_url IN (?, ?, ?, ?)`
+      )
+      project = stmt.get(
+        normalizedRepo,
+        `${normalizedRepo}.git`,
+        `${normalizedRepo}/`,
+        repo
+      ) as Record<string, unknown> | undefined
+    }
+
+    // Reuse existing active session for same agent+repo (prevent garbage sessions)
+    // Match normalized URL to handle .git suffix inconsistency
+    let sessionId: string
+    const existingSession = db.prepare(
+      `SELECT id FROM session_handoffs
+       WHERE from_agent = ? AND project IN (?, ?, ?, ?) AND status = 'active'
+       ORDER BY created_at DESC LIMIT 1`
+    ).get(
+      agentId ?? 'default',
+      normalizedRepo,
+      `${normalizedRepo}.git`,
+      `${normalizedRepo}/`,
+      repo ?? 'unknown'
+    ) as { id: string } | undefined
+
+    if (existingSession) {
+      sessionId = existingSession.id
+      // Touch the session — update timestamp
+      db.prepare(
+        `UPDATE session_handoffs SET created_at = datetime('now') WHERE id = ?`
+      ).run(sessionId)
+    } else {
+      sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
     }
 
     // Get recent quality logs (last 5)
@@ -63,18 +100,20 @@ sessionsRouter.post('/start', async (c) => {
     const projectDesc = (project?.description as string) ?? ''
     const orgId = (project?.org_id as string) ?? ''
 
-    // Store session record
-    const insertStmt = db.prepare(
-      'INSERT INTO session_handoffs (id, from_agent, project, task_summary, context, status) VALUES (?, ?, ?, ?, ?, ?)'
-    )
-    insertStmt.run(
-      sessionId,
-      agentId ?? 'default',
-      repo ?? 'unknown',
-      `Session started: mode=${mode ?? 'development'}`,
-      JSON.stringify({ repo, mode, agentId, projectId: project?.id }),
-      'active'
-    )
+    // Store session record (only if new)
+    if (!existingSession) {
+      const insertStmt = db.prepare(
+        'INSERT INTO session_handoffs (id, from_agent, project, task_summary, context, status) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      insertStmt.run(
+        sessionId,
+        agentId ?? 'default',
+        normalizedRepo,
+        `Session started: mode=${mode ?? 'development'}`,
+        JSON.stringify({ repo, mode, agentId, projectId: project?.id }),
+        'active'
+      )
+    }
 
     return c.json({
       sessionId,

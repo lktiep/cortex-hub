@@ -30,7 +30,6 @@ graph TB
         GN["GitNexus<br/>Code Graph + AST"]
         M0["mem0<br/>Long-term Memory"]
         QD["Qdrant<br/>Vector Search"]
-        N4J["Neo4j Community<br/>Graph Store"]
         API["Dashboard API<br/>Hono + SQLite"]
     end
 
@@ -43,7 +42,7 @@ graph TB
     CODE --> GN
     MEM --> M0
     KB --> QD
-    M0 --> QD & N4J
+    M0 --> QD
     QA & SESS --> API
     DASH --> API
 ```
@@ -76,7 +75,7 @@ Provides deep code understanding via Tree-sitter AST parsing and graph analysis:
 
 ### 3. mem0 (Agent Memory)
 
-Long-term memory for AI agents, backed by Qdrant (vectors) and Neo4j (graph):
+Long-term memory for AI agents, backed by Qdrant (vectors):
 
 - Remembers decisions, patterns, and context across sessions
 - Each agent has isolated memory with optional shared spaces
@@ -125,8 +124,7 @@ Internet
                           ├── :3000  Dashboard Web
                           ├── :3200  GitNexus
                           ├── :8080  mem0
-                          ├── :6333  Qdrant
-                          └── :7474  Neo4j Browser
+                          └── :6333  Qdrant
 ```
 
 All backend services run behind a Cloudflare Tunnel — **no open ports** on the server.

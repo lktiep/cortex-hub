@@ -307,7 +307,7 @@ cortex-hub/
 |---|---|---|
 | **Phase 1** | Server + Cloudflare Tunnel | ✅ Done |
 | **Phase 2** | Monorepo skeleton + shared packages | ✅ Done |
-| **Phase 3** | Docker stack (Qdrant, Neo4j, CLIProxy, Watchtower) | ✅ Done |
+| **Phase 3** | Docker stack (Qdrant, CLIProxy, Watchtower) | ✅ Done |
 | **Phase 4** | Hub MCP Server (Cloudflare Worker) | ✅ Done |
 | **Phase 5** | Dashboard Frontend (Next.js 15) | ✅ Done |
 | **Phase 6** | Polish, docs, testing, GA release | 🔄 In Progress |

@@ -1,6 +1,6 @@
 # Entity Relationship Diagram — Cortex Hub
 
-> This ERD covers the **SQLite application database** only. Qdrant and Neo4j have their own schemas managed by their respective services.
+> This ERD covers the **SQLite application database** only. Qdrant has its own schema managed by its service.
 
 ```mermaid
 erDiagram

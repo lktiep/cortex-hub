@@ -130,9 +130,6 @@ NODE_ENV=production
 CF_ACCOUNT_ID=<your-account-id>
 CF_API_TOKEN=<your-api-token>
 
-# Neo4j
-NEO4J_PASSWORD=<strong-password>
-
 # OpenAI (for mem0 embeddings)
 OPENAI_API_KEY=<your-key>
 
@@ -184,10 +181,7 @@ npx gitnexus serve --port 3200
 # Qdrant
 curl -s http://localhost:6333/healthz | jq .
 
-# Neo4j
-curl -s http://localhost:7474 | jq .
-
-# mem0
+# mem9 (runs in-process within Dashboard API)
 curl -s http://localhost:8080/health | jq .
 
 # Dashboard API
@@ -317,10 +311,6 @@ cp /opt/cortex-hub/infra/data/sqlite/hub.db "$BACKUP_DIR/"
 
 # Qdrant snapshots
 curl -X POST http://localhost:6333/snapshots
-
-# Neo4j dump
-docker exec cortex-neo4j neo4j-admin database dump neo4j --to-path=/data/backup
-cp /opt/cortex-hub/infra/data/neo4j/backup/* "$BACKUP_DIR/"
 
 echo "$(date) — Backup completed → $BACKUP_DIR"
 ```
