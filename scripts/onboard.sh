@@ -26,22 +26,42 @@ if [ -n "$1" ]; then
     HUB_API_KEY="$1"
 fi
 
-# Interactive prompt if TTY is available
-if [ -t 0 ]; then
-    # 1. Prompt for MCP URL (with default)
-    read -rp "Enter your Cortex Hub MCP URL [https://cortex-mcp.jackle.dev]: " INPUT_URL
-    MCP_URL=${INPUT_URL:-"https://cortex-mcp.jackle.dev"}
-
-    # 2. Prompt for API Key (masked)
-    if [ -z "$HUB_API_KEY" ]; then
-        read -rsp "Enter your Cortex Hub API Key: " HUB_API_KEY
-        echo "" # Newline after masked input
+# Interactive prompt — try stdin first, then /dev/tty
+prompt_user() {
+    if [ -t 0 ]; then
+        read "$@"
+    elif [ -e /dev/tty ]; then
+        read "$@" < /dev/tty
+    else
+        return 1
     fi
+}
+
+prompt_user_secret() {
+    if [ -t 0 ]; then
+        read -rsp "$@"
+    elif [ -e /dev/tty ]; then
+        read -rsp "$@" < /dev/tty
+    else
+        return 1
+    fi
+}
+
+# 1. Prompt for MCP URL (with default)
+if prompt_user -rp "Enter your Cortex Hub MCP URL [https://cortex-mcp.jackle.dev]: " INPUT_URL; then
+    MCP_URL=${INPUT_URL:-"https://cortex-mcp.jackle.dev"}
 else
-    # Non-interactive defaults
     MCP_URL=${HUB_API_URL:-"https://cortex-mcp.jackle.dev"}
-    if [ -z "$HUB_API_KEY" ]; then
-        echo -e "${RED}>>> Error: HUB_API_KEY not provided and no TTY detected.${NC}"
+fi
+
+# 2. Prompt for API Key (masked)
+if [ -z "$HUB_API_KEY" ]; then
+    if prompt_user_secret "Enter your Cortex Hub API Key: " HUB_API_KEY; then
+        echo "" # Newline after masked input
+    else
+        echo -e "${RED}>>> Error: HUB_API_KEY not provided and no interactive terminal available.${NC}"
+        echo -e "${YELLOW}    Usage: HUB_API_KEY=your-key bash onboard.sh${NC}"
+        echo -e "${YELLOW}    Or pass as argument: bash onboard.sh your-key${NC}"
         exit 1
     fi
 fi
