@@ -1,7 +1,7 @@
 /**
  * mem9 — Core Memory class
  *
- * Implements the same pipeline as mem0:
+ * Implements the mem9 pipeline:
  * add()    → 2 LLM calls (extract facts + decide actions) + embed + Qdrant
  * search() → 1 embed call + Qdrant search
  * getAll() → Qdrant scroll

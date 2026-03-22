@@ -61,7 +61,7 @@ IF creating a new file:
 **Logic:**
 ```
 ON session start:
-  1. Load agent memories from mem0
+  1. Load agent memories from mem9
   2. Check for pending session handoffs
   3. Load project profile
   4. Inject context into agent's session

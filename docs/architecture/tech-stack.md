@@ -56,5 +56,5 @@
 | Cloudflare Pages (free tier) | $0 |
 | Cloudflare Tunnel | $0 |
 | GitHub repository | $0 |
-| OpenAI API (mem0 embeddings, gpt-4.1-nano) | ~$0.05 |
+| OpenAI API (mem9 embeddings, gpt-4.1-nano) | ~$0.05 |
 | **Total** | **≈ $0.05/month** |

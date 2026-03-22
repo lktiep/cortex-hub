@@ -13,7 +13,7 @@ workers_dev = true
 [vars]
 # Backend service URLs (via Cloudflare Tunnel → server)
 QDRANT_URL = "https://qdrant.hub.jackle.dev"
-MEM0_URL = "https://mem0.hub.jackle.dev"
+MEM9_URL = "https://mem9.hub.jackle.dev"
 CLIPROXY_URL = "https://llm.hub.jackle.dev"
 DASHBOARD_API_URL = "https://api.hub.jackle.dev"
 

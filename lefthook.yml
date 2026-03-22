@@ -32,6 +32,6 @@ post-push:
           FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | jq -R -s 'split("\n") | map(select(. != ""))' 2>/dev/null || echo "[]")
           curl -s -X POST "$CORTEX_API_URL/api/webhooks/local-push" \
             -H "Content-Type: application/json" \
-            -d "{\"repo\":\"$REPO\",\"branch\":\"$BRANCH\",\"commitSha\":\"$COMMIT_SHA\",\"commitMessage\":\"$COMMIT_MSG\",\"filesChanged\":$FILES}" \
+            -d "{"repo":"$REPO","branch":"$BRANCH","commitSha":"$COMMIT_SHA","commitMessage":"$COMMIT_MSG","filesChanged":$FILES}" \
             > /dev/null 2>&1 || true
         fi

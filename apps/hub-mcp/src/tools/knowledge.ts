@@ -64,6 +64,34 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
           }
         }
 
+        // Ensure collection exists before searching (auto-create on first use)
+        const checkRes = await fetch(`${env.QDRANT_URL}/collections/${collection}`, {
+          signal: AbortSignal.timeout(5000),
+        })
+        if (!checkRes.ok) {
+          const vectorSize = vector.length
+          const createRes = await fetch(`${env.QDRANT_URL}/collections/${collection}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              vectors: { size: vectorSize, distance: 'Cosine' },
+            }),
+            signal: AbortSignal.timeout(5000),
+          })
+          if (!createRes.ok) {
+            const err = await createRes.text()
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: `Failed to create collection "${collection}": ${createRes.status} ${err}`,
+                },
+              ],
+              isError: true,
+            }
+          }
+        }
+
         const response = await fetch(`${env.QDRANT_URL}/collections/${collection}/points/search`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

@@ -1,7 +1,7 @@
 /**
- * mem9 prompts — 1:1 port from mem0 prompts.py
+ * mem9 prompts — fact extraction and deduplication.
  *
- * Source: https://github.com/mem0ai/mem0/blob/main/mem0/configs/prompts.py
+ * Based on: https://github.com/mem0ai/mem0/blob/main/mem0/configs/prompts.py
  */
 
 /**
