@@ -14,8 +14,7 @@ import { registerSessionTools } from './tools/session.js'
 import { validateApiKey } from './middleware/auth.js'
 import type { Env } from './types.js'
 
-// Re-export for dashboard-api to inject internal fetch
-export { setInternalFetch } from './api-call.js'
+
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -58,26 +57,7 @@ app.get('/health', (c) => {
   })
 })
 
-// Session Start endpoint (REST — proxies to dashboard-api for real data)
-app.post('/session/start', async (c) => {
-  const auth = await validateApiKey(c.req.raw, c.env)
-  if (!auth.valid) return c.json({ error: auth.error }, 401)
-  
-  try {
-    const sessionData = await c.req.json()
-    const apiUrl = c.env.DASHBOARD_API_URL || 'http://localhost:4000'
-    const response = await fetch(`${apiUrl}/api/sessions/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(sessionData),
-      signal: AbortSignal.timeout(10000),
-    })
-    const result = await response.json()
-    return c.json(result, response.ok ? 200 : 500)
-  } catch (error) {
-    return c.json({ error: String(error) }, 500)
-  }
-})
+
 
 // Root endpoint — server info
 app.get('/', (c) => {
@@ -150,33 +130,6 @@ app.all('/mcp', async (c) => {
   }
 })
 
-// Catch-all for other POST paths (legacy compat)
-app.post('/*', async (c) => {
-  // Validate API key
-  const auth = await validateApiKey(c.req.raw, c.env)
-  if (!auth.valid) {
-    return c.json({ error: auth.error }, 401)
-  }
 
-  const mcpServer = createMcpServer(c.env)
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  })
-
-  await mcpServer.connect(transport)
-
-  try {
-    const response = await transport.handleRequest(c.req.raw)
-    return response
-  } catch (error: any) {
-    console.error('[MCP Handler Error]', error)
-    return c.json({
-      jsonrpc: '2.0',
-      error: { code: -32603, message: error.message || 'Internal error' },
-      id: null,
-    }, 500)
-  }
-})
 
 export default app

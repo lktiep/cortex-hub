@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ──────────────────────────────────────────────
-# Cortex Hub — Optimized Multi-stage Build
+# Cortex Dashboard API — Multi-stage Build
 # Target: < 2 min with BuildKit cache
 # ──────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY apps/dashboard-api/package.json ./apps/dashboard-api/
 COPY apps/dashboard-web/package.json ./apps/dashboard-web/
-COPY apps/hub-mcp/package.json ./apps/hub-mcp/
+
 COPY packages/shared-utils/package.json ./packages/shared-utils/
 COPY packages/shared-types/package.json ./packages/shared-types/
 COPY packages/shared-mem9/package.json ./packages/shared-mem9/
@@ -42,10 +42,9 @@ ARG BUILD_DATE=unknown
 COPY . .
 
 # Build all apps
-RUN npx turbo build --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web
+RUN npx turbo build --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web --filter=!@cortex/hub-mcp
 
-# Verify hono is hoisted
-RUN ls node_modules/@hono/node-server/package.json && echo "✅ HONO_OK"
+
 
 # Stage 4: Production deps only (reuse cached pnpm store)
 FROM base AS prod-deps
@@ -56,7 +55,6 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=builder /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
 COPY --from=builder /app/apps/dashboard-api/package.json ./apps/dashboard-api/package.json
-COPY --from=builder /app/apps/hub-mcp/package.json ./apps/hub-mcp/package.json
 COPY --from=builder /app/packages/shared-utils/package.json ./packages/shared-utils/package.json
 COPY --from=builder /app/packages/shared-types/package.json ./packages/shared-types/package.json
 COPY --from=builder /app/packages/shared-mem9/package.json ./packages/shared-mem9/package.json
@@ -89,7 +87,6 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 
 # Copy built artifacts
 COPY --from=builder /app/apps/dashboard-api/dist ./apps/dashboard-api/dist
-COPY --from=builder /app/apps/hub-mcp/dist ./apps/hub-mcp/dist
 COPY --from=builder /app/packages/shared-utils/dist ./packages/shared-utils/dist
 COPY --from=builder /app/packages/shared-types/dist ./packages/shared-types/dist
 COPY --from=builder /app/packages/shared-mem9/dist ./packages/shared-mem9/dist
@@ -98,8 +95,7 @@ COPY --from=builder /app/packages/shared-mem9/dist ./packages/shared-mem9/dist
 RUN mkdir -p /app/node_modules/@cortex && \
     ln -sf /app/packages/shared-utils /app/node_modules/@cortex/shared-utils && \
     ln -sf /app/packages/shared-types /app/node_modules/@cortex/shared-types && \
-    ln -sf /app/packages/shared-mem9 /app/node_modules/@cortex/shared-mem9 && \
-    ln -sf /app/apps/hub-mcp /app/node_modules/@cortex/hub-mcp
+    ln -sf /app/packages/shared-mem9 /app/node_modules/@cortex/shared-mem9
 
 # Copy runtime assets
 RUN mkdir -p /app/apps/dashboard-api/dist/db
@@ -112,7 +108,6 @@ COPY --from=builder /app/apps/dashboard-web/out/ ./public/
 # Copy metadata for ESM resolution
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/apps/dashboard-api/package.json ./apps/dashboard-api/package.json
-COPY --from=builder /app/apps/hub-mcp/package.json ./apps/hub-mcp/package.json
 COPY --from=builder /app/packages/shared-utils/package.json ./packages/shared-utils/package.json
 COPY --from=builder /app/packages/shared-types/package.json ./packages/shared-types/package.json
 COPY --from=builder /app/packages/shared-mem9/package.json ./packages/shared-mem9/package.json
@@ -125,6 +120,6 @@ RUN mkdir -p /app/data /app/data/repos
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD node -e "fetch('http://localhost:4000/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
 
-EXPOSE 4000 3000 8317
+EXPOSE 4000
 
 CMD ["node", "apps/dashboard-api/dist/index.js"]

@@ -59,15 +59,14 @@ services:
       start_period: 10s
 
   # ─────────────────────────────────────────────
-  # Cortex Hub All-in-One (API + MCP + Web + mem9)
-  # mem9 runs in-process — no separate memory container
+  # Cortex Dashboard API (+ Dashboard Web static)
   # ─────────────────────────────────────────────
-  cortex-hub:
+  cortex-api:
     build:
       context: ..
       dockerfile: infra/Dockerfile.dashboard-api
-    image: ghcr.io/lktiep/cortex-hub:latest
-    container_name: cortex-hub
+    image: ghcr.io/lktiep/cortex-api:latest
+    container_name: cortex-api
     restart: unless-stopped
     ports:
       - "4000:4000"
@@ -91,13 +90,6 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-gpt-5.4-mini}
       MEM9_EMBEDDING_MODEL: ${MEM9_EMBEDDING_MODEL:-gemini-embedding-2-preview}
-      # MCP Gateway Config
-      MCP_SERVER_NAME: "cortex-hub"
-      MCP_SERVER_VERSION: "0.1.0"
-      DASHBOARD_API_URL: http://localhost:4000
-      # Hub-MCP backend URLs (used by MCP tools)
-      CLIPROXY_URL: http://llm-proxy:8317
-      NEO4J_URL: ""
     depends_on:
       qdrant:
         condition: service_healthy
@@ -106,11 +98,49 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:4000/health && curl -f http://localhost:4000/mcp/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  # ─────────────────────────────────────────────
+  # Cortex Hub MCP Gateway (standalone)
+  # ─────────────────────────────────────────────
+  cortex-mcp:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.hub-mcp
+    image: ghcr.io/lktiep/cortex-mcp:latest
+    container_name: cortex-mcp
+    restart: unless-stopped
+    ports:
+      - "8317:8317"
+    environment:
+      PORT: 8317
+      NODE_ENV: production
+      DASHBOARD_API_URL: http://cortex-api:4000
+      QDRANT_URL: http://qdrant:6333
+      CLIPROXY_URL: http://llm-proxy:8317
+      NEO4J_URL: ""
+      MCP_SERVER_NAME: "cortex-hub"
+      MCP_SERVER_VERSION: "0.1.0"
+      API_KEYS: ${MCP_API_KEYS:-}
+    depends_on:
+      cortex-api:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:8317/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ─────────────────────────────────────────────
   # Watchtower — Auto-update containers

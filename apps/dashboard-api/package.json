@@ -14,7 +14,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@cortex/hub-mcp": "workspace:*",
+
     "@cortex/shared-mem9": "workspace:*",
     "@cortex/shared-types": "workspace:*",
     "@cortex/shared-utils": "workspace:*",

@@ -38,9 +38,6 @@ importers:
 
   apps/dashboard-api:
     dependencies:
-      '@cortex/hub-mcp':
-        specifier: workspace:*
-        version: link:../hub-mcp
       '@cortex/shared-mem9':
         specifier: workspace:*
         version: link:../../packages/shared-mem9

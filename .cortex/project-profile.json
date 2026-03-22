@@ -3,7 +3,7 @@
   "project_name": "cortex-hub",
   "fingerprint": {
     "package_manager": "pnpm",
-    "detected_at": "2026-03-22T06:31:34Z"
+    "detected_at": "2026-03-22T09:41:20Z"
   },
   "verify": {
     "pre_commit": ["pnpm build","pnpm typecheck","pnpm lint"],

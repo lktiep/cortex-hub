@@ -16,14 +16,9 @@ import { mem9ProxyRouter } from './routes/mem9-proxy.js'
 import { statsRouter as metricsRouter } from './routes/stats.js'
 import { systemRouter } from './routes/system.js'
 import { accountsRouter } from './routes/accounts.js'
-import mcpApp, { setInternalFetch } from '@cortex/hub-mcp'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
-
-// Inject in-memory request handler into hub-mcp tools
-// This avoids HTTP self-fetch deadlock when MCP tools call dashboard-api routes
-setInternalFetch((path: string, init?: RequestInit) => Promise.resolve(app.request(path, init)))
 
 app.use('*', cors())
 app.use('*', honoLogger())
@@ -31,7 +26,6 @@ app.use('*', honoLogger())
 app.get('/health', async (c) => {
   const startTime = Date.now()
 
-  // Check each downstream service
   async function checkService(name: string, url: string): Promise<'ok' | 'error'> {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(3000) })
@@ -63,8 +57,6 @@ app.get('/health', async (c) => {
   })
 })
 
-
-
 app.route('/api/setup', setupRouter)
 app.route('/api/keys', keysRouter)
 app.route('/api/llm', llmRouter)
@@ -81,17 +73,13 @@ app.route('/api/accounts', accountsRouter)
 app.route('/api/indexing', indexingRouter)
 app.route('/api/mem9', mem9ProxyRouter)
 
-// Mount MCP Gateway (Stateless)
-app.route('/mcp', mcpApp)
-
 // Serve Dashboard Web static files (Next.js static export)
 // Clean URLs: /keys → /keys.html, / → /index.html
 app.use('/*', serveStatic({ 
   root: './public',
   rewriteRequestPath: (path) => {
     if (path === '/') return '/index.html'
-    // If path has no extension and doesn't start with /api or /mcp, try .html
-    if (!path.includes('.') && !path.startsWith('/api/') && !path.startsWith('/mcp/') && !path.startsWith('/_next/')) {
+    if (!path.includes('.') && !path.startsWith('/api/') && !path.startsWith('/_next/')) {
       return `${path}.html`
     }
     return path
@@ -106,14 +94,6 @@ app.get('*', serveStatic({
 
 const port = Number(process.env.PORT) || 4000
 
-// In All-in-One Hub, we listen on multiple ports for Cloudflare Tunnel compatibility
-// dashboard-api: 4000
-// dashboard-web: 3000
-// hub-mcp: 8317
-const ports = [port, 3000, 8317]
-
-ports.forEach(p => {
-  serve({ fetch: app.fetch, port: p }, () => {
-    logger.info(`All-in-One Hub listening on http://localhost:${p}`)
-  })
+serve({ fetch: app.fetch, port }, () => {
+  logger.info(`Dashboard API listening on http://localhost:${port}`)
 })
