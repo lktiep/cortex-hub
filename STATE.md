@@ -6,12 +6,12 @@
 - **Phase:** 6 (Polish, docs, testing, GA release)
 - **Gate Passed:** Gate 5 (Phase 5→6) on 2026-03-19
 
-## Current Task — Service Separation (dashboard-api ↔ hub-mcp)
-- [x] Separate dashboard-api and hub-mcp into 2 independent services
-- [x] Remove setInternalFetch hack — hub-mcp now calls dashboard-api via HTTP
-- [x] Create Dockerfile.hub-mcp (standalone, lightweight)
-- [x] Update docker-compose.yml: cortex-api (port 4000) + cortex-mcp (port 8317)
-- [x] Build ✅ | Typecheck ✅ | Lint ✅
+## Current Task — Dashboard Redesign + Identity Resolution
+- [x] Auto-detect Git provider from repo URL in project creation (`d0b28ee`)
+- [x] X-API-Key-Owner identity resolution: apiCall injects header, quality/session handlers use it (`d0b28ee`)
+- [x] Dashboard redesign: hero bar, project overview cards, intelligence panels (`d8efdef`)
+- [x] New `/api/metrics/overview-v2` endpoint: per-project GitNexus/Mem9 status (`d8efdef`)
+- [x] Build ✅ | Typecheck ✅ | Lint ✅ | Quality: A (100/100)
 
 ## Architecture — 2-Service Model
 - **cortex-api** (port 4000): Dashboard API + Dashboard Web static files
@@ -21,12 +21,10 @@
 ## MCP Server Status ✅
 - **Endpoint:** `POST https://cortex-mcp.jackle.dev/mcp`
 - **Auth:** Bearer token (`sk_ctx_...`)
-- **9 tools operational:** cortex_health, cortex_memory_store, cortex_memory_search, cortex_knowledge_search, cortex_code_search, cortex_code_impact, cortex_code_reindex, cortex_quality_report, cortex_session_start
+- **12 tools operational:** session_start, session_end, changes, code_search, code_impact, code_reindex, memory_search, memory_store, knowledge_search, knowledge_store, quality_report, health
 - **Transport:** Streamable HTTP (WebStandardStreamableHTTPServerTransport)
-- **Agent workflow:** session.start → code.search → implement → quality.report
-
-### Missing Tools (Backlog)
-- `cortex.knowledge.store` — Agent contribute knowledge to Qdrant
+- **Identity:** X-API-Key-Owner header for server-resolved agent identity
+- **Agent workflow:** session_start → code_search → implement → quality_report → memory_store → session_end
 
 ## In Progress
 - [x] MCP auth + handler fix chain (5 bugs fixed in `3df37dd`)
@@ -46,6 +44,10 @@
 - [x] Service separation: split All-in-One into cortex-api + cortex-mcp
 - [x] Agent workflow gaps: catch-all routing, continue.md path fix, onboard.sh env var
 - [x] Version display: Sidebar footer shows version badge, docker-compose build args
+- [x] Auto-detect Git provider from repo URL in project creation form
+- [x] X-API-Key-Owner identity resolution (api-call.ts → quality.ts/sessions)
+- [x] Dashboard redesign: hero stats bar, project cards, intelligence panels
+- [x] `/api/metrics/overview-v2` endpoint with per-project GitNexus/Mem9 status
 - [x] mem9 API key resolution: read from provider_accounts DB as fallback
 
 ## Completed (Phase 6)
@@ -63,13 +65,14 @@
 - [x] Mobile-Responsive Dashboard UI (hamburger sidebar, 3-tier breakpoints)
 
 ## Recent Decisions
-- **Service separation:** dashboard-api and hub-mcp now run as separate Docker services. hub-mcp calls dashboard-api via real HTTP (`DASHBOARD_API_URL`). No more `setInternalFetch` hack.
-- **Docker images:** `ghcr.io/lktiep/cortex-api` (dashboard-api) + `ghcr.io/lktiep/cortex-mcp` (hub-mcp)
+- **Identity resolution:** `mcp-remote` drops Authorization header → workaround: apiCall() injects `X-API-Key-Owner` header from `env.API_KEY_OWNER`. Dashboard-api uses this as authoritative identity in quality reports + sessions.
+- **Dashboard v2:** Single `/overview-v2` endpoint replaces multiple calls. Returns per-project GitNexus/Mem9 status, quality summary, knowledge stats.
+- **Service separation:** dashboard-api and hub-mcp run as separate Docker services. hub-mcp calls dashboard-api via real HTTP.
 - MCP handler uses `WebStandardStreamableHTTPServerTransport` (stateless, enableJsonResponse)
-- Onboard script: uses user-provided MCP URL as-is (no suffix), tests connection before proceeding
 - Mobile responsive: hamburger toggle + backdrop overlay at ≤768px, CSS-only breakpoints at 3 tiers
 
 ## Quality Status
-- Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-22T21:36+07:00)
+- Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-23T17:00+07:00)
+- Quality Grade: A (100/100) — 2 reports today
 - Architecture: 2-service model (cortex-api + cortex-mcp)
-- MCP: 9 tools, hub-mcp as standalone service
+- MCP: 12 tools, hub-mcp as standalone service

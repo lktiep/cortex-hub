@@ -67,8 +67,9 @@ statsRouter.get('/overview-v2', async (c) => {
     const totalSessions = (db.prepare('SELECT COUNT(*) as count FROM session_handoffs').get() as { count: number }).count
     const orgCount = (db.prepare('SELECT COUNT(*) as count FROM organizations').get() as { count: number }).count
     const today = new Date().toISOString().split('T')[0]
-    const todayQueries = (db.prepare("SELECT COUNT(*) as count FROM query_logs WHERE created_at >= ?").get(`${today}T00:00:00`) as { count: number }).count
-    const todayTokens = (db.prepare("SELECT COALESCE(SUM(total_tokens), 0) as total FROM usage_logs WHERE created_at >= ?").get(`${today}T00:00:00`) as { total: number }).total
+    const todayStart = `${today} 00:00:00`  // SQLite uses space, not T
+    const todayQueries = (db.prepare("SELECT COUNT(*) as count FROM query_logs WHERE created_at >= ?").get(todayStart) as { count: number }).count
+    const todayTokens = (db.prepare("SELECT COALESCE(SUM(total_tokens), 0) as total FROM usage_logs WHERE created_at >= ?").get(todayStart) as { total: number }).total
 
     // ── Memory nodes from Qdrant ──
     let memoryNodes = 0
@@ -154,7 +155,7 @@ statsRouter.get('/overview-v2', async (c) => {
 
     const reportsToday = (db.prepare(
       "SELECT COUNT(*) as count FROM quality_reports WHERE created_at >= ?"
-    ).get(`${today}T00:00:00`) as { count: number }).count
+    ).get(todayStart) as { count: number }).count
 
     const avgScore = (db.prepare(
       'SELECT AVG(score_total) as avg FROM quality_reports'
@@ -163,11 +164,11 @@ statsRouter.get('/overview-v2', async (c) => {
     // ── Knowledge stats ──
     let knowledgeStats = { totalDocs: 0, totalChunks: 0, totalHits: 0 }
     try {
-      const kDocs = (db.prepare('SELECT COUNT(*) as count FROM knowledge_docs').get() as { count: number }).count
-      const kChunks = (db.prepare('SELECT COALESCE(SUM(chunk_count), 0) as total FROM knowledge_docs').get() as { total: number }).total
-      const kHits = (db.prepare('SELECT COALESCE(SUM(hit_count), 0) as total FROM knowledge_docs').get() as { total: number }).total
+      const kDocs = (db.prepare('SELECT COUNT(*) as count FROM knowledge_documents').get() as { count: number }).count
+      const kChunks = (db.prepare('SELECT COALESCE(SUM(chunk_count), 0) as total FROM knowledge_documents').get() as { total: number }).total
+      const kHits = (db.prepare('SELECT COALESCE(SUM(hit_count), 0) as total FROM knowledge_documents').get() as { total: number }).total
       knowledgeStats = { totalDocs: kDocs, totalChunks: kChunks, totalHits: kHits }
-    } catch { /* knowledge table may not exist */ }
+    } catch (e) { console.warn('[overview-v2] knowledge stats error:', e) }
 
     return c.json({
       activeKeys: keyCount,

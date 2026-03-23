@@ -6,7 +6,14 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(bash scripts/onboard.sh --tool claude 2>&1)",
-      "Bash(ssh:*)"
+      "Bash(ssh:*)",
+      "WebSearch",
+      "Bash(ls:*)",
+      "Bash(chmod:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(pnpm lint:*)",
+      "mcp__cortex-hub__cortex_quality_report"
     ]
   }
 }

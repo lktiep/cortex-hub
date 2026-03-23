@@ -136,6 +136,17 @@ knowledgeRouter.post('/', async (c) => {
     const tagList = tags ?? []
     const contentPreview = content.slice(0, 500)
 
+    // Normalize project_id: resolve proj-* to slug, and lowercase
+    let normalizedProjectId = projectId ?? null
+    if (normalizedProjectId) {
+      if (normalizedProjectId.startsWith('proj-')) {
+        // Resolve project ID to slug for consistent grouping
+        const proj = db.prepare('SELECT slug FROM projects WHERE id = ?').get(normalizedProjectId) as { slug: string } | undefined
+        if (proj?.slug) normalizedProjectId = proj.slug
+      }
+      normalizedProjectId = normalizedProjectId.toLowerCase()
+    }
+
     // Chunk content
     const chunks = chunkText(content)
     logger.info(`[${docId}] Chunking: ${chunks.length} chunks from ${content.length} chars`)
@@ -159,7 +170,7 @@ knowledgeRouter.post('/', async (c) => {
     db.prepare(
       `INSERT INTO knowledge_documents (id, title, source, source_agent_id, project_id, tags, content_preview, chunk_count)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(docId, title, source ?? 'manual', sourceAgentId ?? null, projectId ?? null, JSON.stringify(tagList), contentPreview, chunks.length)
+    ).run(docId, title, source ?? 'manual', sourceAgentId ?? null, normalizedProjectId, JSON.stringify(tagList), contentPreview, chunks.length)
 
     // Embed and store each chunk
     for (let i = 0; i < chunks.length; i++) {
@@ -172,7 +183,7 @@ knowledgeRouter.post('/', async (c) => {
           document_id: docId,
           chunk_index: i,
           tags: tagList,
-          project_id: projectId ?? '',
+          project_id: normalizedProjectId ?? '',
           content: chunkContent.slice(0, 2000),
           title,
         })
