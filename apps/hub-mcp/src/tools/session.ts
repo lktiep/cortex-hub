@@ -61,10 +61,13 @@ export function registerSessionTools(server: McpServer, env: Env) {
     },
     async ({ repo, mode, agentId }) => {
       try {
+        // Server-resolved identity (from API key) takes precedence over self-reported
+        const resolvedAgentId = env.API_KEY_OWNER || agentId
+
         const response = await apiCall(env, '/api/sessions/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ repo, mode, agentId }),
+          body: JSON.stringify({ repo, mode, agentId: resolvedAgentId }),
         })
 
         if (!response.ok) {
@@ -84,9 +87,9 @@ export function registerSessionTools(server: McpServer, env: Env) {
 
         // Inject recent changes if project was found
         const projectData = session.project as Record<string, unknown> | null
-        if (projectData?.id && agentId) {
+        if (projectData?.id && resolvedAgentId) {
           const projectId = projectData.id as string
-          const { events } = await fetchUnseenChanges(env, agentId, projectId)
+          const { events } = await fetchUnseenChanges(env, resolvedAgentId, projectId)
           const changeSummary = formatChangeSummary(events)
 
           if (changeSummary) {
@@ -107,7 +110,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
             // Auto-acknowledge these changes
             const latestId = events[0]?.id
             if (latestId) {
-              await acknowledgeChanges(env, agentId, projectId, latestId)
+              await acknowledgeChanges(env, resolvedAgentId, projectId, latestId)
             }
           } else {
             session.recentChanges = { count: 0, summary: 'No unseen changes.' }

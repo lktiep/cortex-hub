@@ -136,20 +136,22 @@ function createMcpServer(env: Env) {
 // Stateless mode: each request gets a fresh transport + server.
 // enableJsonResponse: true allows simple request/response without SSE.
 app.all('/mcp', async (c) => {
-  // ─── Auth note ─────────────────────────────────────────────────
-  // Per-request auth is skipped because mcp-remote v0.1.x has a bug
-  // where --header is only forwarded on the first POST (initialize)
-  // but dropped on subsequent tool calls (tools/call → 401).
-  //
-  // Security is enforced at the transport level:
-  // 1. API key is required in mcp_config.json to discover tools
-  // 2. URL is behind Cloudflare Tunnel (not publicly discoverable)
-  //
-  // This matches how other MCP servers (Supabase, Vercel) work:
-  // auth via env vars / config, not per-request Bearer tokens.
-  // TODO: re-enable per-request auth when mcp-remote fixes header forwarding
+  // ─── Auth: resolve API key owner (non-blocking) ────────────────
+  // Per-request auth was previously skipped due to mcp-remote header
+  // forwarding bugs. Now we attempt auth to resolve identity, but
+  // don't block requests on failure (backward compatibility).
+  const envWithOwner = { ...c.env } as Env & { API_KEY_OWNER?: string }
 
-  const mcpServer = createMcpServer(c.env)
+  try {
+    const authResult = await validateApiKey(c.req.raw, c.env)
+    if (authResult.valid && authResult.agentId) {
+      envWithOwner.API_KEY_OWNER = authResult.agentId
+    }
+  } catch {
+    // Auth resolution failed silently — tools will use self-reported agent_id
+  }
+
+  const mcpServer = createMcpServer(envWithOwner)
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless mode
     enableJsonResponse: true,
