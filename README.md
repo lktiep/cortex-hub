@@ -383,24 +383,56 @@ cortex-hub/
 
 ## Roadmap
 
-| Phase | Scope | Status |
+| Phase | What Was Built | Status |
 |---|---|---|
-| **Phase 1** | Server + Cloudflare Tunnel | ✅ |
-| **Phase 2** | Monorepo skeleton + shared packages | ✅ |
-| **Phase 3** | Docker stack (Qdrant, GitNexus, Watchtower) | ✅ |
-| **Phase 4** | Hub MCP Server (12 tools) | ✅ |
-| **Phase 5** | Dashboard Frontend (Next.js 15) | ✅ |
-| **Phase 6** | Polish, docs, testing, GA | 🔄 |
+| **Phase 1** | Ubuntu server provisioning, Docker 24+, Cloudflare Tunnel (`cloudflared`) | ✅ |
+| **Phase 2** | pnpm + Turborepo monorepo, `shared-types`, `shared-utils`, `shared-mem9` packages | ✅ |
+| **Phase 3** | Docker Compose stack: Qdrant, GitNexus eval-server, LLM Proxy, Watchtower | ✅ |
+| **Phase 4** | Hub MCP Server: 12 tools, Streamable HTTP, API key auth, telemetry logging | ✅ |
+| **Phase 5** | Dashboard: 12 pages, LLM Gateway, quality reports, sessions, usage analytics | ✅ |
+| **Phase 6** | Polish, documentation, testing, GA release | 🔄 |
 
-### Recent
+### What's Built (Highlights)
 
-- ✅ LLM API Gateway with multi-provider fallback + budget enforcement
-- ✅ Global MCP telemetry — all tool calls logged to dashboard analytics
-- ✅ Workflow templates deployed via `onboard.sh` to any project
-- ✅ mem9 embedding pipeline (repo → Qdrant)
-- ✅ Smart provider model discovery (no hardcoded lists)
-- ✅ API key identity tracking (agent_id + api_key_name)
-- ✅ Lefthook git hooks auto-generated from project profile
+**Infrastructure**
+- ✅ 2-service Docker architecture: `cortex-api` (:4000) + `cortex-mcp` (:8317)
+- ✅ Cloudflare Tunnel: 4 subdomains, zero open ports
+- ✅ Watchtower auto-updates for Docker images
+- ✅ Docker build optimization: cache mounts, shared base, `.dockerignore`
+
+**MCP Server (12 tools)**
+- ✅ Streamable HTTP transport (JSON-RPC over POST, SSE for streaming)
+- ✅ API key auth with `X-API-Key-Owner` identity resolution
+- ✅ Global telemetry: every tool call logged with agent, latency, project
+- ✅ Code intelligence: `code_search`, `code_impact`, `code_reindex` (GitNexus)
+- ✅ Agent memory: `memory_search`, `memory_store` (mem9 → Qdrant)
+- ✅ Knowledge base: `knowledge_search`, `knowledge_store` (Qdrant)
+- ✅ Sessions: `session_start`, `session_end`, `changes`, `health`
+- ✅ Quality: `quality_report` with 4D scoring (Build/Regression/Standards/Traceability)
+
+**Dashboard (12 pages)**
+- ✅ Hero stats bar + per-project overview cards
+- ✅ LLM provider management: add/test/configure, smart model discovery
+- ✅ Usage analytics: token consumption by model, agent, time period
+- ✅ Budget controls: daily/monthly limits with alert thresholds
+- ✅ Quality reports with grade trending (A→F)
+- ✅ Session list with API key tracking + detail panel
+- ✅ Project management with Git integration + branch-aware indexing
+- ✅ Mobile-responsive: hamburger sidebar, 3-tier CSS breakpoints
+
+**LLM API Gateway**
+- ✅ Multi-provider: Gemini, OpenAI, Anthropic, any OpenAI-compatible
+- ✅ Ordered fallback chains with auto-retry (429/502/503/504)
+- ✅ Gemini ↔ OpenAI format translation
+- ✅ Budget enforcement with daily/monthly token limits
+- ✅ Usage logging per agent, model, day
+
+**Developer Experience**
+- ✅ Universal onboarding: supports Claude Code, Cursor, Windsurf, VS Code, Gemini, headless bots
+- ✅ Remote install: `bash <(curl ...)` — no clone needed
+- ✅ Lefthook git hooks auto-generated from `project-profile.json`
+- ✅ Workflow templates deployed to any project (code, continue, phase)
+- ✅ Agent-facing rules auto-generated (`.cortex/agent-rules.md`)
 
 ### Planned
 
@@ -408,21 +440,24 @@ cortex-hub/
 - [ ] Agent performance leaderboard
 - [ ] Interactive knowledge graph visualization
 - [ ] Slack/Discord notification integrations
-- [ ] Plugin marketplace for community skills
+- [ ] Cloudflare Access for Dashboard UI protection
 
 ---
 
 ## Cost
 
-Cortex is designed for **near-zero** infrastructure cost:
+Cortex runs on **near-zero** infrastructure cost — everything is self-hosted:
 
-| Component | Cost |
-|---|---|
-| Self-hosted server | Your existing hardware or VM |
-| Cloudflare Tunnel | Free |
-| Qdrant (Docker) | Free (self-hosted) |
-| LLM API calls | Pay-per-use via your own keys |
-| **Total** | **≈ $0 + LLM token usage** |
+| Component | Cost | Notes |
+|---|---|---|
+| Linux server | Your existing hardware or VPS | Any machine with Docker |
+| Cloudflare Tunnel | Free | Secure exposure, no open ports |
+| Qdrant | Free | Self-hosted in Docker |
+| GitNexus | Free | Self-hosted code intelligence |
+| mem9 | Free | Self-hosted embedding pipeline |
+| Dashboard | Free | Next.js static export, served by API |
+| LLM API calls | Pay-per-use | Your own keys, budget-controlled |
+| **Total** | **$0 + LLM token usage** | |
 
 ---
 
@@ -433,3 +468,4 @@ See the [Contributing Guide](docs/CONTRIBUTING.md) for development setup, commit
 ## License
 
 MIT © Cortex Hub Contributors
+
