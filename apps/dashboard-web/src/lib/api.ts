@@ -245,6 +245,7 @@ export interface SessionHandoff {
   claimed_by: string | null
   created_at: string
   expires_at: string | null
+  api_key_name: string | null
 }
 
 export async function getSessions(limit = 50) {

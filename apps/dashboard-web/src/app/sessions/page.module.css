@@ -132,6 +132,19 @@
   border-radius: var(--radius-sm);
 }
 
+.sessionIdRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.apiKeyTag {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
 .taskSummary {
   font-size: 0.875rem;
   color: var(--text-primary);

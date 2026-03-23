@@ -301,6 +301,26 @@ statsRouter.post('/admin/restart/:service', async (c) => {
   }
 })
 
+// ── Telemetry: Log MCP Tool Queries ──
+statsRouter.post('/query-log', async (c) => {
+  try {
+    const { agentId, tool, params, status, latencyMs, error, projectId } = await c.req.json()
+    const stmt = db.prepare('INSERT INTO query_logs (agent_id, tool, params, latency_ms, status, error, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    stmt.run(
+      agentId || 'unknown', 
+      tool || 'unknown',
+      params ? JSON.stringify(params) : null,
+      latencyMs || 0,
+      status || 'ok',
+      error || null,
+      projectId || null
+    )
+    return c.json({ success: true })
+  } catch (err) {
+    return c.json({ error: String(err) }, 500)
+  }
+})
+
 // ── Per-Project Analytics ──
 statsRouter.get('/projects/:id/analytics', (c) => {
   const projectId = c.req.param('id')

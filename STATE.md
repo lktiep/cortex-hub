@@ -49,6 +49,7 @@
 - [x] Dashboard redesign: hero stats bar, project cards, intelligence panels
 - [x] `/api/metrics/overview-v2` endpoint with per-project GitNexus/Mem9 status
 - [x] mem9 API key resolution: read from provider_accounts DB as fallback
+- [x] Global MCP Telemetry: intercept `tools/call` in `hub-mcp` and log to dashboard API (`query_logs`)
 
 ## Completed (Phase 6)
 - [x] Dashboard API — 9 real routes (no stubs)

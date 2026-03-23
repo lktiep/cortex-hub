@@ -41,9 +41,9 @@
 |------|------|------------|
 | **Searching code** | `cortex_code_search` | Use FIRST before `grep_search` or `find_by_name`. Queries GitNexus knowledge graph with AST-aware search. Fall back to grep only if unavailable. |
 | **Before editing core code** | `cortex_code_impact` | Run blast radius analysis on the symbol/file you plan to change. |
-| **Searching shared knowledge** | `cortex_knowledge_search` | Search the team knowledge base for patterns, solutions, and documented decisions. Supports tag and project filtering. |
+| **Encountering an error/bug** | `cortex_knowledge_search` | **MANDATORY**: Search if this is a known bug or has a documented workaround before debugging from scratch. |
+| **Fixing a new error/bug** | `cortex_knowledge_store` | **MANDATORY**: If you spend time fixing a frustrating or non-obvious bug, store the solution so other agents won't repeat your mistake. |
 | **Recalling past context** | `cortex_memory_search` | Search agent memories for past decisions, debugging findings, and session context. |
-| **Contributing knowledge** | `cortex_knowledge_store` | Store reusable patterns, resolved issues, architecture decisions into the shared knowledge base. Include tags for discoverability. |
 | **Storing personal memory** | `cortex_memory_store` | Store session-specific findings, debugging gotchas, and workarounds for future recall. |
 | **After pushing code changes** | `cortex_quality_report` | Report build/typecheck/lint results and a summary of changes. |
 
@@ -53,6 +53,12 @@
 3. `cortex_code_search` → search the indexed codebase (GitNexus AST graph)
 4. `cortex_code_impact` → check blast radius before editing
 5. `grep_search` / `find_by_name` → only if Cortex tools are unavailable
+
+**Bug/Error Protocol (NEVER skip):**
+If you encounter a compilation error, runtime error, or failing test:
+1. First search `cortex_knowledge_search` or `cortex_memory_search` for the error message.
+2. Fix the error.
+3. If the fix was non-obvious, **YOU MUST** use `cortex_knowledge_store` to record the problem and solution so you (and others) don't have to debug it again.
 
 ### Before Deploy — ALWAYS do:
 

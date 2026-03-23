@@ -326,6 +326,12 @@ sessionsRouter.post('/start', async (c) => {
 
     // Identity resolution: keep self-reported agentId, API key name tracked separately
     const agentId = bodyAgentId
+    const apiKeyName = c.req.header('X-API-Key-Owner') || null
+
+    // Safe migration: add api_key_name column if not exists
+    try {
+      db.exec("ALTER TABLE session_handoffs ADD COLUMN api_key_name TEXT")
+    } catch { /* column already exists */ }
 
     if (!agentId) {
       return c.json({ error: 'agentId is required. Identify your agent (e.g., "claude-code", "antigravity", "cursor").' }, 400)
@@ -390,7 +396,7 @@ sessionsRouter.post('/start', async (c) => {
 
     if (!existingSession) {
       const insertStmt = db.prepare(
-        'INSERT INTO session_handoffs (id, from_agent, project, task_summary, context, status) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO session_handoffs (id, from_agent, project, task_summary, context, status, api_key_name) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
       insertStmt.run(
         sessionId,
@@ -398,7 +404,8 @@ sessionsRouter.post('/start', async (c) => {
         normalizedRepo,
         `Session started: mode=${mode ?? 'development'}`,
         JSON.stringify({ repo, mode, agentId, projectId: project?.id }),
-        'active'
+        'active',
+        apiKeyName
       )
     }
 
