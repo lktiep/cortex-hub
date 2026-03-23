@@ -1,134 +1,108 @@
 # Onboarding Guide — Cortex Hub
 
-> Get started with Cortex Hub in under 5 minutes. Zero API keys needed.
+> Get started with Cortex Hub in under 5 minutes.
 
 ---
 
 ## How It Works
 
-Cortex Hub uses **CLIProxy** as the LLM gateway. CLIProxy wraps your existing AI subscriptions (ChatGPT Plus, Gemini, Claude) via OAuth — **no API key required**. All services (mem9, dashboard, MCP) route through this proxy automatically.
+Cortex Hub connects AI agents through a unified **MCP (Model Context Protocol)** endpoint. Agents authenticate with **Bearer API keys**, and all LLM calls route through CLIProxy (multi-provider gateway with OAuth support).
 
 ```
-Your Browser → OAuth Login → CLIProxy → OpenAI/Gemini/Claude
-                                ↓
-                         mem9, Dashboard API, MCP Server
-                         (all route through CLIProxy)
+AI Agent → MCP Server (Bearer token) → Dashboard API → Backend Services
+                                          ├── Qdrant (vectors)
+                                          ├── GitNexus (code intelligence)
+                                          ├── mem9 (agent memory)
+                                          └── CLIProxy → OpenAI/Gemini/Claude
 ```
 
 ---
 
-## First-Time Setup
+## First-Time Setup (Admin)
 
-### 1. Open Cortex Hub
+### 1. Open Cortex Hub Dashboard
 
 Navigate to **https://hub.jackle.dev**
 
-On first visit, the **Setup Wizard** launches automatically:
+The **Setup Wizard** launches automatically on first visit — configure your LLM provider (OAuth or API key).
+
+### 2. Create Organization & Projects
 
 ```
-┌─────────────────────────────────────────┐
-│         Welcome to Cortex Hub           │
-│                                         │
-│  Let's connect your AI provider.        │
-│                                         │
-│  ┌─────────────────────────────────┐    │
-│  │ ● OpenAI (ChatGPT Plus)        │    │
-│  │ ○ Google Gemini                 │    │
-│  │ ○ Claude (Anthropic)           │    │
-│  │ ○ Custom OpenAI-compatible     │    │
-│  └─────────────────────────────────┘    │
-│                                         │
-│              [ Connect → ]              │
-└─────────────────────────────────────────┘
+Organization: MyTeam
+├── Project: main-app
+├── Project: api-service
+└── Project: docs
 ```
 
-### 2. OAuth Authentication
+### 3. Generate API Keys
 
-Click **Connect** — you'll be redirected to your provider's login page. Sign in with your existing subscription. No API key to copy-paste.
+Go to **Settings → API Keys → Generate New**:
 
-| Provider | Auth | What You Need |
-|----------|------|---------------|
-| **OpenAI** | OAuth | ChatGPT Plus subscription |
-| **Gemini** | Google OAuth | Google account |
-| **Claude** | Anthropic OAuth | Claude subscription |
-| **Custom** | API Key | Any OpenAI-compatible endpoint |
+| Field | Example |
+|-------|---------|
+| Name | `agent-claude-prod` |
+| Scope | Organization: MyTeam |
+| Permissions | code.search, memory.store, knowledge.* |
+| Expires | 90 days |
 
-### 3. Select & Test Models
+Copy the key — it won't be shown again.
 
-After OAuth, the wizard shows available models. Select which ones to enable and test the connection:
+---
 
-```
-┌─────────────────────────────────────────┐
-│  ✓ Connected to OpenAI                  │
-│                                         │
-│  Available Models:                      │
-│  ☑ GPT-4o          ☑ GPT-4o-mini       │
-│  ☑ o3              ☐ o4-mini           │
-│  ☑ text-embedding-3-small              │
-│                                         │
-│  Test: "Hello" → "Hi! How can I help?" │
-│  ✓ Connection verified                  │
-│                                         │
-│          [ Enter Dashboard → ]          │
-└─────────────────────────────────────────┘
+## Team Member Setup
+
+### 1. Clone & Run Bootstrap
+
+```bash
+git clone https://github.com/lktiep/cortex-hub.git
+cd cortex-hub
+bash scripts/bootstrap.sh
+# Select: "2) Member"
 ```
 
-### 4. Create Organization & Projects
+The script will prompt for:
+- **MCP URL** (default: `https://cortex-mcp.jackle.dev/mcp`)
+- **API Key** (get from your Hub admin or Dashboard → API Keys)
 
-Once inside, create your organization structure:
+### 2. Onboard Your AI Agent
 
-```
-┌─────────────────────────────────────────┐
-│  Organization: Yulgang                  │
-│  ├── Project: yulgang-bot               │
-│  ├── Project: yulgang-analytics         │
-│  └── Project: yulgang-docs              │
-│                                         │
-│  Organization: Personal                 │
-│  └── Project: cortex-hub                │
-└─────────────────────────────────────────┘
+```bash
+bash scripts/onboard.sh
 ```
 
-### 5. Generate Scoped API Keys
+This auto-detects your IDE (Claude Code, Cursor, Windsurf, VS Code) and:
+- Injects MCP server config
+- Generates `lefthook.yml` (quality gates)
+- Creates `.cortex/project-profile.json`
+- Sets up post-push webhook
 
-Create API keys with granular permissions:
+### 3. Verify Connection
 
-```
-┌─────────────────────────────────────────┐
-│  New API Key                            │
-│                                         │
-│  Name: agent-yulgang-prod               │
-│  Scope: ○ All projects                  │
-│         ● Organization: Yulgang/*       │
-│         ○ Single project                │
-│                                         │
-│  Permissions:                           │
-│  ☑ code.search    ☑ memory.store        │
-│  ☑ knowledge.get  ☐ admin.*             │
-│                                         │
-│  Expires: ○ Never  ● 90 days           │
-│                                         │
-│          [ Generate Key → ]             │
-│                                         │
-│  cortex_sk_Yg7x...Kp2m                  │
-│  ⚠ Copy now — won't be shown again     │
-└─────────────────────────────────────────┘
+```bash
+curl -s -X POST 'https://cortex-mcp.jackle.dev/mcp' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer YOUR_KEY' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | head -100
 ```
 
-### 6. Connect Your AI Agent
+You should see a list of Cortex tools.
 
+### 4. Connect Your Agent Config
+
+For **Claude Code** (`~/.claude/settings.json`):
 ```json
 {
   "mcpServers": {
     "cortex-hub": {
-      "url": "https://mcp.hub.jackle.dev",
-      "headers": {
-        "Authorization": "Bearer cortex_sk_Yg7x...Kp2m"
-      }
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://cortex-mcp.jackle.dev/mcp", "--header", "Authorization: Bearer YOUR_KEY"]
     }
   }
 }
 ```
+
+For other tools, `onboard.sh` handles this automatically.
 
 ---
 
@@ -137,9 +111,9 @@ Create API keys with granular permissions:
 | Service | URL | Port |
 |---------|-----|------|
 | Dashboard | https://hub.jackle.dev | 3000 |
-| API | https://api.hub.jackle.dev | 4000 |
-| MCP Server | https://mcp.hub.jackle.dev | 8787 |
-| LLM Proxy | https://llm.hub.jackle.dev | 8317 |
+| API | https://cortex-api.jackle.dev | 4000 |
+| MCP Server | https://cortex-mcp.jackle.dev | 8318 |
+| LLM Proxy | https://cortex-llm.jackle.dev | 8317 |
 | GitNexus (internal) | http://gitnexus:4848 | 4848 |
 
 ## Troubleshooting
@@ -147,6 +121,7 @@ Create API keys with granular permissions:
 | Symptom | Fix |
 |---------|-----|
 | `502 Bad Gateway` | Services not started — `docker compose up -d` |
+| `401 Unauthorized` | API key invalid or expired — regenerate at Dashboard → API Keys |
 | OAuth login fails | Check CLIProxy logs: `docker logs cortex-llm-proxy` |
-| API key rejected | Verify key scope includes the target project |
-| Models not available | Re-authenticate at LLM Proxy management |
+| MCP tools not available | Verify onboard.sh completed — check agent MCP config |
+| Post-push webhook not firing | Set `CORTEX_API_URL` env var, or use default (cortex-api.jackle.dev) |
