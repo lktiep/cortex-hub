@@ -363,26 +363,15 @@ for tool_key in "${SELECTED_TOOLS[@]}"; do
     done
 done
 
-# ── Step 4b: Generate CLAUDE.md for Claude Code ──
-HAS_CLAUDE=false
-for t in "${SELECTED_TOOLS[@]}"; do [ "$t" = "claude" ] && HAS_CLAUDE=true; done
+# ── Step 4b: Generate IDE instruction files with correct agentId ──
+# Maps tool key → agentId used in cortex_session_start
+# Each IDE has its own instruction file format
+GIT_REPO_URL=$(git remote get-url origin 2>/dev/null || echo "unknown")
+CORTEX_MARKER="<!-- cortex-hub:auto-mcp -->"
 
-if $HAS_CLAUDE; then
-    GIT_REPO_URL=$(git remote get-url origin 2>/dev/null || echo "unknown")
-    CORTEX_MARKER="<!-- cortex-hub:auto-mcp -->"
-
-    # Check if cortex instructions already injected
-    if [ -f "CLAUDE.md" ] && grep -q "$CORTEX_MARKER" CLAUDE.md 2>/dev/null; then
-        echo -e "${GREEN}>>> CLAUDE.md already has Cortex Hub instructions — skipping${NC}"
-    else
-        if [ -f "CLAUDE.md" ]; then
-            echo -e "${BLUE}>>> Appending Cortex Hub instructions to existing CLAUDE.md...${NC}"
-        else
-            echo -e "${BLUE}>>> Creating CLAUDE.md with Cortex Hub instructions...${NC}"
-        fi
-
-        cat >> CLAUDE.md <<CLAUDEEOF
-
+generate_cortex_instructions() {
+    local agent_id="$1"
+    cat <<INSTREOF
 $CORTEX_MARKER
 ## Cortex Hub — Auto MCP (MANDATORY — every conversation)
 
@@ -392,7 +381,7 @@ At the START of every conversation, before doing anything else:
    \`\`\`
    repo: "$GIT_REPO_URL"
    mode: "development"
-   agentId: "claude-code"
+   agentId: "$agent_id"
    \`\`\`
    This returns project context AND unseen code changes from other agents.
 
@@ -404,7 +393,7 @@ At the START of every conversation, before doing anything else:
 
 Call \`cortex_changes\` to check if another agent modified the same files:
 \`\`\`
-agentId: "claude-code"
+agentId: "$agent_id"
 projectId: "<from session_start response>"
 \`\`\`
 
@@ -420,11 +409,55 @@ branch: "<current branch>"
 
 Every session must end with verification commands from \`.cortex/project-profile.json\`.
 Call \`cortex_quality_report\` with results.
+Call \`cortex_session_end\` to close the session.
 $CORTEX_MARKER
-CLAUDEEOF
-        echo -e "${GREEN}>>> CLAUDE.md updated${NC}"
+INSTREOF
+}
+
+inject_instructions_to_file() {
+    local file="$1"
+    local agent_id="$2"
+    local label="$3"
+
+    if [ -f "$file" ] && grep -q "$CORTEX_MARKER" "$file" 2>/dev/null; then
+        # Already injected — update agentId in case tool changed
+        sed -i.bak "s/agentId: \"[^\"]*\"/agentId: \"$agent_id\"/g" "$file" && rm -f "${file}.bak"
+        echo -e "${GREEN}>>> $label already has Cortex instructions — updated agentId to '$agent_id'${NC}"
+    else
+        if [ -f "$file" ]; then
+            echo -e "${BLUE}>>> Appending Cortex Hub instructions to $label...${NC}"
+        else
+            echo -e "${BLUE}>>> Creating $label with Cortex Hub instructions...${NC}"
+        fi
+        echo "" >> "$file"
+        generate_cortex_instructions "$agent_id" >> "$file"
+        echo -e "${GREEN}>>> $label updated (agentId: $agent_id)${NC}"
     fi
-fi
+}
+
+for tool_key in "${SELECTED_TOOLS[@]}"; do
+    case "$tool_key" in
+        claude)
+            inject_instructions_to_file "CLAUDE.md" "claude-code" "CLAUDE.md"
+            ;;
+        cursor)
+            inject_instructions_to_file ".cursorrules" "cursor" ".cursorrules"
+            ;;
+        windsurf)
+            inject_instructions_to_file ".windsurfrules" "windsurf" ".windsurfrules"
+            ;;
+        vscode)
+            mkdir -p .vscode
+            inject_instructions_to_file ".vscode/copilot-instructions.md" "vscode-copilot" ".vscode/copilot-instructions.md"
+            ;;
+        antigravity)
+            inject_instructions_to_file "GEMINI.md" "antigravity" "GEMINI.md"
+            ;;
+        bot)
+            echo -e "${YELLOW}>>> Bot mode: agentId should be passed via API call${NC}"
+            ;;
+    esac
+done
 
 # ── Step 5: Scan & Detect Project Stack ──
 echo ""
@@ -695,7 +728,7 @@ cat > "$CORTEX_RULES_PATH" <<'RULESEOF'
 ## Session Protocol
 
 ### At Session Start
-1. Call `cortex_session_start` with repo URL and mode
+1. Call `cortex_session_start` with repo URL, mode, AND your agentId (e.g., "claude-code", "cursor", "antigravity")
 2. Read `STATE.md` → current task & progress
 3. Read `.cortex/project-profile.json` → verify commands
 
