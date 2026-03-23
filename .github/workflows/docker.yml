@@ -9,14 +9,30 @@ on:
       - 'apps/hub-mcp/**'
       - 'packages/**'
       - 'infra/Dockerfile.*'
+      - 'version.json'
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  # ── Read current version ──
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        id: read
+        run: |
+          VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' version.json | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "📦 Current version: $VERSION"
+
   # ── cortex-api (dashboard-api + dashboard-web) ──
   build-api:
+    needs: [version]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,6 +52,7 @@ jobs:
           images: ${{ env.REGISTRY }}/lktiep/cortex-api
           tags: |
             type=raw,value=latest
+            type=raw,value=v${{ needs.version.outputs.version }}
             type=sha
 
       - uses: docker/setup-buildx-action@v3
@@ -55,6 +72,7 @@ jobs:
 
   # ── cortex-mcp (hub-mcp) ──
   build-mcp:
+    needs: [version]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -74,6 +92,7 @@ jobs:
           images: ${{ env.REGISTRY }}/lktiep/cortex-mcp
           tags: |
             type=raw,value=latest
+            type=raw,value=v${{ needs.version.outputs.version }}
             type=sha
 
       - uses: docker/setup-buildx-action@v3
@@ -93,6 +112,7 @@ jobs:
 
   # ── cortex-gitnexus ──
   build-gitnexus:
+    needs: [version]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -112,6 +132,7 @@ jobs:
           images: ${{ env.REGISTRY }}/lktiep/cortex-gitnexus
           tags: |
             type=raw,value=latest
+            type=raw,value=v${{ needs.version.outputs.version }}
             type=sha
 
       - uses: docker/setup-buildx-action@v3
@@ -125,3 +146,29 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cortex-gitnexus
           cache-to: type=gha,scope=cortex-gitnexus,mode=max
+
+  # ── Auto-bump patch version after successful build ──
+  bump-version:
+    needs: [build-api, build-mcp, build-gitnexus]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump patch version
+        run: |
+          chmod +x scripts/bump-version.sh
+          scripts/bump-version.sh patch
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          NEW_VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' version.json | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*')
+          git add version.json
+          git diff --cached --quiet && echo "No version change" && exit 0
+          git commit -m "chore: bump version to v${NEW_VERSION} [skip ci]"
+          git push

@@ -8,13 +8,15 @@
 
 set -e
 
-VERSION_FILE="$(dirname "$0")/../version.json"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VERSION_FILE="$SCRIPT_DIR/../version.json"
 
 if [ ! -f "$VERSION_FILE" ]; then
     echo '{"version":"0.1.0"}' > "$VERSION_FILE"
 fi
 
-CURRENT=$(python3 -c "import json; print(json.load(open('$VERSION_FILE'))['version'])")
+# Parse version without python3 dependency
+CURRENT=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$VERSION_FILE" | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*')
 IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
 case "${1:-patch}" in
@@ -45,12 +47,7 @@ esac
 
 NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
 
-# Update version.json
-python3 -c "
-import json
-with open('$VERSION_FILE', 'w') as f:
-    json.dump({'version': '$NEW_VERSION'}, f, indent=2)
-    f.write('\n')
-"
+# Write version.json (pure bash, no python)
+printf '{\n  "version": "%s"\n}\n' "$NEW_VERSION" > "$VERSION_FILE"
 
 echo "$CURRENT → $NEW_VERSION"
