@@ -8,7 +8,7 @@ import {
   getProject, updateProject,
   startIndexing, getIndexStatus, getIndexHistory, cancelIndexing,
   listBranches, getBranchDiff, getBranchIndexSummary, testGitConnection,
-  startMemNineEmbedding,
+  startMemNineEmbedding, buildDocsKnowledge,
   type IndexStatus, type IndexJobSummary, type BranchIndexStatus,
 } from '@/lib/api'
 import styles from './page.module.css'
@@ -450,6 +450,8 @@ function ProjectContent() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null)
+  const [buildingDocs, setBuildingDocs] = useState(false)
+  const [docsResult, setDocsResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null)
 
   const handleTestConnection = useCallback(async () => {
     if (!projectId) return
@@ -462,6 +464,24 @@ function ProjectContent() {
       setTestResult({ success: false, error: String(err) })
     } finally {
       setTesting(false)
+    }
+  }, [projectId])
+
+  const handleBuildDocsKnowledge = useCallback(async () => {
+    if (!projectId) return
+    setBuildingDocs(true)
+    setDocsResult(null)
+    try {
+      const result = await buildDocsKnowledge(projectId)
+      if (result.success) {
+        setDocsResult({ success: true, message: `📚 ${result.docsProcessed}/${result.docsFound} docs → ${result.chunksCreated} knowledge chunks` })
+      } else {
+        setDocsResult({ success: false, error: result.error ?? 'Unknown error' })
+      }
+    } catch (err) {
+      setDocsResult({ success: false, error: String(err) })
+    } finally {
+      setBuildingDocs(false)
     }
   }, [projectId])
 
@@ -590,10 +610,23 @@ function ProjectContent() {
                 >
                   {testing ? '⏳ Testing...' : '🔌 Test Connection'}
                 </button>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleBuildDocsKnowledge}
+                  disabled={buildingDocs}
+                  title="Scan repo docs and build knowledge items"
+                >
+                  {buildingDocs ? '⏳ Building...' : '📚 Build Knowledge'}
+                </button>
               </div>
               {testResult && (
                 <div className={styles.testResult} data-success={testResult.success}>
                   {testResult.success ? '✅' : '❌'} {testResult.message ?? testResult.error}
+                </div>
+              )}
+              {docsResult && (
+                <div className={styles.testResult} data-success={docsResult.success}>
+                  {docsResult.success ? '✅' : '❌'} {docsResult.message ?? docsResult.error}
                 </div>
               )}
             </div>

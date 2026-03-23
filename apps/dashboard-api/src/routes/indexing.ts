@@ -5,6 +5,7 @@ import { join } from 'path'
 import { db } from '../db/client.js'
 import { startIndexing, cancelJob, buildAuthUrl } from '../services/indexer.js'
 import { embedProject } from '../services/mem9-embedder.js'
+import { buildKnowledgeFromDocs } from '../services/docs-knowledge-builder.js'
 
 const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 
@@ -416,8 +417,45 @@ indexingRouter.get('/:id/index/mem9/status', (c) => {
         status: job.mem9_status ?? 'pending',
         chunks: job.mem9_chunks ?? 0,
       },
+      docsKnowledge: {
+        status: (job as Record<string, unknown>).docs_knowledge_status ?? null,
+        count: (job as Record<string, unknown>).docs_knowledge_count ?? 0,
+      },
     })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
+  }
+})
+
+// ── Manual trigger: Build knowledge from docs ──
+indexingRouter.post('/:id/knowledge/build-from-docs', async (c) => {
+  const projectId = c.req.param('id')
+
+  try {
+    const project = db.prepare(
+      'SELECT id, git_repo_url FROM projects WHERE id = ?'
+    ).get(projectId) as { id: string; git_repo_url: string | null } | undefined
+
+    if (!project?.git_repo_url) {
+      return c.json({ success: false, error: 'No git repository URL configured' }, 400)
+    }
+
+    const repoDir = join(REPOS_DIR, projectId)
+    if (!existsSync(repoDir)) {
+      return c.json({ success: false, error: 'Repository not cloned yet. Run indexing first.' }, 400)
+    }
+
+    // Run synchronously (API waits for completion)
+    const result = await buildKnowledgeFromDocs(projectId, `manual-${Date.now()}`, repoDir)
+
+    return c.json({
+      success: true,
+      docsFound: result.docsFound,
+      docsProcessed: result.docsProcessed,
+      chunksCreated: result.chunksCreated,
+      errors: result.errors,
+    })
+  } catch (error) {
+    return c.json({ success: false, error: String(error).slice(0, 300) }, 500)
   }
 })

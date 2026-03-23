@@ -573,6 +573,13 @@ export async function testGitConnection(projectId: string) {
   )
 }
 
+export async function buildDocsKnowledge(projectId: string) {
+  return apiFetch<{ success: boolean; docsFound?: number; docsProcessed?: number; chunksCreated?: number; error?: string; errors?: string[] }>(
+    `/api/projects/${projectId}/knowledge/build-from-docs`,
+    { method: 'POST', signal: AbortSignal.timeout(120000) }
+  )
+}
+
 export interface BranchDiff {
   branch: string
   base: string

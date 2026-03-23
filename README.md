@@ -418,6 +418,7 @@ cortex-hub/
 - ✅ Quality reports with grade trending (A→F)
 - ✅ Session list with API key tracking + detail panel
 - ✅ Project management with Git integration + branch-aware indexing
+- ✅ Auto-docs knowledge: scans repo docs after indexing → builds knowledge items
 - ✅ Mobile-responsive: hamburger sidebar, 3-tier CSS breakpoints
 
 **LLM API Gateway**
@@ -433,6 +434,7 @@ cortex-hub/
 - ✅ Lefthook git hooks auto-generated from `project-profile.json`
 - ✅ Workflow templates deployed to any project (code, continue, phase)
 - ✅ Agent-facing rules auto-generated (`.cortex/agent-rules.md`)
+- ✅ Auto-docs knowledge pipeline: index repo → mem9 embed → scan docs → build knowledge
 
 ### Planned
 

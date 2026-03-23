@@ -107,11 +107,25 @@ Long-term memory for AI agents, backed by **Qdrant** vectors:
 - Auto-indexes repository content into Qdrant with smart chunking
 - Scoped memory: agent-level → project-level → branch-level
 
+**Indexing Pipeline:**
+
+```
+git clone → GitNexus AST analyze → Symbol extraction
+                                    ↓
+                              mem9 code embed → Qdrant (code search)
+                                    ↓
+                        docs-knowledge-builder → Qdrant (knowledge search)
+                     (scans *.md, *.mdx, *.txt, *.rst)
+```
+
+After code embedding completes, the **docs-knowledge-builder** automatically scans the repository for documentation files, chunks them, embeds via the same pipeline, and stores as knowledge items tagged `auto-docs`. On re-index, existing auto-docs are replaced to ensure freshness. Can also be triggered manually via the Dashboard’s “📚 Build Knowledge” button.
+
 ### 4. Qdrant (Vector Database)
 
 High-performance vector database for semantic search:
 
-- Knowledge items contributed by agents during work sessions
+- **Code collection:** per-project code chunks from mem9 embedding
+- **Knowledge collection:** agent-contributed knowledge + auto-generated docs knowledge
 - Hybrid search: keyword + semantic vector matching
 - Cross-project knowledge sharing (deployment patterns, API conventions, etc.)
 
