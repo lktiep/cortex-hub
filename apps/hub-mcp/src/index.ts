@@ -100,6 +100,7 @@ app.get('/', (c) => {
       'cortex_health',
       'cortex_memory_store',
       'cortex_memory_search',
+      'cortex_knowledge_store',
       'cortex_knowledge_search',
       'cortex_code_search',
       'cortex_code_impact',

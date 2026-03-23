@@ -17,6 +17,7 @@ import { statsRouter as metricsRouter } from './routes/stats.js'
 import { systemRouter } from './routes/system.js'
 import { accountsRouter } from './routes/accounts.js'
 import { webhooksRouter } from './routes/webhooks.js'
+import { knowledgeRouter } from './routes/knowledge.js'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
@@ -74,6 +75,7 @@ app.route('/api/metrics', metricsRouter)
 app.route('/api/accounts', accountsRouter)
 app.route('/api/indexing', indexingRouter)
 app.route('/api/mem9', mem9ProxyRouter)
+app.route('/api/knowledge', knowledgeRouter)
 app.route('/api/webhooks', webhooksRouter)
 
 // Serve Dashboard Web static files (Next.js static export)

@@ -146,6 +146,38 @@ CREATE TABLE IF NOT EXISTS agent_ack (
     PRIMARY KEY (agent_id, project_id)
 );
 
+-- ── Knowledge Documents ──
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    source TEXT DEFAULT 'manual',           -- 'manual' | 'agent' | 'import'
+    source_agent_id TEXT,
+    project_id TEXT,
+    tags TEXT DEFAULT '[]',                 -- JSON array of strings
+    status TEXT DEFAULT 'active',           -- 'active' | 'archived'
+    hit_count INTEGER DEFAULT 0,
+    chunk_count INTEGER DEFAULT 0,
+    content_preview TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_docs_project
+ON knowledge_documents(project_id);
+
+-- ── Knowledge Chunks ──
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+    id TEXT PRIMARY KEY,                    -- doubles as Qdrant point ID
+    document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    char_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_doc
+ON knowledge_chunks(document_id);
+
 -- Insert default uncompleted setup status
 INSERT OR IGNORE INTO setup_status (id, completed) VALUES (1, 0);
 

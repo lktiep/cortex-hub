@@ -546,3 +546,65 @@ export async function getSystemMetrics() {
   return apiFetch<SystemMetrics>('/api/system/metrics')
 }
 
+// ── Knowledge Base ──
+export interface KnowledgeDocument {
+  id: string
+  title: string
+  source: string
+  source_agent_id: string | null
+  project_id: string | null
+  tags: string
+  status: string
+  hit_count: number
+  chunk_count: number
+  content_preview: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeStats {
+  totalDocs: number
+  totalChunks: number
+  totalHits: number
+}
+
+export async function getKnowledgeDocuments(params?: { tag?: string; projectId?: string }) {
+  const qs = new URLSearchParams()
+  if (params?.tag) qs.set('tag', params.tag)
+  if (params?.projectId) qs.set('projectId', params.projectId)
+  const query = qs.toString()
+  return apiFetch<{ documents: KnowledgeDocument[]; total: number; stats: KnowledgeStats }>(
+    `/api/knowledge${query ? '?' + query : ''}`
+  )
+}
+
+export async function createKnowledgeDocument(data: {
+  title: string
+  content: string
+  tags?: string[]
+  projectId?: string
+}) {
+  return apiFetch<KnowledgeDocument>('/api/knowledge', { method: 'POST', body: data })
+}
+
+export async function getKnowledgeDocument(id: string) {
+  return apiFetch<KnowledgeDocument & { chunks: Array<{ id: string; content: string; chunk_index: number; char_count: number }> }>(
+    `/api/knowledge/${id}`
+  )
+}
+
+export async function deleteKnowledgeDocument(id: string) {
+  return apiFetch<{ success: boolean }>(`/api/knowledge/${id}`, { method: 'DELETE' })
+}
+
+export async function searchKnowledge(query: string, opts?: { tags?: string[]; projectId?: string; limit?: number }) {
+  return apiFetch<{ query: string; results: Array<{ score: number; content: unknown; title: unknown; documentId: string; document?: KnowledgeDocument }> }>(
+    '/api/knowledge/search',
+    { method: 'POST', body: { query, ...opts } }
+  )
+}
+
+export async function getKnowledgeTags() {
+  return apiFetch<{ tags: string[] }>('/api/knowledge/tags')
+}
+
