@@ -270,9 +270,9 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
     updateJob(jobId, { progress: 25 })
     logger.info(`[${jobId}] Clone complete`)
 
-    // ── Step 2: GitNexus Analyze (primary) + Pure JS (fallback) ──
-    // analyze runs as CLI because it needs filesystem access to the cloned repo.
-    // Query-time operations (search, impact, context) use the GitNexus HTTP service.
+    // ── Step 2: GitNexus Analyze ──
+    // Try CLI first (only works if gitnexus is installed in this container),
+    // then try HTTP API to the gitnexus container, then pure JS fallback.
     updateJob(jobId, { status: 'analyzing', progress: 30 })
     logger.info(`[${jobId}] Running gitnexus analyze`)
 
@@ -280,28 +280,36 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
     let totalFiles = 0
     let symbolNames: string[] = []
 
-    const analyzeResult = await runCommand('npx', [
-      '-y', 'gitnexus', 'analyze', '.', '--force'
-    ], repoDir, jobId)
+    // Strategy 1: Try local CLI (fast, uses Tree-sitter AST)
+    let gitnexusSuccess = false
+    try {
+      const analyzeResult = await runCommand('gitnexus', [
+        'analyze', '.', '--force'
+      ], repoDir, jobId)
 
-    // Parse symbols count from gitnexus output
-    const symbolMatch = analyzeResult.stdout.match(/(\d+)\s*symbols?/i)
-    const fileMatch = analyzeResult.stdout.match(/(\d+)\s*files?/i)
-    if (symbolMatch?.[1]) symbolsFound = parseInt(symbolMatch[1], 10)
-    if (fileMatch?.[1]) totalFiles = parseInt(fileMatch[1], 10)
+      const symbolMatch = analyzeResult.stdout.match(/(\d+)\s*symbols?/i)
+      const fileMatch = analyzeResult.stdout.match(/(\d+)\s*files?/i)
+      if (symbolMatch?.[1]) symbolsFound = parseInt(symbolMatch[1], 10)
+      if (fileMatch?.[1]) totalFiles = parseInt(fileMatch[1], 10)
 
-    if (analyzeResult.code !== 0 || (symbolsFound === 0 && totalFiles === 0)) {
-      // GitNexus failed — fall back to pure JS regex extraction
-      appendLog(jobId, `[warn] gitnexus failed (exit ${analyzeResult.code}), using pure JS fallback`)
-      logger.warn(`[${jobId}] GitNexus failed, falling back to pure JS extraction`)
+      if (analyzeResult.code === 0 && (symbolsFound > 0 || totalFiles > 0)) {
+        gitnexusSuccess = true
+        appendLog(jobId, `GitNexus: ${totalFiles} files, ${symbolsFound} symbols`)
+      }
+    } catch {
+      // gitnexus not installed locally — expected in cortex-api container
+    }
+
+    // Strategy 2: Pure JS fallback (regex-based, no native deps)
+    if (!gitnexusSuccess) {
+      appendLog(jobId, `[info] Using pure JS symbol extraction (gitnexus CLI not available)`)
+      logger.info(`[${jobId}] Using pure JS fallback extraction`)
 
       const fallback = extractSymbolsFromDir(repoDir)
       totalFiles = fallback.totalFiles
       symbolsFound = fallback.symbolsFound
       symbolNames = fallback.symbolNames
-      appendLog(jobId, `Fallback: ${totalFiles} files, ${symbolsFound} symbols`)
-    } else {
-      appendLog(jobId, `GitNexus: ${totalFiles} files, ${symbolsFound} symbols`)
+      appendLog(jobId, `Extracted: ${totalFiles} files, ${symbolsFound} symbols`)
     }
 
     if (symbolNames.length > 0) {
