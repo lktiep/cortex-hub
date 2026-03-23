@@ -159,11 +159,75 @@ app.all('/mcp', async (c) => {
 
   await mcpServer.connect(transport)
 
+  const startTime = Date.now()
+  let bodyText = ''
   try {
-    const response = await transport.handleRequest(c.req.raw)
+    bodyText = await c.req.text()
+  } catch (e) {}
+
+  const newReq = new Request(c.req.raw.url, {
+    method: c.req.raw.method,
+    headers: c.req.raw.headers,
+    body: bodyText,
+  })
+
+  let toolName = 'unknown'
+  let projectId = null
+  let argsObj = null
+  try {
+    const p = JSON.parse(bodyText)
+    if (p.method === 'tools/call') {
+      toolName = p.params?.name
+      argsObj = p.params?.arguments
+      projectId = argsObj?.projectId || argsObj?.project_id || null
+      if (toolName === 'cortex_session_start' && argsObj?.repo) {
+        projectId = argsObj.repo.split('/').pop()?.replace('.git', '') || null
+      }
+    }
+  } catch (e) {}
+
+  try {
+    const response = await transport.handleRequest(newReq)
+    const latencyMs = Date.now() - startTime
+
+    if (toolName !== 'unknown') {
+      const apiUrl = (c.env.DASHBOARD_API_URL || 'http://localhost:4000').replace(/\/$/, '')
+      fetch(`${apiUrl}/api/metrics/query-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: envWithOwner.API_KEY_OWNER || 'unknown',
+          tool: toolName,
+          params: argsObj,
+          status: response.status >= 400 ? 'error' : 'ok',
+          latencyMs,
+          projectId
+        })
+      }).catch((err: any) => console.error('[MCP Telemetry Error]', err))
+    }
+
     return response
   } catch (error: any) {
     console.error('[MCP Streamable Error]', error)
+    const latencyMs = Date.now() - startTime
+
+    if (toolName !== 'unknown') {
+      const apiUrl = (c.env.DASHBOARD_API_URL || 'http://localhost:4000').replace(/\/$/, '')
+      fetch(`${apiUrl}/api/metrics/query-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agentId: envWithOwner.API_KEY_OWNER || 'unknown',
+          tool: toolName,
+          params: argsObj,
+          status: 'error',
+          error: error.message,
+          latencyMs,
+          projectId
+        })
+      }).catch((err: any) => console.error('[MCP Telemetry Error]', err))
+    }
+
     return c.json({
       jsonrpc: '2.0',
       error: { code: -32603, message: error.message || 'Internal error' },

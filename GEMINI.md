@@ -24,6 +24,12 @@ agentId: "antigravity"
 projectId: "<from session_start response>"
 ```
 
+### When encountering an error or bug (MANDATORY)
+
+1. First search `cortex_knowledge_search` or `cortex_memory_search` for the error message.
+2. Fix the error.
+3. If the fix was non-obvious, **YOU MUST** use `cortex_knowledge_store` to record the problem and solution so you (and others) don't have to debug it again.
+
 ### After pushing code
 
 Call `cortex_code_reindex` to update code intelligence:
@@ -57,8 +63,8 @@ Call `cortex_session_end` to close the session.
 | 6 | `cortex_code_reindex` | After EVERY push | `repo`, `branch` |
 | 7 | `cortex_memory_search` | Recall past decisions/findings | `query` |
 | 8 | `cortex_memory_store` | Store session findings | `content` |
-| 9 | `cortex_knowledge_search` | Search shared knowledge base | `query` |
-| 10 | `cortex_knowledge_store` | Contribute reusable patterns | `title`, `content` |
+| 9 | `cortex_knowledge_search` | Search **FIRST** when encountering errors | `query` |
+| 10 | `cortex_knowledge_store` | **MANDATORY**: Contribute bug fixes & patterns | `title`, `content` |
 | 11 | `cortex_quality_report` | After running verify commands | `gate_name`, `passed`, `details`, `agent_id` |
 | 12 | `cortex_health` | Check service health | (none) |
 

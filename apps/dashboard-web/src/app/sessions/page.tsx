@@ -52,7 +52,12 @@ function SessionCard({
   return (
     <div className={`card ${styles.sessionCard}`} onClick={onSelect}>
       <div className={styles.sessionHeader}>
-        <code className={styles.sessionId}>{session.id.slice(0, 8)}</code>
+        <div className={styles.sessionIdRow}>
+          <code className={styles.sessionId}>{session.id.slice(0, 8)}</code>
+          {session.api_key_name && (
+            <span className={styles.apiKeyTag}>🔑 {session.api_key_name}</span>
+          )}
+        </div>
         <StatusBadge status={session.status} />
       </div>
 
@@ -125,6 +130,12 @@ function SessionDetail({
             <span className={styles.detailLabel}>From Agent</span>
             <code className={styles.detailValue}>{session.from_agent}</code>
           </div>
+          {session.api_key_name && (
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>API Key</span>
+              <span className={styles.detailValue}>🔑 {session.api_key_name}</span>
+            </div>
+          )}
           <div className={styles.detailRow}>
             <span className={styles.detailLabel}>To Agent</span>
             <code className={styles.detailValue}>{session.to_agent ?? 'Not assigned'}</code>
