@@ -116,7 +116,6 @@ Internet
   │
   ├── cortex-mcp.jackle.dev ──── Hub MCP Server (Hono, SSE + JSON-RPC)
   ├── cortex-api.jackle.dev ──── Dashboard API  (Hono + SQLite)
-  ├── cortex-llm.jackle.dev ──── LLM Gateway    (multi-provider proxy)
   └── hub.jackle.dev ─────────── Dashboard UI   (Next.js static export)
                                     │
                               Cloudflare Tunnel
@@ -127,6 +126,7 @@ Internet
                           │  ├─ hub-mcp        │
                           │  ├─ qdrant         │
                           │  ├─ gitnexus       │
+                          │  ├─ llm-proxy      │  ← internal only
                           │  └─ watchtower     │
                           └────────────────────┘
                           All ports internal.

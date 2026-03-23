@@ -160,8 +160,7 @@ Internet
   │
   ├── hub.jackle.dev ─────────── Dashboard UI      (Cloudflare Access protected)
   ├── cortex-api.jackle.dev ──── Dashboard API      (:4000, Hono REST)
-  ├── cortex-mcp.jackle.dev ──── Hub MCP Server     (Streamable HTTP, JSON-RPC)
-  └── cortex-llm.jackle.dev ──── LLM Gateway        (OpenAI-compatible proxy)
+  └── cortex-mcp.jackle.dev ──── Hub MCP Server     (Streamable HTTP, JSON-RPC)
                                     │
                               Cloudflare Tunnel (cloudflared)
                                     │
@@ -169,9 +168,10 @@ Internet
                           │   Docker Compose Stack   │
                           │                          │
                           │   dashboard-api  :4000   │
-                          │   hub-mcp        :4001   │
+                          │   hub-mcp        :8317   │
                           │   qdrant         :6333   │
                           │   gitnexus       :4848   │
+                          │   llm-proxy      :8317   │  ← internal only
                           │   watchtower     (auto)  │
                           │                          │
                           │   Zero open ports.       │
