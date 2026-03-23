@@ -22,11 +22,13 @@ function CreateDialog({
   fields,
   onSubmit,
   onCancel,
+  onFieldChange,
 }: {
   title: string
   fields: { key: string; label: string; placeholder: string; required?: boolean; type?: string }[]
   onSubmit: (data: Record<string, string>) => void
   onCancel: () => void
+  onFieldChange?: (key: string, value: string, setValues: React.Dispatch<React.SetStateAction<Record<string, string>>>) => void
 }) {
   const [values, setValues] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
@@ -61,7 +63,11 @@ function CreateDialog({
                 type={field.type || "text"}
                 placeholder={field.placeholder}
                 value={values[field.key] ?? ''}
-                onChange={(e) => setValues((v) => ({ ...v, [field.key]: e.target.value }))}
+                onChange={(e) => {
+                  const newVal = e.target.value
+                  setValues((v) => ({ ...v, [field.key]: newVal }))
+                  onFieldChange?.(field.key, newVal, setValues)
+                }}
               />
             )}
           </div>
@@ -266,12 +272,24 @@ function OrgSection({ org, onDeleted }: { org: Organization; onDeleted: () => vo
             { key: 'name', label: 'Project Name', placeholder: 'my-app', required: true },
             { key: 'description', label: 'Description', placeholder: 'Project description...', type: 'textarea', required: false },
             { key: 'gitRepoUrl', label: 'Git Repository URL', placeholder: 'https://github.com/user/repo', required: false },
-            { key: 'gitProvider', label: 'Git Provider', placeholder: 'github / gitlab / bitbucket / azure', required: false },
+            { key: 'gitProvider', label: 'Git Provider', placeholder: 'auto-detected from URL', required: false },
             { key: 'gitUsername', label: 'Git Username (Optional)', placeholder: 'username', required: false },
             { key: 'gitToken', label: 'Git Token / PAT (Optional)', placeholder: 'Personal Access Token', type: 'password', required: false },
           ]}
           onSubmit={handleCreateProject}
           onCancel={() => setShowCreateProject(false)}
+          onFieldChange={(key, value, setValues) => {
+            if (key === 'gitRepoUrl') {
+              const url = value.toLowerCase()
+              let provider = ''
+              if (url.includes('github.com') || url.includes('github.')) provider = 'github'
+              else if (url.includes('gitlab.com') || url.includes('gitlab.')) provider = 'gitlab'
+              else if (url.includes('bitbucket.org') || url.includes('bitbucket.')) provider = 'bitbucket'
+              else if (url.includes('dev.azure.com') || url.includes('visualstudio.com') || url.includes('azure.')) provider = 'azure'
+              else if (url.includes('gitea.') || url.includes('codeberg.org')) provider = 'gitea'
+              if (provider) setValues((v) => ({ ...v, gitProvider: provider }))
+            }
+          }}
         />
       )}
 

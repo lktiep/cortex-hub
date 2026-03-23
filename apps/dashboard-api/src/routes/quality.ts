@@ -58,11 +58,15 @@ qualityRouter.post('/report', async (c) => {
 
     if (!gate_name) return c.json({ error: 'gate_name is required' }, 400)
 
+    // Identity resolution: X-API-Key-Owner (server-resolved from API key)
+    // takes precedence over self-reported agent_id
+    const apiKeyOwner = c.req.header('X-API-Key-Owner')
+    const agentId = apiKeyOwner || agent_id || 'unknown'
+
     // Server-side enforcement: validate session
-    const sessionCheck = validateSession(agent_id || 'unknown', session_id)
+    const sessionCheck = validateSession(agentId, session_id)
 
     const reportId = `qr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
-    const agentId = agent_id || 'unknown'
 
     let scoreBuild = 0
     let scoreRegression = 0
@@ -315,7 +319,12 @@ export const sessionsRouter = new Hono()
 sessionsRouter.post('/start', async (c) => {
   try {
     const body = await c.req.json()
-    const { repo, mode, agentId } = body
+    const { repo, mode, agentId: bodyAgentId } = body
+
+    // Identity resolution: X-API-Key-Owner (server-resolved from API key)
+    // takes precedence over self-reported agentId
+    const apiKeyOwner = c.req.header('X-API-Key-Owner')
+    const agentId = apiKeyOwner || bodyAgentId
 
     if (!agentId) {
       return c.json({ error: 'agentId is required. Identify your agent (e.g., "claude-code", "antigravity", "cursor").' }, 400)
