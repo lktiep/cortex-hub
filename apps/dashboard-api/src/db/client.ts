@@ -53,6 +53,15 @@ try {
   db.exec('ALTER TABLE index_jobs ADD COLUMN mem9_chunks INTEGER DEFAULT 0')
 } catch (e) { /* ignore if exists */ }
 
+// Docs knowledge builder status on index_jobs
+try {
+  db.exec("ALTER TABLE index_jobs ADD COLUMN docs_knowledge_status TEXT DEFAULT NULL")
+} catch (e) { /* ignore if exists */ }
+
+try {
+  db.exec('ALTER TABLE index_jobs ADD COLUMN docs_knowledge_count INTEGER DEFAULT 0')
+} catch (e) { /* ignore if exists */ }
+
 // Helper: SQLite-safe date normalization for ISO 8601 strings (2026-03-23T05:26:46.407Z → 2026-03-23 05:26:46)
 const ISO_TO_SQLITE = `substr(replace(replace(completed_at, 'T', ' '), 'Z', ''), 1, 19)`
 

@@ -4,6 +4,7 @@ import { join, extname } from 'path'
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
 import { embedProject } from './mem9-embedder.js'
+import { buildKnowledgeFromDocs } from './docs-knowledge-builder.js'
 
 const logger = createLogger('indexer')
 
@@ -348,6 +349,22 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
           appendLog(jobId, `⚠️ mem9 errors: ${result.errors.slice(0, 3).join('; ')}`)
         }
         logger.info(`[${jobId}] mem9 complete: ${result.chunks} chunks`)
+
+        // ── Step 6: Auto-build knowledge from docs (fire-and-forget) ──
+        updateJob(jobId, { docs_knowledge_status: 'building' })
+        appendLog(jobId, '📚 Auto-building knowledge from documentation...')
+        buildKnowledgeFromDocs(projectId, jobId, repoDir).then((docsResult) => {
+          updateJob(jobId, {
+            docs_knowledge_status: 'done',
+            docs_knowledge_count: docsResult.docsProcessed,
+          })
+          appendLog(jobId, `📚 Docs knowledge: ${docsResult.docsProcessed}/${docsResult.docsFound} docs → ${docsResult.chunksCreated} chunks`)
+          logger.info(`[${jobId}] Docs knowledge complete: ${docsResult.docsProcessed} docs processed`)
+        }).catch((err) => {
+          updateJob(jobId, { docs_knowledge_status: 'error' })
+          appendLog(jobId, `⚠️ Docs knowledge failed (non-fatal): ${err}`)
+          logger.warn(`[${jobId}] Docs knowledge failed: ${err}`)
+        })
       }).catch((err) => {
         updateJob(jobId, { mem9_status: 'error' })
         appendLog(jobId, `❌ mem9 failed: ${err}`)
