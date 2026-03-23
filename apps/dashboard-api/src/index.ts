@@ -1,6 +1,16 @@
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
+import { readFileSync } from 'node:fs'
+
+// Read version from version.json (copied at build time)
+let appVersion = process.env['APP_VERSION'] || '0.0.0-dev'
+try {
+  const versionJson = JSON.parse(readFileSync('./version.json', 'utf-8'))
+  appVersion = versionJson.version || appVersion
+} catch {
+  // version.json not found — use fallback
+}
 import { cors } from 'hono/cors'
 import { logger as honoLogger } from 'hono/logger'
 import { createLogger } from '@cortex/shared-utils'
@@ -51,7 +61,7 @@ app.get('/health', async (c) => {
   return c.json({
     status: allOk ? 'ok' : 'degraded',
     service: 'dashboard-api',
-    version: '0.1.0',
+    version: appVersion,
     commit: process.env['COMMIT_SHA'] || 'dev',
     buildDate: process.env['BUILD_DATE'] || 'unknown',
     image: `ghcr.io/lktiep/cortex-hub:${(process.env['COMMIT_SHA'] || 'dev').slice(0, 7)}`,

@@ -100,6 +100,7 @@ RUN mkdir -p /app/node_modules/@cortex && \
 # Copy runtime assets
 RUN mkdir -p /app/apps/dashboard-api/dist/db
 COPY --from=builder /app/apps/dashboard-api/src/db/schema.sql ./apps/dashboard-api/dist/db/schema.sql
+COPY --from=builder /app/version.json ./version.json
 
 # Copy Dashboard Web assets
 RUN mkdir -p /app/public

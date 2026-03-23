@@ -106,9 +106,9 @@ export default function Sidebar() {
               {isOnline ? 'All systems online' : 'Connecting...'}
             </span>
           </div>
-          <div className={styles.commitRow} title={commitShort !== 'dev' ? `Commit: ${health?.commit}\nBuilt: ${health?.buildDate ?? 'N/A'}` : undefined}>
+        <div className={styles.commitRow} title={`Version: v${health?.version ?? '0.0.0'}\nCommit: ${health?.commit ?? 'dev'}\nBuilt: ${health?.buildDate ?? 'N/A'}`}>
             <code className={styles.commitHash}>
-              {commitShort !== 'dev' ? commitShort : `v${health?.version ?? '0.1.0'}`}
+              v{health?.version ?? '0.0.0'}{commitShort !== 'dev' ? ` · ${commitShort}` : ''}
             </code>
           </div>
         </div>
