@@ -39,17 +39,20 @@
 
 | When | Tool | What to Do |
 |------|------|------------|
-| **Searching code** | `cortex_code_search` | Use FIRST before `grep_search` or `find_by_name`. It queries the GitNexus knowledge graph with AST-aware search, understanding execution flows and symbol relationships. Fall back to grep only if GitNexus is unavailable. |
-| **Before editing core code** | `cortex_code_impact` | Run blast radius analysis on the symbol/file you plan to change. This ensures you don't miss downstream breakages. |
-| **Recalling past knowledge** | `cortex_memory_search` | Search for memories about the topic before starting fresh research. Previous agents may have already solved this problem. |
-| **Learning something new** | `cortex_memory_store` | Store debugging findings, architecture decisions, deployment gotchas, and workarounds. Future sessions will benefit from this knowledge. |
-| **After pushing code changes** | `cortex_quality_report` | Report the final quality gate results. Include build/typecheck/lint status and a summary of changes made. |
+| **Searching code** | `cortex_code_search` | Use FIRST before `grep_search` or `find_by_name`. Queries GitNexus knowledge graph with AST-aware search. Fall back to grep only if unavailable. |
+| **Before editing core code** | `cortex_code_impact` | Run blast radius analysis on the symbol/file you plan to change. |
+| **Searching shared knowledge** | `cortex_knowledge_search` | Search the team knowledge base for patterns, solutions, and documented decisions. Supports tag and project filtering. |
+| **Recalling past context** | `cortex_memory_search` | Search agent memories for past decisions, debugging findings, and session context. |
+| **Contributing knowledge** | `cortex_knowledge_store` | Store reusable patterns, resolved issues, architecture decisions into the shared knowledge base. Include tags for discoverability. |
+| **Storing personal memory** | `cortex_memory_store` | Store session-specific findings, debugging gotchas, and workarounds for future recall. |
+| **After pushing code changes** | `cortex_quality_report` | Report build/typecheck/lint results and a summary of changes. |
 
-**Tool priority order for code discovery:**
-1. `cortex_memory_search` → check if already known
-2. `cortex_code_search` → search the indexed codebase
-3. `cortex_code_impact` → check blast radius before editing
-4. `grep_search` / `find_by_name` → only if Cortex tools are unavailable
+**Tool priority order for discovery (before grep/find):**
+1. `cortex_memory_search` → check if you or another agent already knows this
+2. `cortex_knowledge_search` → search the shared knowledge base
+3. `cortex_code_search` → search the indexed codebase (GitNexus AST graph)
+4. `cortex_code_impact` → check blast radius before editing
+5. `grep_search` / `find_by_name` → only if Cortex tools are unavailable
 
 ### Before Deploy — ALWAYS do:
 
@@ -191,3 +194,6 @@ Every code session MUST end with verification from `project-profile.json`:
 - ❌ Edit infrastructure (Docker, Tunnel) without updating docs
 - ❌ Ignore quality gate failures
 - ❌ Hardcode verify commands — always read from `project-profile.json`
+
+<!-- cortex-hub:agent-rules -->
+> 📋 **Cortex Hub rules:** See [.cortex/agent-rules.md](.cortex/agent-rules.md) for MCP tool usage guidelines.
