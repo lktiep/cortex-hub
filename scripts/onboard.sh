@@ -650,9 +650,67 @@ else
     echo -e "${YELLOW}>>> No project-profile.json found. Skipping hook setup.${NC}"
 fi
 
-# ── Step 7: Sync AGENTS.md ──
+# ── Step 7: Validate & Enhance AGENTS.md ──
 if [ -f AGENTS.md ]; then
-    echo -e "${GREEN}>>> Found AGENTS.md — agent rules are active${NC}"
+    echo -e "${GREEN}>>> Found AGENTS.md — checking for Cortex tool integration...${NC}"
+
+    # Check if AGENTS.md has the "During Session" section
+    if grep -q "During Session.*Cortex Tool Integration" AGENTS.md 2>/dev/null; then
+        echo -e "${GREEN}    ✓ Cortex tool integration section present${NC}"
+    else
+        echo -e "${YELLOW}>>> AGENTS.md missing 'During Session' section — injecting...${NC}"
+        # Find the "Before Deploy" section and inject before it
+        python3 -c "
+import re
+
+with open('AGENTS.md', 'r') as f:
+    content = f.read()
+
+section = '''
+### During Session — Cortex Tool Integration (MANDATORY)
+
+> ⚠️ **Agents MUST use Cortex tools throughout the session, not just at start/end.**
+> These tools are the core value of Cortex Hub — skipping them defeats the purpose.
+
+| When | Tool | What to Do |
+|------|------|------------|
+| **Searching code** | \`cortex_code_search\` | Use FIRST before \`grep_search\` or \`find_by_name\`. It queries the GitNexus knowledge graph with AST-aware search. Fall back to grep only if GitNexus is unavailable. |
+| **Before editing core code** | \`cortex_code_impact\` | Run blast radius analysis on the symbol/file you plan to change. |
+| **Recalling past knowledge** | \`cortex_memory_search\` | Search for memories about the topic before starting fresh research. |
+| **Learning something new** | \`cortex_memory_store\` | Store debugging findings, architecture decisions, deployment gotchas. |
+| **After pushing code changes** | \`cortex_quality_report\` | Report the final quality gate results. |
+
+**Tool priority order for code discovery:**
+1. \`cortex_memory_search\` → check if already known
+2. \`cortex_code_search\` → search the indexed codebase
+3. \`cortex_code_impact\` → check blast radius before editing
+4. \`grep_search\` / \`find_by_name\` → only if Cortex tools are unavailable
+
+'''
+
+# Try to inject before 'Before Deploy' section
+marker = '### Before Deploy'
+if marker in content:
+    content = content.replace(marker, section + marker)
+else:
+    # Append before '---' that comes after session end
+    content += '\n' + section
+
+with open('AGENTS.md', 'w') as f:
+    f.write(content)
+print('    Injected Cortex tool integration section into AGENTS.md')
+"
+        echo -e "${GREEN}    ✓ AGENTS.md updated with Cortex tool integration${NC}"
+    fi
+
+    # Also check for memory_store in session end protocol
+    if grep -q "cortex_memory_store" AGENTS.md 2>/dev/null; then
+        echo -e "${GREEN}    ✓ memory_store in session end protocol${NC}"
+    else
+        echo -e "${YELLOW}    ⚠ Consider adding cortex_memory_store to session end protocol${NC}"
+    fi
+else
+    echo -e "${YELLOW}>>> No AGENTS.md found — agents will have no project-specific rules${NC}"
 fi
 
 # ── Step 8: Session Start ──
