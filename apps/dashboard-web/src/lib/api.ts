@@ -153,8 +153,11 @@ export interface QueryLog {
   created_at: string
 }
 
-export async function getQualityLogs(limit = 50) {
-  return apiFetch<{ logs: QueryLog[] }>(`/api/quality/logs?limit=${limit}`)
+export async function getQualityLogs(opts?: { limit?: number; page?: number }) {
+  const params = new URLSearchParams()
+  if (opts?.limit) params.set('limit', String(opts.limit))
+  if (opts?.page) params.set('page', String(opts.page))
+  return apiFetch<{ logs: QueryLog[]; total: number; page: number; limit: number; totalPages: number }>(`/api/quality/logs?${params}`)
 }
 
 // ── Quality Reports (4-dimension scoring) ──
@@ -203,13 +206,14 @@ export interface QualitySummary {
   grade_f: number
 }
 
-export async function getQualityReports(opts?: { limit?: number; projectId?: string; agentId?: string; grade?: string }) {
+export async function getQualityReports(opts?: { limit?: number; page?: number; projectId?: string; agentId?: string; grade?: string }) {
   const params = new URLSearchParams()
   if (opts?.limit) params.set('limit', String(opts.limit))
+  if (opts?.page) params.set('page', String(opts.page))
   if (opts?.projectId) params.set('project_id', opts.projectId)
   if (opts?.agentId) params.set('agent_id', opts.agentId)
   if (opts?.grade) params.set('grade', opts.grade)
-  return apiFetch<{ reports: QualityReportRow[] }>(`/api/quality/reports?${params}`)
+  return apiFetch<{ reports: QualityReportRow[]; total: number; page: number; limit: number; totalPages: number }>(`/api/quality/reports?${params}`)
 }
 
 export async function getLatestQualityReport(projectId?: string) {

@@ -174,21 +174,38 @@ type TabId = 'overview' | 'reports' | 'logs'
 export default function QualityPage() {
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [filterGrade, setFilterGrade] = useState('')
+  const [filterAgent, setFilterAgent] = useState('')
+  const [reportPage, setReportPage] = useState(1)
+  const [logPage, setLogPage] = useState(1)
 
   const { data: summaryData } = useSWR('quality-summary', getQualitySummary, { refreshInterval: 15000 })
   const { data: trendsData } = useSWR('quality-trends', () => getQualityTrends(30), { refreshInterval: 30000 })
   const { data: reportsData, mutate: mutateReports } = useSWR(
-    ['quality-reports', filterGrade],
-    () => getQualityReports({ limit: 100, grade: filterGrade || undefined }),
+    ['quality-reports', filterGrade, filterAgent, reportPage],
+    () => getQualityReports({ limit: 20, page: reportPage, grade: filterGrade || undefined, agentId: filterAgent || undefined }),
     { refreshInterval: 15000 }
   )
-  const { data: logsData } = useSWR('quality-logs-legacy', () => getQualityLogs(100), { refreshInterval: 30000 })
+  const { data: logsData } = useSWR(
+    ['quality-logs', logPage],
+    () => getQualityLogs({ limit: 20, page: logPage }),
+    { refreshInterval: 30000 }
+  )
 
   const summary = summaryData?.summary
   const latest = summaryData?.latest
   const trends = trendsData?.trends ?? []
   const reports = reportsData?.reports ?? []
+  const reportsTotalPages = reportsData?.totalPages ?? 1
+  const reportsTotal = reportsData?.total ?? 0
   const logs = logsData?.logs ?? []
+  const logsTotalPages = logsData?.totalPages ?? 1
+  const logsTotal = logsData?.total ?? 0
+
+  // Collect unique agent IDs from reports for filter dropdown
+  const uniqueAgents = useMemo(() => {
+    const set = new Set(reports.map((r: QualityReportRow) => r.agent_id))
+    return Array.from(set).sort()
+  }, [reports])
 
   const latestGrade = latest?.grade ?? '—'
   const latestScore = latest?.score_total ?? 0
@@ -331,11 +348,21 @@ export default function QualityPage() {
             <select
               className={styles.filterSelect}
               value={filterGrade}
-              onChange={(e) => setFilterGrade(e.target.value)}
+              onChange={(e) => { setFilterGrade(e.target.value); setReportPage(1) }}
             >
               <option value="">All Grades</option>
               {['A', 'B', 'C', 'D', 'F'].map(g => (
                 <option key={g} value={g}>Grade {g}</option>
+              ))}
+            </select>
+            <select
+              className={styles.filterSelect}
+              value={filterAgent}
+              onChange={(e) => { setFilterAgent(e.target.value); setReportPage(1) }}
+            >
+              <option value="">All Agents</option>
+              {uniqueAgents.map(a => (
+                <option key={a} value={a}>{a}</option>
               ))}
             </select>
             <button className="btn btn-secondary btn-sm" onClick={() => mutateReports()}>
@@ -372,6 +399,29 @@ export default function QualityPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination */}
+          {reportsTotalPages > 1 && (
+            <div className={styles.pagination}>
+              <button
+                className={styles.paginationBtn}
+                disabled={reportPage <= 1}
+                onClick={() => setReportPage(p => Math.max(1, p - 1))}
+              >
+                ← Prev
+              </button>
+              <span className={styles.pageInfo}>
+                Page {reportPage} of {reportsTotalPages} ({reportsTotal} total)
+              </span>
+              <button
+                className={styles.paginationBtn}
+                disabled={reportPage >= reportsTotalPages}
+                onClick={() => setReportPage(p => p + 1)}
+              >
+                Next →
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -403,6 +453,29 @@ export default function QualityPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination */}
+          {logsTotalPages > 1 && (
+            <div className={styles.pagination}>
+              <button
+                className={styles.paginationBtn}
+                disabled={logPage <= 1}
+                onClick={() => setLogPage(p => Math.max(1, p - 1))}
+              >
+                ← Prev
+              </button>
+              <span className={styles.pageInfo}>
+                Page {logPage} of {logsTotalPages} ({logsTotal} total)
+              </span>
+              <button
+                className={styles.paginationBtn}
+                disabled={logPage >= logsTotalPages}
+                onClick={() => setLogPage(p => p + 1)}
+              >
+                Next →
+              </button>
+            </div>
+          )}
         </div>
       )}
     </DashboardLayout>

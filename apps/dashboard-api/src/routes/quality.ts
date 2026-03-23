@@ -12,6 +12,34 @@ import {
 
 export const qualityRouter = new Hono()
 
+// ── Server-side session validation ──
+// Warns (but doesn't block) if agent hasn't started a session.
+// This provides enforcement for IDEs that don't support hooks (Cursor, Windsurf, etc.)
+function validateSession(agentId: string, sessionId?: string): { valid: boolean; warning?: string } {
+  if (sessionId) {
+    // Verify session exists and is active
+    const session = db.prepare(
+      "SELECT id, status FROM session_handoffs WHERE id = ? AND status = 'active'"
+    ).get(sessionId) as { id: string; status: string } | undefined
+
+    if (!session) {
+      return { valid: true, warning: `Session ${sessionId} not found or not active. Call cortex_session_start first.` }
+    }
+    return { valid: true }
+  }
+
+  // No session_id provided — check if agent has ANY active session
+  const anySession = db.prepare(
+    "SELECT id FROM session_handoffs WHERE from_agent = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1"
+  ).get(agentId) as { id: string } | undefined
+
+  if (!anySession) {
+    return { valid: true, warning: `No active session for agent "${agentId}". Call cortex_session_start before submitting reports.` }
+  }
+
+  return { valid: true }
+}
+
 // ── POST /report — Submit a quality gate report ──
 // Accepts both legacy format and new 4-dimension format
 qualityRouter.post('/report', async (c) => {
@@ -29,6 +57,9 @@ qualityRouter.post('/report', async (c) => {
     } = body
 
     if (!gate_name) return c.json({ error: 'gate_name is required' }, 400)
+
+    // Server-side enforcement: validate session
+    const sessionCheck = validateSession(agent_id || 'unknown', session_id)
 
     const reportId = `qr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
     const agentId = agent_id || 'unknown'
@@ -93,6 +124,7 @@ qualityRouter.post('/report', async (c) => {
 
     return c.json({
       success: true,
+      ...(sessionCheck.warning ? { warning: sessionCheck.warning } : {}),
       report: {
         id: reportId,
         gate_name,
@@ -110,35 +142,44 @@ qualityRouter.post('/report', async (c) => {
   }
 })
 
-// ── GET /reports — List quality reports with filters ──
+// ── GET /reports — List quality reports with filters + pagination ──
 qualityRouter.get('/reports', (c) => {
   try {
-    const limit = Number(c.req.query('limit') || '50')
+    const page = Math.max(1, Number(c.req.query('page') || '1'))
+    const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') || '20')))
+    const offset = (page - 1) * limit
     const projectId = c.req.query('project_id')
     const agentId = c.req.query('agent_id')
     const grade = c.req.query('grade')
 
-    let sql = 'SELECT * FROM quality_reports WHERE 1=1'
+    let where = 'WHERE 1=1'
     const params: unknown[] = []
 
     if (projectId) {
-      sql += ' AND project_id = ?'
+      where += ' AND project_id = ?'
       params.push(projectId)
     }
     if (agentId) {
-      sql += ' AND agent_id = ?'
+      where += ' AND agent_id = ?'
       params.push(agentId)
     }
     if (grade) {
-      sql += ' AND grade = ?'
+      where += ' AND grade = ?'
       params.push(grade)
     }
 
-    sql += ' ORDER BY created_at DESC LIMIT ?'
-    params.push(limit)
+    const total = (db.prepare(`SELECT COUNT(*) as count FROM quality_reports ${where}`).get(...params) as { count: number }).count
+    const reports = db.prepare(
+      `SELECT * FROM quality_reports ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+    ).all(...params, limit, offset)
 
-    const reports = db.prepare(sql).all(...params)
-    return c.json({ reports })
+    return c.json({
+      reports,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -246,13 +287,23 @@ qualityRouter.post('/plan-quality', async (c) => {
   }
 })
 
-// ── GET /logs — Backward compatible (reads from query_logs) ──
+// ── GET /logs — Backward compatible (reads from query_logs) with pagination ──
 qualityRouter.get('/logs', (c) => {
   try {
-    const limit = Number(c.req.query('limit') || '50')
-    const stmt = db.prepare('SELECT * FROM query_logs ORDER BY created_at DESC LIMIT ?')
-    const logs = stmt.all(limit)
-    return c.json({ logs })
+    const page = Math.max(1, Number(c.req.query('page') || '1'))
+    const limit = Math.min(100, Math.max(1, Number(c.req.query('limit') || '20')))
+    const offset = (page - 1) * limit
+
+    const total = (db.prepare('SELECT COUNT(*) as count FROM query_logs').get() as { count: number }).count
+    const logs = db.prepare('SELECT * FROM query_logs ORDER BY created_at DESC LIMIT ? OFFSET ?').all(limit, offset)
+
+    return c.json({
+      logs,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
