@@ -232,8 +232,8 @@ else:
     target = config
 
 entry = {
-    'command': 'npx.cmd',
-    'args': ['-y', 'mcp-remote', mcp_url, '--header', 'Authorization: Bearer ' + api_key],
+    'command': 'cmd',
+    'args': ['/c', 'npx', '-y', 'mcp-remote', mcp_url, '--header', 'Authorization: Bearer ' + api_key],
     'env': {
         'HUB_API_KEY': api_key
     }
