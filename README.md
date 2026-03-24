@@ -443,6 +443,7 @@ cortex-hub/
 
 **Infrastructure**
 - ✅ 2-service Docker architecture: `cortex-api` (:4000) + `cortex-mcp` (:8317)
+- ✅ Pre-built Docker images on GHCR (`ghcr.io/lktiep/cortex-*:latest`)
 - ✅ Cloudflare Tunnel: 4 subdomains, zero open ports
 - ✅ Watchtower auto-updates for Docker images
 - ✅ Docker build optimization: cache mounts, shared base, `.dockerignore`
@@ -491,7 +492,6 @@ cortex-hub/
 
 ### Planned
 
-- [ ] Pre-built Docker images on GHCR (currently build from source)
 - [ ] Streaming chat completions via LLM gateway
 - [ ] Agent performance leaderboard
 - [ ] Interactive knowledge graph visualization
