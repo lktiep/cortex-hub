@@ -50,6 +50,7 @@
 - [x] `/api/metrics/overview-v2` endpoint with per-project GitNexus/Mem9 status
 - [x] mem9 API key resolution: read from provider_accounts DB as fallback
 - [x] Global MCP Telemetry: intercept `tools/call` in `hub-mcp` and log to dashboard API (`query_logs`)
+- [x] **Multi-Repo Code Intelligence** — GitNexus auto-discovery + multi-candidate repo routing (`fe1ff04`, `3f2e60c`, `b48c385`)
 
 ## Completed (Phase 6)
 - [x] Dashboard API — 9 real routes (no stubs)
@@ -57,6 +58,7 @@
 - [x] LLM API Gateway (multi-provider fallback, budget, usage logging)
 - [x] Usage page rewired to real `/api/usage` endpoints
 - [x] GitNexus as standalone Docker service (eval-server HTTP API on :4848, indexing via clone → analyze → mem9 ingest)
+- [x] **Multi-Repo GitNexus** — auto-discovers repos from shared `/app/data/repos/`, analyzes & registers them. 6/8 Yulgang repos loaded (2,569 Methods, 420 Classes in ChinaSource)
 - [x] Branch-scoped knowledge (mem9 user_id namespacing, fallback chain)
 - [x] MCP branch-aware tools (code.search/impact with branch param)
 - [x] Universal Installation & Onboarding (bootstrap.sh → onboard.sh)
@@ -66,6 +68,8 @@
 - [x] Mobile-Responsive Dashboard UI (hamburger sidebar, 3-tier breakpoints)
 
 ## Recent Decisions
+- **Multi-repo routing:** `callGitNexusWithFallback()` tries slug → URL-derived → projectId → no-filter as cascading fallback when routing to GitNexus eval-server. All intel routes (search, impact, context, cypher, detect-changes) use this helper.
+- **GitNexus auto-discovery:** Updated `gitnexus-entrypoint.sh` to scan `/app/data/repos/` for cloned repos and run `gitnexus analyze` on any not already registered in `~/.gitnexus/registry.json`.
 - **Identity resolution:** `mcp-remote` drops Authorization header → workaround: apiCall() injects `X-API-Key-Owner` header from `env.API_KEY_OWNER`. Dashboard-api uses this as authoritative identity in quality reports + sessions.
 - **Dashboard v2:** Single `/overview-v2` endpoint replaces multiple calls. Returns per-project GitNexus/Mem9 status, quality summary, knowledge stats.
 - **Service separation:** dashboard-api and hub-mcp run as separate Docker services. hub-mcp calls dashboard-api via real HTTP.
@@ -73,7 +77,7 @@
 - Mobile responsive: hamburger toggle + backdrop overlay at ≤768px, CSS-only breakpoints at 3 tiers
 
 ## Quality Status
-- Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-23T17:00+07:00)
-- Quality Grade: A (100/100) — 2 reports today
+- Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-24T10:46+07:00)
 - Architecture: 2-service model (cortex-api + cortex-mcp)
-- MCP: 12 tools, hub-mcp as standalone service
+- MCP: 14 tools, hub-mcp as standalone service
+- GitNexus: 6 repos indexed (cortex-hub + 5 Yulgang projects)
