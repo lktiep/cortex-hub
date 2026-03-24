@@ -65,8 +65,8 @@ else
         cd "$REPO_PATH" && git pull --ff-only 2>/dev/null || true
     fi
 
-    echo "GitNexus: Analyzing $REPO_PATH..."
-    cd "$REPO_PATH" && gitnexus analyze 2>&1 || {
+    echo "GitNexus: Analyzing $REPO_PATH (with embeddings)..."
+    cd "$REPO_PATH" && gitnexus analyze --embeddings 2>&1 || {
         echo "GitNexus: Analyze failed for default repo."
     }
 fi
@@ -89,10 +89,10 @@ if [ -d "$REPOS_DIR" ]; then
             continue
         fi
 
-        echo "  → Analyzing ${repo_name}..."
-        cd "$repo_dir" && gitnexus analyze --force 2>&1 && {
+        echo "  → Analyzing ${repo_name} (with embeddings)..."
+        cd "$repo_dir" && gitnexus analyze --force --embeddings 2>&1 && {
             ANALYZED=$((ANALYZED + 1))
-            echo "  ✓ ${repo_name} — indexed successfully"
+            echo "  ✓ ${repo_name} — indexed with embeddings"
         } || {
             echo "  ✗ ${repo_name} — analyze failed (skipping)"
         }

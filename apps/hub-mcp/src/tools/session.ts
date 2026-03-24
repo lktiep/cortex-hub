@@ -39,6 +39,23 @@ export function registerSessionTools(server: McpServer, env: Env) {
         }
 
         const result = await response.json()
+
+        // ── Auto-store session summary to mem9 for cross-session recall ──
+        if (summary) {
+          try {
+            await apiCall(env, '/api/mem9/store', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                messages: [{ role: 'user', content: `Session completed: ${summary}` }],
+                userId: `session-${sessionId}`,
+                agentId: 'session-auto',
+                metadata: { session_id: sessionId, type: 'session_summary' },
+              }),
+            })
+          } catch { /* non-fatal: don't block session end */ }
+        }
+
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
         }
@@ -115,6 +132,29 @@ export function registerSessionTools(server: McpServer, env: Env) {
           } else {
             session.recentChanges = { count: 0, summary: 'No unseen changes.' }
           }
+
+          // ── Auto-recall recent mem9 memories for context ──
+          try {
+            const memResponse = await apiCall(env, '/api/mem9/search', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                query: `project ${projectId} recent session context`,
+                userId: `project-${projectId}`,
+                limit: 3,
+              }),
+            })
+            if (memResponse.ok) {
+              const memData = (await memResponse.json()) as { memories?: Array<{ memory?: string }> }
+              const memories = memData.memories ?? []
+              if (memories.length > 0) {
+                session.recentMemories = {
+                  count: memories.length,
+                  items: memories.map((m) => m.memory ?? '').filter(Boolean),
+                }
+              }
+            }
+          } catch { /* non-fatal */ }
         }
 
         return {
