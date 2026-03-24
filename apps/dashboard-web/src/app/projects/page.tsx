@@ -372,9 +372,30 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
                       </button>
                     )}
                   </div>
+                  {/* Knowledge docs row */}
+                  <div className={styles.branchMem9Row}>
+                    <span className={styles.branchMem9Label}>📚 knowledge:</span>
+                    {(b.docs_knowledge_count ?? 0) > 0 ? (
+                      <span className={styles.branchMem9Badge} data-status="done">
+                        ✅ {b.docs_knowledge_count} items
+                      </span>
+                    ) : b.docs_knowledge_status === 'processing' ? (
+                      <span className={styles.branchMem9Badge} data-status="embedding">
+                        ⏳ Building...
+                      </span>
+                    ) : b.docs_knowledge_status === 'error' ? (
+                      <span className={styles.branchMem9Badge} data-status="error">
+                        ❌ Error
+                      </span>
+                    ) : (
+                      <span className={styles.branchMem9Badge} data-status="pending">
+                        — None
+                      </span>
+                    )}
+                  </div>
                   {b.completed_at && (
                     <div className={styles.branchStatusDate}>
-                      {new Date(b.completed_at).toLocaleString()}
+                      {formatRelativeTime(b.completed_at)}
                     </div>
                   )}
                 </div>

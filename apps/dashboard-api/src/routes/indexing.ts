@@ -318,7 +318,8 @@ indexingRouter.get('/:id/index/branches', (c) => {
     // Get the latest job per branch
     const jobs = db.prepare(
       `SELECT branch, status, progress, total_files, symbols_found, 
-              mem9_status, mem9_chunks, completed_at, created_at
+              mem9_status, mem9_chunks, docs_knowledge_status, docs_knowledge_count,
+              completed_at, created_at
        FROM index_jobs
        WHERE project_id = ?
          AND id IN (

@@ -606,6 +606,8 @@ export interface BranchIndexStatus {
   symbols_found: number
   mem9_status: string | null
   mem9_chunks: number
+  docs_knowledge_status: string | null
+  docs_knowledge_count: number
   completed_at: string | null
   created_at: string
 }
