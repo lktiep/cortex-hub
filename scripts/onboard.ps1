@@ -200,12 +200,26 @@ function Set-McpConfig {
         Write-Ok "Created $ConfigPath"
     }
 
-    # Read existing config
-    $config = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+    # Read existing config safely
+    $configContent = Get-Content $ConfigPath -Raw
+    $config = $null
+    if ($configContent -and $configContent.Trim() -ne '') {
+        try { $config = $configContent | ConvertFrom-Json } catch { }
+    }
+    if ($null -eq $config) {
+        $config = [PSCustomObject]@{ }
+    }
 
-    # Ensure config key exists
-    if (-not ($config.PSObject.Properties.Name -contains $ConfigKey)) {
-        $config | Add-Member -NotePropertyName $ConfigKey -NotePropertyValue ([PSCustomObject]@{})
+    # Extract or create the target container (e.g. mcpServers)
+    if ($ConfigKey -eq "") {
+        $targetContainer = $config
+    }
+    else {
+        $targetContainer = $config.$ConfigKey
+        if ($null -eq $targetContainer) {
+            $targetContainer = [PSCustomObject]@{ }
+            $config | Add-Member -MemberType NoteProperty -Name $ConfigKey -Value $targetContainer -Force
+        }
     }
 
     # Build MCP entry
@@ -219,11 +233,11 @@ function Set-McpConfig {
 
     # Add type for VS Code
     if ($ToolKey -eq "vscode") {
-        $mcpEntry | Add-Member -NotePropertyName "type" -NotePropertyValue "stdio"
+        $mcpEntry | Add-Member -MemberType NoteProperty -Name "type" -Value "stdio" -Force
     }
 
-    # Set the cortex-hub entry
-    $config.$ConfigKey | Add-Member -NotePropertyName "cortex-hub" -NotePropertyValue $mcpEntry -Force
+    # Set the cortex-hub entry into the target container
+    $targetContainer | Add-Member -MemberType NoteProperty -Name "cortex-hub" -Value $mcpEntry -Force
 
     # Write back
     $config | ConvertTo-Json -Depth 10 | Out-File -FilePath $ConfigPath -Encoding utf8
