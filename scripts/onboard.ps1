@@ -232,7 +232,7 @@ else:
     target = config
 
 entry = {
-    'url': mcp_url,
+    'serverURL': mcp_url,
     'headers': {
         'Authorization': 'Bearer ' + api_key
     }
