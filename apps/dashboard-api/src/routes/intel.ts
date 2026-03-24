@@ -145,6 +145,29 @@ async function callGitNexusWithFallback(
 type GitNexusResult = Record<string, any>
 
 /**
+ * Post-process GitNexus raw text to replace CLI hints with MCP tool references.
+ */
+function rewriteGitNexusHints(text: string): string {
+  return text
+    .replace(/gitnexus-context/g, 'cortex_code_context')
+    .replace(/gitnexus-impact/g, 'cortex_code_impact')
+    .replace(/gitnexus-query/g, 'cortex_code_search')
+    .replace(
+      /Next: Pick a symbol above and run gitnexus-context .*/g,
+      'Next: Use cortex_code_context "<symbol>" to explore callers/callees, or cortex_code_impact "<symbol>" for blast radius.',
+    )
+    .replace(
+      /Next: To check what breaks if you change this, run .*/g,
+      'Next: Use cortex_code_impact "<name>" to check blast radius, or cortex_code_search for related logic.',
+    )
+    .replace(
+      /Re-run: gitnexus-context .*/g,
+      'Tip: Use cortex_code_context with file parameter to disambiguate.',
+    )
+    .replace(/Read the source with cat /g, 'Examine the source at ')
+}
+
+/**
  * Format GitNexus query results into a readable report for agents.
  * Handles the process-grouped search format that GitNexus returns.
  */
@@ -153,7 +176,7 @@ function formatSearchResults(query: string, data: unknown): string {
 
   // Handle raw text response
   if (result?.raw) {
-    return `🔍 Search: "${query}"\n\n${result.raw}`
+    return `🔍 Search: "${query}"\n\n${rewriteGitNexusHints(result.raw)}`
   }
 
   // Handle structured response with processes
@@ -370,7 +393,12 @@ intelRouter.post('/context', async (c) => {
     const params: Record<string, unknown> = { name, content: true }
     if (file) params.file = file
 
-    const results = await callGitNexusWithFallback('context', params, projectId)
+    const results = await callGitNexusWithFallback('context', params, projectId) as { raw?: string }
+
+    // Post-process CLI hints
+    if (results?.raw) {
+      results.raw = rewriteGitNexusHints(results.raw)
+    }
 
     return c.json({
       success: true,

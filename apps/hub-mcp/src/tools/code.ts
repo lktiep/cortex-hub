@@ -101,14 +101,39 @@ export function registerCodeTools(server: McpServer, env: Env) {
         // Try context lookup to find methods, then retry impact on first method.
         if (raw.includes('appears isolated') || raw.includes('not found')) {
           try {
+            let contextRaw = ''
+
+            // First attempt: context lookup without file
             const contextData = await callIntel('context', {
               name: target,
               projectId,
             }) as { data?: { results?: { raw?: string } } }
 
-            const contextRaw = contextData?.data?.results?.raw ?? ''
-            // Extract method names from context output (pattern: "→ [has_method] ... MethodName →")
-            const methodMatches = contextRaw.match(/\[has_method\]\s+\w+\s+(\w+)/g)
+            contextRaw = contextData?.data?.results?.raw ?? ''
+
+            // Handle disambiguation: "Multiple symbols named 'X'. Disambiguate with file path:"
+            // Extract the first file path and retry with it
+            if (contextRaw.includes('Disambiguate with file path')) {
+              const fileMatch = contextRaw.match(/→\s+\S+\/(\S+\.cs):\d+/)
+              if (fileMatch) {
+                const fullPathMatch = contextRaw.match(/→\s+(\S+\.cs):\d+/)
+                const filePath = fullPathMatch?.[1]
+                if (filePath) {
+                  try {
+                    const retryData = await callIntel('context', {
+                      name: target,
+                      file: filePath,
+                      projectId,
+                    }) as { data?: { results?: { raw?: string } } }
+                    contextRaw = retryData?.data?.results?.raw ?? contextRaw
+                  } catch { /* keep first response */ }
+                }
+              }
+            }
+
+            // Extract method names from context output
+            // Pattern 1: [has_method] undefined MethodName
+            const methodMatches = contextRaw.match(/\[has_method\]\s+\w+\s+\w+/g)
 
             if (methodMatches && methodMatches.length > 0) {
               const methods = methodMatches
@@ -119,7 +144,6 @@ export function registerCodeTools(server: McpServer, env: Env) {
                 })
                 .filter((m) => m && m !== target)
 
-              // Build enriched response with class context + first method impact
               const lines: string[] = [
                 `📋 Class "${target}" — ${methods.length} method(s) found:\n`,
                 ...methods.map((m: string) => `  • ${m}`),
@@ -142,8 +166,23 @@ export function registerCodeTools(server: McpServer, env: Env) {
                 } catch { /* ignore retry failure */ }
               }
 
-              lines.push(`\n💡 Tip: Run cortex_code_impact on specific methods above for detailed blast radius.`)
+              lines.push(`\n💡 Tip: Run cortex_code_impact on specific methods for detailed blast radius.`)
+              lines.push(`💡 Tip: Run cortex_code_context "${target}" for full 360° view.`)
 
+              return {
+                content: [{ type: 'text' as const, text: lines.join('\n') }],
+              }
+            }
+
+            // If no [has_method] but context has useful info, return it enriched
+            if (contextRaw && !contextRaw.includes('not found')) {
+              const lines: string[] = [
+                `⚠️ No direct downstream dependencies found for "${target}".`,
+                `\n📋 Context from code graph:\n`,
+                contextRaw,
+                `\n💡 Tip: Try cortex_code_impact on specific methods/functions listed above.`,
+                `💡 Tip: Try cortex_code_context "${target}" for full details.`,
+              ]
               return {
                 content: [{ type: 'text' as const, text: lines.join('\n') }],
               }
