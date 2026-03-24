@@ -103,6 +103,44 @@ function resolveRepoName(projectId: string): string {
 }
 
 
+/**
+ * Call GitNexus with multi-candidate repo fallback.
+ * Tries each repo name candidate until one succeeds, then falls back to no-repo mode.
+ */
+async function callGitNexusWithFallback(
+  tool: string,
+  params: Record<string, unknown>,
+  projectId?: string,
+): Promise<unknown> {
+  if (!projectId) {
+    return callGitNexus(tool, params)
+  }
+
+  const candidates = resolveRepoNames(projectId)
+  logger.info(`GitNexus fallback: trying candidates ${JSON.stringify(candidates)} for ${tool}`)
+
+  let lastError: unknown = null
+
+  for (const candidate of candidates) {
+    try {
+      const result = await callGitNexus(tool, { ...params, repo: candidate })
+      logger.info(`GitNexus fallback: success with repo "${candidate}" for ${tool}`)
+      return result
+    } catch (err) {
+      lastError = err
+      logger.info(`GitNexus fallback: "${candidate}" failed for ${tool}, trying next...`)
+    }
+  }
+
+  // Final fallback: try without repo filter
+  try {
+    logger.info(`GitNexus fallback: all candidates failed, trying ${tool} without repo filter`)
+    return await callGitNexus(tool, params)
+  } catch {
+    throw lastError
+  }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GitNexusResult = Record<string, any>
 
@@ -298,11 +336,8 @@ intelRouter.post('/impact', async (c) => {
       target,
       direction: direction ?? 'downstream',
     }
-    if (projectId) {
-      params.repo = resolveRepoName(projectId)
-    }
 
-    const results = await callGitNexus('impact', params)
+    const results = await callGitNexusWithFallback('impact', params, projectId)
 
     return c.json({
       success: true,
@@ -333,12 +368,9 @@ intelRouter.post('/context', async (c) => {
     if (!name) return c.json({ error: 'Symbol name is required' }, 400)
 
     const params: Record<string, unknown> = { name, content: true }
-    if (projectId) {
-      params.repo = resolveRepoName(projectId)
-    }
     if (file) params.file = file
 
-    const results = await callGitNexus('context', params)
+    const results = await callGitNexusWithFallback('context', params, projectId)
 
     return c.json({
       success: true,
@@ -383,11 +415,8 @@ intelRouter.post('/detect-changes', async (c) => {
     const params: Record<string, unknown> = {
       scope: scope ?? 'all',
     }
-    if (projectId) {
-      params.repo = resolveRepoName(projectId)
-    }
 
-    const results = await callGitNexus('detect_changes', params)
+    const results = await callGitNexusWithFallback('detect_changes', params, projectId)
     return c.json({ success: true, data: results })
   } catch (error) {
     logger.error(`Detect changes failed: ${String(error)}`)
@@ -410,11 +439,8 @@ intelRouter.post('/cypher', async (c) => {
     if (!cypherQuery) return c.json({ error: 'Cypher query is required' }, 400)
 
     const params: Record<string, unknown> = { query: cypherQuery }
-    if (projectId) {
-      params.repo = resolveRepoName(projectId)
-    }
 
-    const results = await callGitNexus('cypher', params)
+    const results = await callGitNexusWithFallback('cypher', params, projectId)
     return c.json({ success: true, data: results })
   } catch (error) {
     logger.error(`Cypher query failed: ${String(error)}`)
