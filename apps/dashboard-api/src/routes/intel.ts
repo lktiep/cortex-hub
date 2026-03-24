@@ -40,53 +40,68 @@ async function callGitNexus(
 }
 
 /**
- * Resolve a projectId to a GitNexus-compatible repo name.
- * GitNexus registers repos by folder name (our clone path uses projectId)
- * or by git remote URL. We try multiple strategies:
- * 1. If input looks like a project ID (proj-xxx), look up the project slug
- * 2. Extract repo name from git_repo_url as fallback
- * 3. Return the original input as last resort
+ * Resolve a projectId to GitNexus-compatible repo name candidates.
+ * Returns ordered list of names to try — GitNexus may register repos by:
+ *   1. slug (e.g., 'yulgangproject')
+ *   2. git URL basename (e.g., 'YulgangProject')
+ *   3. projectId folder name (e.g., 'proj-abc123')
+ * All candidates are returned for fallback-based querying.
  */
-function resolveRepoName(projectId: string): string {
-  // If it doesn't look like an internal ID, use as-is (already a repo name)
+function resolveRepoNames(projectId: string): string[] {
+  const candidates: string[] = []
+
+  // If it doesn't look like an internal ID, try as-is first
   if (!projectId.startsWith('proj-')) {
-    return projectId
+    candidates.push(projectId)
   }
 
   try {
     const project = db.prepare(
-      'SELECT slug, git_repo_url FROM projects WHERE id = ?'
-    ).get(projectId) as { slug?: string; git_repo_url?: string } | undefined
+      'SELECT id, slug, git_repo_url FROM projects WHERE id = ? OR slug = ?'
+    ).get(projectId, projectId) as { id?: string; slug?: string; git_repo_url?: string } | undefined
 
-    if (!project) {
-      logger.warn(`resolveRepoName: project ${projectId} not found, using ID as-is`)
-      return projectId
-    }
+    if (project) {
+      // Strategy 1: Use slug
+      if (project.slug && !candidates.includes(project.slug)) {
+        candidates.push(project.slug)
+      }
 
-    // Strategy 1: Use slug (most likely matches GitNexus registration)
-    if (project.slug) {
-      logger.info(`resolveRepoName: ${projectId} → slug "${project.slug}"`)
-      return project.slug
-    }
+      // Strategy 2: Extract repo name from git URL
+      if (project.git_repo_url) {
+        const repoName = project.git_repo_url
+          .replace(/\.git$/, '')
+          .split('/')
+          .pop()
+        if (repoName && !candidates.includes(repoName)) {
+          candidates.push(repoName)
+        }
+      }
 
-    // Strategy 2: Extract repo name from git URL
-    if (project.git_repo_url) {
-      const repoName = project.git_repo_url
-        .replace(/\.git$/, '')
-        .split('/')
-        .pop()
-      if (repoName) {
-        logger.info(`resolveRepoName: ${projectId} → url-derived "${repoName}"`)
-        return repoName
+      // Strategy 3: Use project ID (folder name in /app/data/repos/)
+      if (project.id && !candidates.includes(project.id)) {
+        candidates.push(project.id)
       }
     }
   } catch (error) {
-    logger.warn(`resolveRepoName: DB lookup failed: ${error}`)
+    logger.warn(`resolveRepoNames: DB lookup failed: ${error}`)
   }
 
-  // Fallback: use projectId directly (might work if folder-based registration)
-  return projectId
+  // Last resort: use input directly
+  if (candidates.length === 0) {
+    candidates.push(projectId)
+  }
+
+  return candidates
 }
+
+/**
+ * Legacy single-result resolver for backward compatibility.
+ */
+function resolveRepoName(projectId: string): string {
+  const names = resolveRepoNames(projectId)
+  return names[0] ?? projectId
+}
+
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GitNexusResult = Record<string, any>
@@ -190,12 +205,11 @@ intelRouter.post('/search', async (c) => {
       content: true,
     }
 
-    // Smart repo name resolution: handle both projectId and direct repo name
+    // Smart repo name resolution with multi-candidate fallback
+    const repoCandidates: string[] = projectId ? resolveRepoNames(projectId) : []
     if (projectId) {
-      const repoName = resolveRepoName(projectId)
-      params.repo = repoName
-      // Also try with projectId as fallback identifier
-      logger.info(`Code search: resolved repo "${repoName}" from "${projectId}"`)
+      params.repo = repoCandidates[0]
+      logger.info(`Code search: trying candidates ${JSON.stringify(repoCandidates)} from "${projectId}"`)
     }
 
     if (branch) {
@@ -203,24 +217,39 @@ intelRouter.post('/search', async (c) => {
     }
 
     let results: unknown
-    try {
-      results = await callGitNexus('query', params)
-    } catch (firstError) {
-      // Fallback: if repo name didn't work, try with projectId directly
-      if (projectId && params.repo !== projectId) {
-        logger.info(`Code search: retrying with projectId "${projectId}" as repo name`)
-        params.repo = projectId
+    let lastError: unknown = null
+
+    // Try each candidate repo name until one works
+    if (repoCandidates.length > 0) {
+      for (const candidate of repoCandidates) {
+        try {
+          params.repo = candidate
+          results = await callGitNexus('query', params)
+          logger.info(`Code search: success with repo "${candidate}"`)
+          lastError = null
+          break
+        } catch (err) {
+          lastError = err
+          logger.info(`Code search: "${candidate}" failed, trying next...`)
+        }
+      }
+
+      // Final fallback: try without repo filter (search all repos)
+      if (lastError) {
+        logger.info('Code search: all candidates failed, trying without repo filter')
+        delete params.repo
         try {
           results = await callGitNexus('query', params)
-        } catch {
-          // Final fallback: try without repo filter
-          logger.info('Code search: retrying without repo filter')
-          delete params.repo
-          results = await callGitNexus('query', params)
+          lastError = null
+        } catch (err) {
+          lastError = err
         }
-      } else {
-        throw firstError
       }
+
+      if (lastError) throw lastError
+    } else {
+      // No projectId — search across all repos
+      results = await callGitNexus('query', params)
     }
 
     // Format results as readable report
@@ -393,6 +422,140 @@ intelRouter.post('/cypher', async (c) => {
       { success: false, error: String(error) },
       500,
     )
+  }
+})
+
+// ── Register: trigger GitNexus analyze on a cloned repo ──
+intelRouter.post('/register', async (c) => {
+  try {
+    const body = await c.req.json()
+    const { projectId } = body as { projectId: string }
+
+    if (!projectId) return c.json({ error: 'projectId is required' }, 400)
+
+    // Look up project to get repo path and slug
+    const project = db.prepare(
+      'SELECT id, slug, git_repo_url FROM projects WHERE id = ?'
+    ).get(projectId) as { id: string; slug?: string; git_repo_url?: string } | undefined
+
+    if (!project) return c.json({ error: 'Project not found' }, 404)
+
+    const repoDir = `/app/data/repos/${projectId}`
+    const repoName = project.slug || projectId
+
+    logger.info(`Register: analyzing ${repoName} at ${repoDir}`)
+
+    // Call GitNexus eval-server to analyze the repo
+    // The eval-server and cortex-api share /app/data volume
+    try {
+      const analyzeRes = await fetch(`${GITNEXUS_URL()}/tool/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: repoDir, name: repoName }),
+        signal: AbortSignal.timeout(120000), // 2 min for analysis
+      })
+
+      if (analyzeRes.ok) {
+        const result = await analyzeRes.text()
+        logger.info(`Register: GitNexus analyze success for ${repoName}`)
+        return c.json({ success: true, data: { repoName, result: result.trim() } })
+      }
+
+      // If eval-server doesn't have /tool/analyze, the repo needs to be
+      // analyzed via CLI in the gitnexus container
+      logger.warn(`Register: eval-server analyze returned ${analyzeRes.status}, repo may need manual registration`)
+    } catch (err) {
+      logger.warn(`Register: eval-server analyze call failed: ${err}`)
+    }
+
+    // Fallback: return info about what needs to be done
+    return c.json({
+      success: false,
+      data: {
+        repoName,
+        repoDir,
+        message: 'GitNexus eval-server does not have an analyze endpoint. '
+          + 'Run `gitnexus analyze` in the repo directory inside the gitnexus container, '
+          + 'or restart the gitnexus container to trigger auto-discovery.',
+        hint: 'docker exec cortex-gitnexus sh -c "cd ' + repoDir + ' && gitnexus analyze --force"',
+      },
+    })
+  } catch (error) {
+    logger.error(`Register failed: ${String(error)}`)
+    return c.json({ success: false, error: String(error) }, 500)
+  }
+})
+
+// ── Sync: register all cloned repos with GitNexus ──
+intelRouter.post('/sync-repos', async (c) => {
+  try {
+    // Get all projects that have been indexed
+    const projects = db.prepare(
+      'SELECT id, slug, git_repo_url, indexed_symbols FROM projects WHERE indexed_at IS NOT NULL'
+    ).all() as Array<{ id: string; slug?: string; git_repo_url?: string; indexed_symbols?: number }>
+
+    const results: Array<{ projectId: string; slug: string; status: string; error?: string }> = []
+
+    for (const project of projects) {
+      const repoName = project.slug || project.id
+      const repoDir = `/app/data/repos/${project.id}`
+
+      try {
+        // Try to call GitNexus query to check if already registered
+        const checkRes = await fetch(`${GITNEXUS_URL()}/tool/query`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: 'test', repo: repoName, limit: 1 }),
+          signal: AbortSignal.timeout(5000),
+        })
+
+        if (checkRes.ok) {
+          results.push({ projectId: project.id, slug: repoName, status: 'already_registered' })
+          continue
+        }
+
+        const errorText = await checkRes.text()
+        if (errorText.includes('not found')) {
+          // Not registered — try to analyze
+          const analyzeRes = await fetch(`${GITNEXUS_URL()}/tool/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: repoDir, name: repoName }),
+            signal: AbortSignal.timeout(120000),
+          })
+
+          if (analyzeRes.ok) {
+            results.push({ projectId: project.id, slug: repoName, status: 'analyzed' })
+          } else {
+            results.push({
+              projectId: project.id,
+              slug: repoName,
+              status: 'needs_manual',
+              error: `Analyze returned ${analyzeRes.status}`,
+            })
+          }
+        }
+      } catch (err) {
+        results.push({
+          projectId: project.id,
+          slug: repoName,
+          status: 'error',
+          error: String(err),
+        })
+      }
+    }
+
+    return c.json({
+      success: true,
+      data: {
+        total: projects.length,
+        results,
+        hint: 'To manually register repos, restart the gitnexus container: docker restart cortex-gitnexus',
+      },
+    })
+  } catch (error) {
+    logger.error(`Sync repos failed: ${String(error)}`)
+    return c.json({ success: false, error: String(error) }, 500)
   }
 })
 
