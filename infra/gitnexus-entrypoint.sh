@@ -11,6 +11,11 @@ GITNEXUS_DIR="${HOME}/.gitnexus"
 REPOS_DIR="/app/data/repos"
 PORT="${PORT:-4848}"
 
+# Cap Node.js heap at 4GB to prevent OOM kills on servers with limited RAM.
+# GitNexus defaults to 8GB (HEAP_MB=8192) which triggers Linux OOM killer
+# on servers with 12GB total RAM when analyzing large repos (e.g. 1500+ .cs files).
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=4096}"
+
 # Check if registry.json exists and has entries
 has_indexed_repos() {
     if [ -f "${GITNEXUS_DIR}/registry.json" ]; then
