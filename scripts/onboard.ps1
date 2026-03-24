@@ -83,10 +83,12 @@ try {
     if ($statusCode -eq 401) {
         Write-Err "Invalid API Key (401). Check your key and try again."
         exit 1
-    } elseif ($null -eq $statusCode) {
+    }
+    elseif ($null -eq $statusCode) {
         Write-Err "Cannot reach $McpUrl - check your network and URL."
         exit 1
-    } else {
+    }
+    else {
         Write-Warn "MCP responded with HTTP $statusCode - continuing anyway..."
     }
 }
@@ -136,7 +138,8 @@ $selectedTools = @()
 if ($Tool -ne "") {
     $selectedTools = $Tool -split ","
     Write-Step "Using specified tool(s): $Tool"
-} else {
+}
+else {
     Write-Host ''
     Write-Host 'Select which tools to configure:' -ForegroundColor Cyan
     $detectedStr = $detectedTools -join ', '
@@ -178,7 +181,7 @@ function Set-McpConfig {
         Write-Host "---------------------------------------" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "  MCP Endpoint:  $McpUrl" -ForegroundColor Green
-        Write-Host "  Auth Header:   Authorization: Bearer <API_KEY>" -ForegroundColor Green
+        Write-Host "  Auth Header:   Authorization: Bearer [API_KEY]" -ForegroundColor Green
         Write-Host ""
         return
     }
@@ -309,7 +312,8 @@ if (-not (Test-Path $profilePath)) {
     }
     $profile | ConvertTo-Json -Depth 5 | Out-File -FilePath $profilePath -Encoding utf8
     Write-Ok "Generated $profilePath"
-} else {
+}
+else {
     Write-Ok "Found existing $profilePath - skipping generation"
 }
 
@@ -398,7 +402,8 @@ $cortexMarker
 
     if ((Test-Path $FilePath) -and (Get-Content $FilePath -Raw) -match [regex]::Escape($cortexMarker)) {
         Write-Ok "$Label already has Cortex instructions - skipping"
-    } else {
+    }
+    else {
         Add-Content -Path $FilePath -Value $instructions -Encoding utf8
         Write-Ok "$Label updated (agentId: $AgentId)"
     }
@@ -438,7 +443,8 @@ foreach ($wf in $workflows) {
         } catch {
             Write-Warn "Could not download $wf - will be available after git pull"
         }
-    } else {
+    }
+    else {
         Write-Ok "$wf already exists"
     }
 }
