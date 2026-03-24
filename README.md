@@ -70,64 +70,59 @@ graph TB
         AG["🤖 Antigravity<br/>(Gemini)"]
         CC["🐙 Claude Code"]
         CU["⚡ Cursor"]
+        WS["🌊 Windsurf"]
         BOT["🤖 Headless Bots"]
     end
 
     subgraph Gateway["Hub MCP Server"]
         AUTH["🔐 API Key Auth"]
-        ROUTER["🔀 Tool Router"]
-        TEL["📊 Telemetry Logger"]
+        ROUTER["🔀 Tool Router (17 tools)"]
+        TEL["📊 Telemetry + Hints Engine"]
     end
 
     subgraph Services["Backend Services (Docker)"]
         direction LR
         GN["GitNexus<br/>AST Graph :4848"]
-        M9["mem9<br/>Memory :4000"]
         QD["Qdrant<br/>Vectors :6333"]
         DB["SQLite<br/>WAL Mode"]
-    end
-
-    subgraph LLM["LLM Gateway"]
-        PROXY["Multi-Provider Proxy"]
-        GEM["Gemini"]
-        OAI["OpenAI"]
-        ANT["Anthropic"]
+        CLIP["CLIProxy<br/>LLM Gateway :8317"]
     end
 
     subgraph Frontend["Dashboard"]
-        DASH["Next.js 15<br/>React 19"]
+        DASH["Next.js 15<br/>React 19<br/>(13 pages)"]
     end
 
     Agents --> AUTH --> ROUTER --> TEL
     TEL --> Services
-    ROUTER -->|"code_search<br/>code_impact"| GN
-    ROUTER -->|"memory_search<br/>memory_store"| M9
-    ROUTER -->|"knowledge_search<br/>knowledge_store"| QD
-    ROUTER -->|"quality_report<br/>session_start"| DB
-    PROXY --> GEM & OAI & ANT
+    ROUTER -->|"code_search, code_context<br/>code_impact, cypher"| GN
+    ROUTER -->|"memory_search, memory_store<br/>knowledge_search"| QD
+    ROUTER -->|"quality_report, session_start<br/>plan_quality"| DB
+    CLIP --> GEM["Gemini"] & OAI["OpenAI"] & ANT["Anthropic"]
     DASH --> DB
-    M9 --> QD
 ```
+
+> **Note:** mem9 (embedding pipeline) runs in-process within the Dashboard API container — not as a separate service. It connects to Qdrant for vector storage.
 
 ### Network Topology
 
 ```
 Internet
   │
-  ├── cortex-mcp.jackle.dev ──── Hub MCP Server (Hono, SSE + JSON-RPC)
-  ├── cortex-api.jackle.dev ──── Dashboard API  (Hono + SQLite)
+  ├── cortex-mcp.jackle.dev ──── Hub MCP Server (Hono, Streamable HTTP)
+  ├── cortex-api.jackle.dev ──── Dashboard API  (Hono + SQLite + mem9)
+  ├── cortex-llm.jackle.dev ──── LLM Gateway    (CLIProxy, multi-provider)
   └── hub.jackle.dev ─────────── Dashboard UI   (Next.js static export)
                                     │
                               Cloudflare Tunnel
                                     │
                           ┌─────────┼─────────┐
                           │  Docker Compose    │
-                          │  ├─ dashboard-api  │
-                          │  ├─ hub-mcp        │
-                          │  ├─ qdrant         │
-                          │  ├─ gitnexus       │
-                          │  ├─ llm-proxy      │  ← internal only
-                          │  └─ watchtower     │
+                          │  ├─ cortex-api     │  ← API + mem9 in-process
+                          │  ├─ cortex-mcp     │  ← 17 MCP tools
+                          │  ├─ qdrant         │  ← vectors + knowledge
+                          │  ├─ gitnexus       │  ← AST code graph
+                          │  ├─ llm-proxy      │  ← CLIProxy (internal)
+                          │  └─ watchtower     │  ← auto-update images
                           └────────────────────┘
                           All ports internal.
                           Zero open ports on host.
@@ -137,16 +132,17 @@ Internet
 
 ## Features
 
-### 🧠 Code Intelligence — GitNexus + mem9
+### 🧠 Code Intelligence — GitNexus
 
-| Capability | How It Works |
-|---|---|
-| **Semantic code search** | Natural language → AST-aware results across all repos |
-| **360° symbol context** | Every caller, callee, import chain for any function/class |
-| **Blast radius analysis** | See downstream impact before editing (`cortex_code_impact`) |
-| **Execution flow tracing** | Follow code paths across files and modules |
-| **Multi-repo indexing** | All repositories in a single knowledge graph |
-| **Auto-embedding** | mem9 indexes repos into Qdrant with smart chunking |
+| Capability | Tool | How It Works |
+|---|---|---|
+| **Semantic code search** | `cortex_code_search` | Natural language → AST-aware execution flows across all repos |
+| **360° symbol context** | `cortex_code_context` | Every caller, callee, import chain for any function/class |
+| **Blast radius analysis** | `cortex_code_impact` | See downstream impact before editing any symbol |
+| **Pre-commit risk** | `cortex_detect_changes` | Analyze uncommitted changes, find affected flows |
+| **Graph queries** | `cortex_cypher` | Direct Cypher queries against the code knowledge graph |
+| **Multi-repo indexing** | `cortex_list_repos` | All repositories in a single graph, discoverable by agents |
+| **Auto-reindexing** | `cortex_code_reindex` | Trigger re-indexing after code changes |
 
 ### 💾 Persistent Agent Memory
 
@@ -159,8 +155,9 @@ Session 2 (Cursor):        cortex_memory_search("auth middleware")
                                     → "JWT with RS256" ✓
 ```
 
-- Per-agent isolation with optional shared spaces
+- Per-agent and per-project isolation with optional shared spaces
 - Semantic recall (search by meaning, not keywords)
+- Scoped to branch — agents on `feature/auth` recall branch-specific context
 - Automatic deduplication and relevance ranking
 
 ### 📚 Shared Knowledge Base — Qdrant
@@ -171,6 +168,7 @@ Agents contribute and consume a team-wide knowledge base:
 - **Semantic search** — find relevant knowledge by concept, not exact match
 - **Tag & project filtering** — organized by domain and repository
 - **Cross-project sharing** — deployment patterns, API conventions, etc.
+- **Auto-docs pipeline** — index repo docs → mem9 embed → auto-build knowledge items
 
 ### 🔀 LLM API Gateway
 
@@ -181,6 +179,7 @@ Centralized proxy for all LLM/embedding calls:
 - **Gemini ↔ OpenAI format translation** — handled transparently
 - **Budget enforcement** — daily/monthly token limits from Dashboard
 - **Usage logging** — exact token counts per agent, model, and day
+- **Complexity-based routing** — `model: "auto"` auto-selects tier based on task complexity
 - **OpenAI-compatible** — `/v1/embeddings` + `/v1/chat/completions`
 
 ### 🛡️ Quality Gates
@@ -207,14 +206,29 @@ One agent picks up where another left off:
 
 ### 📊 Dashboard
 
-Real-time monitoring and management:
+Real-time monitoring and management (13 pages):
 
-- Service health (Qdrant, GitNexus, mem9, MCP)
-- Query analytics per project (total queries, active agents)
-- LLM usage — token consumption by model, agent, day/week/month
-- Provider management — add/test/configure with smart model discovery
-- Project management — repo indexing, embedding status
-- Quality reports with grade trends
+- **Overview** — hero stats bar + per-project cards with GitNexus/mem9 status
+- **Sessions** — agent session list with API key tracking + detail panel
+- **Quality** — quality reports with grade trending (A→F) + trends chart
+- **Projects** — repo management, branch-aware indexing, embedding status
+- **Knowledge** — browse and search the shared knowledge base
+- **Providers** — LLM provider management: add/test/configure, smart model discovery
+- **Usage** — token consumption by model, agent, time period + budget controls
+- **Keys** — API key management with per-key permissions
+- **Organizations** — multi-tenant org management
+- **Settings** — system configuration + version info
+- **Setup** — first-time wizard with provider configuration
+- Mobile-responsive: hamburger sidebar, 3-tier CSS breakpoints
+
+### 🔒 Compliance Enforcement
+
+Automatic tool usage tracking and guidance:
+
+- **Session compliance score** — graded A/B/C/D at session end across 5 categories (Discovery, Safety, Learning, Contribution, Lifecycle)
+- **Context-aware hints** — MCP responses include smart suggestions for what tool to use next
+- **Quality gates** — 4D scoring (Build/Regression/Standards/Traceability) with A→F grades
+- **Plan quality assessment** — `cortex_plan_quality` scores plans against 8 criteria before execution
 
 ---
 
@@ -341,13 +355,13 @@ curl https://cortex-mcp.jackle.dev/health     # MCP Server
 
 | Layer | Technology | Role |
 |---|---|---|
-| **MCP Server** | Hono (Node.js, Docker) | Streamable HTTP + JSON-RPC gateway |
-| **Code Intel** | GitNexus | AST parsing, execution flow, impact analysis |
-| **Embeddings** | mem9 + Qdrant | Auto-index repos → vector search |
-| **LLM Proxy** | Hono | Multi-provider gateway with fallback chains |
-| **App DB** | SQLite (WAL) | Sessions, quality, usage, providers, budgets |
-| **API** | Hono | Dashboard backend REST API |
-| **Frontend** | Next.js 15 + React 19 | Dashboard web interface (static export) |
+| **MCP Server** | Hono (Node.js, Docker) | Streamable HTTP + JSON-RPC gateway (17 tools) |
+| **Code Intel** | GitNexus | AST parsing, execution flow, impact analysis, Cypher graph |
+| **Embeddings** | mem9 + Qdrant | In-process embedding pipeline → vector search |
+| **LLM Proxy** | CLIProxy | Multi-provider gateway with fallback chains |
+| **App DB** | SQLite (WAL) | Sessions, quality, usage, providers, budgets, orgs |
+| **API** | Hono | Dashboard backend REST API + mem9 in-process |
+| **Frontend** | Next.js 15 + React 19 | Dashboard web interface (static export, 13 pages) |
 | **Infra** | Docker Compose | Service orchestration |
 | **Tunnel** | Cloudflare Tunnel | Secure exposure, zero open ports |
 | **Hooks** | Lefthook | Git hooks from `project-profile.json` |
@@ -361,26 +375,35 @@ curl https://cortex-mcp.jackle.dev/health     # MCP Server
 cortex-hub/
 ├── apps/
 │   ├── hub-mcp/                 # MCP Server (Hono, Streamable HTTP)
-│   │   └── src/tools/           #   17 MCP tool implementations
-│   ├── dashboard-api/           # Dashboard Backend (Hono + SQLite)
-│   │   ├── routes/llm.ts        #   LLM Gateway (multi-provider proxy)
+│   │   └── src/tools/           #   17 MCP tools (code, memory, knowledge, quality, session, analytics)
+│   ├── dashboard-api/           # Dashboard Backend (Hono + SQLite + mem9)
+│   │   ├── routes/llm.ts        #   LLM Gateway (multi-provider proxy + complexity routing)
 │   │   ├── routes/quality.ts    #   Quality gates + session handoffs
-│   │   └── routes/stats.ts      #   Analytics + telemetry ingestion
+│   │   ├── routes/stats.ts      #   Analytics, telemetry, compliance scoring, hints engine
+│   │   ├── routes/intel.ts      #   Code intelligence proxy (GitNexus)
+│   │   └── routes/knowledge.ts  #   Knowledge base management
 │   └── dashboard-web/           # Dashboard Frontend (Next.js 15)
-│       └── src/app/             #   12 pages: dashboard, sessions, quality, ...
+│       └── src/app/             #   13 pages: dashboard, sessions, quality, orgs, ...
 ├── packages/
 │   ├── shared-types/            # TypeScript type definitions
 │   ├── shared-utils/            # Logger, error classes, common utilities
 │   └── shared-mem9/             # Embedding pipeline + vector store client
 ├── infra/
-│   └── docker-compose.yml       # Qdrant, GitNexus, Watchtower
+│   ├── docker-compose.yml       # Full stack: Qdrant, GitNexus, CLIProxy, API, MCP, Watchtower
+│   ├── Dockerfile.dashboard-api #   API + mem9 in-process
+│   ├── Dockerfile.hub-mcp       #   MCP server
+│   ├── Dockerfile.dashboard-web #   Next.js static export
+│   └── Dockerfile.gitnexus      #   GitNexus eval-server
 ├── scripts/
 │   ├── bootstrap.sh             # One-command install (admin + member modes)
+│   ├── install-hub.sh           # Full server setup (Docker, Cloudflare, services)
 │   ├── onboard.sh               # Universal agent onboarding — macOS/Linux
-│   └── onboard.ps1              # Universal agent onboarding — Windows
+│   ├── onboard.ps1              # Universal agent onboarding — Windows
+│   ├── uninstall.sh             # Clean uninstall for fresh re-testing
+│   └── bump-version.sh          # Version management (patch/minor/major)
 ├── templates/
 │   └── workflows/               # Portable workflow templates for any project
-├── docs/                        # Architecture, API reference, guides
+├── docs/                        # Architecture, API reference, guides, use-cases
 ├── .cortex/                     # Project profile + code conventions
 └── .agents/workflows/           # Active workflow definitions (/code, /continue, /phase)
 ```
@@ -435,21 +458,25 @@ cortex-hub/
 - ✅ Quality: `quality_report` with 4D scoring + `plan_quality` assessment
 - ✅ Compliance enforcement: session compliance grading (A/B/C/D) + context-aware hints
 
-**Dashboard (12 pages)**
-- ✅ Hero stats bar + per-project overview cards
+**Dashboard (13 pages)**
+- ✅ Hero stats bar + per-project overview cards with GitNexus/mem9 status
 - ✅ LLM provider management: add/test/configure, smart model discovery
 - ✅ Usage analytics: token consumption by model, agent, time period
 - ✅ Budget controls: daily/monthly limits with alert thresholds
-- ✅ Quality reports with grade trending (A→F)
+- ✅ Quality reports with grade trending (A→F) + trends chart
 - ✅ Session list with API key tracking + detail panel
 - ✅ Project management with Git integration + branch-aware indexing
+- ✅ Knowledge base browser + search
+- ✅ API key management with per-key permissions
+- ✅ Organization/multi-tenant management
 - ✅ Auto-docs knowledge: scans repo docs after indexing → builds knowledge items
 - ✅ Mobile-responsive: hamburger sidebar, 3-tier CSS breakpoints
 
-**LLM API Gateway**
+**LLM API Gateway (CLIProxy)**
 - ✅ Multi-provider: Gemini, OpenAI, Anthropic, any OpenAI-compatible
 - ✅ Ordered fallback chains with auto-retry (429/502/503/504)
 - ✅ Gemini ↔ OpenAI format translation
+- ✅ Complexity-based model routing (`model: "auto"`)
 - ✅ Budget enforcement with daily/monthly token limits
 - ✅ Usage logging per agent, model, day
 
@@ -464,11 +491,13 @@ cortex-hub/
 
 ### Planned
 
+- [ ] Pre-built Docker images on GHCR (currently build from source)
 - [ ] Streaming chat completions via LLM gateway
 - [ ] Agent performance leaderboard
 - [ ] Interactive knowledge graph visualization
 - [ ] Slack/Discord notification integrations
 - [ ] Cloudflare Access for Dashboard UI protection
+- [ ] GitHub Actions CI/CD pipeline
 
 ---
 
