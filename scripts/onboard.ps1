@@ -137,18 +137,18 @@ if ($Tool -ne "") {
     $selectedTools = $Tool -split ","
     Write-Step "Using specified tool(s): $Tool"
 } else {
-    Write-Host ""
-    Write-Host "Select which tools to configure:" -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host 'Select which tools to configure:' -ForegroundColor Cyan
     $detectedStr = $detectedTools -join ', '
-    Write-Host "  1) All detected tools ($detectedStr)"
-    Write-Host "  2) Claude Code"
-    Write-Host "  3) Cursor"
-    Write-Host "  4) Windsurf"
-    Write-Host "  5) VS Code (Copilot)"
-    Write-Host "  6) Antigravity (Gemini)"
-    Write-Host "  7) Headless Bot"
-    Write-Host "  8) All tools"
-    Write-Host ""
+    Write-Host ('  1) All detected tools (' + $detectedStr + ')')
+    Write-Host '  2) Claude Code'
+    Write-Host '  3) Cursor'
+    Write-Host '  4) Windsurf'
+    Write-Host '  5) VS Code (Copilot)'
+    Write-Host '  6) Antigravity (Gemini)'
+    Write-Host '  7) Headless Bot'
+    Write-Host '  8) All tools'
+    Write-Host ''
 
     $choice = Read-Host "  Select option(s) [1-8, comma-separated]"
     $choices = $choice -split ","
