@@ -26,7 +26,9 @@ description: Write code following project-specific quality gates from project-pr
 2. **`cortex_knowledge_search`** → "Is there documented knowledge about this?"
 3. **`cortex_code_search`** → "Where does this pattern exist in the codebase?"
 4. **`cortex_code_impact`** → "What will break if I change these files?"
-5. `grep_search` / `find_by_name` → FALLBACK only if steps 1-4 are insufficient
+5. **`cortex_detect_changes`** → "What's the risk level of my uncommitted changes?"
+6. **`cortex_cypher`** → "What are the exact graph relationships?" (advanced)
+7. `grep_search` / `find_by_name` → FALLBACK only if steps 1-6 are insufficient
 
 **Then plan:**
 - Identify files to create/modify/delete
@@ -46,6 +48,8 @@ Write code following project conventions:
 
 **During execution — Cortex inline usage:**
 - Before editing a core file → run `cortex_code_impact` on target symbol/file
+- Before committing → run `cortex_detect_changes` to assess risk level
+- For complex dependency questions → use `cortex_cypher` with Cypher queries
 - If you encounter a compilation error or runtime bug:
   1. **FIRST** → `cortex_knowledge_search("error message or symptom")`
   2. If no result → debug manually
@@ -104,6 +108,8 @@ If any verify step fails:
 | Starting work | `cortex_memory_search` | Recall past context |
 | Finding code | `cortex_code_search` | AST-aware search (better than grep) |
 | Before editing | `cortex_code_impact` | Check blast radius |
+| Before committing | `cortex_detect_changes` | Assess risk of uncommitted changes |
+| Complex graph queries | `cortex_cypher` | Direct Cypher queries on knowledge graph |
 | Hitting an error | `cortex_knowledge_search` | Check if known bug |
 | After fixing bug | `cortex_knowledge_store` | Save solution for others |
 | After verify pass | `cortex_quality_report` | Report build/lint/typecheck |
@@ -116,3 +122,4 @@ If any verify step fails:
 - ❌ Fix a non-obvious bug without storing it via `cortex_knowledge_store`
 - ❌ Skip `cortex_quality_report` at end of session
 - ❌ Skip `cortex_code_impact` before editing core infrastructure files
+- ❌ Commit without running `cortex_detect_changes` to check risk level

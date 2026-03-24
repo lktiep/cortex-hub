@@ -45,6 +45,8 @@ Continue the identified task. Follow the appropriate workflow:
 |-----------|--------|
 | Need to find code | `cortex_code_search` FIRST, then `grep_search` as fallback |
 | Before editing core file | `cortex_code_impact` on target symbol/file |
+| Before committing | `cortex_detect_changes` to assess risk level of changes |
+| Complex dependency question | `cortex_cypher` with Cypher queries on the knowledge graph |
 | Hit a compilation error | `cortex_knowledge_search("error message")` FIRST |
 | Fixed a non-obvious bug | `cortex_knowledge_store(title, problem, solution)` MANDATORY |
 | Learned something new | `cortex_memory_store(content)` to persist for next session |
@@ -87,5 +89,5 @@ If any verify step fails:
 - Task: [what was done]
 - Build: ✅/❌ | Typecheck: ✅/❌ | Lint: ✅/❌
 - STATE.md updated: ✅
-- Cortex tools used: code_search ✅/❌ | memory ✅/❌ | knowledge ✅/❌ | impact ✅/❌ | quality_report ✅/❌
+- Cortex tools used: code_search ✅/❌ | memory ✅/❌ | knowledge ✅/❌ | impact ✅/❌ | detect_changes ✅/❌ | quality_report ✅/❌
 ```
