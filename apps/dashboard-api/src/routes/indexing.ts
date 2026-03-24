@@ -317,19 +317,34 @@ indexingRouter.get('/:id/index/branches', (c) => {
   try {
     // Get the latest job per branch
     const jobs = db.prepare(
-      `SELECT branch, status, progress, total_files, symbols_found, 
-              mem9_status, mem9_chunks, docs_knowledge_status, docs_knowledge_count,
-              completed_at, created_at
-       FROM index_jobs
-       WHERE project_id = ?
-         AND id IN (
+      `SELECT j.branch, j.status, j.progress, j.total_files, j.symbols_found, 
+              j.mem9_status, j.mem9_chunks,
+              COALESCE(
+                NULLIF(j.docs_knowledge_status, NULL),
+                (SELECT docs_knowledge_status FROM index_jobs 
+                 WHERE project_id = ? AND branch = j.branch 
+                   AND docs_knowledge_count > 0
+                 ORDER BY created_at DESC LIMIT 1)
+              ) as docs_knowledge_status,
+              COALESCE(
+                NULLIF(j.docs_knowledge_count, 0),
+                (SELECT docs_knowledge_count FROM index_jobs 
+                 WHERE project_id = ? AND branch = j.branch 
+                   AND docs_knowledge_count > 0
+                 ORDER BY created_at DESC LIMIT 1),
+                0
+              ) as docs_knowledge_count,
+              j.completed_at, j.created_at
+       FROM index_jobs j
+       WHERE j.project_id = ?
+         AND j.id IN (
            SELECT id FROM (
              SELECT id, ROW_NUMBER() OVER (PARTITION BY branch ORDER BY created_at DESC) as rn
              FROM index_jobs WHERE project_id = ?
            ) WHERE rn = 1
          )
-       ORDER BY created_at DESC`
-    ).all(projectId, projectId)
+       ORDER BY j.created_at DESC`
+    ).all(projectId, projectId, projectId, projectId)
 
     return c.json({ branches: jobs })
   } catch (error) {
