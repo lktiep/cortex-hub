@@ -51,6 +51,7 @@
 - [x] mem9 API key resolution: read from provider_accounts DB as fallback
 - [x] Global MCP Telemetry: intercept `tools/call` in `hub-mcp` and log to dashboard API (`query_logs`)
 - [x] **Multi-Repo Code Intelligence** — GitNexus auto-discovery + multi-candidate repo routing (`fe1ff04`, `3f2e60c`, `b48c385`)
+- [x] **Tool Usage Analytics** — token tracking (input_size/output_size), tool-analytics API, `cortex_tool_stats` MCP tool (`753eaeb`)
 
 ## Completed (Phase 6)
 - [x] Dashboard API — 9 real routes (no stubs)
@@ -79,5 +80,5 @@
 ## Quality Status
 - Build ✅ | Typecheck ✅ | Lint ✅ (Verified 2026-03-24T10:46+07:00)
 - Architecture: 2-service model (cortex-api + cortex-mcp)
-- MCP: 14 tools, hub-mcp as standalone service
+- MCP: 15 tools, hub-mcp as standalone service (added cortex_tool_stats)
 - GitNexus: 6 repos indexed (cortex-hub + 5 Yulgang projects)
