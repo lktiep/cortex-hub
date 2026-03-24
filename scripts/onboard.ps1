@@ -231,8 +231,11 @@ if config_key:
 else:
     target = config
 
+import os
+cmd = 'npx.cmd' if os.name == 'nt' else 'npx'
+
 entry = {
-    'command': 'npx',
+    'command': cmd,
     'args': ['-y', 'mcp-remote', mcp_url, '--header', 'Authorization: Bearer ' + api_key],
     'env': {
         'HUB_API_KEY': api_key
