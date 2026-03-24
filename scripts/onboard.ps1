@@ -2,9 +2,9 @@
 # Equivalent of onboard.sh for Windows users.
 #
 # Usage:
-#   .\onboard.ps1                                   # Interactive
-#   .\onboard.ps1 -Tool claude                      # Specific tool
-#   .\onboard.ps1 -Tool bot                         # Headless bot
+#   .\onboard.ps1                                   # Interactive (auto-detects tools)
+#   .\onboard.ps1 -Tool cursor                      # Specific tool (skip detection)
+#   .\onboard.ps1 -Tool bot                         # Headless bot mode
 #   $env:HUB_API_KEY = "xxx"; .\onboard.ps1         # Non-interactive
 #
 # Requirements: PowerShell 5.1+ (ships with Windows 10+), Node.js 22+

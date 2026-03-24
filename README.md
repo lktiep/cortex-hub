@@ -321,7 +321,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scr
 **Windows (PowerShell):**
 ```powershell
 iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/onboard.ps1 -OutFile onboard.ps1
-.\onboard.ps1 -Tool claude
+.\onboard.ps1
 ```
 
 Or with API key pre-configured:
