@@ -1,5 +1,9 @@
 import { Hono } from 'hono'
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
+import { join, relative } from 'path'
 import { createLogger } from '@cortex/shared-utils'
+import { Embedder } from '@cortex/shared-mem9'
+import type { EmbedderConfig } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 
 const logger = createLogger('intel')
@@ -7,6 +11,24 @@ const logger = createLogger('intel')
 export const intelRouter = new Hono()
 
 const GITNEXUS_URL = () => process.env.GITNEXUS_URL ?? 'http://gitnexus:4848'
+const QDRANT_URL = process.env.QDRANT_URL ?? 'http://qdrant:6333'
+const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
+
+/** Max file size for code_read (512KB) */
+const MAX_READ_SIZE = 512 * 1024
+
+/** Resolve Gemini API key for embedding */
+function resolveGeminiApiKey(): string {
+  const envKey = process.env['GEMINI_API_KEY']
+  if (envKey) return envKey
+  try {
+    const row = db.prepare(
+      "SELECT api_key FROM provider_accounts WHERE type = 'gemini' AND status = 'enabled' AND api_key IS NOT NULL LIMIT 1"
+    ).get() as { api_key: string } | undefined
+    if (row?.api_key) return row.api_key
+  } catch { /* DB might not be ready */ }
+  return ''
+}
 
 /**
  * Call GitNexus eval-server HTTP API.
@@ -702,6 +724,208 @@ intelRouter.post('/sync-repos', async (c) => {
     return c.json({ success: false, error: String(error) }, 500)
   }
 })
+
+// ── Code Search (Qdrant semantic): search embedded source code ──
+intelRouter.post('/code-search', async (c) => {
+  try {
+    const body = await c.req.json()
+    const { query, projectId, branch, limit, file } = body as {
+      query: string
+      projectId?: string
+      branch?: string
+      limit?: number
+      file?: string
+    }
+
+    if (!query) return c.json({ error: 'query is required' }, 400)
+    if (!projectId) return c.json({ error: 'projectId is required for code search' }, 400)
+
+    // Resolve collection name
+    const collectionName = `cortex-project-${projectId}`
+
+    // Embed the query
+    const config: EmbedderConfig = {
+      provider: 'gemini' as const,
+      apiKey: resolveGeminiApiKey(),
+      model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-exp-03-07',
+    }
+    const embedder = new Embedder(config)
+    const vector = await embedder.embed(query)
+
+    // Build Qdrant filter
+    const must: Array<Record<string, unknown>> = []
+    if (branch) {
+      must.push({ key: 'branch', match: { value: branch } })
+    }
+    if (file) {
+      must.push({ key: 'file_path', match: { text: file } })
+    }
+
+    const searchLimit = limit ?? 10
+
+    const res = await fetch(`${QDRANT_URL}/collections/${collectionName}/points/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        vector,
+        limit: searchLimit,
+        with_payload: true,
+        filter: must.length > 0 ? { must } : undefined,
+      }),
+      signal: AbortSignal.timeout(10000),
+    })
+
+    if (!res.ok) {
+      const errText = await res.text()
+      // Collection may not exist (project not embedded yet)
+      if (errText.includes('Not found') || errText.includes('doesn\'t exist')) {
+        return c.json({
+          success: true,
+          data: {
+            query,
+            results: [],
+            message: `No embedded code found for project ${projectId}. Run Mem9 embedding first via the dashboard.`,
+          },
+        })
+      }
+      return c.json({ error: `Qdrant search failed: ${errText}` }, 500)
+    }
+
+    const data = (await res.json()) as {
+      result?: Array<{ id: string; score: number; payload?: Record<string, unknown> }>
+    }
+
+    const results = (data.result ?? []).map((hit) => ({
+      score: hit.score,
+      filePath: hit.payload?.file_path as string | undefined,
+      chunkIndex: hit.payload?.chunk_index as number | undefined,
+      content: hit.payload?.content as string | undefined,
+      branch: hit.payload?.branch as string | undefined,
+    }))
+
+    return c.json({
+      success: true,
+      data: { query, projectId, results },
+    })
+  } catch (error) {
+    logger.error(`Code search (Qdrant) failed: ${String(error)}`)
+    return c.json({ success: false, error: String(error) }, 500)
+  }
+})
+
+// ── File Content: read raw source file from cloned repo ──
+intelRouter.post('/file-content', async (c) => {
+  try {
+    const body = await c.req.json()
+    const { projectId, file, startLine, endLine } = body as {
+      projectId: string
+      file: string
+      startLine?: number
+      endLine?: number
+    }
+
+    if (!projectId) return c.json({ error: 'projectId is required' }, 400)
+    if (!file) return c.json({ error: 'file path is required' }, 400)
+
+    // Security: prevent path traversal
+    const normalized = file.replace(/\\/g, '/').replace(/\.\.\/|\.\.$/g, '')
+    const repoDir = join(REPOS_DIR, projectId)
+    const fullPath = join(repoDir, normalized)
+
+    // Ensure path stays within repo dir
+    if (!fullPath.startsWith(repoDir)) {
+      return c.json({ error: 'Invalid file path (path traversal attempt)' }, 400)
+    }
+
+    if (!existsSync(fullPath)) {
+      // Try to find file by basename in repo
+      const basename = normalized.split('/').pop() ?? ''
+      const suggestions = findFilesByName(repoDir, basename, 5)
+      return c.json({
+        error: `File not found: ${normalized}`,
+        suggestions: suggestions.length > 0 ? suggestions : undefined,
+        hint: 'Use cortex_code_search to find the correct file path first.',
+      }, 404)
+    }
+
+    const stat = statSync(fullPath)
+    if (!stat.isFile()) {
+      return c.json({ error: 'Path is a directory, not a file' }, 400)
+    }
+    if (stat.size > MAX_READ_SIZE) {
+      return c.json({
+        error: `File too large (${Math.round(stat.size / 1024)}KB > ${MAX_READ_SIZE / 1024}KB limit)`,
+        hint: 'Use startLine/endLine to read a portion of the file.',
+      }, 400)
+    }
+
+    const content = readFileSync(fullPath, 'utf-8')
+
+    // Optional line range
+    if (startLine || endLine) {
+      const lines = content.split('\n')
+      const start = Math.max(1, startLine ?? 1) - 1
+      const end = Math.min(lines.length, endLine ?? lines.length)
+      const sliced = lines.slice(start, end)
+
+      return c.json({
+        success: true,
+        data: {
+          file: normalized,
+          projectId,
+          totalLines: lines.length,
+          startLine: start + 1,
+          endLine: end,
+          content: sliced.join('\n'),
+        },
+      })
+    }
+
+    return c.json({
+      success: true,
+      data: {
+        file: normalized,
+        projectId,
+        totalLines: content.split('\n').length,
+        sizeBytes: stat.size,
+        content,
+      },
+    })
+  } catch (error) {
+    logger.error(`File content read failed: ${String(error)}`)
+    return c.json({ success: false, error: String(error) }, 500)
+  }
+})
+
+/** Find files by basename in a repo directory (for suggestions) */
+function findFilesByName(dir: string, basename: string, maxResults: number): string[] {
+  const results: string[] = []
+  const skipDirs = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.turbo', 'vendor', 'bin', 'obj'])
+
+  function walk(currentDir: string) {
+    if (results.length >= maxResults) return
+    let entries: string[]
+    try { entries = readdirSync(currentDir) } catch { return }
+
+    for (const entry of entries) {
+      if (results.length >= maxResults) return
+      if (skipDirs.has(entry) || entry.startsWith('.')) continue
+
+      const fullPath = join(currentDir, entry)
+      let stat
+      try { stat = statSync(fullPath) } catch { continue }
+
+      if (stat.isDirectory()) {
+        walk(fullPath)
+      } else if (entry.toLowerCase() === basename.toLowerCase()) {
+        results.push(relative(dir, fullPath))
+      }
+    }
+  }
+
+  walk(dir)
+  return results
+}
 
 // ── Health: check GitNexus service status ──
 intelRouter.get('/health', async (c) => {

@@ -52,7 +52,7 @@ Call `cortex_session_end` to close the session.
 > If any tool is missing or fails with `fetch failed`, immediately inform the user to refresh the MCP server connection.
 > ℹ️ **Compliance is auto-enforced**: every tool response includes contextual hints, and `session_end` shows your compliance grade.
 
-### Complete Tool Reference (16 tools)
+### Complete Tool Reference (17 tools)
 
 | # | Tool | When to Use | Required Args |
 |---|------|-------------|---------------|
@@ -60,28 +60,30 @@ Call `cortex_session_end` to close the session.
 | 2 | `cortex_session_end` | End of EVERY session | `sessionId` |
 | 3 | `cortex_changes` | Before editing shared files | `agentId`, `projectId` |
 | 4 | `cortex_code_search` | **BEFORE** grep/find — use FIRST | `query`, optional `projectId` |
-| 5 | `cortex_code_context` | Understand a symbol (callers, callees, flows) | `name`, optional `file` |
-| 6 | `cortex_code_impact` | Before editing core code | `target` (function/class/file) |
-| 7 | `cortex_detect_changes` | Before committing — pre-commit risk analysis | optional `scope`, `projectId` |
-| 8 | `cortex_cypher` | Advanced graph queries (find callers, trace deps) | `query` (Cypher syntax) |
-| 9 | `cortex_code_reindex` | After EVERY push | `repo`, `branch` |
-| 10 | `cortex_memory_search` | Recall past decisions/findings | `query` |
-| 11 | `cortex_memory_store` | Store session findings | `content` |
-| 12 | `cortex_knowledge_search` | Search **FIRST** when encountering errors | `query` |
-| 13 | `cortex_knowledge_store` | **MANDATORY**: Contribute bug fixes & patterns | `title`, `content` |
-| 14 | `cortex_quality_report` | After running verify commands | `gate_name`, `results`, `agent_id` |
-| 15 | `cortex_plan_quality` | Assess plan before execution | `plan`, `request` |
-| 16 | `cortex_tool_stats` | View tool usage analytics & effectiveness | optional `days`, `agentId` |
+| 5 | `cortex_code_read` | Read raw source files from repos | `file`, `projectId`, optional `startLine`/`endLine` |
+| 6 | `cortex_code_context` | Understand a symbol (callers, callees, flows) | `name`, optional `file` |
+| 7 | `cortex_code_impact` | Before editing core code | `target` (function/class/file) |
+| 8 | `cortex_detect_changes` | Before committing — pre-commit risk analysis | optional `scope`, `projectId` |
+| 9 | `cortex_cypher` | Advanced graph queries (find callers, trace deps) | `query` (Cypher syntax) |
+| 10 | `cortex_code_reindex` | After EVERY push | `repo`, `branch` |
+| 11 | `cortex_memory_search` | Recall past decisions/findings | `query` |
+| 12 | `cortex_memory_store` | Store session findings | `content` |
+| 13 | `cortex_knowledge_search` | Search **FIRST** when encountering errors | `query` |
+| 14 | `cortex_knowledge_store` | **MANDATORY**: Contribute bug fixes & patterns | `title`, `content` |
+| 15 | `cortex_quality_report` | After running verify commands | `gate_name`, `results`, `agent_id` |
+| 16 | `cortex_plan_quality` | Assess plan before execution | `plan`, `request` |
+| 17 | `cortex_tool_stats` | View tool usage analytics & effectiveness | optional `days`, `agentId` |
 
 ### Tool Priority Order (MANDATORY — before grep/find)
 
 1. `cortex_memory_search` → check if you already know this
 2. `cortex_knowledge_search` → search shared knowledge base
-3. `cortex_code_search` → search indexed codebase (GitNexus AST)
-4. `cortex_code_impact` → check blast radius before editing
-5. `cortex_detect_changes` → pre-commit risk analysis
-6. `cortex_cypher` → advanced graph queries (Cypher syntax)
-7. `grep_search` / `find_by_name` → fallback ONLY if Cortex tools unavailable
+3. `cortex_code_search` → search indexed codebase (GitNexus AST + Qdrant semantic)
+4. `cortex_code_read` → read full source files from indexed repos
+5. `cortex_code_impact` → check blast radius before editing
+6. `cortex_detect_changes` → pre-commit risk analysis
+7. `cortex_cypher` → advanced graph queries (Cypher syntax)
+8. `grep_search` / `find_by_name` → fallback ONLY if Cortex tools unavailable
 
 ### Post-Push Checklist (NEVER skip)
 
@@ -98,7 +100,7 @@ Call `cortex_session_end` to close the session.
 Your tool usage is **automatically tracked and scored**. Two mechanisms enforce compliance:
 
 1. **Session Compliance Score** — `cortex_session_end` returns a grade (A/B/C/D) based on tool category coverage:
-   - Discovery (code_search, code_context, cypher)
+   - Discovery (code_search, code_read, code_context, cypher)
    - Safety (code_impact, detect_changes)
    - Learning (knowledge_search, memory_search)
    - Contribution (knowledge_store, memory_store)
@@ -110,6 +112,6 @@ Your tool usage is **automatically tracked and scored**. Two mechanisms enforce 
 
 ### Tool Verification
 
-If you see fewer than 16 tools from `cortex-hub` MCP server, the connection may be stale.
+If you see fewer than 17 tools from `cortex-hub` MCP server, the connection may be stale.
 **Action:** Immediately inform the user: "MCP tools are incomplete. Please refresh the cortex-hub MCP server connection."
 <!-- cortex-hub:auto-mcp -->

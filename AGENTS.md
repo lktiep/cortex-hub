@@ -40,7 +40,8 @@
 
 | When | Tool | What to Do |
 |------|------|------------|
-| **Searching code** | `cortex_code_search` | Use FIRST before `grep_search` or `find_by_name`. Queries GitNexus knowledge graph with AST-aware search. Fall back to grep only if unavailable. |
+| **Searching code** | `cortex_code_search` | Use FIRST before `grep_search` or `find_by_name`. Queries GitNexus knowledge graph + Qdrant semantic search for actual source code snippets. Fall back to grep only if unavailable. |
+| **Reading source files** | `cortex_code_read` | Read raw source code from indexed repos. Use after `cortex_code_search` to view full files. Supports line ranges. |
 | **Understanding a symbol** | `cortex_code_context` | Get 360° view of a function/class: callers, callees, imports, process participation. |
 | **Before editing core code** | `cortex_code_impact` | Run blast radius analysis on the symbol/file you plan to change. |
 | **Before committing** | `cortex_detect_changes` | Detect uncommitted changes and assess risk level — shows affected symbols, processes, and risk rating. Use before `git commit`. |
@@ -55,11 +56,12 @@
 **Tool priority order for discovery (before grep/find):**
 1. `cortex_memory_search` → check if you or another agent already knows this
 2. `cortex_knowledge_search` → search the shared knowledge base
-3. `cortex_code_search` → search the indexed codebase (GitNexus AST graph)
-4. `cortex_code_impact` → check blast radius before editing
-5. `cortex_detect_changes` → pre-commit risk analysis
-6. `cortex_cypher` → advanced graph queries (Cypher syntax)
-7. `grep_search` / `find_by_name` → only if Cortex tools are unavailable
+3. `cortex_code_search` → search the indexed codebase (GitNexus AST + Qdrant semantic)
+4. `cortex_code_read` → read full source files from indexed repos
+5. `cortex_code_impact` → check blast radius before editing
+6. `cortex_detect_changes` → pre-commit risk analysis
+7. `cortex_cypher` → advanced graph queries (Cypher syntax)
+8. `grep_search` / `find_by_name` → only if Cortex tools are unavailable
 
 **Bug/Error Protocol (NEVER skip):**
 If you encounter a compilation error, runtime error, or failing test:
@@ -72,7 +74,7 @@ If you encounter a compilation error, runtime error, or failing test:
 Cortex Hub enforces tool usage through two mechanisms:
 
 1. **Session Compliance Score** — When you call `cortex_session_end`, the system automatically evaluates your tool usage across 5 categories and shows a grade:
-   - **Discovery** (code_search, code_context, cypher)
+   - **Discovery** (code_search, code_read, code_context, cypher)
    - **Safety** (code_impact, detect_changes)
    - **Learning** (knowledge_search, memory_search)
    - **Contribution** (knowledge_store, memory_store)

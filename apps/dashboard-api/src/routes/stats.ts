@@ -506,7 +506,7 @@ statsRouter.get('/session-compliance/:sessionId', (c) => {
 
     // Define recommended tool categories
     const recommendedTools = {
-      discovery: ['cortex_code_search', 'cortex_code_context', 'cortex_cypher'],
+      discovery: ['cortex_code_search', 'cortex_code_context', 'cortex_cypher', 'cortex_code_read'],
       safety: ['cortex_code_impact', 'cortex_detect_changes'],
       learning: ['cortex_knowledge_search', 'cortex_memory_search'],
       contribution: ['cortex_knowledge_store', 'cortex_memory_store'],
@@ -597,6 +597,9 @@ statsRouter.get('/hints/:agentId', (c) => {
       if (currentTool === 'cortex_code_search' && !used.has('cortex_code_context')) {
         hints.push('🔍 If code_search returns empty (repo has 0 flows), try cortex_code_context or cortex_cypher for symbol-level queries.')
       }
+      if (currentTool === 'cortex_code_search' && !used.has('cortex_code_read')) {
+        hints.push('📄 Use cortex_code_read to view full source files found by code_search. Requires projectId + file path.')
+      }
       if (currentTool === 'cortex_code_context' && !used.has('cortex_list_repos')) {
         hints.push('📦 If you get "symbol not found", use cortex_list_repos to find the correct projectId for your repository.')
       }
@@ -631,7 +634,7 @@ statsRouter.get('/hints/:agentId', (c) => {
     }
 
     // General hints based on low tool coverage
-    const discoveryTools = ['cortex_code_search', 'cortex_code_context', 'cortex_cypher']
+    const discoveryTools = ['cortex_code_search', 'cortex_code_context', 'cortex_cypher', 'cortex_code_read']
     const usedDiscovery = discoveryTools.filter(t => used.has(t)).length
     if (usedDiscovery === 0 && used.size > 2) {
       hints.push('🔍 You haven\'t used any code discovery tools yet. Try cortex_code_search before grep for better results.')
