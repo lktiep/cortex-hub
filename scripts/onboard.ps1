@@ -223,9 +223,9 @@ function Set-McpConfig {
     }
 
     # Build MCP entry
-    $mcpEntry = [PSCustomObject]@{
+    $cortexHubConfig = [PSCustomObject]@{
         command = "npx"
-        args    = @("-y", "mcp-remote", $McpUrl, "--header", "Authorization: Bearer `${HUB_API_KEY}")
+        args    = @("-y", "mcp-remote", $McpUrl, "--header", "Authorization: Bearer $HUB_API_KEY")
         env     = [PSCustomObject]@{
             HUB_API_KEY = $ApiKey
         }
@@ -250,7 +250,7 @@ $configMap = @{
     cursor      = @{ Path = "$env:USERPROFILE\.cursor\mcp.json"; Key = "mcpServers"; Name = "Cursor" }
     windsurf    = @{ Path = "$env:USERPROFILE\.codeium\windsurf\mcp_config.json"; Key = "mcpServers"; Name = "Windsurf" }
     vscode      = @{ Path = ".vscode\mcp.json"; Key = "servers"; Name = "VS Code (Copilot)" }
-    antigravity = @{ Path = "$env:USERPROFILE\.gemini\settings.json"; Key = "mcpServers"; Name = "Antigravity (Gemini)" }
+    antigravity = @{ Path = "$env:USERPROFILE\.gemini\antigravity\mcp_config.json"; Key = "mcpServers"; Name = "Antigravity (Gemini)" }
     bot         = @{ Path = ""; Key = ""; Name = "Headless Bot" }
 }
 

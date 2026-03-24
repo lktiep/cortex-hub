@@ -51,7 +51,7 @@ TOOL_REGISTRY=(
     "cursor|Cursor|__cursor_mcp__|mcpServers"
     "windsurf|Windsurf|$HOME/.codeium/windsurf/mcp_config.json|mcpServers"
     "vscode|VS Code (Copilot)|__vscode_mcp__|servers"
-    "antigravity|Antigravity (Gemini)|$HOME/.gemini/settings.json|mcpServers"
+    "antigravity|Antigravity (Gemini)|$HOME/.gemini/antigravity/mcp_config.json|mcpServers"
     "bot|Headless Bot (OpenClaw, API)|__bot__|__none__"
 )
 
@@ -303,7 +303,7 @@ with open(path, 'r') as f: config = json.load(f)
 if '$config_key' not in config: config['$config_key'] = {}
 config['$config_key']['cortex-hub'] = {
     'command': 'npx',
-    'args': ['-y', 'mcp-remote', '$MCP_URL', '--header', 'Authorization: Bearer \${HUB_API_KEY}'],
+    'args': ['-y', 'mcp-remote', '$MCP_URL', '--header', 'Authorization: Bearer $HUB_API_KEY'],
     'env': {
         'HUB_API_KEY': '$HUB_API_KEY'
     }
@@ -321,7 +321,7 @@ if '$config_key' not in config: config['$config_key'] = {}
 config['$config_key']['cortex-hub'] = {
     'type': 'stdio',
     'command': 'npx',
-    'args': ['-y', 'mcp-remote', '$MCP_URL', '--header', 'Authorization: Bearer \${HUB_API_KEY}'],
+    'args': ['-y', 'mcp-remote', '$MCP_URL', '--header', 'Authorization: Bearer $HUB_API_KEY'],
     'env': {
         'HUB_API_KEY': '$HUB_API_KEY'
     }
@@ -338,7 +338,7 @@ with open(path, 'r') as f: config = json.load(f)
 if '$config_key' not in config: config['$config_key'] = {}
 config['$config_key']['cortex-hub'] = {
     'command': 'npx',
-    'args': ['-y', 'mcp-remote', '$MCP_URL', '--header', 'Authorization: Bearer \${HUB_API_KEY}'],
+    'args': ['-y', 'mcp-remote', '$MCP_URL', '--header', 'Authorization: Bearer $HUB_API_KEY'],
     'env': {
         'HUB_API_KEY': '$HUB_API_KEY'
     }
