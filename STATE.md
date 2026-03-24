@@ -43,7 +43,7 @@
 - [x] Fix self-fetch deadlock: apiCall + setInternalFetch for in-memory routing (`bba043d`)
 - [x] Service separation: split All-in-One into cortex-api + cortex-mcp
 - [x] Agent workflow gaps: catch-all routing, continue.md path fix, onboard.sh env var
-- [x] Fix onboard.ps1 syntax parsing bug in Windows PowerShell 5.1 (Removed UTF-8 characters misread as ANSI smart quotes, decoupled `} else {` to bypass LF Lexer bugs, and fixed $null pipeline errors in Add-Member for empty configs)
+- [x] Fix onboard.ps1 syntax parsing bug in Windows PowerShell 5.1 (Removed UTF-8 characters misread as ANSI smart quotes, decoupled `} else {` to bypass LF Lexer bugs, fixed $null pipeline errors in Add-Member for empty configs, and corrected Antigravity config path to `.gemini/settings.json`)
 - [x] Version display: Sidebar footer shows version badge, docker-compose build args
 - [x] Auto-detect Git provider from repo URL in project creation form
 - [x] X-API-Key-Owner identity resolution (api-call.ts → quality.ts/sessions)

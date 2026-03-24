@@ -51,7 +51,7 @@ TOOL_REGISTRY=(
     "cursor|Cursor|__cursor_mcp__|mcpServers"
     "windsurf|Windsurf|$HOME/.codeium/windsurf/mcp_config.json|mcpServers"
     "vscode|VS Code (Copilot)|__vscode_mcp__|servers"
-    "antigravity|Antigravity (Gemini)|$HOME/.gemini/antigravity/mcp_config.json|mcpServers"
+    "antigravity|Antigravity (Gemini)|$HOME/.gemini/settings.json|mcpServers"
     "bot|Headless Bot (OpenClaw, API)|__bot__|__none__"
 )
 
