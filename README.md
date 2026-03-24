@@ -110,7 +110,6 @@ Internet
   │
   ├── cortex-mcp.jackle.dev ──── Hub MCP Server (Hono, Streamable HTTP)
   ├── cortex-api.jackle.dev ──── Dashboard API  (Hono + SQLite + mem9)
-  ├── cortex-llm.jackle.dev ──── LLM Gateway    (CLIProxy, multi-provider)
   └── hub.jackle.dev ─────────── Dashboard UI   (Next.js static export)
                                     │
                               Cloudflare Tunnel
