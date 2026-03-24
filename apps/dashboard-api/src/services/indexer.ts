@@ -271,6 +271,23 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
     updateJob(jobId, { progress: 25 })
     logger.info(`[${jobId}] Clone complete`)
 
+    // ── Step 1b: Extract commit info from HEAD ──
+    try {
+      const { execFileSync } = await import('child_process')
+      const commitHash = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+        cwd: repoDir, encoding: 'utf-8', timeout: 5000,
+      }).trim()
+      const commitMessage = execFileSync('git', ['log', '-1', '--format=%s'], {
+        cwd: repoDir, encoding: 'utf-8', timeout: 5000,
+      }).trim()
+      updateJob(jobId, { commit_hash: commitHash, commit_message: commitMessage.slice(0, 200) })
+      appendLog(jobId, `📌 Commit: ${commitHash} — ${commitMessage.slice(0, 100)}`)
+      logger.info(`[${jobId}] HEAD commit: ${commitHash} — ${commitMessage.slice(0, 60)}`)
+    } catch {
+      // Non-fatal — commit info is nice-to-have
+      logger.warn(`[${jobId}] Could not extract commit info`)
+    }
+
     // ── Step 2: GitNexus Analyze ──
     // Try CLI first (only works if gitnexus is installed in this container),
     // then try HTTP API to the gitnexus container, then pure JS fallback.

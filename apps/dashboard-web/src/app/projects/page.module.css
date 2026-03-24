@@ -565,7 +565,7 @@
 
 .historyHeaderRow {
   display: grid;
-  grid-template-columns: 1fr 1.2fr 0.7fr 0.7fr 1fr;
+  grid-template-columns: 0.8fr 1fr 2fr 0.6fr 0.5fr 1.2fr;
   padding: var(--space-2) var(--space-3);
   font-size: 0.6875rem;
   font-weight: 600;
@@ -578,7 +578,7 @@
 
 .historyRow {
   display: grid;
-  grid-template-columns: 1fr 1.2fr 0.7fr 0.7fr 1fr;
+  grid-template-columns: 0.8fr 1fr 2fr 0.6fr 0.5fr 1.2fr;
   padding: var(--space-2) var(--space-3);
   font-size: 0.8125rem;
   color: var(--text-secondary);
@@ -599,9 +599,48 @@
   font-size: 0.75rem;
 }
 
+.historyCommit {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.commitHash {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--accent-primary);
+  background: rgba(74, 144, 217, 0.1);
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.commitMsg {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.commitEmpty {
+  color: var(--text-quaternary, #444);
+}
+
+.triggerIcon {
+  font-size: 0.6875rem;
+  margin-right: 0.25rem;
+}
+
 .historyDate {
   font-size: 0.75rem;
   color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
 }
 
 /* History Header */
@@ -1005,7 +1044,11 @@
   .infoGrid { grid-template-columns: 1fr; }
   .providerGrid { grid-template-columns: repeat(2, 1fr); }
   .historyHeaderRow,
-  .historyRow { grid-template-columns: 1fr 1fr 0.7fr 0.7fr 1fr; }
+  .historyRow { grid-template-columns: 0.8fr 1fr 0.6fr 0.5fr; }
+  .historyHeaderRow > :nth-child(3),
+  .historyHeaderRow > :nth-child(6),
+  .historyRow > :nth-child(3),
+  .historyRow > :nth-child(6) { display: none; }
   .branchStatusGrid { grid-template-columns: 1fr; }
   .pipelineGrid { grid-template-columns: 1fr; }
   .pipelineArrow { transform: rotate(90deg); padding: 0; }

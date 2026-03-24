@@ -31,6 +31,21 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: string
   none:      { label: 'Not indexed', color: '#666', icon: '—' },
 }
 
+function formatRelativeTime(dateStr: string): string {
+  const now = Date.now()
+  const then = new Date(dateStr).getTime()
+  const diff = now - then
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  const d = new Date(dateStr)
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl: boolean }) {
   const [branch, setBranch] = useState('')
   const [starting, setStarting] = useState(false)
@@ -382,22 +397,38 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
             <div className={styles.historyHeaderRow}>
               <span>Branch</span>
               <span>Status</span>
+              <span>Commit</span>
               <span>Symbols</span>
               <span>Files</span>
-              <span>Date</span>
+              <span>Time</span>
             </div>
             {history.map((job: IndexJobSummary) => {
               const jobStatus = STATUS_CONFIG[job.status] ?? { label: 'Unknown', color: '#666', icon: '—' }
+              const ts = job.completed_at ?? job.started_at ?? job.created_at
+              const triggerIcon = job.triggered_by === 'push' ? '🔄' : job.triggered_by === 'reindex' ? '🔁' : job.triggered_by === 'schedule' ? '⏰' : '▶️'
               return (
                 <div key={job.id} className={styles.historyRow}>
                   <span className={styles.historyBranch}>{job.branch}</span>
                   <span className={styles.historyStatus} style={{ color: jobStatus.color }}>
                     {jobStatus.icon} {jobStatus.label}
                   </span>
+                  <span className={styles.historyCommit} title={job.commit_message ?? undefined}>
+                    {job.commit_hash ? (
+                      <>
+                        <code className={styles.commitHash}>{job.commit_hash}</code>
+                        {job.commit_message && (
+                          <span className={styles.commitMsg}>{job.commit_message.slice(0, 40)}{job.commit_message.length > 40 ? '…' : ''}</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className={styles.commitEmpty}>—</span>
+                    )}
+                  </span>
                   <span>{job.symbols_found}</span>
                   <span>{job.total_files}</span>
-                  <span className={styles.historyDate}>
-                    {new Date(job.created_at).toLocaleDateString()}
+                  <span className={styles.historyDate} title={new Date(ts).toLocaleString()}>
+                    <span className={styles.triggerIcon}>{triggerIcon}</span>
+                    {formatRelativeTime(ts)}
                   </span>
                 </div>
               )

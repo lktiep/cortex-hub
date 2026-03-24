@@ -21,6 +21,9 @@ interface IndexJob {
   symbols_found: number
   log: string | null
   error: string | null
+  commit_hash: string | null
+  commit_message: string | null
+  triggered_by: string | null
   started_at: string | null
   completed_at: string | null
   created_at: string
@@ -51,9 +54,11 @@ indexingRouter.post('/:id/index', async (c) => {
 
     // Parse branch from body
     let branch = 'main'
+    let triggeredBy = 'manual'
     try {
       const body = await c.req.json()
       if (body.branch) branch = body.branch
+      if (body.triggeredBy) triggeredBy = body.triggeredBy
     } catch {
       // No body is OK, use default branch
     }
@@ -61,8 +66,8 @@ indexingRouter.post('/:id/index', async (c) => {
     // Create job record
     const jobId = `idx-${randomUUID().slice(0, 12)}`
     db.prepare(
-      `INSERT INTO index_jobs (id, project_id, branch, status, progress) VALUES (?, ?, ?, 'pending', 0)`
-    ).run(jobId, projectId, branch)
+      `INSERT INTO index_jobs (id, project_id, branch, status, progress, triggered_by) VALUES (?, ?, ?, 'pending', 0, ?)`
+    ).run(jobId, projectId, branch, triggeredBy)
 
     // Fire and forget — run indexing in background
     startIndexing(projectId, jobId, branch).catch(() => {
@@ -118,7 +123,9 @@ indexingRouter.get('/:id/index/history', (c) => {
     const total = totalRow?.total ?? 0
 
     const jobs = db.prepare(
-      `SELECT id, branch, status, progress, total_files, symbols_found, error, started_at, completed_at, created_at
+      `SELECT id, branch, status, progress, total_files, symbols_found, error,
+              commit_hash, commit_message, triggered_by,
+              started_at, completed_at, created_at
        FROM index_jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`
     ).all(projectId, limit, offset) as IndexJob[]
 

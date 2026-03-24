@@ -64,7 +64,7 @@ export function registerIndexingTools(server: McpServer, env: Env) {
         const indexRes = await apiCall(env, `/api/projects/${projectId}/index`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ branch: branch ?? 'main' }),
+          body: JSON.stringify({ branch: branch ?? 'main', triggeredBy: 'reindex' }),
         })
 
         const indexData = (await indexRes.json()) as Record<string, unknown>

@@ -532,6 +532,9 @@ export interface IndexJobSummary {
   total_files: number
   symbols_found: number
   error: string | null
+  commit_hash: string | null
+  commit_message: string | null
+  triggered_by: string | null
   started_at: string | null
   completed_at: string | null
   created_at: string
