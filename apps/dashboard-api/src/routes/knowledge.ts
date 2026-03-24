@@ -366,7 +366,10 @@ knowledgeRouter.get('/tags', (c) => {
   for (const row of rows) {
     try {
       const parsed = JSON.parse(row.tags) as string[]
-      for (const tag of parsed) tagSet.add(tag)
+      for (const tag of parsed) {
+        // Skip internal project: tags — those are structural, not content tags
+        if (!tag.startsWith('project:')) tagSet.add(tag)
+      }
     } catch { /* skip malformed */ }
   }
 
