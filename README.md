@@ -490,14 +490,17 @@ cortex-hub/
 - ✅ Agent-facing rules auto-generated (`.cortex/agent-rules.md`)
 - ✅ Auto-docs knowledge pipeline: index repo → mem9 embed → scan docs → build knowledge
 
+**CI/CD & Operations**
+- ✅ GitHub Actions: CI (lint + typecheck + test) on every push/PR
+- ✅ GitHub Actions: Docker build → GHCR publish with auto version bump
+- ✅ Watchtower auto-update: server pulls new images automatically
+
 ### Planned
 
-- [ ] Streaming chat completions via LLM gateway
 - [ ] Agent performance leaderboard
 - [ ] Interactive knowledge graph visualization
 - [ ] Slack/Discord notification integrations
 - [ ] Cloudflare Access for Dashboard UI protection
-- [ ] GitHub Actions CI/CD pipeline
 
 ---
 
