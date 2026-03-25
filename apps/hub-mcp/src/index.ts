@@ -146,52 +146,35 @@ function createMcpServer(env: Env) {
 // enableJsonResponse: true allows simple request/response without SSE.
 app.all('/mcp', async (c) => {
   // ─── Auth: STRICT enforcement ──────────────────────────────────
-  // All requests MUST provide a valid Bearer token (API key).
-  // Internal Docker-network requests bypass auth for inter-service calls.
+  // ALL HTTP requests to /mcp MUST provide a valid Bearer token.
+  // Inter-service calls (dashboard-api → hub-mcp) use in-memory
+  // setInternalFetch() and never hit this HTTP endpoint.
   const envWithOwner = { ...c.env } as Env & { API_KEY_OWNER?: string }
 
-  // Check if request is from internal Docker network (inter-service)
-  const forwardedFor = c.req.header('x-forwarded-for') ?? ''
-  const realIp = c.req.header('x-real-ip') ?? ''
-  const isInternal = !forwardedFor && !realIp // No proxy headers = direct Docker network call
-
-  if (!isInternal) {
-    // External request — MUST have valid API key
-    try {
-      const authResult = await validateApiKey(c.req.raw, c.env)
-      if (!authResult.valid) {
-        return c.json({
-          jsonrpc: '2.0',
-          error: {
-            code: -32001,
-            message: `Unauthorized: ${authResult.error || 'Invalid API key'}. Get a key from the Dashboard → API Keys.`,
-          },
-          id: null,
-        }, 401)
-      }
-      if (authResult.agentId) {
-        envWithOwner.API_KEY_OWNER = authResult.agentId
-      }
-    } catch (err) {
+  try {
+    const authResult = await validateApiKey(c.req.raw, c.env)
+    if (!authResult.valid) {
       return c.json({
         jsonrpc: '2.0',
         error: {
           code: -32001,
-          message: `Auth service unavailable: ${String(err)}`,
+          message: `Unauthorized: ${authResult.error || 'Invalid API key'}. Get a key from the Dashboard → API Keys.`,
         },
         id: null,
-      }, 503)
+      }, 401)
     }
-  } else {
-    // Internal request — attempt non-blocking identity resolution
-    try {
-      const authResult = await validateApiKey(c.req.raw, c.env)
-      if (authResult.valid && authResult.agentId) {
-        envWithOwner.API_KEY_OWNER = authResult.agentId
-      }
-    } catch {
-      // Internal calls proceed without auth
+    if (authResult.agentId) {
+      envWithOwner.API_KEY_OWNER = authResult.agentId
     }
+  } catch (err) {
+    return c.json({
+      jsonrpc: '2.0',
+      error: {
+        code: -32001,
+        message: `Auth service unavailable: ${String(err)}`,
+      },
+      id: null,
+    }, 503)
   }
 
   const mcpServer = createMcpServer(envWithOwner)
