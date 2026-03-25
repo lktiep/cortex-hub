@@ -183,7 +183,7 @@ export async function embedProject(
   projectId: string,
   branch: string,
   jobId: string,
-  onProgress?: (progress: number, chunks: number) => void,
+  onProgress?: (progress: number, successChunks: number, totalChunks: number) => void,
 ): Promise<{ status: string; chunks: number; errors: string[] }> {
   // First pass: count chunks to calculate dynamic timeout
   // The actual embedding happens in embedProjectInternal
@@ -222,7 +222,7 @@ async function embedProjectInternal(
   projectId: string,
   branch: string,
   jobId: string,
-  onProgress?: (progress: number, chunks: number) => void,
+  onProgress?: (progress: number, successChunks: number, totalChunks: number) => void,
   onChunkCount?: (count: number) => void,
 ): Promise<{ status: string; chunks: number; errors: string[] }> {
   const repoDir = join(REPOS_DIR, projectId)
@@ -325,7 +325,7 @@ async function embedProjectInternal(
 
     // Report progress
     const progress = Math.round(((batchIdx + 1) / totalBatches) * 100)
-    onProgress?.(progress, successCount)
+    onProgress?.(progress, successCount, allChunks.length)
 
     // Small delay between batches to avoid rate limiting
     if (batchIdx < totalBatches - 1) {

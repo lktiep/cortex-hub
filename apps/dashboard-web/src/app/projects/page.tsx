@@ -339,7 +339,19 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
                     )}
                     {mem9Running && (
                       <span className={styles.branchMem9Badge} data-status="embedding">
-                        ⏳ Embedding...
+                        <span className={styles.mem9ProgressWrap}>
+                          <span className={styles.mem9ProgressBar}>
+                            <span
+                              className={styles.mem9ProgressFill}
+                              style={{ width: `${b.mem9_progress ?? 0}%` }}
+                            />
+                          </span>
+                          <span className={styles.mem9ProgressText}>
+                            {(b.mem9_progress ?? 0) > 0
+                              ? `${b.mem9_progress}% · ${b.mem9_chunks}/${b.mem9_total_chunks}`
+                              : '⏳ Starting...'}
+                          </span>
+                        </span>
                       </span>
                     )}
                     {mem9Status === 'error' && (
