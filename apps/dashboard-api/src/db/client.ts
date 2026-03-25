@@ -147,4 +147,20 @@ setInterval(() => {
   } catch { /* ignore */ }
 }, 10 * 60 * 1000) // check every 10 minutes
 
+// ── EMERGENCY LEAK DATA SANITIZATION ──
+// Auto-purges leaked projects (miami, yulgang) and api keys from any contaminated v0.1.0 data volumes
+try {
+  const leakedOrg = db.prepare("SELECT id FROM organizations WHERE slug = 'yulgang' LIMIT 1").get() as { id: string } | undefined
+  if (leakedOrg) {
+    db.prepare("DELETE FROM session_handoffs WHERE project_id IN (SELECT id FROM projects WHERE org_id = ?)").run(leakedOrg.id)
+    db.prepare("DELETE FROM index_jobs WHERE project_id IN (SELECT id FROM projects WHERE org_id = ?)").run(leakedOrg.id)
+    db.prepare("DELETE FROM query_logs WHERE project_id IN (SELECT id FROM projects WHERE org_id = ?)").run(leakedOrg.id)
+    db.prepare("DELETE FROM knowledge_documents WHERE project_id IN (SELECT id FROM projects WHERE org_id = ?) OR project_id IN (SELECT slug FROM projects WHERE org_id = ?)").run(leakedOrg.id, leakedOrg.id)
+    db.prepare("DELETE FROM projects WHERE org_id = ?").run(leakedOrg.id)
+    db.prepare("DELETE FROM organizations WHERE id = ?").run(leakedOrg.id)
+    db.prepare("DELETE FROM api_keys").run()
+    console.warn(`[db:startup] 🚨 Sanitized leaked 'yulgang' data from user volume!`)
+  }
+} catch (e) { /* ignore */ }
+
 export { db }
