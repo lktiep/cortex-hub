@@ -3,7 +3,7 @@
 import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://cortex-api.jackle.dev'
+const API_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
 function CallbackContent() {
   const searchParams = useSearchParams()

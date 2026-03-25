@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'https://cortex-api.jackle.dev'
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
 const MCP_BASE = process.env.NEXT_PUBLIC_MCP_URL ?? 'https://cortex-mcp.jackle.dev'
 
 export const config = {
