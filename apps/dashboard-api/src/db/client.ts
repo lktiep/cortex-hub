@@ -55,6 +55,15 @@ try {
   db.exec('ALTER TABLE index_jobs ADD COLUMN mem9_chunks INTEGER DEFAULT 0')
 } catch (e) { /* ignore if exists */ }
 
+// Mem9 embedding progress tracking
+try {
+  db.exec('ALTER TABLE index_jobs ADD COLUMN mem9_progress INTEGER DEFAULT 0')
+} catch (e) { /* ignore if exists */ }
+
+try {
+  db.exec('ALTER TABLE index_jobs ADD COLUMN mem9_total_chunks INTEGER DEFAULT 0')
+} catch (e) { /* ignore if exists */ }
+
 // Docs knowledge builder status on index_jobs
 try {
   db.exec("ALTER TABLE index_jobs ADD COLUMN docs_knowledge_status TEXT DEFAULT NULL")

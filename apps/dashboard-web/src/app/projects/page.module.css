@@ -935,6 +935,45 @@
   50% { opacity: 0.6; }
 }
 
+/* ── Mem9 Inline Progress ── */
+.mem9ProgressWrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+}
+
+.mem9ProgressBar {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+  min-width: 50px;
+}
+
+.mem9ProgressFill {
+  height: 100%;
+  background: linear-gradient(90deg, #f5a623, #e67e22);
+  border-radius: 3px;
+  transition: width 0.8s ease;
+  animation: mem9Shimmer 2s infinite linear;
+  background-size: 200% 100%;
+}
+
+@keyframes mem9Shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.mem9ProgressText {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: #f5a623;
+  white-space: nowrap;
+  min-width: 40px;
+}
+
 .branchMem9Btn {
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.12);

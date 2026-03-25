@@ -357,8 +357,9 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
       updateJob(jobId, { mem9_status: 'embedding' })
       appendLog(jobId, '🧠 Auto-starting mem9 embedding...')
 
-      embedProject(projectId, branch, jobId, (_progress, chunks) => {
-        db.prepare('UPDATE index_jobs SET mem9_chunks = ? WHERE id = ?').run(chunks, jobId)
+      embedProject(projectId, branch, jobId, (progress, chunks, totalChunks) => {
+        db.prepare('UPDATE index_jobs SET mem9_chunks = ?, mem9_progress = ?, mem9_total_chunks = ? WHERE id = ?')
+          .run(chunks, progress, totalChunks, jobId)
       }).then((result) => {
         updateJob(jobId, { mem9_status: result.status, mem9_chunks: result.chunks })
         appendLog(jobId, `✅ mem9 done: ${result.chunks} chunks embedded`)

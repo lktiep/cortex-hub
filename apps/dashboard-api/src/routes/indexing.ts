@@ -318,7 +318,7 @@ indexingRouter.get('/:id/index/branches', (c) => {
     // Get the latest job per branch
     const jobs = db.prepare(
       `SELECT j.branch, j.status, j.progress, j.total_files, j.symbols_found, 
-              j.mem9_status, j.mem9_chunks,
+              j.mem9_status, j.mem9_chunks, j.mem9_progress, j.mem9_total_chunks,
               COALESCE(
                 NULLIF(j.docs_knowledge_status, NULL),
                 (SELECT docs_knowledge_status FROM index_jobs 
@@ -388,8 +388,9 @@ indexingRouter.post('/:id/index/mem9', async (c) => {
     db.prepare("UPDATE index_jobs SET mem9_status = 'embedding', mem9_chunks = 0 WHERE id = ?").run(jobId)
 
     // Fire and forget — run embedding in background
-    embedProject(projectId, branch, jobId, (_progress, chunks) => {
-      db.prepare('UPDATE index_jobs SET mem9_chunks = ? WHERE id = ?').run(chunks, jobId)
+    embedProject(projectId, branch, jobId, (progress, chunks, totalChunks) => {
+      db.prepare('UPDATE index_jobs SET mem9_chunks = ?, mem9_progress = ?, mem9_total_chunks = ? WHERE id = ?')
+        .run(chunks, progress, totalChunks, jobId)
     }).then((result) => {
       db.prepare('UPDATE index_jobs SET mem9_status = ?, mem9_chunks = ? WHERE id = ?')
         .run(result.status, result.chunks, jobId)
@@ -410,13 +411,15 @@ indexingRouter.get('/:id/index/mem9/status', (c) => {
 
   try {
     const job = db.prepare(
-      `SELECT id, branch, mem9_status, mem9_chunks, status as gitnexus_status, 
+      `SELECT id, branch, mem9_status, mem9_chunks, mem9_progress, mem9_total_chunks,
+              status as gitnexus_status, 
               symbols_found, total_files, completed_at
        FROM index_jobs 
        WHERE project_id = ? AND status = 'done'
        ORDER BY completed_at DESC LIMIT 1`
     ).get(projectId) as {
       id: string; branch: string; mem9_status: string; mem9_chunks: number;
+      mem9_progress: number; mem9_total_chunks: number;
       gitnexus_status: string; symbols_found: number; total_files: number; completed_at: string
     } | undefined
 
@@ -439,6 +442,8 @@ indexingRouter.get('/:id/index/mem9/status', (c) => {
       mem9: {
         status: job.mem9_status ?? 'pending',
         chunks: job.mem9_chunks ?? 0,
+        progress: job.mem9_progress ?? 0,
+        totalChunks: job.mem9_total_chunks ?? 0,
       },
       docsKnowledge: {
         status: (job as Record<string, unknown>).docs_knowledge_status ?? null,

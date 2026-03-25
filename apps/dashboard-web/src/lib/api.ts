@@ -650,6 +650,8 @@ export interface BranchIndexStatus {
   symbols_found: number
   mem9_status: string | null
   mem9_chunks: number
+  mem9_progress: number
+  mem9_total_chunks: number
   docs_knowledge_status: string | null
   docs_knowledge_count: number
   completed_at: string | null
@@ -665,7 +667,7 @@ export interface Mem9PipelineStatus {
   jobId?: string
   branch?: string
   gitnexus: { status: string; symbols?: number; files?: number; completedAt?: string }
-  mem9: { status: string; chunks?: number }
+  mem9: { status: string; chunks?: number; progress?: number; totalChunks?: number }
 }
 
 export async function getMemNineStatus(projectId: string) {

@@ -116,12 +116,13 @@ statsRouter.get('/overview-v2', async (c) => {
     const projectSummaries = projects.map((p) => {
       // Latest indexing job
       const job = db.prepare(`
-        SELECT id, branch, status, mem9_status, mem9_chunks,
+        SELECT id, branch, status, mem9_status, mem9_chunks, mem9_progress, mem9_total_chunks,
                symbols_found, total_files, completed_at, created_at as started_at
         FROM index_jobs WHERE project_id = ? ORDER BY completed_at DESC, created_at DESC LIMIT 1
       `).get(p.id) as {
         id: string; branch: string; status: string; mem9_status: string | null
-        mem9_chunks: number | null; symbols_found: number | null
+        mem9_chunks: number | null; mem9_progress: number | null; mem9_total_chunks: number | null
+        symbols_found: number | null
         total_files: number | null; completed_at: string | null; started_at: string
       } | undefined
 
@@ -178,7 +179,9 @@ statsRouter.get('/overview-v2', async (c) => {
         mem9: job ? {
           status: job.mem9_status ?? 'pending',
           chunks: job.mem9_chunks ?? 0,
-        } : { status: 'none', chunks: 0 },
+          progress: job.mem9_progress ?? 0,
+          totalChunks: job.mem9_total_chunks ?? 0,
+        } : { status: 'none', chunks: 0, progress: 0, totalChunks: 0 },
         knowledge: {
           docs: knowledgeDocs,
           chunks: knowledgeChunks,
