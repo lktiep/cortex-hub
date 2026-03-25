@@ -3,21 +3,16 @@
 
 # Server port
 port: 8317
-
 # Bind to all interfaces (for Docker)
 host: ""
-
 # Auth directory (persisted via Docker volume)
 auth-dir: /CLIProxyAPI/auth
-
 # Debug logging
 debug: false
-
 # Remote management (for onboarding via web)
 remote-management:
   allow-remote: true
-  secret-key: ${MANAGEMENT_PASSWORD:-cortex2026}
-
+  secret-key: $2a$10$VEcq/ehUemHmQHsJn.Jec.dO3iraXhQ/RrQ8gVKwpfYDQs6KNZKIq
 # OpenAI-compatible endpoints
 # API key is synced from Codex OAuth by dashboard-api startup
 openai-compatibility:
