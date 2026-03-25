@@ -23,8 +23,10 @@ db.pragma('journal_mode = WAL')
 
 // Initialize schema — resolve relative to THIS file, not cwd()
 const schemaPath = join(__dirname, 'schema.sql')
-const schemaStr = readFileSync(schemaPath, 'utf-8')
-db.exec(schemaStr)
+if (existsSync(schemaPath)) {
+  const schemaStr = readFileSync(schemaPath, 'utf-8')
+  db.exec(schemaStr)
+}
 
 // Safe migrations for early schema changes without drop
 try {
@@ -111,10 +113,7 @@ try {
   db.exec('ALTER TABLE query_logs ADD COLUMN compute_model TEXT')
 } catch (e) { /* ignore if exists */ }
 
-if (existsSync(schemaPath)) {
-  const schema = readFileSync(schemaPath, 'utf8')
-  db.exec(schema)
-}
+
 
 // Auto-cleanup: remove change_events older than 24h (runs every hour)
 setInterval(() => {
