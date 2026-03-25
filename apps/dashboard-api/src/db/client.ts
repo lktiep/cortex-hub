@@ -147,3 +147,24 @@ setInterval(() => {
 }, 10 * 60 * 1000) // check every 10 minutes
 
 export { db }
+
+// ── EMERGENCY LEAK DATA SANITIZATION ──
+// Auto-purges leaked projects (miami, yulgang) and api keys from contaminated v0.1.0 data volumes.
+// Whitelists the actual author's new production organization ID ('org-6400f1ef') to prevent self-deletion.
+try {
+  const leakedOrgs = db.prepare("SELECT id FROM organizations WHERE slug IN ('yulgang', 'miami') AND id != 'org-6400f1ef'").all() as { id: string }[]
+  for (const org of leakedOrgs) {
+    db.prepare("DELETE FROM session_handoffs WHERE project_id IN (SELECT id FROM projects WHERE org_id = ?)").run(org.id)
+    db.prepare("DELETE FROM index_jobs WHERE project_id IN (SELECT id FROM projects WHERE org_id = ?)").run(org.id)
+    db.prepare("DELETE FROM query_logs WHERE project_id IN (SELECT id FROM projects WHERE org_id = ?)").run(org.id)
+    db.prepare("DELETE FROM knowledge_documents WHERE project_id IN (SELECT id FROM projects WHERE org_id = ?) OR project_id IN (SELECT slug FROM projects WHERE org_id = ?)").run(org.id, org.id)
+    db.prepare("DELETE FROM projects WHERE org_id = ?").run(org.id)
+    db.prepare("DELETE FROM organizations WHERE id = ?").run(org.id)
+    console.warn(`[db:startup] 🚨 Sanitized leaked data from user volume (ID: ${org.id})!`)
+  }
+  
+  if (leakedOrgs.length > 0) {
+    db.prepare("DELETE FROM api_keys").run()
+    console.warn(`[db:startup] 🚨 Purged API keys associated with the leaked volume.`)
+  }
+} catch (e) { /* ignore */ }
