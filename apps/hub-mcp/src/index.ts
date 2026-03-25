@@ -14,6 +14,7 @@ import { registerSessionTools } from './tools/session.js'
 import { registerChangeTools } from './tools/changes.js'
 import { registerAnalyticsTools } from './tools/analytics.js'
 import { validateApiKey } from './middleware/auth.js'
+import { telemetryStorage } from './api-call.js'
 import type { Env } from './types.js'
 
 
@@ -195,70 +196,75 @@ app.all('/mcp', async (c) => {
   } catch (e) {}
 
   try {
-    const response = await transport.handleRequest(newReq)
-    const latencyMs = Date.now() - startTime
-    const inputSize = bodyText.length
+    const response = await telemetryStorage.run({ computeTokens: 0, computeModel: null }, async () => {
+      const res = await transport.handleRequest(newReq)
+      const latencyMs = Date.now() - startTime
+      const inputSize = bodyText.length
 
-    // Measure output size by cloning the response
-    let outputSize = 0
-    let respBody = ''
-    try {
-      const cloned = response.clone()
-      respBody = await cloned.text()
-      outputSize = respBody.length
-    } catch { /* ignore clone failures */ }
-
-    const apiUrl = (c.env.DASHBOARD_API_URL || 'http://localhost:4000').replace(/\/$/, '')
-    const agentId = envWithOwner.API_KEY_OWNER || 'unknown'
-
-    if (toolName !== 'unknown') {
-      fetch(`${apiUrl}/api/metrics/query-log`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          agentId,
-          tool: toolName,
-          params: argsObj,
-          status: response.status >= 400 ? 'error' : 'ok',
-          latencyMs,
-          projectId,
-          inputSize,
-          outputSize,
-        })
-      }).catch((err: any) => console.error('[MCP Telemetry Error]', err))
-    }
-
-    // ── Cortex Hints Injection (Solution 3) ──
-    // Fetch context-aware hints and inject into the response body
-    // This is the "hard enforcement" — agents MUST read hints because they're in the response
-    if (toolName !== 'unknown' && toolName !== 'cortex_health' && agentId !== 'unknown') {
+      let outputSize = 0
+      let respBody = ''
       try {
-        const hintsRes = await fetch(
-          `${apiUrl}/api/metrics/hints/${encodeURIComponent(agentId)}?currentTool=${encodeURIComponent(toolName)}`,
-          { signal: AbortSignal.timeout(2000) }
-        )
-        if (hintsRes.ok) {
-          const hintsData = (await hintsRes.json()) as { hints: string[] }
-          if (hintsData.hints.length > 0 && respBody) {
-            try {
-              const parsed = JSON.parse(respBody)
-              // MCP JSON-RPC response format: { jsonrpc: "2.0", result: { content: [...] } }
-              if (parsed.result?.content && Array.isArray(parsed.result.content)) {
-                const lastItem = parsed.result.content[parsed.result.content.length - 1]
-                if (lastItem?.type === 'text' && typeof lastItem.text === 'string') {
-                  lastItem.text += '\n\n---\n💡 Cortex hints:\n' + hintsData.hints.map((h: string) => `  ${h}`).join('\n')
+        const cloned = res.clone()
+        respBody = await cloned.text()
+        outputSize = respBody.length
+      } catch { /* ignore clone failures */ }
+
+      const store = telemetryStorage.getStore()
+      const computeTokens = store?.computeTokens || 0
+      const computeModel = store?.computeModel || null
+
+      const apiUrl = (c.env.DASHBOARD_API_URL || 'http://localhost:4000').replace(/\/$/, '')
+      const agentId = envWithOwner.API_KEY_OWNER || 'unknown'
+
+      if (toolName !== 'unknown') {
+        fetch(`${apiUrl}/api/metrics/query-log`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId,
+            tool: toolName,
+            params: argsObj,
+            status: res.status >= 400 ? 'error' : 'ok',
+            latencyMs,
+            projectId,
+            inputSize,
+            outputSize,
+            computeTokens,
+            computeModel,
+          })
+        }).catch((err: any) => console.error('[MCP Telemetry Error]', err))
+      }
+
+      if (toolName !== 'unknown' && toolName !== 'cortex_health' && agentId !== 'unknown') {
+        try {
+          const hintsRes = await fetch(
+            `${apiUrl}/api/metrics/hints/${encodeURIComponent(agentId)}?currentTool=${encodeURIComponent(toolName)}`,
+            { signal: AbortSignal.timeout(2000) }
+          )
+          if (hintsRes.ok) {
+            const hintsData = (await hintsRes.json()) as { hints: string[] }
+            if (hintsData.hints.length > 0 && respBody) {
+              try {
+                const parsed = JSON.parse(respBody)
+                if (parsed.result?.content && Array.isArray(parsed.result.content)) {
+                  const lastItem = parsed.result.content[parsed.result.content.length - 1]
+                  if (lastItem?.type === 'text' && typeof lastItem.text === 'string') {
+                    lastItem.text += '\n\n---\n💡 Cortex hints:\n' + hintsData.hints.map((h: string) => `  ${h}`).join('\n')
+                  }
+                  const modifiedBody = JSON.stringify(parsed)
+                  return new Response(modifiedBody, {
+                    status: res.status,
+                    headers: res.headers,
+                  })
                 }
-                const modifiedBody = JSON.stringify(parsed)
-                return new Response(modifiedBody, {
-                  status: response.status,
-                  headers: response.headers,
-                })
-              }
-            } catch { /* JSON parse failed, return original */ }
+              } catch { /* JSON parse failed */ }
+            }
           }
-        }
-      } catch { /* hints fetch failed, non-fatal */ }
-    }
+        } catch { /* hints fetch failed */ }
+      }
+
+      return res
+    })
 
     return response
   } catch (error: any) {

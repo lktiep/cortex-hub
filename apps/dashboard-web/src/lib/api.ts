@@ -506,6 +506,7 @@ export interface ToolStatsData {
     totalCalls: number
     overallSuccessRate: number
     estimatedTokensSaved: number
+    totalComputeTokens?: number
     totalDataBytes: number
     activeAgents: number
   }
@@ -516,13 +517,14 @@ export interface ToolStatsData {
     errorCount: number
     avgLatencyMs: number
     estimatedTokensSaved: number
+    computeTokens?: number
   }>
   agents: Array<{ agentId: string; totalCalls: number; successRate: number }>
   trend: Array<{ day: string; calls: number; errors: number }>
 }
 
 export async function getToolStats(days = 7) {
-  return apiFetch<ToolStatsData>(`/api/metrics/tool-stats?days=${days}`)
+  return apiFetch<ToolStatsData>(`/api/metrics/tool-analytics?days=${days}`)
 }
 
 export async function getUsageHistory(days = 7) {

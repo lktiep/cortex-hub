@@ -197,10 +197,10 @@ statsRouter.get('/overview-v2', async (c) => {
       `).get() as { total_calls: number; total_output_bytes: number; total_data_bytes: number }
 
       const topTools = db.prepare(`
-        SELECT tool, COUNT(*) as calls, COALESCE(SUM(output_size), 0) as output_bytes
+        SELECT tool, COUNT(*) as calls, COALESCE(SUM(output_size), 0) as output_bytes, COALESCE(SUM(compute_tokens), 0) as compute_tokens
         FROM query_logs WHERE status = 'ok'
         GROUP BY tool ORDER BY output_bytes DESC LIMIT 5
-      `).all() as Array<{ tool: string; calls: number; output_bytes: number }>
+      `).all() as Array<{ tool: string; calls: number; output_bytes: number; compute_tokens: number }>
 
       const totalTokensSaved = Math.round(savingsOverall.total_output_bytes / 4)
       tokenSavings = {
@@ -208,7 +208,7 @@ statsRouter.get('/overview-v2', async (c) => {
         totalToolCalls: savingsOverall.total_calls,
         avgTokensPerCall: savingsOverall.total_calls > 0 ? Math.round(totalTokensSaved / savingsOverall.total_calls) : 0,
         totalDataBytes: savingsOverall.total_data_bytes,
-        topTools: topTools.map(t => ({ tool: t.tool, tokensSaved: Math.round(t.output_bytes / 4), calls: t.calls })),
+        topTools: topTools.map(t => ({ tool: t.tool, tokensSaved: Math.round(t.output_bytes / 4), calls: t.calls, computeTokens: t.compute_tokens })),
       }
     } catch (e) { console.warn('[overview-v2] token savings error:', e) }
 
@@ -347,8 +347,8 @@ statsRouter.post('/admin/restart/:service', async (c) => {
 // ── Telemetry: Log MCP Tool Queries ──
 statsRouter.post('/query-log', async (c) => {
   try {
-    const { agentId, tool, params, status, latencyMs, error, projectId, inputSize, outputSize } = await c.req.json()
-    const stmt = db.prepare('INSERT INTO query_logs (agent_id, tool, params, latency_ms, status, error, project_id, input_size, output_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    const { agentId, tool, params, status, latencyMs, error, projectId, inputSize, outputSize, computeTokens, computeModel } = await c.req.json()
+    const stmt = db.prepare('INSERT INTO query_logs (agent_id, tool, params, latency_ms, status, error, project_id, input_size, output_size, compute_tokens, compute_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     stmt.run(
       agentId || 'unknown', 
       tool || 'unknown',
@@ -358,8 +358,17 @@ statsRouter.post('/query-log', async (c) => {
       error || null,
       projectId || null,
       inputSize || 0,
-      outputSize || 0
+      outputSize || 0,
+      computeTokens || 0,
+      computeModel || null
     )
+
+    // Bridge backend LLM cost to the unified billing table
+    if (computeTokens && computeTokens > 0 && computeModel) {
+      const usageStmt = db.prepare('INSERT INTO usage_logs (agent_id, model, total_tokens, request_type, project_id) VALUES (?, ?, ?, ?, ?)')
+      usageStmt.run(agentId || 'unknown', computeModel, computeTokens, 'tool', projectId || null)
+    }
+
     return c.json({ success: true })
   } catch (err) {
     return c.json({ error: String(err) }, 500)
@@ -434,7 +443,8 @@ statsRouter.get('/tool-analytics', (c) => {
         ROUND(AVG(CASE WHEN input_size > 0 THEN input_size ELSE NULL END)) as avg_input_size,
         ROUND(AVG(CASE WHEN output_size > 0 THEN output_size ELSE NULL END)) as avg_output_size,
         COALESCE(SUM(input_size), 0) as total_input_bytes,
-        COALESCE(SUM(output_size), 0) as total_output_bytes
+        COALESCE(SUM(output_size), 0) as total_output_bytes,
+        COALESCE(SUM(compute_tokens), 0) as compute_tokens
       FROM query_logs
       WHERE ${where}
       GROUP BY tool
@@ -442,7 +452,7 @@ statsRouter.get('/tool-analytics', (c) => {
     `).all(...params) as Array<{
       tool: string; total_calls: number; success_count: number; error_count: number
       avg_latency_ms: number; avg_input_size: number | null; avg_output_size: number | null
-      total_input_bytes: number; total_output_bytes: number
+      total_input_bytes: number; total_output_bytes: number; compute_tokens: number
     }>
 
     // Enrich with success rate and estimated tokens
@@ -456,6 +466,7 @@ statsRouter.get('/tool-analytics', (c) => {
       avgOutputSize: t.avg_output_size,
       // Estimate tokens: ~4 chars per token (conservative)
       estimatedTokensSaved: Math.round(t.total_output_bytes / 4),
+      computeTokens: t.compute_tokens,
       totalInputBytes: t.total_input_bytes,
       totalOutputBytes: t.total_output_bytes,
     }))
@@ -465,6 +476,7 @@ statsRouter.get('/tool-analytics', (c) => {
     const totalSuccess = enriched.reduce((s, t) => s + Math.round(t.totalCalls * t.successRate / 100), 0)
     const totalOutputBytes = enriched.reduce((s, t) => s + t.totalOutputBytes, 0)
     const totalInputBytes = enriched.reduce((s, t) => s + t.totalInputBytes, 0)
+    const totalComputeTokens = enriched.reduce((s, t) => s + t.computeTokens, 0)
 
     // Per-agent breakdown
     const agents = db.prepare(`

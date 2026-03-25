@@ -100,6 +100,9 @@ mem9ProxyRouter.post('/store', async (c) => {
     const mem9 = getMem9()
     const result = await mem9.add({ messages, userId, agentId, metadata })
 
+    c.header('X-Cortex-Compute-Tokens', String(result.tokensUsed || 0))
+    c.header('X-Cortex-Compute-Model', process.env['MEM9_LLM_MODEL'] || 'gpt-4.1-mini')
+
     return c.json({
       success: true,
       events: result.events,
@@ -126,6 +129,9 @@ mem9ProxyRouter.post('/search', async (c) => {
 
     const mem9 = getMem9()
     const result = await mem9.search({ query, userId, agentId, limit })
+
+    c.header('X-Cortex-Compute-Tokens', String(result.tokensUsed || 0))
+    c.header('X-Cortex-Compute-Model', process.env['MEM9_LLM_MODEL'] || 'gpt-4.1-mini')
 
     return c.json({
       memories: result.memories,

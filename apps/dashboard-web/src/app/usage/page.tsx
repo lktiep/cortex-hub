@@ -140,6 +140,13 @@ function CortexSavingsSection() {
           </div>
         </div>
         <div className={`card ${styles.statCard}`}>
+          <span className={styles.statIcon}>🔥</span>
+          <div>
+            <div className={styles.statValue} style={{ color: '#ef4444' }}>{formatNumber(summary.totalComputeTokens || 0)}</div>
+            <div className={styles.statLabel}>Compute Cost</div>
+          </div>
+        </div>
+        <div className={`card ${styles.statCard}`}>
           <span className={styles.statIcon}>🔧</span>
           <div>
             <div className={styles.statValue}>{formatNumber(summary.totalCalls)}</div>
@@ -165,18 +172,20 @@ function CortexSavingsSection() {
       {/* Per-tool breakdown */}
       {tools.length > 0 && (
         <div className={`card ${styles.savingsTable}`}>
-          <div className={styles.savingsTableHeader}>
+          <div className={styles.savingsTableHeader} style={{ gridTemplateColumns: 'minmax(120px, 1fr) 0.8fr 1.2fr 1.2fr 1fr 1fr' }}>
             <span>Tool</span>
             <span>Calls</span>
             <span>Tokens Saved</span>
-            <span>Avg Latency</span>
+            <span>Compute</span>
+            <span>Latency</span>
             <span>Success</span>
           </div>
           {tools.filter(t => !t.tool.includes('session') && !t.tool.includes('Gate')).slice(0, 12).map((t) => (
-            <div key={t.tool} className={styles.savingsTableRow}>
+            <div key={t.tool} className={styles.savingsTableRow} style={{ gridTemplateColumns: 'minmax(120px, 1fr) 0.8fr 1.2fr 1.2fr 1fr 1fr' }}>
               <code className={styles.savingsToolName}>{t.tool.replace('cortex_', '')}</code>
               <span>{t.totalCalls}</span>
               <span style={{ color: '#22c55e', fontWeight: 600 }}>{formatNumber(t.estimatedTokensSaved)}</span>
+              <span style={{ color: (t.computeTokens || 0) > 0 ? '#ef4444' : 'inherit', fontWeight: (t.computeTokens || 0) > 0 ? 600 : 400 }}>{formatNumber(t.computeTokens || 0)}</span>
               <span>{t.avgLatencyMs ? `${t.avgLatencyMs}ms` : '—'}</span>
               <span>{t.successRate}%</span>
             </div>

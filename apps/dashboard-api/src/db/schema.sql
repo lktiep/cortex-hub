@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS query_logs (
     status TEXT DEFAULT 'ok',
     error TEXT,
     project_id TEXT,
+    input_size INTEGER DEFAULT 0,
+    output_size INTEGER DEFAULT 0,
+    compute_tokens INTEGER DEFAULT 0,
+    compute_model TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 

@@ -11,6 +11,7 @@
 - [x] X-API-Key-Owner identity resolution: apiCall injects header, quality/session handlers use it (`d0b28ee`)
 - [x] Dashboard redesign: hero bar, project overview cards, intelligence panels (`d8efdef`)
 - [x] New `/api/metrics/overview-v2` endpoint: per-project GitNexus/Mem9 status (`d8efdef`)
+- [x] LLM Telemetry: Track `compute_tokens` / `compute_model` from mem9-proxy back to `query_logs` via MCP `apiCall`, and expose via stats endpoints.
 - [x] Build ✅ | Typecheck ✅ | Lint ✅ | Quality: A (100/100)
 
 ## Architecture — 2-Service Model
@@ -55,6 +56,7 @@
 - [x] **Tool Usage Analytics** — token tracking (input_size/output_size), tool-analytics API, `cortex_tool_stats` MCP tool, and comprehensive Token Savings Dashboard (Global + Per Session) (`753eaeb`)
 - [x] **Compliance Enforcement** — session compliance score (5-category grading on session_end) + MCP response hints injection (contextual reminders in every tool response) (`1be109a`)
 - [x] **Cross-Project Intelligence Fixes** — P0: code_context file disambiguation auto-resolve via UID extraction, code_search fallback hints when 0 flows; P1: `cortex_list_repos` MCP tool + `/repos` enrichment with project mapping; P2: cypher schema hints, 4 new hint engine scenarios
+- [x] **LLM Telemetry Optimization** — Extracted Mem9 token responses, propagated via MCP storage headers, updated `query_logs` & `usage_logs` bridging, rendering "Compute Cost" widgets in Usage Dashboard.
 
 ## Completed (Phase 6)
 - [x] Dashboard API — 9 real routes (no stubs)

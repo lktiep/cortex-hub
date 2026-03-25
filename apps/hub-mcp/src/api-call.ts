@@ -1,4 +1,7 @@
 import type { Env } from './types.js'
+import { AsyncLocalStorage } from 'node:async_hooks'
+
+export const telemetryStorage = new AsyncLocalStorage<{ computeTokens: number; computeModel: string | null }>()
 
 /**
  * Make an API call to dashboard-api.
@@ -23,9 +26,21 @@ export async function apiCall(
     headers.set('X-API-Key-Owner', env.API_KEY_OWNER)
   }
 
-  return fetch(`${baseUrl}${path}`, {
+  const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers,
     signal: init?.signal ?? AbortSignal.timeout(30000),
   })
+  
+  // Extract compute telemetry headers if present
+  const computeTokens = parseInt(response.headers.get('X-Cortex-Compute-Tokens') || '0', 10)
+  const computeModel = response.headers.get('X-Cortex-Compute-Model')
+  
+  const store = telemetryStorage.getStore()
+  if (store && computeTokens > 0) {
+    store.computeTokens += computeTokens
+    if (computeModel) store.computeModel = computeModel
+  }
+
+  return response
 }
