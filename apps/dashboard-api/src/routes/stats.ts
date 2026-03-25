@@ -10,7 +10,7 @@ const QDRANT_URL = () => process.env['QDRANT_URL'] || 'http://qdrant:6333'
 statsRouter.get('/overview', async (c) => {
   try {
     const keyCount = (db.prepare('SELECT COUNT(*) as count FROM api_keys').get() as { count: number }).count
-    const agentCount = (db.prepare('SELECT COUNT(DISTINCT agent_id) as count FROM query_logs').get() as { count: number }).count
+    const agentCount = (db.prepare("SELECT COUNT(DISTINCT from_agent) as count FROM session_handoffs WHERE status = 'active'").get() as { count: number }).count
     const totalQueries = (db.prepare('SELECT COUNT(*) as count FROM query_logs').get() as { count: number }).count
     const totalSessions = (db.prepare('SELECT COUNT(*) as count FROM session_handoffs').get() as { count: number }).count
     const orgCount = (db.prepare('SELECT COUNT(*) as count FROM organizations').get() as { count: number }).count
@@ -72,7 +72,7 @@ statsRouter.get('/overview-v2', async (c) => {
 
     // ── Basic counts ──
     const keyCount = (db.prepare('SELECT COUNT(*) as count FROM api_keys').get() as { count: number }).count
-    const agentCount = (db.prepare('SELECT COUNT(DISTINCT agent_id) as count FROM query_logs').get() as { count: number }).count
+    const agentCount = (db.prepare("SELECT COUNT(DISTINCT from_agent) as count FROM session_handoffs WHERE status = 'active'").get() as { count: number }).count
     const totalQueries = (db.prepare('SELECT COUNT(*) as count FROM query_logs').get() as { count: number }).count
     const totalSessions = (db.prepare('SELECT COUNT(*) as count FROM session_handoffs').get() as { count: number }).count
     const orgCount = (db.prepare('SELECT COUNT(*) as count FROM organizations').get() as { count: number }).count
