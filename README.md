@@ -205,7 +205,11 @@ One agent picks up where another left off:
 
 ### 📊 Dashboard
 
+![Cortex Hub Main Dashboard](docs/assets/dashboard-main.png)
+*System overview and project health tracking.*
+
 ![Cortex Hub Usage Analytics](docs/assets/dashboard-usage.png)
+*Token consumption and API request analytics.*
 
 Real-time monitoring and management (13 pages):
 
