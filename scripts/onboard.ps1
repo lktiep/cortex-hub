@@ -526,9 +526,10 @@ exit 0
     $hook5Str | Out-File -FilePath "$CLAUDE_HOOKS_DIR\enforce-session.ps1" -Encoding utf8
 
     # Merge hooks into settings.json
+    $escSettingsPath = $CLAUDE_SETTINGS -replace "\\", "/"
     $pyScriptHooks = @"
 import json, os
-settings_path = '$CLAUDE_SETTINGS'.replace('\\\\', '/')
+settings_path = '$escSettingsPath'
 hooks_config = {
     'hooks': {
         'SessionStart': [{
