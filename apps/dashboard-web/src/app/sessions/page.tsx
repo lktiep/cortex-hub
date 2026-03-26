@@ -70,6 +70,10 @@ function SessionCard({
         </div>
         <div className={styles.metaItem}>
           <span className={styles.metaLabel}>From</span>
+          <code className={styles.agentName}>{session.api_key_name || session.from_agent}</code>
+        </div>
+        <div className={styles.metaItem}>
+          <span className={styles.metaLabel}>Agent</span>
           <code className={styles.agentName}>{session.from_agent}</code>
         </div>
         <div className={styles.metaItem}>
@@ -132,15 +136,15 @@ function SessionDetail({
             <span className={styles.detailValue}>{session.project}</span>
           </div>
           <div className={styles.detailRow}>
-            <span className={styles.detailLabel}>From Agent</span>
+            <span className={styles.detailLabel}>From</span>
+            <span className={styles.detailValue}>
+              {session.api_key_name ? `🔑 ${session.api_key_name}` : session.from_agent}
+            </span>
+          </div>
+          <div className={styles.detailRow}>
+            <span className={styles.detailLabel}>Agent</span>
             <code className={styles.detailValue}>{session.from_agent}</code>
           </div>
-          {session.api_key_name && (
-            <div className={styles.detailRow}>
-              <span className={styles.detailLabel}>API Key</span>
-              <span className={styles.detailValue}>🔑 {session.api_key_name}</span>
-            </div>
-          )}
           <div className={styles.detailRow}>
             <span className={styles.detailLabel}>To Agent</span>
             <code className={styles.detailValue}>{session.to_agent ?? 'Not assigned'}</code>
