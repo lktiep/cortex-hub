@@ -586,25 +586,26 @@ $cortexMarker = "<!-- cortex-hub:auto-mcp -->"
 function Set-InstructionFile {
     param([string]$FilePath, [string]$AgentId, [string]$Label)
 
-    $instructions = @"
-
-$cortexMarker
-## Cortex Hub - Auto MCP (MANDATORY - every conversation)
-
-At the START of every conversation:
-1. Call ``cortex_session_start`` with repo: "$gitRepoUrl", agentId: "$AgentId", mode: "development"
-2. If recentChanges.count > 0, warn user and run ``git pull``
-3. Read ``STATE.md`` if it exists
-
-### Error Protocol
-1. ``cortex_knowledge_search`` first
-2. Fix the error
-3. Store non-obvious fixes: ``cortex_knowledge_store``
-
-### Session End
-``cortex_quality_report``   ``cortex_memory_store``   ``cortex_session_end``
-$cortexMarker
-"@
+    $instructionsLines = @(
+        "",
+        $cortexMarker,
+        "## Cortex Hub - Auto MCP (MANDATORY - every conversation)",
+        "",
+        "At the START of every conversation:",
+        "1. Call ``cortex_session_start`` with repo: `"$gitRepoUrl`", agentId: `"$AgentId`", mode: `"development`"",
+        "2. If recentChanges.count > 0, warn user and run ``git pull``",
+        "3. Read ``STATE.md`` if it exists",
+        "",
+        "### Error Protocol",
+        "1. ``cortex_knowledge_search`` first",
+        "2. Fix the error",
+        "3. Store non-obvious fixes: ``cortex_knowledge_store``",
+        "",
+        "### Session End",
+        "``cortex_quality_report``   ``cortex_memory_store``   ``cortex_session_end``",
+        $cortexMarker
+    )
+    $instructions = $instructionsLines -join [Environment]::NewLine
 
     if ((Test-Path $FilePath) -and (Get-Content $FilePath -Raw) -match [regex]::Escape($cortexMarker)) {
         Write-Ok "$Label already has Cortex instructions - skipping"
