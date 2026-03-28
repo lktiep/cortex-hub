@@ -1011,25 +1011,25 @@ hooks_config = {
     'hooks': {
         'SessionStart': [{
             'matcher': '',
-            'hooks': [{'type': 'command', 'command': '.claude/hooks/session-init.sh'}]
+            'hooks': [{'type': 'command', 'command': 'bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-init.sh'}]
         }],
         'PreToolUse': [
             {
                 'matcher': 'Edit|Write|NotebookEdit|Bash',
-                'hooks': [{'type': 'command', 'command': '.claude/hooks/enforce-session.sh'}]
+                'hooks': [{'type': 'command', 'command': 'bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-session.sh'}]
             },
             {
                 'matcher': 'Bash',
-                'hooks': [{'type': 'command', 'command': '.claude/hooks/enforce-commit.sh'}]
+                'hooks': [{'type': 'command', 'command': 'bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-commit.sh'}]
             }
         ],
         'PostToolUse': [{
             'matcher': '',
-            'hooks': [{'type': 'command', 'command': '.claude/hooks/track-quality.sh'}]
+            'hooks': [{'type': 'command', 'command': 'bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/track-quality.sh'}]
         }],
         'Stop': [{
             'matcher': '',
-            'hooks': [{'type': 'command', 'command': '.claude/hooks/session-end-check.sh'}]
+            'hooks': [{'type': 'command', 'command': 'bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-end-check.sh'}]
         }]
     }
 }
