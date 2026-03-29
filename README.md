@@ -76,7 +76,7 @@ graph TB
 
     subgraph Gateway["Hub MCP Server"]
         AUTH["🔐 API Key Auth"]
-        ROUTER["🔀 Tool Router (17 tools)"]
+        ROUTER["🔀 Tool Router (18 tools)"]
         TEL["📊 Telemetry + Hints Engine"]
     end
 
@@ -117,7 +117,7 @@ Internet
                           │  Docker Compose    │
                           │  ├─ dashboard-web  │  ← Nginx (UI + API Proxy)
                           │  ├─ cortex-api     │  ← Internal API + mem9
-                          │  ├─ cortex-mcp     │  ← 17 MCP tools
+                          │  ├─ cortex-mcp     │  ← 18 MCP tools
                           │  ├─ qdrant         │  ← vectors + knowledge
                           │  ├─ gitnexus       │  ← AST code graph
                           │  ├─ llm-proxy      │  ← CLIProxy (internal)
@@ -239,7 +239,7 @@ Automatic tool usage tracking and guidance:
 
 ## MCP Tools
 
-Cortex exposes **17 tools** via a single MCP endpoint. Any MCP-compatible client can use them:
+Cortex exposes **18 tools** via a single MCP endpoint. Any MCP-compatible client can use them:
 
 | # | Tool | Purpose |
 |---|------|---------|
@@ -259,7 +259,8 @@ Cortex exposes **17 tools** via a single MCP endpoint. Any MCP-compatible client
 | 14 | `cortex_knowledge_store` | Contribute bug fixes, patterns, decisions |
 | 15 | `cortex_quality_report` | Report build/typecheck/lint results (4D scoring) |
 | 16 | `cortex_plan_quality` | Assess implementation plan quality before execution |
-| 17 | `cortex_health` | Check all backend service health |
+| 17 | `cortex_tool_stats` | View token savings, tool usage analytics |
+| 18 | `cortex_health` | Check all backend service health |
 
 > **Full API reference:** [`docs/api/hub-mcp-reference.md`](docs/api/hub-mcp-reference.md)
 
@@ -274,26 +275,47 @@ Cortex exposes **17 tools** via a single MCP endpoint. Any MCP-compatible client
 - pnpm 9.x
 - A Cloudflare account (free tier)
 
-### One-Command Install
+### One-Command Install (Agent Setup)
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/bootstrap.sh | bash
+curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh?t=$(date +%s)" | bash
 ```
 
 **Windows (PowerShell):**
 ```powershell
-iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/onboard.ps1 -OutFile onboard.ps1; .\onboard.ps1
+$t = [int](Get-Date -UFormat %s); iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.ps1?t=$t" -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
 ```
 
-The bootstrap script offers two modes:
+**Inside Claude Code (after first install):**
+```
+/install
+```
 
-| Mode | Who | What It Does |
-|------|-----|-------------|
-| **Administrator** | Server owner | Full Docker stack, infra, tunnel setup |
-| **Member** | Team dev | Connects local agent to an existing Hub |
+The unified `install.sh` does everything in one step:
+- ✅ Installs `/install` slash command globally (works in any project)
+- ✅ Auto-detects IDEs (Claude, Gemini, Cursor, Windsurf, VS Code, Codex)
+- ✅ Configures MCP for each detected IDE
+- ✅ Smart stack detection (Node, Go, Rust, Python, .NET, Godot — including mixed projects)
+- ✅ Glob-filtered pipelines — each check only runs when relevant files change
+- ✅ Installs enforcement hooks (Claude Code + Gemini CLI)
+- ✅ Creates instruction files (`.cursorrules`, `.windsurfrules`, etc.)
+- ✅ Injects cortex integration into `CLAUDE.md`
+- ✅ Version tracking + auto-update
+- ✅ Idempotent — safe to run multiple times
 
-### Manual Setup
+```bash
+# Check status
+bash scripts/install.sh --check
+
+# Force regenerate everything
+bash scripts/install.sh --force
+
+# Specific IDEs only
+bash scripts/install.sh --tools claude,gemini
+```
+
+### Server Setup (Admin)
 
 ```bash
 # 1. Clone
@@ -314,38 +336,10 @@ cd infra && docker compose up -d
 pnpm build && pnpm dev
 ```
 
-### Connect Your Agent (Member Install)
-
-Connect your IDE agent to an existing Cortex Hub — **no need to clone the repo**:
-
-**macOS / Linux:**
+Or use the admin bootstrap:
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/onboard.sh)
+bash scripts/bootstrap.sh   # Select "1) Administrator"
 ```
-
-**Windows (PowerShell):**
-```powershell
-iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/onboard.ps1 -OutFile onboard.ps1
-.\onboard.ps1
-```
-
-Or with API key pre-configured:
-
-```bash
-# macOS/Linux
-HUB_API_KEY=your-key bash <(curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/onboard.sh) --tool antigravity
-```
-```powershell
-# Windows
-$env:HUB_API_KEY = "your-key"; .\onboard.ps1 -Tool antigravity
-```
-
-The onboarding script will:
-- ✅ Inject MCP config into your IDE (Claude, Cursor, Windsurf, VS Code, Gemini)
-- ✅ Generate `.cortex/project-profile.json` with verify commands
-- ✅ Install Lefthook git hooks (pre-commit + pre-push)
-- ✅ Deploy workflow templates (`.agents/workflows/`)
-- ✅ Generate agent rules (`.cortex/agent-rules.md`)
 
 ### Verify
 
@@ -369,7 +363,7 @@ curl https://cortex-mcp.jackle.dev/health     # MCP Server
 | **Frontend** | Next.js 15 + React 19 | Dashboard web interface (static export, 13 pages) |
 | **Infra** | Docker Compose | Service orchestration |
 | **Tunnel** | Cloudflare Tunnel | Secure exposure, zero open ports |
-| **Hooks** | Lefthook | Git hooks from `project-profile.json` |
+| **Hooks** | Lefthook | Smart glob-filtered git hooks from `project-profile.json` |
 | **Monorepo** | pnpm + Turborepo | Build orchestration + caching |
 
 ---
@@ -380,7 +374,7 @@ curl https://cortex-mcp.jackle.dev/health     # MCP Server
 cortex-hub/
 ├── apps/
 │   ├── hub-mcp/                 # MCP Server (Hono, Streamable HTTP)
-│   │   └── src/tools/           #   17 MCP tools (code, memory, knowledge, quality, session, analytics)
+│   │   └── src/tools/           #   18 MCP tools (code, memory, knowledge, quality, session, analytics)
 │   ├── dashboard-api/           # Dashboard Backend (Hono + SQLite + mem9)
 │   │   ├── routes/llm.ts        #   LLM Gateway (multi-provider proxy + complexity routing)
 │   │   ├── routes/quality.ts    #   Quality gates + session handoffs
@@ -400,13 +394,16 @@ cortex-hub/
 │   ├── Dockerfile.dashboard-web #   Next.js static export
 │   └── Dockerfile.gitnexus      #   GitNexus eval-server
 ├── scripts/
-│   ├── bootstrap.sh             # One-command install (admin + member modes)
+│   ├── install.sh               # Unified installer — global skill + MCP + hooks + IDE setup
+│   ├── install.ps1              # Windows PowerShell equivalent
+│   ├── bootstrap.sh             # Admin/member mode selector
 │   ├── install-hub.sh           # Full server setup (Docker, Cloudflare, services)
-│   ├── onboard.sh               # Universal agent onboarding — macOS/Linux
-│   ├── onboard.ps1              # Universal agent onboarding — Windows
+│   ├── onboard.sh               # Legacy interactive onboarding — macOS/Linux
+│   ├── onboard.ps1              # Legacy interactive onboarding — Windows
 │   ├── uninstall.sh             # Clean uninstall for fresh re-testing
 │   └── bump-version.sh          # Version management (patch/minor/major)
 ├── templates/
+│   ├── skills/install/          # /install slash command template (global skill)
 │   └── workflows/               # Portable workflow templates for any project
 ├── docs/                        # Architecture, API reference, guides, use-cases
 ├── .cortex/                     # Project profile + code conventions
@@ -487,12 +484,16 @@ cortex-hub/
 - ✅ Usage logging per agent, model, day
 
 **Developer Experience**
-- ✅ Universal onboarding: supports Claude Code, Cursor, Windsurf, VS Code, Gemini, OpenAI Codex, headless bots
-- ✅ **Windows support**: `onboard.ps1` — full PowerShell equivalent of `onboard.sh`
-- ✅ Remote install: `bash <(curl ...)` or `iwr | .\onboard.ps1` — no clone needed
+- ✅ **Unified installer**: `install.sh` / `install.ps1` — one script for everything (global + project + multi-IDE)
+- ✅ **`/install` slash command**: type `/install` in Claude Code to set up any project
+- ✅ **Smart stack detection**: auto-detects Node, Go, Rust, Python, .NET, Godot (including mixed projects)
+- ✅ **Glob-filtered pipelines**: each check only runs when relevant files change (e.g., `.py` → Python, `.cs` → .NET)
+- ✅ **Multi-IDE support**: Claude Code, Gemini, Cursor, Windsurf, VS Code, OpenAI Codex
+- ✅ **Cross-platform**: macOS, Linux, Windows (PowerShell + Git Bash)
+- ✅ **Version-tracked hooks**: `.cortex/.hooks-version` — auto-update on `/install`
+- ✅ **Idempotent**: safe to run repeatedly, skips what's up to date
 - ✅ Lefthook git hooks auto-generated from `project-profile.json`
 - ✅ Workflow templates deployed to any project (code, continue, phase)
-- ✅ Agent-facing rules auto-generated (`.cortex/agent-rules.md`)
 - ✅ Auto-docs knowledge pipeline: index repo → mem9 embed → scan docs → build knowledge
 
 **CI/CD & Operations**
