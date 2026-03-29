@@ -215,6 +215,26 @@ statsRouter.get('/overview-v2', async (c) => {
     } catch (e) { console.warn('[overview-v2] knowledge stats error:', e) }
 
     // ── Token savings (from Cortex tool calls) ──
+    // Estimation model: tokens saved = (estimated grep/manual cost) - (cortex response tokens)
+    // Grep alternative cost estimates per tool type (based on typical agent behavior):
+    //   code_search: grep would scan ~20 files × ~500 tokens = 10,000 tokens baseline
+    //   code_context: manual trace would read ~10 files × ~800 tokens = 8,000 tokens
+    //   code_impact: manual impact analysis ~15 files × ~600 tokens = 9,000 tokens
+    //   knowledge_search: agent would re-debug from scratch ~5,000 tokens wasted
+    //   memory_search: agent would re-discover context ~3,000 tokens
+    //   code_read: targeted read vs full file scan, ~3x savings
+    //   Other tools: conservative 2x savings
+    const GREP_BASELINE: Record<string, number> = {
+      code_search: 10000,
+      code_context: 8000,
+      code_impact: 9000,
+      knowledge_search: 5000,
+      memory_search: 3000,
+      code_read: 0, // calculated as 3x output
+      detect_changes: 6000,
+      cypher: 7000,
+    }
+
     let tokenSavings = { totalTokensSaved: 0, totalToolCalls: 0, avgTokensPerCall: 0, totalDataBytes: 0, topTools: [] as { tool: string; tokensSaved: number; calls: number }[] }
     try {
       const savingsOverall = db.prepare(`
@@ -230,13 +250,42 @@ statsRouter.get('/overview-v2', async (c) => {
         GROUP BY tool ORDER BY output_bytes DESC LIMIT 5
       `).all() as Array<{ tool: string; calls: number; output_bytes: number; compute_tokens: number }>
 
-      const totalTokensSaved = Math.round(savingsOverall.total_output_bytes / 4)
+      // Calculate per-tool savings using baseline model
+      const allTools = db.prepare(`
+        SELECT tool, COUNT(*) as calls, COALESCE(SUM(output_size), 0) as output_bytes
+        FROM query_logs WHERE status = 'ok'
+        GROUP BY tool
+      `).all() as Array<{ tool: string; calls: number; output_bytes: number }>
+
+      let totalTokensSaved = 0
+      for (const t of allTools) {
+        const toolKey = t.tool.replace('cortex_', '')
+        const baseline = GREP_BASELINE[toolKey]
+        const cortexTokens = Math.round(t.output_bytes / 4)
+        if (baseline !== undefined) {
+          // Savings = (what grep would cost × calls) - (what cortex returned)
+          const grepCost = baseline > 0 ? baseline * t.calls : cortexTokens * 3
+          totalTokensSaved += Math.max(0, grepCost - cortexTokens)
+        } else {
+          // Unknown tool: conservative 2x estimate
+          totalTokensSaved += cortexTokens
+        }
+      }
+
       tokenSavings = {
         totalTokensSaved,
         totalToolCalls: savingsOverall.total_calls,
         avgTokensPerCall: savingsOverall.total_calls > 0 ? Math.round(totalTokensSaved / savingsOverall.total_calls) : 0,
         totalDataBytes: savingsOverall.total_data_bytes,
-        topTools: topTools.map(t => ({ tool: t.tool, tokensSaved: Math.round(t.output_bytes / 4), calls: t.calls, computeTokens: t.compute_tokens })),
+        topTools: topTools.map(t => {
+          const toolKey = t.tool.replace('cortex_', '')
+          const baseline = GREP_BASELINE[toolKey]
+          const cortexTokens = Math.round(t.output_bytes / 4)
+          const saved = baseline !== undefined
+            ? Math.max(0, (baseline > 0 ? baseline * t.calls : cortexTokens * 3) - cortexTokens)
+            : cortexTokens
+          return { tool: t.tool, tokensSaved: saved, calls: t.calls, computeTokens: t.compute_tokens }
+        }),
       }
     } catch (e) { console.warn('[overview-v2] token savings error:', e) }
 
@@ -492,8 +541,15 @@ statsRouter.get('/tool-analytics', (c) => {
       avgLatencyMs: t.avg_latency_ms,
       avgInputSize: t.avg_input_size,
       avgOutputSize: t.avg_output_size,
-      // Estimate tokens: ~4 chars per token (conservative)
-      estimatedTokensSaved: Math.round(t.total_output_bytes / 4),
+      // Token savings: (grep baseline cost × calls) - (cortex response tokens)
+      estimatedTokensSaved: (() => {
+        const toolKey = t.tool.replace('cortex_', '')
+        const baseline: Record<string, number> = { code_search: 10000, code_context: 8000, code_impact: 9000, knowledge_search: 5000, memory_search: 3000, code_read: 0, detect_changes: 6000, cypher: 7000 }
+        const cortexTokens = Math.round(t.total_output_bytes / 4)
+        const b = baseline[toolKey]
+        if (b !== undefined) return Math.max(0, (b > 0 ? b * t.total_calls : cortexTokens * 3) - cortexTokens)
+        return cortexTokens
+      })(),
       computeTokens: t.compute_tokens,
       totalInputBytes: t.total_input_bytes,
       totalOutputBytes: t.total_output_bytes,
@@ -532,7 +588,7 @@ statsRouter.get('/tool-analytics', (c) => {
       summary: {
         totalCalls,
         overallSuccessRate: totalCalls > 0 ? Math.round((totalSuccess / totalCalls) * 100 * 10) / 10 : 0,
-        estimatedTokensSaved: Math.round(totalOutputBytes / 4),
+        estimatedTokensSaved: tools.reduce((sum, t) => sum + ((t as unknown as Record<string, number>).estimatedTokensSaved || 0), 0),
         totalDataBytes: totalInputBytes + totalOutputBytes,
         activeAgents: agents.length,
       },
