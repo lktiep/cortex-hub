@@ -50,6 +50,9 @@ function Get-DetectedIDEs {
     if ((Test-Path "$env:USERPROFILE\.cursor") -or (Get-Command cursor -ErrorAction SilentlyContinue)) {
         $detected += "cursor"
     }
+    if ((Test-Path "$env:USERPROFILE\.codeium") -or (Get-Command windsurf -ErrorAction SilentlyContinue)) {
+        $detected += "windsurf"
+    }
     if (Get-Command code -ErrorAction SilentlyContinue) {
         $detected += "vscode"
     }
@@ -136,25 +139,55 @@ with open(path, 'w') as f: json.dump(config, f, indent=2)
         $McpConfigured = $true
         Write-Ok "MCP: configured with provided API key"
 
-        # Configure other IDEs
-        if (Test-IDESelected "cursor") {
-            $cursorDir = Join-Path $env:USERPROFILE ".cursor"
-            if (-not (Test-Path $cursorDir)) { New-Item -ItemType Directory -Path $cursorDir -Force | Out-Null }
+        # Configure other IDEs — reusable function
+        function Set-McpConfig {
+            param([string]$Path, [string]$RootKey, [string]$Label)
+            $dir = Split-Path $Path -Parent
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $escapedPath = $Path -replace '\\', '/'
             python3 -c @"
 import json, os
-path = os.path.join(os.environ['USERPROFILE'], '.cursor', 'mcp.json')
+path = '$escapedPath'
 config = {}
 if os.path.exists(path):
     with open(path) as f: config = json.load(f)
-if 'mcpServers' not in config: config['mcpServers'] = {}
-config['mcpServers']['cortex-hub'] = {
+if '$RootKey' not in config: config['$RootKey'] = {}
+config['$RootKey']['cortex-hub'] = {
     'command': 'npx',
     'args': ['-y', 'mcp-remote', '$McpUrl', '--header', 'Authorization:`${AUTH_HEADER}'],
     'env': {'AUTH_HEADER': 'Bearer $ApiKey'}
 }
 with open(path, 'w') as f: json.dump(config, f, indent=2)
 "@
-            Write-Ok "MCP: configured Cursor"
+            Write-Ok "MCP: configured $Label"
+        }
+
+        if (Test-IDESelected "cursor") {
+            Set-McpConfig -Path (Join-Path $env:USERPROFILE ".cursor\mcp.json") -RootKey "mcpServers" -Label "Cursor"
+        }
+        if (Test-IDESelected "windsurf") {
+            Set-McpConfig -Path (Join-Path $env:USERPROFILE ".codeium\windsurf\mcp_config.json") -RootKey "mcpServers" -Label "Windsurf"
+        }
+        if (Test-IDESelected "gemini") {
+            Set-McpConfig -Path (Join-Path $env:USERPROFILE ".gemini\antigravity\mcp_config.json") -RootKey "mcpServers" -Label "Gemini"
+        }
+        if (Test-IDESelected "vscode") {
+            Set-McpConfig -Path ".vscode\mcp.json" -RootKey "servers" -Label "VS Code"
+        }
+        if (Test-IDESelected "codex") {
+            # Codex uses TOML — append if not present
+            $codexConfig = Join-Path $env:USERPROFILE ".codex\config.toml"
+            $codexDir = Split-Path $codexConfig -Parent
+            if (-not (Test-Path $codexDir)) { New-Item -ItemType Directory -Path $codexDir -Force | Out-Null }
+            if (-not (Test-Path $codexConfig) -or -not (Select-String -Path $codexConfig -Pattern "cortex-hub" -Quiet)) {
+                Add-Content -Path $codexConfig -Value @"
+
+[mcp_servers.cortex-hub]
+command = "npx"
+args = ["-y", "mcp-remote", "$McpUrl", "--header", "Authorization:Bearer $ApiKey"]
+"@
+                Write-Ok "MCP: configured Codex"
+            }
         }
     } else {
         Write-Warn "MCP: not configured. Set HUB_API_KEY in env or .env file, then re-run"
@@ -201,15 +234,18 @@ if ($Force) {
 # Phase 3: Detect Project Stack
 # ══════════════════════════════════════════════
 if (-not (Test-Path ".cortex\project-profile.json") -or $Force) {
-    Write-Info "Detecting project stack..."
+    Write-Info "Detecting project stacks..."
     $PkgManager = "unknown"
+    $DetectedStacks = @()
     $PreCommitCmds = @()
     $FullCmds = @()
 
+    # Node.js
     if (Test-Path "package.json") {
         if (Test-Path "pnpm-lock.yaml") { $PkgManager = "pnpm" }
         elseif (Test-Path "yarn.lock") { $PkgManager = "yarn" }
         else { $PkgManager = "npm" }
+        $DetectedStacks += "node:$PkgManager"
 
         $scripts = python3 -c "import json; s=json.load(open('package.json',encoding='utf-8-sig')).get('scripts',{}); print(' '.join(s.keys()))" 2>$null
         foreach ($s in @("build", "typecheck", "lint")) {
@@ -219,26 +255,59 @@ if (-not (Test-Path ".cortex\project-profile.json") -or $Force) {
             }
         }
         if ($scripts -match "\btest\b") { $FullCmds += "`"$PkgManager test`"" }
-    } elseif (Test-Path "go.mod") {
-        $PkgManager = "go"
-        $PreCommitCmds = @('"go build ./..."', '"go vet ./..."')
-        $FullCmds = @('"go build ./..."', '"go vet ./..."', '"go test ./..."')
-    } elseif (Test-Path "Cargo.toml") {
-        $PkgManager = "cargo"
-        $PreCommitCmds = @('"cargo build"', '"cargo clippy"')
-        $FullCmds = @('"cargo build"', '"cargo clippy"', '"cargo test"')
-    } elseif ((Test-Path "*.csproj") -or (Test-Path "*.sln")) {
-        $PkgManager = "dotnet"
-        $PreCommitCmds = @('"dotnet build"')
-        $FullCmds = @('"dotnet build"', '"dotnet test"')
+    }
+    # Go
+    if (Test-Path "go.mod") {
+        $PkgManager = "go"; $DetectedStacks += "go"
+    }
+    # Rust
+    if (Test-Path "Cargo.toml") {
+        $PkgManager = "cargo"; $DetectedStacks += "rust"
+    }
+    # Python (with manifest)
+    if ((Test-Path "requirements.txt") -or (Test-Path "pyproject.toml") -or (Test-Path "setup.py") -or (Test-Path "Pipfile")) {
+        $DetectedStacks += "python"
+        if ($PkgManager -eq "unknown") { $PkgManager = "pip" }
+    }
+    # .NET (root)
+    if ((Get-ChildItem -Filter "*.csproj" -ErrorAction SilentlyContinue) -or (Get-ChildItem -Filter "*.sln" -ErrorAction SilentlyContinue)) {
+        $DetectedStacks += "dotnet:root"
+        if ($PkgManager -eq "unknown") { $PkgManager = "dotnet" }
+    }
+    # .NET (subdirectory)
+    elseif (Get-ChildItem -Recurse -Depth 2 -Filter "*.sln" -ErrorAction SilentlyContinue) {
+        $slnFile = (Get-ChildItem -Recurse -Depth 2 -Filter "*.sln" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+        $slnRelative = [System.IO.Path]::GetRelativePath($ProjectDir, $slnFile)
+        $DetectedStacks += "dotnet:$slnRelative"
+        if ($PkgManager -eq "unknown") { $PkgManager = "dotnet-mixed" }
+    }
+    # Godot
+    $godotFile = Get-ChildItem -Recurse -Depth 3 -Filter "project.godot" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($godotFile) {
+        $godotDir = [System.IO.Path]::GetRelativePath($ProjectDir, $godotFile.DirectoryName)
+        $DetectedStacks += "godot:$godotDir"
+    }
+    # Python scripts (no manifest)
+    if (-not ($DetectedStacks -match "python") -and (Get-ChildItem -Recurse -Depth 2 -Filter "*.py" -ErrorAction SilentlyContinue)) {
+        $DetectedStacks += "python-scripts"
     }
 
+    if ($DetectedStacks.Count -eq 0) {
+        Write-Warn "Stack: no recognized project types found"
+    } elseif ($DetectedStacks.Count -eq 1) {
+        Write-Ok "Stack: $($DetectedStacks[0])"
+    } else {
+        Write-Ok "Stack: mixed project — $($DetectedStacks -join ', ')"
+    }
+
+    $stacksJson = ($DetectedStacks | ForEach-Object { "`"$_`"" }) -join ","
     $profileJson = @"
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "project_name": "$(Split-Path $ProjectDir -Leaf)",
   "fingerprint": {
     "package_manager": "$PkgManager",
+    "stacks": [$stacksJson],
     "detected_at": "$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')"
   },
   "verify": {
@@ -250,7 +319,7 @@ if (-not (Test-Path ".cortex\project-profile.json") -or $Force) {
 }
 "@
     $profileJson | Out-File -FilePath ".cortex\project-profile.json" -Encoding utf8
-    Write-Ok "Profile: .cortex\project-profile.json created ($PkgManager)"
+    Write-Ok "Profile: .cortex\project-profile.json created ($($DetectedStacks -join ', '))"
 } else {
     Write-Ok "Profile: already exists"
 }
