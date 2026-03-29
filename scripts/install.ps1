@@ -89,7 +89,7 @@ if (-not $SkipGlobal -and -not $CheckOnly -and (Test-IDESelected "claude")) {
     } elseif (-not (Test-Path (Join-Path $skillDir "SKILL.md"))) {
         if (-not (Test-Path $skillDir)) { New-Item -ItemType Directory -Path $skillDir -Force | Out-Null }
         try {
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/lktiep/cortex-hub/main/templates/skills/install/SKILL.md" -OutFile (Join-Path $skillDir "SKILL.md")
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/lktiep/cortex-hub/master/templates/skills/install/SKILL.md" -OutFile (Join-Path $skillDir "SKILL.md")
             Write-Ok "Global: /install skill downloaded"
         } catch {
             Write-Warn "Global: could not download /install skill"
@@ -361,21 +361,97 @@ if ((Test-Path (Join-Path $StateDir "session-started")) -and -not (Test-Path (Jo
 exit 0
 '@ | Out-File -FilePath "$hooksDir\session-end-check.ps1" -Encoding utf8
 
-        # settings.json for Windows (PowerShell hooks)
-        $psCmd = 'powershell.exe -ExecutionPolicy Bypass -File ${CLAUDE_PROJECT_DIR:-.}\.claude\hooks'
-        @"
+        # settings.json for Windows
+        # Use bash (Git Bash) for hooks — more reliable than PowerShell on Windows Claude Code
+        @'
 {
   "hooks": {
-    "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "$psCmd\\session-init.ps1"}]}],
+    "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-init.sh"}]}],
     "PreToolUse": [
-      {"matcher": "Edit|Write|NotebookEdit|Bash", "hooks": [{"type": "command", "command": "$psCmd\\enforce-session.ps1"}]},
-      {"matcher": "Bash", "hooks": [{"type": "command", "command": "$psCmd\\enforce-commit.ps1"}]}
+      {"matcher": "Edit|Write|NotebookEdit|Bash", "hooks": [{"type": "command", "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-session.sh"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-commit.sh"}]}
     ],
-    "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "$psCmd\\track-quality.ps1"}]}],
-    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "$psCmd\\session-end-check.ps1"}]}]
+    "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/track-quality.sh"}]}],
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-end-check.sh"}]}]
   }
 }
-"@ | Out-File -FilePath ".claude\settings.json" -Encoding utf8
+'@ | Out-File -FilePath ".claude\settings.json" -Encoding utf8
+
+        # Also install bash hooks (settings.json uses bash via Git Bash on Windows)
+        @'
+#!/bin/bash
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+mkdir -p "$STATE_DIR"
+rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" "$STATE_DIR/session-ended" 2>/dev/null
+echo "HARD REQUIREMENT: Call cortex_session_start IMMEDIATELY. ALL edits BLOCKED until you do."
+'@ | Out-File -FilePath "$hooksDir\session-init.sh" -Encoding utf8 -NoNewline
+
+        @'
+#!/bin/bash
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+[ -f "$STATE_DIR/session-started" ] && exit 0
+INPUT=$(cat)
+TOOL_NAME=""
+COMMAND=""
+if command -v jq >/dev/null 2>&1; then
+  TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+  COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1; then
+  TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null || true)
+  COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+fi
+if [ -z "$TOOL_NAME" ]; then echo "BLOCKED: Cannot parse hook input." >&2; exit 2; fi
+case "$TOOL_NAME" in
+  Edit|Write|NotebookEdit) echo "BLOCKED: Call cortex_session_start first." >&2; exit 2 ;;
+  Bash)
+    if [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ ) ]]; then exit 0; fi
+    if [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ |sed\ -i|>\ ) ]]; then echo "BLOCKED: Call cortex_session_start first." >&2; exit 2; fi
+    exit 0 ;;
+esac
+exit 0
+'@ | Out-File -FilePath "$hooksDir\enforce-session.sh" -Encoding utf8 -NoNewline
+
+        @'
+#!/bin/bash
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+[[ ! "$COMMAND" =~ ^git\ (commit|push) ]] && exit 0
+if [[ "$COMMAND" =~ ^git\ commit ]] && [ ! -f "$STATE_DIR/quality-gates-passed" ]; then echo "BLOCKED: Quality gates not passed." >&2; exit 2; fi
+if [[ "$COMMAND" =~ ^git\ push ]]; then echo "REMINDER: Call cortex_code_reindex after push." >&2; fi
+exit 0
+'@ | Out-File -FilePath "$hooksDir\enforce-commit.sh" -Encoding utf8 -NoNewline
+
+        @'
+#!/bin/bash
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+mkdir -p "$STATE_DIR"
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ build ]]    && touch "$STATE_DIR/gate-build"
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ typecheck ]] && touch "$STATE_DIR/gate-typecheck"
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ lint ]]      && touch "$STATE_DIR/gate-lint"
+[ -f "$STATE_DIR/gate-build" ] && [ -f "$STATE_DIR/gate-typecheck" ] && [ -f "$STATE_DIR/gate-lint" ] && touch "$STATE_DIR/quality-gates-passed"
+[[ "$TOOL_NAME" =~ cortex_session_start ]]  && touch "$STATE_DIR/session-started"
+[[ "$TOOL_NAME" =~ cortex_session_end ]]    && touch "$STATE_DIR/session-ended"
+[[ "$TOOL_NAME" =~ cortex_quality_report ]] && touch "$STATE_DIR/quality-gates-passed"
+exit 0
+'@ | Out-File -FilePath "$hooksDir\track-quality.sh" -Encoding utf8 -NoNewline
+
+        @'
+#!/bin/bash
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+if [ -f "$STATE_DIR/session-started" ] && [ ! -f "$STATE_DIR/session-ended" ]; then
+  echo "WARNING: cortex_session_end has not been called."
+fi
+exit 0
+'@ | Out-File -FilePath "$hooksDir\session-end-check.sh" -Encoding utf8 -NoNewline
 
         Write-Ok "Claude: hooks + settings.json installed (v$HOOKS_VERSION)"
     }
@@ -426,16 +502,54 @@ End session: ``cortex_session_end`` with sessionId and summary.
 }
 
 # ══════════════════════════════════════════════
-# Phase 5: Lefthook (skip on Windows — use bash version)
+# Phase 5: Lefthook
 # ══════════════════════════════════════════════
 if (-not (Test-Path "lefthook.yml")) {
-    Write-Warn "Lefthook: run 'bash scripts/cortex-setup.sh' for lefthook.yml generation"
+    Write-Warn "Lefthook: run 'bash scripts/install.sh' on Git Bash for lefthook.yml generation"
 } else {
     Write-Ok "Lefthook: already configured"
 }
 
 # ══════════════════════════════════════════════
-# Phase 6: Summary
+# Phase 6: CLAUDE.md Injection
+# ══════════════════════════════════════════════
+$cortexMarker = "<!-- cortex-hub:auto-mcp -->"
+$claudeMdContent = @"
+$cortexMarker
+## Cortex Hub — MANDATORY (enforced by hooks)
+
+**YOUR FIRST ACTION in every conversation MUST be calling ``cortex_session_start``.**
+If you skip this, all Edit/Write/file-modifying Bash commands will return exit code 2 (BLOCKED).
+
+``cortex_session_start(repo: "$GitRepo", mode: "development", agentId: "claude-code")``
+
+Then:
+- If ``recentChanges.count > 0`` → warn user and ``git pull``
+- Read ``STATE.md`` if it exists
+
+### Quality gates (enforced — commit blocked without these)
+Run verify commands from ``.cortex/project-profile.json``.
+Call ``cortex_quality_report`` then ``cortex_session_end``.
+$cortexMarker
+"@
+
+if (-not (Test-Path "CLAUDE.md")) {
+    $claudeMdContent | Out-File -FilePath "CLAUDE.md" -Encoding utf8
+    Write-Ok "CLAUDE.md: created"
+} elseif (Select-String -Path "CLAUDE.md" -Pattern "cortex-hub:auto-mcp" -Quiet) {
+    # Replace existing section
+    $existing = Get-Content "CLAUDE.md" -Raw
+    $pattern = [regex]::Escape($cortexMarker) + '[\s\S]*?' + [regex]::Escape($cortexMarker)
+    $updated = [regex]::Replace($existing, $pattern, $claudeMdContent.Trim())
+    $updated | Out-File -FilePath "CLAUDE.md" -Encoding utf8
+    Write-Ok "CLAUDE.md: cortex section updated"
+} else {
+    Add-Content -Path "CLAUDE.md" -Value "`n$claudeMdContent"
+    Write-Ok "CLAUDE.md: cortex section appended"
+}
+
+# ══════════════════════════════════════════════
+# Phase 7: Summary
 # ══════════════════════════════════════════════
 Write-Host ""
 Write-Host "  Cortex Hub setup complete (v$HOOKS_VERSION)" -ForegroundColor Green
