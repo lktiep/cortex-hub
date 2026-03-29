@@ -435,11 +435,17 @@ rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" \
       "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" \
       "$STATE_DIR/session-ended" 2>/dev/null
 cat <<'MSG'
-MANDATORY SESSION PROTOCOL — You MUST complete these steps NOW before any other work:
-1. Call cortex_session_start with repo, mode: "development", agentId: "claude-code"
-2. If recentChanges.count > 0, warn user and run git pull
-3. Read STATE.md for current task progress
-DO NOT proceed with any code changes until step 1 is complete.
+⚠️ HARD REQUIREMENT — BLOCKING ⚠️
+You MUST call cortex_session_start IMMEDIATELY as your very first action.
+ALL file edits and modifications are BLOCKED until you do this.
+
+Steps:
+1. Call cortex_session_start(repo: "<git remote url>", mode: "development", agentId: "claude-code")
+2. If recentChanges.count > 0 → warn user and git pull
+3. Read STATE.md if it exists
+
+FAILURE TO COMPLY: Your Edit/Write/Bash tools WILL return exit code 2 (blocked).
+This is enforced by hooks — not optional.
 MSG
 HOOKEOF
 
@@ -952,21 +958,19 @@ inject_claude_md() {
   local CONTENT
   CONTENT=$(cat << 'CLAUDEEOF'
 <!-- cortex-hub:auto-mcp -->
-## Cortex Hub — Auto MCP (MANDATORY — every conversation)
+## Cortex Hub — MANDATORY (enforced by hooks — violations are BLOCKED)
 
-At the START of every conversation, before doing anything else:
+**YOUR FIRST ACTION in every conversation MUST be calling `cortex_session_start`.
+If you skip this, all Edit/Write/file-modifying Bash commands will return exit code 2 (BLOCKED).
+This is not optional — it is enforced by pre-tool hooks.**
 
-1. Call `cortex_session_start` with:
-   ```
-   repo: "__GIT_REPO__"
-   mode: "development"
-   agentId: "claude-code"
-   ```
-   This returns project context AND unseen code changes from other agents.
+```
+cortex_session_start(repo: "__GIT_REPO__", mode: "development", agentId: "claude-code")
+```
 
-2. If `recentChanges.count > 0` in the response, warn the user and run `git pull` before editing any affected files.
-
-3. Read `STATE.md` for current task progress (if it exists).
+Then:
+- If `recentChanges.count > 0` in the response, warn the user and run `git pull`
+- Read `STATE.md` for current task progress (if it exists)
 
 ### Before editing shared files
 
@@ -976,11 +980,11 @@ agentId: "claude-code"
 projectId: "<from session_start response>"
 ```
 
-### When encountering an error or bug (MANDATORY)
+### When encountering an error or bug
 
-1. First search `cortex_knowledge_search` or `cortex_memory_search` for the error message.
-2. Fix the error.
-3. If the fix was non-obvious, **YOU MUST** use `cortex_knowledge_store` to record the problem and solution so others do not have to debug it again.
+1. First search `cortex_knowledge_search` or `cortex_memory_search` for the error message
+2. Fix the error
+3. Non-obvious fixes: **YOU MUST** call `cortex_knowledge_store` to record the solution
 
 ### After pushing code
 
@@ -990,11 +994,11 @@ repo: "__GIT_REPO__"
 branch: "<current branch>"
 ```
 
-### Quality gates
+### Quality gates (enforced — commit blocked without these)
 
 Every session must end with verification commands from `.cortex/project-profile.json`.
-Call `cortex_quality_report` with results.
-Call `cortex_session_end` to close the session.
+Call `cortex_quality_report` with results. Call `cortex_session_end` to close the session.
+**Commits are BLOCKED by hooks until quality gates pass.**
 
 ### Compliance Enforcement (Automated)
 
