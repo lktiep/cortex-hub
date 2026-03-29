@@ -9,7 +9,7 @@
 #   bash install.sh --check                 # Check status only
 #   bash install.sh --tools claude,gemini   # Specific IDEs only
 #   bash install.sh --skip-global           # Skip global install (project only)
-#   curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh | bash
 #
 # Supported IDEs: claude, gemini, cursor, windsurf, vscode, codex
 # Called by: /install skill, or directly from terminal
@@ -131,7 +131,7 @@ if [ "$SKIP_GLOBAL" = "false" ] && [ "$CHECK_ONLY" = "false" ] && ide_selected "
     fi
   elif [ ! -f "$SKILL_DIR/SKILL.md" ]; then
     mkdir -p "$SKILL_DIR"
-    curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/main/templates/skills/install/SKILL.md" \
+    curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/master/templates/skills/install/SKILL.md" \
       -o "$SKILL_DIR/SKILL.md" 2>/dev/null && SKILL_INSTALLED=true || true
   fi
 
