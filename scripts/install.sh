@@ -391,10 +391,23 @@ if [ ! -f ".cortex/project-profile.json" ] || [ "$FORCE" = "true" ]; then
     PRE_COMMIT_CMDS='"python -m py_compile *.py"'
     FULL_CMDS='"python -m py_compile *.py","python -m pytest"'
 
-  elif [ -f "*.csproj" ] 2>/dev/null || [ -f "*.sln" ] 2>/dev/null; then
+  elif ls *.csproj >/dev/null 2>&1 || ls *.sln >/dev/null 2>&1; then
     PKG_MANAGER="dotnet"
     PRE_COMMIT_CMDS='"dotnet build"'
     FULL_CMDS='"dotnet build","dotnet test"'
+
+  elif find . -maxdepth 2 -name "*.sln" 2>/dev/null | grep -q .; then
+    PKG_MANAGER="dotnet-mixed"
+    SLN_PATH=$(find . -maxdepth 2 -name "*.sln" 2>/dev/null | head -1)
+    SLN_DIR=$(dirname "$SLN_PATH")
+    PRE_COMMIT_CMDS="\"dotnet build $SLN_PATH\""
+    FULL_CMDS="\"dotnet build $SLN_PATH\",\"dotnet test $SLN_PATH\""
+  fi
+
+  # Mixed/unknown projects: no verify commands = no lefthook blocking
+  if [ "$PKG_MANAGER" = "unknown" ]; then
+    warn "Stack: could not detect project type — no quality gates configured"
+    warn "  Edit .cortex/project-profile.json manually to add verify commands"
   fi
 
   cat > .cortex/project-profile.json << EOF
@@ -932,9 +945,30 @@ post-push:
             > /dev/null 2>&1 || true
         fi
 EOF
-    ok "Lefthook: lefthook.yml generated"
+    ok "Lefthook: lefthook.yml generated (with quality gates)"
   else
-    warn "Lefthook: skipped (no verify commands detected)"
+    # No verify commands — still create post-push notification
+    cat > lefthook.yml << 'EOF'
+# No quality gates detected for this project type.
+# Edit .cortex/project-profile.json to add verify commands, then re-run /install --force
+
+post-push:
+  commands:
+    notify_cortex:
+      run: |
+        if [ -n "$CORTEX_API_URL" ]; then
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          REPO=$(git remote get-url origin 2>/dev/null || echo "")
+          COMMIT_SHA=$(git rev-parse HEAD)
+          COMMIT_MSG=$(git log -1 --pretty=%s)
+          curl -s -X POST "$CORTEX_API_URL/api/webhooks/local-push" \
+            -H "Content-Type: application/json" \
+            -d "{\"repo\":\"$REPO\",\"branch\":\"$BRANCH\",\"commitSha\":\"$COMMIT_SHA\",\"commitMessage\":\"$COMMIT_MSG\"}" \
+            > /dev/null 2>&1 || true
+        fi
+EOF
+    warn "Lefthook: no quality gates (unknown project type) — post-push only"
+    warn "  Edit .cortex/project-profile.json to add verify commands"
   fi
 
   # Install lefthook if available
