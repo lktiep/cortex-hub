@@ -13,24 +13,28 @@ argument-hint: [--force | --check | --tools claude,gemini]
 
 ## Run
 
-Always download the latest install script from GitHub (source of truth).
-Append a cache-busting timestamp to bypass GitHub CDN cache:
+Download via GitHub API (bypasses CDN cache, always latest):
 
+### Unix/macOS
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh?t=$(date +%s)" -o /tmp/cortex-install.sh && bash /tmp/cortex-install.sh $ARGUMENTS
+curl -fsSL "$(curl -fsSL https://api.github.com/repos/lktiep/cortex-hub/contents/scripts/install.sh?ref=master | grep download_url | cut -d'"' -f4)" -o /tmp/cortex-install.sh && bash /tmp/cortex-install.sh $ARGUMENTS
 ```
 
-If curl fails (no internet / private repo), tell the user and suggest:
-```
-Cannot download install.sh from GitHub. Either:
-1. Check your internet connection
-2. Clone the repo: git clone https://github.com/lktiep/cortex-hub.git ~/Sources/cortex-hub
-   Then run: bash ~/Sources/cortex-hub/scripts/install.sh
+If the API call fails (rate limited), fallback to raw:
+```bash
+curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh" -o /tmp/cortex-install.sh && bash /tmp/cortex-install.sh $ARGUMENTS
 ```
 
 ### Windows PowerShell
 ```powershell
-$ts = [int](Get-Date -UFormat %s); Invoke-WebRequest -Uri "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.ps1?t=$ts" -OutFile "$env:TEMP\cortex-install.ps1"; & "$env:TEMP\cortex-install.ps1" $ARGUMENTS
+$url = (Invoke-RestMethod "https://api.github.com/repos/lktiep/cortex-hub/contents/scripts/install.ps1?ref=master").download_url; Invoke-WebRequest -Uri $url -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1 $ARGUMENTS
+```
+
+### If all else fails
+Tell the user to clone the repo and run locally:
+```
+git clone https://github.com/lktiep/cortex-hub.git ~/Sources/cortex-hub
+bash ~/Sources/cortex-hub/scripts/install.sh
 ```
 
 ## After Setup
