@@ -399,20 +399,20 @@ if [ ! -f ".cortex/project-profile.json" ] || [ "$FORCE" = "true" ]; then
   if ls *.csproj >/dev/null 2>&1 || ls *.sln >/dev/null 2>&1; then
     DETECTED_STACKS+=("dotnet:root")
     [ "$PKG_MANAGER" = "unknown" ] && PKG_MANAGER="dotnet"
-  elif find . -maxdepth 2 -name "*.sln" 2>/dev/null | grep -q .; then
-    SLN_PATH=$(find . -maxdepth 2 -name "*.sln" 2>/dev/null | head -1)
+  elif find . -maxdepth 3 -name "*.sln" 2>/dev/null | grep -q .; then
+    SLN_PATH=$(find . -maxdepth 3 -name "*.sln" 2>/dev/null | head -1)
     DETECTED_STACKS+=("dotnet:$SLN_PATH")
     [ "$PKG_MANAGER" = "unknown" ] && PKG_MANAGER="dotnet-mixed"
   fi
 
   # ── Godot ──
-  if find . -maxdepth 2 -name "project.godot" 2>/dev/null | grep -q .; then
-    GODOT_DIR=$(dirname "$(find . -maxdepth 2 -name "project.godot" 2>/dev/null | head -1)")
+  if find . -maxdepth 4 -name "project.godot" 2>/dev/null | grep -q .; then
+    GODOT_DIR=$(dirname "$(find . -maxdepth 4 -name "project.godot" 2>/dev/null | head -1)")
     DETECTED_STACKS+=("godot:$GODOT_DIR")
   fi
 
   # ── Scattered Python scripts (no manifest) ──
-  if ! printf '%s\n' "${DETECTED_STACKS[@]}" 2>/dev/null | grep -q "python" && find . -maxdepth 2 -name "*.py" 2>/dev/null | grep -q .; then
+  if ! printf '%s\n' "${DETECTED_STACKS[@]}" 2>/dev/null | grep -q "python" && find . -maxdepth 3 -name "*.py" 2>/dev/null | grep -q .; then
     DETECTED_STACKS+=("python-scripts")
   fi
 
