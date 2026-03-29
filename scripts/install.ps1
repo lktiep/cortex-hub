@@ -129,18 +129,38 @@ if ((Test-Path $ClaudeJson) -and (Select-String -Path $ClaudeJson -Pattern "cort
             param([string]$Path, [string]$RootKey, [string]$Label)
             $dir = Split-Path $Path -Parent
             if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-            $config = @{}
-            if (Test-Path $Path) {
-                try { $config = Get-Content $Path -Raw | ConvertFrom-Json -AsHashtable } catch { $config = @{} }
-            }
-            if (-not $config.ContainsKey($RootKey)) { $config[$RootKey] = @{} }
-            $config[$RootKey]["cortex-hub"] = @{
+
+            # Build MCP entry as ordered dict (PS 5.1 compatible)
+            $mcpEntry = [ordered]@{
                 command = "npx"
                 args = @("-y", "mcp-remote", $McpUrl, "--header", "Authorization:`${AUTH_HEADER}")
-                env = @{ AUTH_HEADER = "Bearer $ApiKey" }
+                env = [ordered]@{ AUTH_HEADER = "Bearer $ApiKey" }
             }
-            $config | ConvertTo-Json -Depth 5 | Out-File -FilePath $Path -Encoding utf8
-            Write-Ok "MCP: configured $Label"
+
+            if (Test-Path $Path) {
+                try {
+                    $json = Get-Content $Path -Raw | ConvertFrom-Json
+                    # Add or update the root key
+                    if (-not ($json | Get-Member -Name $RootKey -ErrorAction SilentlyContinue)) {
+                        $json | Add-Member -NotePropertyName $RootKey -NotePropertyValue (New-Object PSObject)
+                    }
+                    $servers = $json.$RootKey
+                    if ($servers | Get-Member -Name "cortex-hub" -ErrorAction SilentlyContinue) {
+                        $servers."cortex-hub" = New-Object PSObject -Property $mcpEntry
+                    } else {
+                        $servers | Add-Member -NotePropertyName "cortex-hub" -NotePropertyValue (New-Object PSObject -Property $mcpEntry)
+                    }
+                    $json | ConvertTo-Json -Depth 5 | Out-File -FilePath $Path -Encoding utf8
+                } catch {
+                    # File corrupt or empty — create fresh
+                    $fresh = [ordered]@{ $RootKey = [ordered]@{ "cortex-hub" = $mcpEntry } }
+                    New-Object PSObject -Property $fresh | ConvertTo-Json -Depth 5 | Out-File -FilePath $Path -Encoding utf8
+                }
+            } else {
+                $fresh = [ordered]@{ $RootKey = [ordered]@{ "cortex-hub" = $mcpEntry } }
+                New-Object PSObject -Property $fresh | ConvertTo-Json -Depth 5 | Out-File -FilePath $Path -Encoding utf8
+            }
+            Write-Ok ("MCP: configured " + $Label)
         }
 
         Set-McpConfig -Path $ClaudeJson -RootKey "mcpServers" -Label "Claude Code"
@@ -274,34 +294,34 @@ if (-not (Test-Path ".cortex\project-profile.json") -or $Force) {
     if ($DetectedStacks.Count -eq 0) {
         Write-Warn "Stack: no recognized project types found"
     } elseif ($DetectedStacks.Count -eq 1) {
-        Write-Ok "Stack: $($DetectedStacks[0])"
+        Write-Ok ("Stack: " + $DetectedStacks[0])
     } else {
-        Write-Ok "Stack: mixed project — $($DetectedStacks -join ', ')"
+        Write-Ok ("Stack: mixed project - " + ($DetectedStacks -join ", "))
     }
 
-    $stacksJson = ($DetectedStacks | ForEach-Object { "`"$_`"" }) -join ","
     $projectName = Split-Path $ProjectDir -Leaf
     $detectedAt = Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ'
-    $preCommitJson = $PreCommitCmds -join ','
-    $fullJson = $FullCmds -join ','
+    $preCommitArr = if ($PreCommitCmds.Count -gt 0) { @($PreCommitCmds | ForEach-Object { $_.Trim('"') }) } else { @() }
+    $fullArr = if ($FullCmds.Count -gt 0) { @($FullCmds | ForEach-Object { $_.Trim('"') }) } else { @() }
 
-    $profile = @{
+    $profile = New-Object PSObject -Property ([ordered]@{
         schema_version = "2.0"
-        project_name = $projectName
-        fingerprint = @{
+        project_name   = $projectName
+        fingerprint    = New-Object PSObject -Property ([ordered]@{
             package_manager = $PkgManager
-            stacks = $DetectedStacks
-            detected_at = $detectedAt
-        }
-        verify = @{
-            pre_commit = if ($PreCommitCmds.Count -gt 0) { $PreCommitCmds | ForEach-Object { $_.Trim('"') } } else { @() }
-            full = if ($FullCmds.Count -gt 0) { $FullCmds | ForEach-Object { $_.Trim('"') } } else { @() }
-            auto_fix = $true
+            stacks          = @($DetectedStacks)
+            detected_at     = $detectedAt
+        })
+        verify = New-Object PSObject -Property ([ordered]@{
+            pre_commit = $preCommitArr
+            full       = $fullArr
+            auto_fix   = $true
             max_retries = 2
-        }
-    }
+        })
+    })
     $profile | ConvertTo-Json -Depth 4 | Out-File -FilePath ".cortex\project-profile.json" -Encoding utf8
-    Write-Ok "Profile: .cortex\project-profile.json created ($($DetectedStacks -join ', '))"
+    $stackLabel = $DetectedStacks -join ", "
+    Write-Ok ("Profile: .cortex\project-profile.json created (" + $stackLabel + ")")
 } else {
     Write-Ok "Profile: already exists"
 }
