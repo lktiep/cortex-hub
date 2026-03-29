@@ -456,6 +456,96 @@ exit 0
         Write-Ok "Claude: hooks + settings.json installed (v$HOOKS_VERSION)"
     }
 
+    # ── Gemini / Antigravity hooks ──
+    if (Test-IDESelected "gemini") {
+        $geminiHooksDir = ".gemini\hooks"
+        if (-not (Test-Path $geminiHooksDir)) { New-Item -ItemType Directory -Path $geminiHooksDir -Force | Out-Null }
+
+        @'
+#!/bin/bash
+PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+mkdir -p "$STATE_DIR"
+rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" "$STATE_DIR/session-ended" 2>/dev/null
+echo '{"systemMessage":"MANDATORY: Call cortex_session_start before any work."}'
+'@ | Out-File -FilePath "$geminiHooksDir\session-init.sh" -Encoding utf8 -NoNewline
+
+        @'
+#!/bin/bash
+PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+[ -f "$STATE_DIR/session-started" ] && { echo '{"decision":"allow"}'; exit 0; }
+INPUT=$(cat)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+case "$TOOL_NAME" in
+  write_file|edit_file|create_file|insert_text)
+    echo '{"decision":"deny","reason":"BLOCKED: Call cortex_session_start first."}'; exit 0 ;;
+  run_shell_command|shell)
+    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+    if [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ ) ]]; then
+      echo '{"decision":"deny","reason":"BLOCKED: Call cortex_session_start first."}'; exit 0
+    fi ;;
+esac
+echo '{"decision":"allow"}'
+'@ | Out-File -FilePath "$geminiHooksDir\enforce-session.sh" -Encoding utf8 -NoNewline
+
+        @'
+#!/bin/bash
+PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+if [[ "$COMMAND" =~ ^git\ commit ]] && [ ! -f "$STATE_DIR/quality-gates-passed" ]; then
+  echo '{"decision":"deny","reason":"Quality gates not passed."}'; exit 0
+fi
+echo '{"decision":"allow"}'
+'@ | Out-File -FilePath "$geminiHooksDir\enforce-commit.sh" -Encoding utf8 -NoNewline
+
+        @'
+#!/bin/bash
+PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+mkdir -p "$STATE_DIR"
+INPUT=$(cat)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ build ]]    && touch "$STATE_DIR/gate-build"
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ typecheck ]] && touch "$STATE_DIR/gate-typecheck"
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ lint ]]      && touch "$STATE_DIR/gate-lint"
+[ -f "$STATE_DIR/gate-build" ] && [ -f "$STATE_DIR/gate-typecheck" ] && [ -f "$STATE_DIR/gate-lint" ] && touch "$STATE_DIR/quality-gates-passed"
+[[ "$TOOL_NAME" =~ cortex_session_start ]]  && touch "$STATE_DIR/session-started"
+[[ "$TOOL_NAME" =~ cortex_session_end ]]    && touch "$STATE_DIR/session-ended"
+[[ "$TOOL_NAME" =~ cortex_quality_report ]] && touch "$STATE_DIR/quality-gates-passed"
+echo '{"decision":"allow"}'
+'@ | Out-File -FilePath "$geminiHooksDir\track-quality.sh" -Encoding utf8 -NoNewline
+
+        @'
+#!/bin/bash
+PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+if [ -f "$STATE_DIR/session-started" ] && [ ! -f "$STATE_DIR/session-ended" ]; then
+  echo '{"systemMessage":"WARNING: Call cortex_session_end before ending."}'
+fi
+'@ | Out-File -FilePath "$geminiHooksDir\session-end-check.sh" -Encoding utf8 -NoNewline
+
+        # Gemini settings.json
+        @'
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": ".gemini/hooks/session-init.sh", "name": "cortex_session_init"}]}],
+    "BeforeTool": [
+      {"matcher": "write_file|edit_file|create_file|insert_text|run_shell_command|shell", "hooks": [{"type": "command", "command": ".gemini/hooks/enforce-session.sh", "name": "cortex_enforce_session"}]},
+      {"matcher": "run_shell_command|shell", "hooks": [{"type": "command", "command": ".gemini/hooks/enforce-commit.sh", "name": "cortex_enforce_commit"}]}
+    ],
+    "AfterTool": [{"matcher": ".*", "hooks": [{"type": "command", "command": ".gemini/hooks/track-quality.sh", "name": "cortex_track_quality"}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": ".gemini/hooks/session-end-check.sh", "name": "cortex_session_end_check"}]}]
+  }
+}
+'@ | Out-File -FilePath ".gemini\settings.json" -Encoding utf8
+
+        Write-Ok "Gemini: hooks + settings.json installed (v$HOOKS_VERSION)"
+    }
+
     # ── Instruction files for other IDEs ──
     $instructionContent = @"
 <!-- cortex-hub:auto-mcp -->
@@ -560,5 +650,5 @@ Write-Host "  IDEs:      $($SelectedIDEs -join ', ')"
 Write-Host "  Hooks:     v$HOOKS_VERSION"
 Write-Host ""
 if (-not $McpConfigured) { Write-Warn "Set HUB_API_KEY and re-run to configure MCP" }
-Write-Host "  Restart Claude Code to pick up any MCP changes" -ForegroundColor Cyan
+Write-Host "  Restart your IDE to pick up changes" -ForegroundColor Cyan
 Write-Host ""
