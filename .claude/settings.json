@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/session-init.sh"
+            "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-init.sh"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/enforce-session.sh"
+            "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-session.sh"
           }
         ]
       },
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/enforce-commit.sh"
+            "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-commit.sh"
           }
         ]
       }
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/track-quality.sh"
+            "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/track-quality.sh"
           }
         ]
       }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/session-end-check.sh"
+            "command": "bash ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-end-check.sh"
           }
         ]
       }

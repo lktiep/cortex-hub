@@ -1,48 +1,51 @@
 #!/bin/bash
-# ── Cortex Session Enforcement — HARD BLOCK ──
-# Blocks Edit, Write, Bash (file-modifying) if cortex_session_start hasn't been called.
-# This is the strongest enforcement layer — agent CANNOT do any work without starting a session.
+# Cortex Session Enforcement (v3) — HARD BLOCK without active session
+# Improvements: robust path resolution, jq+python3 fallback, fail-closed
 
-CORTEX_STATE_DIR="${CLAUDE_PROJECT_DIR:-.}/.cortex/.session-state"
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 
 # If session already started, allow everything
-if [ -f "$CORTEX_STATE_DIR/session-started" ]; then
-  exit 0
+[ -f "$STATE_DIR/session-started" ] && exit 0
+
+# Parse hook input (jq → python3 fallback)
+INPUT=$(cat)
+TOOL_NAME=""
+COMMAND=""
+
+if command -v jq >/dev/null 2>&1; then
+  TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+  COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1; then
+  TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null || true)
+  COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || true)
 fi
 
-# Read hook input to get tool name
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
-
-# Allow read-only tools — agent can read files to understand context before starting session
-# Allow: Read, Glob, Grep, ToolSearch, Agent (research), WebSearch, WebFetch
-# Block: Edit, Write, Bash, NotebookEdit (anything that modifies state)
+# If we couldn't parse at all, fail closed (block)
+if [ -z "$TOOL_NAME" ]; then
+  echo "BLOCKED: Cannot parse hook input. Install jq or python3." >&2
+  exit 2
+fi
 
 case "$TOOL_NAME" in
   Edit|Write|NotebookEdit)
-    echo "BLOCKED: Call cortex_session_start before editing files. Session not started." >&2
+    echo "BLOCKED: Call cortex_session_start before editing files." >&2
     exit 2
     ;;
   Bash)
-    # Allow specific read-only bash commands
-    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-
-    # Allow: ls, cat, head, tail, git status/log/diff, pnpm build/test/lint, curl (MCP calls), echo, pwd, which
-    # Block: anything that modifies files (sed, awk with -i, mv, cp, rm, mkdir, touch, git commit/push/add)
-    if [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote)|pnpm\ (build|typecheck|lint|test)|curl|python3\ -m\ json) ]]; then
+    # Allow read-only commands
+    if [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|rev-parse)|pnpm\ (build|typecheck|lint|test)|npm\ (run|test)|yarn\ |cargo\ (build|test|clippy)|go\ (build|test|vet)|python3?\ -m|curl|dotnet\ (build|test)) ]]; then
       exit 0
     fi
-
     # Block file-modifying commands
-    if [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ |sed\ -i|> ) ]]; then
-      echo "BLOCKED: Call cortex_session_start before modifying files. Session not started." >&2
+    if [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ |sed\ -i|>\ ) ]]; then
+      echo "BLOCKED: Call cortex_session_start before modifying files." >&2
       exit 2
     fi
-
-    # Default: allow other bash commands (they might be read-only inspection)
+    # Default: allow (likely read-only inspection)
     exit 0
     ;;
 esac
 
-# All other tools (Read, Glob, Grep, etc.) — allow
+# All other tools — allow
 exit 0

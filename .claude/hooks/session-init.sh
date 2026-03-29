@@ -1,10 +1,11 @@
 #!/bin/bash
-# Cortex Session Init — Injects mandatory reminder + resets session markers.
-CORTEX_STATE_DIR="${CLAUDE_PROJECT_DIR:-.}/.cortex/.session-state"
-mkdir -p "$CORTEX_STATE_DIR"
-rm -f "$CORTEX_STATE_DIR/session-started" "$CORTEX_STATE_DIR/quality-gates-passed" \
-      "$CORTEX_STATE_DIR/gate-build" "$CORTEX_STATE_DIR/gate-typecheck" "$CORTEX_STATE_DIR/gate-lint" \
-      "$CORTEX_STATE_DIR/session-ended" 2>/dev/null
+# Cortex Session Init (v3) — Resets session markers + prints mandatory reminder
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+mkdir -p "$STATE_DIR"
+rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" \
+      "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" \
+      "$STATE_DIR/session-ended" 2>/dev/null
 cat <<'MSG'
 MANDATORY SESSION PROTOCOL — You MUST complete these steps NOW before any other work:
 1. Call cortex_session_start with repo, mode: "development", agentId: "claude-code"
