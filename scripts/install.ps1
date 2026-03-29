@@ -443,20 +443,23 @@ exit 0
 
         # settings.json for Windows
         # Windows: use PowerShell hooks (no Git Bash / jq / python dependency)
-        $hooksPath = '.claude\hooks'
-        $psHookCmd = "powershell.exe -ExecutionPolicy Bypass -File `${CLAUDE_PROJECT_DIR:-.}\$hooksPath"
-        $settingsJson = @{
-            hooks = @{
-                SessionStart = @(@{ matcher = ""; hooks = @(@{ type = "command"; command = "$psHookCmd\session-init.ps1" }) })
-                PreToolUse = @(
-                    @{ matcher = "Edit|Write|NotebookEdit|Bash"; hooks = @(@{ type = "command"; command = "$psHookCmd\enforce-session.ps1" }) },
-                    @{ matcher = "Bash"; hooks = @(@{ type = "command"; command = "$psHookCmd\enforce-commit.ps1" }) }
-                )
-                PostToolUse = @(@{ matcher = ""; hooks = @(@{ type = "command"; command = "$psHookCmd\track-quality.ps1" }) })
-                Stop = @(@{ matcher = ""; hooks = @(@{ type = "command"; command = "$psHookCmd\session-end-check.ps1" }) })
-            }
-        }
-        $settingsJson | ConvertTo-Json -Depth 6 | Out-File -FilePath ".claude\settings.json" -Encoding utf8
+        # Use forward slashes in JSON to avoid backslash escape issues
+        $prefix = 'powershell.exe -ExecutionPolicy Bypass -File .claude/hooks'
+        $settingsContent = @'
+{
+  "hooks": {
+    "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "PREFIX/session-init.ps1"}]}],
+    "PreToolUse": [
+      {"matcher": "Edit|Write|NotebookEdit|Bash", "hooks": [{"type": "command", "command": "PREFIX/enforce-session.ps1"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "PREFIX/enforce-commit.ps1"}]}
+    ],
+    "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "PREFIX/track-quality.ps1"}]}],
+    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "PREFIX/session-end-check.ps1"}]}]
+  }
+}
+'@
+        $settingsContent = $settingsContent -replace "PREFIX", $prefix
+        [System.IO.File]::WriteAllText((Join-Path $ProjectDir ".claude/settings.json"), $settingsContent)
 
         Write-Ok ("Claude: PS1 hooks + settings.json installed (v" + $HOOKS_VERSION + ")")
     }
