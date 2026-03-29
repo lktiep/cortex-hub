@@ -488,52 +488,28 @@ HOOKEOF
   # ── enforce-session.sh ──
   cat > .claude/hooks/enforce-session.sh << 'HOOKEOF'
 #!/bin/bash
-# Cortex Session Enforcement (v3) — HARD BLOCK without active session
-# Improvements: robust path resolution, jq+python3 fallback, fail-closed
-
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-
-# If session already started, allow everything
-[ -f "$STATE_DIR/session-started" ] && exit 0
-
-# Parse hook input (jq → python3 fallback)
+if [ -f "$STATE_DIR/session-started" ]; then
+  if [ ! -f "$STATE_DIR/discovery-used" ]; then
+    INPUT_PEEK=$(cat)
+    PEEK_TOOL=$(echo "$INPUT_PEEK" | jq -r '.tool_name // empty' 2>/dev/null || true)
+    if [[ "$PEEK_TOOL" = "Grep" ]]; then
+      echo "HINT: Use cortex_code_search BEFORE grep." >&2
+    fi
+  fi
+  exit 0
+fi
 INPUT=$(cat)
-TOOL_NAME=""
-COMMAND=""
-
-if command -v jq >/dev/null 2>&1; then
-  TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
-  COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
-elif command -v python3 >/dev/null 2>&1; then
-  TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null || true)
-  COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || true)
-fi
-
-# If we couldn't parse at all, fail closed (block)
-if [ -z "$TOOL_NAME" ]; then
-  echo "BLOCKED: Cannot parse hook input. Install jq or python3." >&2
-  exit 2
-fi
-
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || true)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+[ -z "$TOOL_NAME" ] && { echo "BLOCKED: Cannot parse hook input." >&2; exit 2; }
 case "$TOOL_NAME" in
-  Edit|Write|NotebookEdit)
-    echo "BLOCKED: Call cortex_session_start before editing files." >&2
-    exit 2
-    ;;
+  Edit|Write|NotebookEdit) echo "BLOCKED: Call cortex_session_start first." >&2; exit 2 ;;
   Bash)
-    # Allow read-only commands
-    if [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|rev-parse)|pnpm\ (build|typecheck|lint|test)|npm\ (run|test)|yarn\ |cargo\ (build|test|clippy)|go\ (build|test|vet)|python3?\ -m|curl|dotnet\ (build|test)) ]]; then
-      exit 0
-    fi
-    # Block file-modifying commands
-    if [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ |sed\ -i|>\ ) ]]; then
-      echo "BLOCKED: Call cortex_session_start before modifying files." >&2
-      exit 2
-    fi
-    # Default: allow (likely read-only inspection)
-    exit 0
-    ;;
+    [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ |pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ ) ]] && exit 0
+    [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ |sed\ -i) ]] && { echo "BLOCKED: Call cortex_session_start first." >&2; exit 2; }
+    exit 0 ;;
 esac
 
 # All other tools — allow
@@ -623,6 +599,14 @@ fi
 [[ "$TOOL_NAME" =~ cortex_session_start ]]  && touch "$STATE_DIR/session-started"
 [[ "$TOOL_NAME" =~ cortex_session_end ]]    && touch "$STATE_DIR/session-ended"
 [[ "$TOOL_NAME" =~ cortex_quality_report ]] && touch "$STATE_DIR/quality-gates-passed"
+
+# Track cortex discovery tool usage
+[[ "$TOOL_NAME" =~ cortex_code_search ]]      && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_knowledge_search ]] && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_memory_search ]]    && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_code_context ]]     && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_code_impact ]]      && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_cypher ]]           && touch "$STATE_DIR/discovery-used"
 exit 0
 HOOKEOF
 
@@ -1142,19 +1126,28 @@ Then:
 - If `recentChanges.count > 0` in the response, warn the user and run `git pull`
 - Read `STATE.md` for current task progress (if it exists)
 
+### Tool Priority (MANDATORY — use cortex tools BEFORE grep/find)
+
+**ALWAYS search with cortex tools first. Only use Grep/find as fallback.**
+Hooks will remind you if you use Grep before cortex discovery tools.
+
+1. `cortex_memory_search` — check if you already know this from previous sessions
+2. `cortex_knowledge_search` — search the shared knowledge base
+3. `cortex_code_search` — AST-aware indexed search (better than grep, saves tokens)
+4. `cortex_code_context` — understand callers/callees of a symbol
+5. `cortex_code_impact` — check blast radius before editing
+6. Grep / find — **ONLY if cortex tools are unavailable or return no results**
+
 ### Before editing shared files
 
-Call `cortex_changes` to check if another agent modified the same files:
-```
-agentId: "claude-code"
-projectId: "<from session_start response>"
-```
+Call `cortex_changes` to check if another agent modified the same files.
 
 ### When encountering an error or bug
 
-1. First search `cortex_knowledge_search` or `cortex_memory_search` for the error message
-2. Fix the error
-3. Non-obvious fixes: **YOU MUST** call `cortex_knowledge_store` to record the solution
+1. **FIRST** search `cortex_knowledge_search` — someone may have solved this already
+2. **THEN** `cortex_memory_search` — you may have seen this before
+3. Fix the error
+4. Non-obvious fixes: **YOU MUST** call `cortex_knowledge_store` to record the solution
 
 ### After pushing code
 

@@ -48,4 +48,12 @@ fi
 [[ "$TOOL_NAME" =~ cortex_session_start ]]  && touch "$STATE_DIR/session-started"
 [[ "$TOOL_NAME" =~ cortex_session_end ]]    && touch "$STATE_DIR/session-ended"
 [[ "$TOOL_NAME" =~ cortex_quality_report ]] && touch "$STATE_DIR/quality-gates-passed"
+
+# Track cortex discovery tool usage
+[[ "$TOOL_NAME" =~ cortex_code_search ]]      && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_knowledge_search ]] && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_memory_search ]]    && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_code_context ]]     && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_code_impact ]]      && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_cypher ]]           && touch "$STATE_DIR/discovery-used"
 exit 0
