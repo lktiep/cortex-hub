@@ -9,36 +9,33 @@ argument-hint: [--force | --check | --tools claude,gemini]
 # Cortex Hub — Install
 
 ## Current Status
-!`bash -c 'echo "hooks=$(cat .cortex/.hooks-version 2>/dev/null || echo 0)/3 mcp=$(grep -q cortex-hub ~/.claude.json 2>/dev/null && echo ok || echo missing) skill=$(test -f ~/.claude/skills/install/SKILL.md && echo ok || echo missing) os=$(uname -s 2>/dev/null || echo Windows)"'`
-
-## Locate install script
-!`bash -c 'FOUND=""; if [ -f scripts/install.sh ]; then FOUND="scripts/install.sh"; else for d in ~/Sources ~/Projects ~/repos ~/code ~/dev ~/src; do f="$d/cortex-hub/scripts/install.sh"; if [ -f "$f" ]; then FOUND="$f"; break; fi; done; fi; if [ -n "$FOUND" ]; then echo "INSTALL_SH=$FOUND"; else echo "INSTALL_SH=REMOTE"; fi'`
+!`bash -c 'echo "hooks=$(cat .cortex/.hooks-version 2>/dev/null || echo 0)/3 mcp=$(grep -q cortex-hub ~/.claude.json 2>/dev/null && echo ok || echo missing) os=$(uname -s 2>/dev/null || echo Windows)"'`
 
 ## Run
 
-Based on the `INSTALL_SH` value above:
+Always download the latest install script from GitHub (source of truth):
 
-- If `INSTALL_SH` is a local path (not `REMOTE`): run it directly:
-  ```bash
-  bash <INSTALL_SH path> $ARGUMENTS
-  ```
+```bash
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/main/scripts/install.sh -o /tmp/cortex-install.sh && bash /tmp/cortex-install.sh $ARGUMENTS
+```
 
-- If `INSTALL_SH=REMOTE`: download from GitHub:
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/main/scripts/install.sh -o /tmp/cortex-install.sh && bash /tmp/cortex-install.sh $ARGUMENTS
-  ```
-  If curl fails (404/private repo), tell the user:
-  "Cannot download install.sh. Clone cortex-hub first: `git clone https://github.com/lktiep/cortex-hub.git ~/Sources/cortex-hub`"
+If curl fails (no internet / private repo), tell the user and suggest:
+```
+Cannot download install.sh from GitHub. Either:
+1. Check your internet connection
+2. Clone the repo: git clone https://github.com/lktiep/cortex-hub.git ~/Sources/cortex-hub
+   Then run: bash ~/Sources/cortex-hub/scripts/install.sh
+```
 
 ### Windows PowerShell
 ```powershell
-.\scripts\install.ps1 $ARGUMENTS
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/lktiep/cortex-hub/main/scripts/install.ps1" -OutFile "$env:TEMP\cortex-install.ps1"; & "$env:TEMP\cortex-install.ps1" $ARGUMENTS
 ```
 
 ## After Setup
 
 1. Report what was installed/updated/skipped and which IDEs were configured
 2. If MCP not configured (missing API key), ask user for it:
-   - `HUB_API_KEY=<key> bash scripts/install.sh`
+   - `HUB_API_KEY=<key> bash /tmp/cortex-install.sh`
 3. If MCP was newly configured, remind: **restart IDE** to pick up changes
 4. Show quality gate commands from `.cortex/project-profile.json`
