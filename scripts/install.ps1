@@ -354,7 +354,18 @@ exit 0
 $ProjectDir = if ($env:CLAUDE_PROJECT_DIR) { $env:CLAUDE_PROJECT_DIR } else { (git rev-parse --show-toplevel 2>$null) }
 if (-not $ProjectDir) { $ProjectDir = "." }
 $StateDir = Join-Path $ProjectDir ".cortex\.session-state"
-if (Test-Path (Join-Path $StateDir "session-started")) { exit 0 }
+if (Test-Path (Join-Path $StateDir "session-started")) {
+    # Nudge: hint if Grep used before cortex discovery tools
+    if (-not (Test-Path (Join-Path $StateDir "discovery-used"))) {
+        try {
+            $peek = [Console]::In.ReadToEnd() | ConvertFrom-Json
+            if ($peek.tool_name -eq "Grep") {
+                Write-Host "HINT: Use cortex_code_search BEFORE grep." -ForegroundColor Yellow
+            }
+        } catch {}
+    }
+    exit 0
+}
 try {
     $json = [Console]::In.ReadToEnd() | ConvertFrom-Json
     $ToolName = $json.tool_name
@@ -363,16 +374,14 @@ try {
     exit 2
 }
 if ($ToolName -match "^(Edit|Write|NotebookEdit)$") {
-    Write-Error "BLOCKED: Call cortex_session_start before editing files."
+    Write-Error "BLOCKED: Call cortex_session_start first."
     exit 2
 }
 if ($ToolName -eq "Bash") {
     $Command = $json.tool_input.command
-    if ($Command -match "^(ls|cat|head|tail|pwd|which|echo|git (status|log|diff|branch|remote)|pnpm (build|typecheck|lint|test)|curl|python)") {
-        exit 0
-    }
-    if ($Command -match "(git (add|commit|push|reset)|rm |mv |cp |mkdir |touch |chmod |sed -i|> )") {
-        Write-Error "BLOCKED: Call cortex_session_start before modifying files."
+    if ($Command -match "^(ls|cat|head|tail|pwd|which|echo|git |pnpm |npm |yarn |cargo |go |python|curl|dotnet )") { exit 0 }
+    if ($Command -match "(git (add|commit|push|reset)|rm |mv |cp |mkdir |touch |chmod |sed -i)") {
+        Write-Error "BLOCKED: Call cortex_session_start first."
         exit 2
     }
 }
@@ -462,23 +471,25 @@ echo "HARD REQUIREMENT: Call cortex_session_start IMMEDIATELY. ALL edits BLOCKED
 #!/bin/bash
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-[ -f "$STATE_DIR/session-started" ] && exit 0
-INPUT=$(cat)
-TOOL_NAME=""
-COMMAND=""
-if command -v jq >/dev/null 2>&1; then
-  TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
-  COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
-elif command -v python3 >/dev/null 2>&1; then
-  TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null || true)
-  COMMAND=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+if [ -f "$STATE_DIR/session-started" ]; then
+  if [ ! -f "$STATE_DIR/discovery-used" ]; then
+    INPUT_PEEK=$(cat)
+    PEEK_TOOL=$(echo "$INPUT_PEEK" | jq -r '.tool_name // empty' 2>/dev/null || true)
+    if [[ "$PEEK_TOOL" = "Grep" ]]; then
+      echo "HINT: Use cortex_code_search BEFORE grep." >&2
+    fi
+  fi
+  exit 0
 fi
-if [ -z "$TOOL_NAME" ]; then echo "BLOCKED: Cannot parse hook input." >&2; exit 2; fi
+INPUT=$(cat)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || true)
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+[ -z "$TOOL_NAME" ] && { echo "BLOCKED: Cannot parse hook input." >&2; exit 2; }
 case "$TOOL_NAME" in
   Edit|Write|NotebookEdit) echo "BLOCKED: Call cortex_session_start first." >&2; exit 2 ;;
   Bash)
-    if [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ ) ]]; then exit 0; fi
-    if [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ |sed\ -i|>\ ) ]]; then echo "BLOCKED: Call cortex_session_start first." >&2; exit 2; fi
+    [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ |pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ ) ]] && exit 0
+    [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ |sed\ -i) ]] && { echo "BLOCKED: Call cortex_session_start first." >&2; exit 2; }
     exit 0 ;;
 esac
 exit 0
