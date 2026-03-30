@@ -780,7 +780,7 @@ statsRouter.get('/conductor/agents', (c) => {
         COALESCE(agent_id, 'unknown') as agentId,
         COUNT(*) as queryCount,
         MAX(created_at) as lastActivity,
-        COUNT(DISTINCT session_id) as sessionCount
+        COUNT(*) as sessionCount
       FROM query_logs
       WHERE created_at > ?
       GROUP BY agent_id
