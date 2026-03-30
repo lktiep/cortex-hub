@@ -101,13 +101,8 @@ export function registerTaskTools(server: McpServer, env: Env) {
           }
         }
 
-        const tasks = (await response.json()) as Array<{
-          id: string
-          title: string
-          status: string
-          priority?: string
-          description?: string
-        }>
+        const data = (await response.json()) as { tasks?: Array<{ id: string; title: string; status: string; priority?: string; description?: string }> }
+        const tasks = data.tasks ?? []
 
         if (tasks.length === 0) {
           return { content: [{ type: 'text' as const, text: `No pending tasks for agent **${agentId}**.` }] }
@@ -246,14 +241,8 @@ export function registerTaskTools(server: McpServer, env: Env) {
           }
         }
 
-        const tasks = (await response.json()) as Array<{
-          id: string
-          title: string
-          status: string
-          assignedTo?: string
-          priority?: string
-          createdAt?: string
-        }>
+        const data = (await response.json()) as { tasks?: Array<{ id: string; title: string; status: string; assigned_to_agent?: string; priority?: number; created_at?: string }> }
+        const tasks = data.tasks ?? []
 
         if (tasks.length === 0) {
           return { content: [{ type: 'text' as const, text: 'No tasks found matching the given filters.' }] }
@@ -262,7 +251,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
         const lines = [`**Tasks** (${tasks.length} found):\n`]
         for (const task of tasks) {
           const parts = [`| ${task.id} | ${task.title} | ${task.status}`]
-          if (task.assignedTo) parts.push(` | ${task.assignedTo}`)
+          if (task.assigned_to_agent) parts.push(` | ${task.assigned_to_agent}`)
           if (task.priority) parts.push(` | ${task.priority}`)
           lines.push(parts.join(''))
         }
