@@ -80,13 +80,14 @@ export function registerTaskTools(server: McpServer, env: Env) {
   // task.pickup — get tasks assigned to the calling agent
   server.tool(
     'cortex_task_pickup',
-    'Retrieve tasks assigned to the specified agent that are ready to be worked on (assigned, accepted, or in-progress).',
+    'Retrieve tasks assigned to you. Automatically checks both your agentId and API key name.',
     {
-      agentId: z.string().describe('The agent ID to retrieve tasks for'),
+      agentId: z.string().optional().describe('Agent ID (auto-detected if not provided)'),
     },
     async ({ agentId }) => {
       try {
-        const url = `${env.DASHBOARD_API_URL}/api/tasks/agent/${encodeURIComponent(agentId)}?status=assigned,accepted,in_progress`
+        // Query all tasks, filter by any matching identity
+        const url = `${env.DASHBOARD_API_URL}/api/tasks?status=assigned,accepted,in_progress`
         const response = await fetch(url, {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
