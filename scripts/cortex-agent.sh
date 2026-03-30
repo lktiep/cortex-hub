@@ -97,22 +97,46 @@ check_dependencies() {
 
 read_identity() {
   if [ -f "$IDENTITY_FILE" ]; then
-    AGENT_ID=$(node -e "const d=require('$IDENTITY_FILE'); console.log(d.agentId || d.id || 'unknown')" 2>/dev/null || echo "cortex-agent")
-    AGENT_HOSTNAME=$(node -e "const d=require('$IDENTITY_FILE'); console.log(d.hostname || '')" 2>/dev/null || hostname)
-    AGENT_OS=$(node -e "const d=require('$IDENTITY_FILE'); console.log(d.os || '')" 2>/dev/null || uname -s)
-    AGENT_IDE=$(node -e "const d=require('$IDENTITY_FILE'); console.log(d.ide || 'cli')" 2>/dev/null || echo "cli")
-    AGENT_ROLE=$(node -e "const d=require('$IDENTITY_FILE'); console.log(d.role || 'worker')" 2>/dev/null || echo "worker")
-    AGENT_CAPABILITIES=$(node -e "const d=require('$IDENTITY_FILE'); console.log(JSON.stringify(d.capabilities || ['claude']))" 2>/dev/null || echo '["claude"]')
+    # agent-identity.json uses: agent_name, environment.hostname, environment.os, role, capabilities, tags
+    AGENT_ID=$(node -e "
+      const d=require('$IDENTITY_FILE');
+      console.log(d.agentId || d.agent_name || d.id || 'unknown')
+    " 2>/dev/null || echo "cortex-agent")
+    AGENT_HOSTNAME=$(node -e "
+      const d=require('$IDENTITY_FILE');
+      console.log((d.environment && d.environment.hostname) || d.hostname || '')
+    " 2>/dev/null || hostname)
+    AGENT_OS=$(node -e "
+      const d=require('$IDENTITY_FILE');
+      console.log((d.environment && d.environment.os) || d.os || '')
+    " 2>/dev/null || uname -s)
+    AGENT_IDE=$(node -e "
+      const d=require('$IDENTITY_FILE');
+      console.log(d.ide || 'cortex-agent')
+    " 2>/dev/null || echo "cortex-agent")
+    AGENT_ROLE=$(node -e "
+      const d=require('$IDENTITY_FILE');
+      console.log(d.role || 'worker')
+    " 2>/dev/null || echo "worker")
+    AGENT_CAPABILITIES=$(node -e "
+      const d=require('$IDENTITY_FILE');
+      const caps = d.capabilities || (d.environment && d.environment.tools) || ['claude'];
+      console.log(JSON.stringify(caps))
+    " 2>/dev/null || echo '["claude"]')
     log_info "Loaded identity from $IDENTITY_FILE (agentId=$AGENT_ID)"
   else
     AGENT_ID="${CORTEX_AGENT_ID:-cortex-agent-$(hostname -s 2>/dev/null || hostname)}"
     AGENT_HOSTNAME="$(hostname)"
     AGENT_OS="$(uname -s)"
-    AGENT_IDE="cli"
+    AGENT_IDE="cortex-agent"
     AGENT_ROLE="worker"
     AGENT_CAPABILITIES='["claude"]'
     log_warn "No identity file at $IDENTITY_FILE; using defaults (agentId=$AGENT_ID)"
   fi
+
+  # Allow env var overrides (highest priority)
+  AGENT_ID="${CORTEX_AGENT_ID:-$AGENT_ID}"
+  AGENT_IDE="${CORTEX_AGENT_IDE:-$AGENT_IDE}"
 }
 
 # ── PID Management ───────────────────────────────────────────
@@ -547,8 +571,22 @@ cmd_start() {
     nohup "$0" _run >> "$LOG_FILE" 2>&1 &
     local bg_pid=$!
     echo "$bg_pid" > "$PID_FILE"
+    echo ""
     echo -e "${GREEN}Agent started in background (pid=$bg_pid)${NC}"
-    echo -e "${BLUE}Logs: tail -f $LOG_FILE${NC}"
+    echo -e "  Agent ID:  ${BLUE}$AGENT_ID${NC}"
+    echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC}"
+    echo -e "  Hub URL:   ${BLUE}${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}${NC}"
+    echo ""
+    echo -e "${BLUE}Next steps:${NC}"
+    echo -e "  1. Check logs:     ${GREEN}tail -f $LOG_FILE${NC}"
+    echo -e "  2. Check status:   ${GREEN}$0 status${NC}"
+    echo -e "  3. Create a task:  Use Dashboard Conductor page or cortex_task_create MCP tool"
+    echo -e "  4. Agent will auto-pickup matching tasks and execute them"
+    echo -e "  5. Stop agent:     ${GREEN}$0 stop${NC}"
+    echo ""
+    echo -e "  ${YELLOW}Tip:${NC} Override identity with env vars:"
+    echo -e "    CORTEX_AGENT_ID=my-agent CORTEX_AGENT_IDE=claude-code $0 start --daemon"
+    echo ""
   else
     run_agent
   fi
@@ -582,20 +620,27 @@ cmd_stop() {
 }
 
 cmd_status() {
+  read_identity
   if is_running; then
     local pid
     pid=$(read_pid)
     echo -e "${GREEN}Agent is running (pid=$pid)${NC}"
-    echo -e "${BLUE}Log file: $LOG_FILE${NC}"
-    echo -e "${BLUE}PID file: $PID_FILE${NC}"
+    echo -e "  Agent ID:  ${BLUE}$AGENT_ID${NC}"
+    echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC}"
+    echo -e "  Hostname:  ${BLUE}$AGENT_HOSTNAME${NC}"
+    echo -e "  OS:        ${BLUE}$AGENT_OS${NC}"
+    echo -e "  Role:      ${BLUE}$AGENT_ROLE${NC}"
+    echo -e "  Hub URL:   ${BLUE}${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}${NC}"
+    echo -e "  Log file:  ${BLUE}$LOG_FILE${NC}"
     if [ -f "$LOG_FILE" ]; then
       echo ""
-      echo -e "${CYAN}Last 10 log lines:${NC}"
-      tail -10 "$LOG_FILE" 2>/dev/null || true
+      echo -e "${CYAN}Last 5 log lines:${NC}"
+      tail -5 "$LOG_FILE" 2>/dev/null || true
     fi
     exit 0
   else
     echo -e "${YELLOW}Agent is not running.${NC}"
+    echo -e "Start with: ${GREEN}$0 start --daemon${NC}"
     exit 1
   fi
 }
