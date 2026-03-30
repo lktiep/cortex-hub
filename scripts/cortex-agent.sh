@@ -188,6 +188,118 @@ read_identity() {
 
   # Setup per-agent paths
   setup_paths
+
+  # Auto-detect Hub config from IDE settings
+  detect_hub_config
+}
+
+# ── Auto-Detect Hub Config from IDE Settings ────────────────
+# Reads HUB_API_KEY and Hub URL from IDE MCP configurations
+# created during onboarding (onboard.sh). Checks configs in
+# order: Claude Code, Cursor, Windsurf, Antigravity.
+detect_hub_config() {
+  # Skip if both are already explicitly set via env vars
+  if [ -n "${CORTEX_HUB_WS_URL:-}" ] && [ -n "${CORTEX_HUB_API_KEY:-}" ]; then
+    log_debug "Hub config: using explicit env vars"
+    return 0
+  fi
+
+  # IDE config file locations (order of priority)
+  local config_files=""
+  config_files="$HOME/.claude.json"
+  config_files="$config_files $HOME/.cursor/mcp.json"
+  config_files="$config_files $HOME/.codeium/windsurf/mcp_config.json"
+  config_files="$config_files $HOME/.gemini/antigravity/mcp_config.json"
+
+  local detected_api_key=""
+  local detected_mcp_url=""
+  local detected_from=""
+
+  for config_file in $config_files; do
+    [ -f "$config_file" ] || continue
+
+    # Extract API key and MCP URL from the config using node
+    local result
+    result=$(node -e "
+      try {
+        const fs = require('fs');
+        const data = JSON.parse(fs.readFileSync('$config_file', 'utf8'));
+        const srv = data.mcpServers && data.mcpServers['cortex-hub'];
+        if (!srv) { process.exit(0); }
+        const apiKey = (srv.env && srv.env.HUB_API_KEY) || '';
+        const mcpUrl = (srv.args && srv.args[2]) || '';
+        console.log(apiKey + '|||' + mcpUrl);
+      } catch(e) { /* ignore parse errors */ }
+    " 2>/dev/null || echo "")
+
+    if [ -n "$result" ] && [ "$result" != "|||" ]; then
+      detected_api_key="${result%%|||*}"
+      detected_mcp_url="${result##*|||}"
+      detected_from="$config_file"
+      if [ -n "$detected_api_key" ]; then
+        break
+      fi
+    fi
+  done
+
+  # Set API key if not already set
+  if [ -z "${CORTEX_HUB_API_KEY:-}" ] && [ -n "$detected_api_key" ]; then
+    CORTEX_HUB_API_KEY="$detected_api_key"
+    log_info "Auto-detected API key from $detected_from"
+  fi
+
+  # Derive Hub WS URL if not already set
+  if [ -z "${CORTEX_HUB_WS_URL:-}" ] && [ -n "$detected_mcp_url" ]; then
+    # MCP URL is like https://cortex-mcp.jackle.dev/mcp
+    # Hub API is typically at hub.<domain> (same base domain, different subdomain)
+    # Extract domain: cortex-mcp.jackle.dev → jackle.dev → hub.jackle.dev
+    local hub_ws_url
+    hub_ws_url=$(node -e "
+      try {
+        const u = new URL('$detected_mcp_url');
+        const host = u.hostname;
+        // cortex-mcp.example.com → extract base domain → hub.example.com
+        const parts = host.split('.');
+        let baseDomain;
+        if (parts.length > 2) {
+          baseDomain = parts.slice(-2).join('.');
+        } else {
+          baseDomain = host;
+        }
+        const proto = u.protocol === 'https:' ? 'wss:' : 'ws:';
+        const port = u.port ? ':' + u.port : '';
+        console.log(proto + '//hub.' + baseDomain + port + '/ws/conductor');
+      } catch(e) { console.log(''); }
+    " 2>/dev/null || echo "")
+
+    if [ -n "$hub_ws_url" ]; then
+      CORTEX_HUB_WS_URL="$hub_ws_url"
+      log_info "Auto-detected Hub URL: $hub_ws_url (derived from MCP URL)"
+    fi
+  fi
+
+  # If URL still not set, check project-profile.json for hub_url field
+  if [ -z "${CORTEX_HUB_WS_URL:-}" ]; then
+    local profile_file="$PROJECT_ROOT/.cortex/project-profile.json"
+    if [ -f "$profile_file" ]; then
+      local hub_url_from_profile
+      hub_url_from_profile=$(node -e "
+        try {
+          const d = require('$profile_file');
+          if (d.hub_url) {
+            const u = new URL(d.hub_url);
+            const proto = u.protocol === 'https:' ? 'wss:' : 'ws:';
+            const port = u.port ? ':' + u.port : '';
+            console.log(proto + '//' + u.hostname + port + '/ws/conductor');
+          }
+        } catch(e) {}
+      " 2>/dev/null || echo "")
+      if [ -n "$hub_url_from_profile" ]; then
+        CORTEX_HUB_WS_URL="$hub_url_from_profile"
+        log_info "Hub URL from project-profile.json: $hub_url_from_profile"
+      fi
+    fi
+  fi
 }
 
 # ── PID Management ───────────────────────────────────────────
@@ -444,10 +556,20 @@ NODESCRIPT
 # ── Main Agent Loop ──────────────────────────────────────────
 run_agent() {
   local hub_url="${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}"
+  local api_key="${CORTEX_HUB_API_KEY:-}"
   local node_resolve_paths="$PROJECT_ROOT/node_modules"
 
+  # Append apiKey as query parameter if available
+  if [ -n "$api_key" ]; then
+    case "$hub_url" in
+      *\?*) hub_url="${hub_url}&apiKey=${api_key}" ;;
+      *)    hub_url="${hub_url}?apiKey=${api_key}" ;;
+    esac
+  fi
+
   log_info "Starting $SCRIPT_NAME"
-  log_info "Hub URL: $hub_url"
+  log_info "Hub URL: ${hub_url%%\?*}"  # Log URL without query params (hide API key)
+  log_info "API Key: ${api_key:+configured (auto-detected)}${api_key:-not set}"
   log_info "Agent ID: $AGENT_ID"
   log_info "Capabilities: $AGENT_CAPABILITIES"
 
@@ -625,12 +747,16 @@ cmd_start() {
     local bg_pid=$!
     echo "$bg_pid" > "$PID_FILE"
     local ide_desc="$(ide_description "$AGENT_IDE")"
+    local display_hub_url="${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}"
+    local display_api_key="${CORTEX_HUB_API_KEY:+auto-detected}"
+    display_api_key="${display_api_key:-not set (set CORTEX_HUB_API_KEY or configure MCP in your IDE)}"
     echo ""
     echo -e "${GREEN}Agent started in background (pid=$bg_pid)${NC}"
     echo -e "  Agent ID:  ${BLUE}$AGENT_ID${NC}"
     echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC} ($ide_desc)"
     echo -e "  Engine:    ${BLUE}$AGENT_ENGINE${NC}"
-    echo -e "  Hub URL:   ${BLUE}${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}${NC}"
+    echo -e "  Hub URL:   ${BLUE}$display_hub_url${NC}"
+    echo -e "  API Key:   ${BLUE}$display_api_key${NC}"
     echo -e "  PID file:  ${BLUE}$PID_FILE${NC}"
     echo -e "  Log file:  ${BLUE}$LOG_FILE${NC}"
     echo ""
@@ -680,6 +806,8 @@ cmd_status() {
   if is_running; then
     local pid
     pid=$(read_pid)
+    local display_api_key="${CORTEX_HUB_API_KEY:+configured}"
+    display_api_key="${display_api_key:-not set}"
     echo -e "${GREEN}Agent is running (pid=$pid)${NC}"
     echo -e "  Agent ID:  ${BLUE}$AGENT_ID${NC}"
     echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC} ($ide_desc)"
@@ -688,6 +816,7 @@ cmd_status() {
     echo -e "  OS:        ${BLUE}$AGENT_OS${NC}"
     echo -e "  Role:      ${BLUE}$AGENT_ROLE${NC}"
     echo -e "  Hub URL:   ${BLUE}${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}${NC}"
+    echo -e "  API Key:   ${BLUE}$display_api_key${NC}"
     echo -e "  PID file:  ${BLUE}$PID_FILE${NC}"
     echo -e "  Log file:  ${BLUE}$LOG_FILE${NC}"
     if [ -f "$LOG_FILE" ]; then
@@ -802,9 +931,15 @@ ${GREEN}Commands:${NC}
 ${GREEN}Environment Variables:${NC}
   CORTEX_AGENT_ID            Agent ID (unique per instance, REQUIRED for multi-agent)
   CORTEX_AGENT_IDE           IDE preset: claude-code | vscode | codex | cursor | antigravity
-  CORTEX_HUB_WS_URL          Hub WebSocket URL (default: $DEFAULT_HUB_URL)
+  CORTEX_HUB_WS_URL          Hub WebSocket URL (default: auto-detected or $DEFAULT_HUB_URL)
+  CORTEX_HUB_API_KEY          Hub API key (default: auto-detected from IDE config)
   CORTEX_AGENT_LOG_DIR        Custom log directory
   CORTEX_AGENT_DEBUG          Set to 1 for debug logging
+
+${GREEN}Auto-Detection:${NC}
+  The agent automatically reads Hub API key and URL from your IDE's MCP config.
+  Checked in order: ~/.claude.json, ~/.cursor/mcp.json, ~/.codeium/windsurf/mcp_config.json,
+  ~/.gemini/antigravity/mcp_config.json. Set env vars above to override.
 
 ${GREEN}IDE Presets:${NC}
   claude-code   → engine: claude   (claude -p --permission-mode accept)
