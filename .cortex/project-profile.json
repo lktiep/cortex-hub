@@ -4,7 +4,7 @@
   "fingerprint": {
     "package_manager": "pnpm",
     "stacks": ["node:pnpm"],
-    "detected_at": "2026-03-29T09:10:55Z"
+    "detected_at": "2026-03-30T08:30:16Z"
   },
   "verify": {
     "pre_commit": ["pnpm build","pnpm typecheck","pnpm lint"],

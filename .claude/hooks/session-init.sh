@@ -7,7 +7,7 @@ rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" \
       "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" \
       "$STATE_DIR/session-ended" 2>/dev/null
 cat <<'MSG'
-HARD REQUIREMENT — BLOCKING
+⚠️ HARD REQUIREMENT — BLOCKING ⚠️
 You MUST call cortex_session_start IMMEDIATELY as your very first action.
 ALL file edits and modifications are BLOCKED until you do this.
 

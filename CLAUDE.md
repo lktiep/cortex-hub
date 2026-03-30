@@ -57,35 +57,42 @@ Monorepo: pnpm + Turborepo. TypeScript strict. Hono API. Next.js 15 frontend. SQ
 camelCase vars/functions, PascalCase types. `@cortex/*` path aliases. No `any` without comment.
 
 <!-- cortex-hub:auto-mcp -->
-## Cortex Hub — Auto MCP (MANDATORY — every conversation)
+## Cortex Hub — MANDATORY (enforced by hooks — violations are BLOCKED)
 
-At the START of every conversation, before doing anything else:
+**YOUR FIRST ACTION in every conversation MUST be calling `cortex_session_start`.
+If you skip this, all Edit/Write/file-modifying Bash commands will return exit code 2 (BLOCKED).
+This is not optional — it is enforced by pre-tool hooks.**
 
-1. Call `cortex_session_start` with:
-   ```
-   repo: "https://github.com/lktiep/cortex-hub.git"
-   mode: "development"
-   agentId: "claude-code"
-   ```
-   This returns project context AND unseen code changes from other agents.
+```
+cortex_session_start(repo: "https://github.com/lktiep/cortex-hub.git", mode: "development", agentId: "claude-code")
+```
 
-2. If `recentChanges.count > 0` in the response, warn the user and run `git pull` before editing any affected files.
+Then:
+- If `recentChanges.count > 0` in the response, warn the user and run `git pull`
+- Read `STATE.md` for current task progress (if it exists)
 
-3. Read `STATE.md` for current task progress (if it exists).
+### Tool Priority (MANDATORY — use cortex tools BEFORE grep/find)
+
+**ALWAYS search with cortex tools first. Only use Grep/find as fallback.**
+Hooks will remind you if you use Grep before cortex discovery tools.
+
+1. `cortex_memory_search` — check if you already know this from previous sessions
+2. `cortex_knowledge_search` — search the shared knowledge base
+3. `cortex_code_search` — AST-aware indexed search (better than grep, saves tokens)
+4. `cortex_code_context` — understand callers/callees of a symbol
+5. `cortex_code_impact` — check blast radius before editing
+6. Grep / find — **ONLY if cortex tools are unavailable or return no results**
 
 ### Before editing shared files
 
-Call `cortex_changes` to check if another agent modified the same files:
-```
-agentId: "claude-code"
-projectId: "<from session_start response>"
-```
+Call `cortex_changes` to check if another agent modified the same files.
 
-### When encountering an error or bug (MANDATORY)
+### When encountering an error or bug
 
-1. First search `cortex_knowledge_search` or `cortex_memory_search` for the error message.
-2. Fix the error.
-3. If the fix was non-obvious, **YOU MUST** use `cortex_knowledge_store` to record the problem and solution so others do not have to debug it again.
+1. **FIRST** search `cortex_knowledge_search` — someone may have solved this already
+2. **THEN** `cortex_memory_search` — you may have seen this before
+3. Fix the error
+4. Non-obvious fixes: **YOU MUST** call `cortex_knowledge_store` to record the solution
 
 ### After pushing code
 
@@ -95,11 +102,11 @@ repo: "https://github.com/lktiep/cortex-hub.git"
 branch: "<current branch>"
 ```
 
-### Quality gates
+### Quality gates (enforced — commit blocked without these)
 
 Every session must end with verification commands from `.cortex/project-profile.json`.
-Call `cortex_quality_report` with results.
-Call `cortex_session_end` to close the session.
+Call `cortex_quality_report` with results. Call `cortex_session_end` to close the session.
+**Commits are BLOCKED by hooks until quality gates pass.**
 
 ### Compliance Enforcement (Automated)
 

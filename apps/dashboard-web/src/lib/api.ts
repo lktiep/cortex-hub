@@ -803,3 +803,79 @@ export async function getKnowledgeTags() {
   return apiFetch<{ tags: string[] }>('/api/knowledge/tags')
 }
 
+// ── Conductor Tasks ──
+export interface ConductorTask {
+  id: string
+  title: string
+  description: string
+  project_id: string | null
+  parent_task_id: string | null
+  created_by_agent: string | null
+  assigned_to_agent: string | null
+  assigned_session_id: string | null
+  status: 'pending' | 'assigned' | 'accepted' | 'in_progress' | 'review' | 'completed' | 'failed' | 'cancelled'
+  priority: number
+  required_capabilities: string
+  depends_on: string
+  notify_on_complete: string
+  context: string
+  result: string | null
+  created_at: string
+  assigned_at: string | null
+  accepted_at: string | null
+  completed_at: string | null
+}
+
+export interface ConductorTaskLog {
+  id: number
+  task_id: string
+  agent_id: string | null
+  action: string
+  message: string | null
+  created_at: string
+}
+
+export interface TaskBoardData {
+  columns: Record<string, ConductorTask[]>
+  counts: Record<string, number>
+}
+
+export async function getTasks(opts?: { status?: string; assignedTo?: string }) {
+  const params = new URLSearchParams()
+  if (opts?.status) params.set('status', opts.status)
+  if (opts?.assignedTo) params.set('assignedTo', opts.assignedTo)
+  const query = params.toString()
+  return apiFetch<{ tasks: ConductorTask[] }>(`/api/tasks${query ? '?' + query : ''}`)
+}
+
+export async function getTaskBoard() {
+  return apiFetch<TaskBoardData>('/api/tasks/board')
+}
+
+export async function getAgentTasks(agentId: string) {
+  return apiFetch<{ tasks: ConductorTask[] }>(`/api/tasks/agent/${encodeURIComponent(agentId)}`)
+}
+
+export async function createTask(data: {
+  title: string
+  description: string
+  assignTo?: string
+  priority?: number
+  requiredCapabilities?: string[]
+  context?: Record<string, unknown>
+}) {
+  return apiFetch<ConductorTask>('/api/tasks', { method: 'POST', body: data })
+}
+
+export async function updateTask(id: string, data: { status?: string; result?: string; message?: string }) {
+  return apiFetch<ConductorTask>(`/api/tasks/${id}`, { method: 'PATCH', body: data })
+}
+
+export async function assignTask(id: string, data: { agentId: string; sessionId?: string }) {
+  return apiFetch<ConductorTask>(`/api/tasks/${id}/assign`, { method: 'POST', body: data })
+}
+
+export async function getTaskLogs(id: string) {
+  return apiFetch<{ logs: ConductorTaskLog[] }>(`/api/tasks/${id}/logs`)
+}
+

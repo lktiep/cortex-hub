@@ -15,6 +15,7 @@ const navItems = [
   { href: '/providers', label: 'LLM Providers', icon: '⬡' },
   { href: '/usage', label: 'Usage', icon: '📊' },
   { href: '/quality', label: 'Quality', icon: '✦' },
+  { href: '/conductor', label: 'Conductor', icon: '🎯' },
   { href: '/sessions', label: 'Sessions', icon: '⇄' },
   { href: '/settings', label: 'Settings', icon: '⚙' },
 ]
