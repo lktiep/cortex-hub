@@ -258,3 +258,27 @@ export function notifyTaskAssigned(
   }
   return false // agent not connected
 }
+
+/** Push a task assignment notification to an agent by agentId, regardless of API key owner. */
+export function pushTaskToAgent(
+  assignedTo: string,
+  taskId: string,
+  title: string,
+  description: string,
+): boolean {
+  for (const [id, agent] of agents) {
+    if (id === assignedTo && agent.ws.readyState === WebSocket.OPEN) {
+      agent.ws.send(
+        JSON.stringify({
+          type: 'task.assigned',
+          taskId,
+          title,
+          description,
+          timestamp: new Date().toISOString(),
+        }),
+      )
+      return true
+    }
+  }
+  return false
+}
