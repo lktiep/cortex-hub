@@ -534,13 +534,14 @@ process.stdin.on('data', (chunk) => {
     if (!line.trim()) continue;
     try {
       const cmd = JSON.parse(line);
-      if (cmd.type === 'send') {
-        sendMessage(cmd.payload);
-      } else if (cmd.type === 'quit') {
+      if (cmd.type === 'quit') {
         if (pingInterval) clearInterval(pingInterval);
         if (reconnectTimer) clearTimeout(reconnectTimer);
         if (ws) ws.close(1000, 'Agent shutting down');
         process.exit(0);
+      } else {
+        // Forward any other message directly to WebSocket
+        sendMessage(cmd);
       }
     } catch (e) {
       emit('error', { message: `Invalid stdin command: ${e.message}` });
@@ -725,7 +726,7 @@ run_agent() {
 
           heartbeat|ping)
             # Respond to server heartbeats
-            ws_send "{\"type\":\"send\",\"payload\":{\"type\":\"pong\",\"agentId\":\"$AGENT_ID\",\"timestamp\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"}}"
+            ws_send "{\"type\":\"pong\",\"agentId\":\"$AGENT_ID\",\"timestamp\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"}"
             ;;
 
           *)
