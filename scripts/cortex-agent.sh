@@ -586,7 +586,11 @@ run_agent() {
 
   log_info "Starting $SCRIPT_NAME"
   log_info "Hub URL: ${hub_url%%\?*}"  # Log URL without query params (hide API key)
-  log_info "API Key: ${api_key:+configured (auto-detected)}${api_key:-not set}"
+  if [ -n "$api_key" ]; then
+    log_info "API Key: configured (auto-detected)"
+  else
+    log_info "API Key: not set"
+  fi
   log_info "Agent ID: $AGENT_ID"
   log_info "Capabilities: $AGENT_CAPABILITIES"
 
@@ -623,7 +627,7 @@ run_agent() {
   exec 7>"$pipe_in"
 
   # Cleanup on exit
-  trap 'log_info "Shutting down..."; echo "{\"type\":\"quit\"}" >&7 2>/dev/null; exec 7>&-; wait "$ws_pid" 2>/dev/null; cleanup_pid; rm -f "$pipe_in" "$pipe_out" "$ws_script_file"; exit 0' INT TERM
+  trap 'log_info "Shutting down..."; echo "{\"type\":\"quit\"}" >&7 2>/dev/null; exec 7>&-; exec 8<&- 2>/dev/null; wait "$ws_pid" 2>/dev/null; cleanup_pid; rm -f "$pipe_in" "$pipe_out" "$ws_script_file"; exit 0' INT TERM
 
   # Helper: send a command to the Node.js process
   ws_send() {
@@ -637,8 +641,11 @@ run_agent() {
     echo "$json" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const o=JSON.parse(d);console.log($expr)}catch{console.log('')}})" 2>/dev/null || echo ""
   }
 
+  # Keep the read end of pipe_out open on fd 8
+  exec 8<"$pipe_out"
+
   # Read messages from WebSocket client and handle them
-  while IFS= read -r line < "$pipe_out"; do
+  while IFS= read -r line <&8; do
     [ -z "$line" ] && continue
     log_debug "WS recv: $line"
 
@@ -735,7 +742,8 @@ run_agent() {
 
   # If we get here, the WS client has exited
   log_warn "WebSocket client process exited"
-  exec 7>&-
+  exec 7>&- 2>/dev/null
+  exec 8<&- 2>/dev/null
   wait "$ws_pid" 2>/dev/null
   cleanup_pid
   rm -f "$pipe_in" "$pipe_out" "$ws_script_file"
