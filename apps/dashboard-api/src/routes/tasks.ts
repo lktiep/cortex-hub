@@ -366,3 +366,29 @@ tasksRouter.post('/:id/logs', async (c) => {
     return c.json({ error: String(error) }, 500)
   }
 })
+
+// DELETE /api/tasks/:id — cancel/delete task
+tasksRouter.delete('/:id', (c) => {
+  const id = c.req.param('id')
+  try {
+    db.prepare('DELETE FROM conductor_task_logs WHERE task_id = ?').run(id)
+    const result = db.prepare('DELETE FROM conductor_tasks WHERE id = ?').run(id)
+    if (result.changes === 0) {
+      return c.json({ error: 'Task not found' }, 404)
+    }
+    return c.json({ success: true, id })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+// PATCH /api/tasks/:id/cancel — soft cancel (set status to cancelled)
+tasksRouter.patch('/:id/cancel', (c) => {
+  const id = c.req.param('id')
+  try {
+    db.prepare("UPDATE conductor_tasks SET status = 'cancelled', completed_at = datetime('now') WHERE id = ?").run(id)
+    return c.json({ success: true, id, status: 'cancelled' })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
