@@ -1,4 +1,4 @@
-# Cortex Hub — Unified Installer (v3) — Windows PowerShell
+# Cortex Hub — Unified Installer (v4.0) — Windows PowerShell
 # One script for everything: global skill + MCP + hooks + IDE setup.
 # Idempotent. Version-aware. Auto-updating. Multi-IDE.
 #
@@ -20,7 +20,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$HOOKS_VERSION = 3
+$HOOKS_VERSION = 4
+$HOOKS_MINOR = 0
+$LATEST_VERSION = "$HOOKS_VERSION.$HOOKS_MINOR"
 $MCP_URL_DEFAULT = "https://cortex-mcp.jackle.dev/mcp"
 
 # ── Helpers ──
@@ -207,11 +209,11 @@ if ($CheckOnly) {
     Write-Host "=== Cortex Hub Status ===" -ForegroundColor Cyan
     Write-Host "  Project:        $ProjectDir"
     Write-Host "  MCP configured: $McpConfigured"
-    Write-Host "  Hooks version:  $InstalledVersion (latest: $HOOKS_VERSION)"
+    Write-Host "  Hooks version:  $InstalledVersion (latest: $LATEST_VERSION)"
     Write-Host "  Profile:        $(if (Test-Path '.cortex\project-profile.json') { 'yes' } else { 'no' })"
     Write-Host "  Claude hooks:   $(if (Test-Path '.claude\hooks\enforce-session.ps1') { 'yes' } else { 'no' })"
     Write-Host "  Lefthook:       $(if (Test-Path 'lefthook.yml') { 'yes' } else { 'no' })"
-    if ($InstalledVersion -lt $HOOKS_VERSION) { Write-Warn "Hooks outdated! Run /onboard to update." }
+    if ($InstalledVersion -ne $LATEST_VERSION) { Write-Warn ("Update available: " + $InstalledVersion + " -> " + $LATEST_VERSION + ". Run /install --force") }
     exit 0
 }
 
@@ -219,14 +221,14 @@ $NeedsUpdate = $false
 if ($Force) {
     $NeedsUpdate = $true
     Write-Info "Force mode: regenerating all files"
-} elseif ($InstalledVersion -lt $HOOKS_VERSION) {
+} elseif ($InstalledVersion -ne $LATEST_VERSION) {
     $NeedsUpdate = $true
-    Write-Info "Updating hooks v$InstalledVersion -> v$HOOKS_VERSION"
+    Write-Info ("Updating hooks v" + $InstalledVersion + " -> v" + $LATEST_VERSION)
 } elseif (-not (Test-Path ".claude\hooks\enforce-session.ps1")) {
     $NeedsUpdate = $true
     Write-Info "Missing files detected, regenerating..."
 } else {
-    Write-Ok "Hooks: up to date (v$HOOKS_VERSION)"
+    Write-Ok ("Hooks: up to date (v" + $LATEST_VERSION + ")")
 }
 
 # ══════════════════════════════════════════════
@@ -461,7 +463,7 @@ exit 0
         $settingsContent = $settingsContent -replace "PREFIX", $prefix
         [System.IO.File]::WriteAllText((Join-Path $ProjectDir ".claude/settings.json"), $settingsContent)
 
-        Write-Ok ("Claude: PS1 hooks + settings.json installed (v" + $HOOKS_VERSION + ")")
+        Write-Ok ("Claude: PS1 hooks + settings.json installed (v" + $LATEST_VERSION + ")")
     }
 
     # ── Gemini / Antigravity hooks ──
@@ -551,7 +553,7 @@ fi
 }
 '@ | Out-File -FilePath ".gemini\settings.json" -Encoding utf8
 
-        Write-Ok "Gemini: hooks + settings.json installed (v$HOOKS_VERSION)"
+        Write-Ok ("Gemini: hooks + settings.json installed (v" + $LATEST_VERSION + ")")
     }
 
     # ── Instruction files for other IDEs ──
@@ -595,8 +597,8 @@ End session: ``cortex_session_end`` with sessionId and summary.
     }
 
     # Write version marker
-    $HOOKS_VERSION | Out-File -FilePath ".cortex\.hooks-version" -Encoding utf8 -NoNewline
-    Write-Ok "Version: v$HOOKS_VERSION marked"
+    $LATEST_VERSION | Out-File -FilePath ".cortex\.hooks-version" -Encoding utf8 -NoNewline
+    Write-Ok ("Version: v" + $LATEST_VERSION + " marked")
 }
 
 # ══════════════════════════════════════════════
@@ -650,12 +652,12 @@ if (-not (Test-Path "CLAUDE.md")) {
 # Phase 7: Summary
 # ══════════════════════════════════════════════
 Write-Host ""
-Write-Host "  Cortex Hub setup complete (v$HOOKS_VERSION)" -ForegroundColor Green
+Write-Host ("  Cortex Hub setup complete (v" + $LATEST_VERSION + ")") -ForegroundColor Green
 Write-Host ""
 Write-Host "  Project:   $(Split-Path $ProjectDir -Leaf)"
 Write-Host "  MCP:       $(if ($McpConfigured) { 'configured' } else { 'needs API key' })"
 Write-Host "  IDEs:      $($SelectedIDEs -join ', ')"
-Write-Host "  Hooks:     v$HOOKS_VERSION"
+Write-Host ("  Hooks:     v" + $LATEST_VERSION)
 Write-Host ""
 if (-not $McpConfigured) { Write-Warn "Set HUB_API_KEY and re-run to configure MCP" }
 Write-Host "  Restart your IDE to pick up changes" -ForegroundColor Cyan

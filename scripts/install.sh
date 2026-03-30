@@ -1,7 +1,13 @@
 #!/bin/bash
-# Cortex Hub — Unified Installer (v3)
+# Cortex Hub — Unified Installer (v4.0)
 # One script for everything: global skill + MCP config + project hooks + IDE setup.
 # Idempotent. Version-aware. Auto-updating. Multi-IDE.
+#
+# Version history:
+#   v4.0 — Agent identity, Conductor support, discovery enforcement, stronger hooks
+#   v3.x — Multi-IDE, glob pipelines, PS1 parity, fail-closed hooks
+#   v2.x — Legacy onboard.sh hooks
+#   v1.x — Initial hooks
 #
 # Usage:
 #   bash install.sh                         # Full setup (global + project)
@@ -16,7 +22,8 @@
 
 set -euo pipefail
 
-HOOKS_VERSION=3
+HOOKS_VERSION=4
+HOOKS_MINOR=0
 MCP_URL_DEFAULT="https://cortex-mcp.jackle.dev/mcp"
 
 # ── Colors ──
@@ -302,20 +309,24 @@ fi
 # ══════════════════════════════════════════════
 mkdir -p .cortex
 INSTALLED_VERSION=$(cat .cortex/.hooks-version 2>/dev/null || echo "0")
+LATEST_VERSION="${HOOKS_VERSION}.${HOOKS_MINOR}"
+# Compare: extract major for numeric comparison
+INSTALLED_MAJOR=$(echo "$INSTALLED_VERSION" | cut -d. -f1)
 
 if [ "$CHECK_ONLY" = "true" ]; then
   echo ""
   echo -e "${CYAN}=== Cortex Hub Status ===${NC}"
   echo "  Project:        $PROJECT_DIR"
   echo "  MCP configured: $MCP_CONFIGURED"
-  echo "  Hooks version:  $INSTALLED_VERSION (latest: $HOOKS_VERSION)"
+  echo "  Hooks version:  $INSTALLED_VERSION (latest: $LATEST_VERSION)"
   echo "  Profile:        $([ -f .cortex/project-profile.json ] && echo 'yes' || echo 'no')"
   echo "  Claude hooks:   $([ -f .claude/hooks/enforce-session.sh ] && echo 'yes' || echo 'no')"
   echo "  Gemini hooks:   $([ -f .gemini/hooks/enforce-session.sh ] && echo 'yes' || echo 'no')"
   echo "  Settings:       $([ -f .claude/settings.json ] && echo 'yes' || echo 'no')"
+  echo "  Identity:       $([ -f .cortex/agent-identity.json ] && echo 'yes' || echo 'no')"
   echo "  Lefthook:       $([ -f lefthook.yml ] && echo 'yes' || echo 'no')"
   echo "  CLAUDE.md:      $([ -f CLAUDE.md ] && echo 'yes' || echo 'no')"
-  [ "$INSTALLED_VERSION" -lt "$HOOKS_VERSION" ] 2>/dev/null && warn "Hooks outdated! Run /onboard to update."
+  [ "$INSTALLED_VERSION" != "$LATEST_VERSION" ] && warn "Update available: $INSTALLED_VERSION → $LATEST_VERSION. Run /install --force"
   exit 0
 fi
 
@@ -323,14 +334,14 @@ NEEDS_UPDATE=false
 if [ "$FORCE" = "true" ]; then
   NEEDS_UPDATE=true
   info "Force mode: regenerating all files"
-elif [ "$INSTALLED_VERSION" -lt "$HOOKS_VERSION" ] 2>/dev/null; then
+elif [ "$INSTALLED_VERSION" != "$LATEST_VERSION" ]; then
   NEEDS_UPDATE=true
-  info "Updating hooks v$INSTALLED_VERSION → v$HOOKS_VERSION"
+  info "Updating hooks v$INSTALLED_VERSION → v$LATEST_VERSION"
 elif [ ! -f ".claude/hooks/enforce-session.sh" ] || [ ! -f ".claude/settings.json" ]; then
   NEEDS_UPDATE=true
   info "Missing files detected, regenerating..."
 else
-  ok "Hooks: up to date (v$HOOKS_VERSION)"
+  ok "Hooks: up to date (v$LATEST_VERSION)"
 fi
 
 # ══════════════════════════════════════════════
@@ -671,7 +682,7 @@ exit 0
 HOOKEOF
 
   chmod +x .claude/hooks/*.sh
-  ok "Hooks: all 5 hooks installed (v$HOOKS_VERSION)"
+  ok "Hooks: all 5 hooks installed (v${HOOKS_VERSION}.${HOOKS_MINOR})"
 
   # ── settings.json ──
   # Detect OS for hook command prefix
@@ -875,7 +886,7 @@ GHOOKEOF
   }
 }
 GSETTINGS
-    ok "Gemini: hooks + settings.json installed (v$HOOKS_VERSION)"
+    ok "Gemini: hooks + settings.json installed (v${HOOKS_VERSION}.${HOOKS_MINOR})"
   fi
 
   # ── Instruction files for IDEs without runtime hooks ──
@@ -941,7 +952,7 @@ PYEOF2
   ide_selected "codex"     && { mkdir -p .codex; inject_or_update_instructions ".codex/instructions.md" "codex"; }
 
   # Write version marker
-  echo "$HOOKS_VERSION" > .cortex/.hooks-version
+  echo "${HOOKS_VERSION}.${HOOKS_MINOR}" > .cortex/.hooks-version
   ok "Version: v$HOOKS_VERSION marked"
 fi
 
@@ -1273,7 +1284,7 @@ fi
 # ══════════════════════════════════════════════
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  Cortex Hub setup complete (v$HOOKS_VERSION)${NC}"
+echo -e "${GREEN}  Cortex Hub setup complete (v${HOOKS_VERSION}.${HOOKS_MINOR})${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo "  Project:   $(basename "$PROJECT_DIR")"
@@ -1282,7 +1293,7 @@ echo "  Stack:     $STACK_NAME"
 echo "  MCP:       $([ "$MCP_CONFIGURED" = "true" ] && echo "✓ configured" || echo "⚠ needs API key")"
 echo "  /install:  $([ -f "$HOME/.claude/skills/install/SKILL.md" ] && echo "✓ global skill active" || echo "- not installed")"
 echo "  IDEs:      ${SELECTED_IDES[*]}"
-echo "  Hooks:     v$HOOKS_VERSION (enforcement: $(ide_selected claude && echo 'claude ')$(ide_selected gemini && echo 'gemini '))"
+echo "  Hooks:     v${HOOKS_VERSION}.${HOOKS_MINOR} (enforcement: $(ide_selected claude && echo 'claude ')$(ide_selected gemini && echo 'gemini '))"
 echo "  Lefthook:  $([ -f lefthook.yml ] && echo "✓ configured" || echo "⚠ not configured")"
 echo ""
 [ "$MCP_CONFIGURED" != "true" ] && echo -e "  ${YELLOW}→ Set HUB_API_KEY and re-run /install to configure MCP${NC}"
