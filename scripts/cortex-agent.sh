@@ -28,7 +28,7 @@ ide_engine() {
     vscode)      echo "claude" ;;
     codex)       echo "codex" ;;
     cursor)      echo "claude" ;;
-    antigravity) echo "gemini" ;;
+    antigravity) echo "antigravity" ;;
     *)           echo "claude" ;;
   esac
 }
@@ -393,9 +393,9 @@ execute_task() {
   local working_dir="${4:-$PROJECT_ROOT}"
 
   case "$engine" in
-    claude)  execute_task_claude "$task_id" "$prompt" "$working_dir" ;;
-    codex)   execute_task_codex "$task_id" "$prompt" "$working_dir" ;;
-    gemini)  execute_task_gemini "$task_id" "$prompt" "$working_dir" ;;
+    claude)                execute_task_claude "$task_id" "$prompt" "$working_dir" ;;
+    codex)                 execute_task_codex "$task_id" "$prompt" "$working_dir" ;;
+    antigravity|gemini)    execute_task_gemini "$task_id" "$prompt" "$working_dir" ;;
     *)
       log_error "Unknown engine: $engine (falling back to claude)"
       execute_task_claude "$task_id" "$prompt" "$working_dir"
@@ -684,7 +684,9 @@ run_agent() {
           task.assigned)
             local task_id engine prompt working_dir
             task_id=$(json_get "$payload" "o.taskId||(o.task&&o.task.id)||''")
-            engine=$(json_get "$payload" "o.engine||(o.task&&o.task.engine)||'claude'")
+            # Use task-specified engine if provided, otherwise use agent's configured engine
+            engine=$(json_get "$payload" "o.engine||(o.task&&o.task.engine)||''")
+            [ -z "$engine" ] && engine="$AGENT_ENGINE"
             prompt=$(json_get "$payload" "o.prompt||o.description||(o.task&&(o.task.prompt||o.task.description))||o.title||''")
             working_dir=$(json_get "$payload" "o.workingDir||(o.task&&o.task.workingDir)||''")
             [ -z "$working_dir" ] && working_dir="$PROJECT_ROOT"
@@ -887,21 +889,21 @@ cmd_list() {
   echo -e "  ${GREEN}vscode${NC}        — VS Code + Claude extension (engine: claude)"
   echo -e "  ${GREEN}codex${NC}         — OpenAI Codex headless (engine: codex)"
   echo -e "  ${GREEN}cursor${NC}        — Cursor IDE (engine: claude)"
-  echo -e "  ${GREEN}antigravity${NC}   — Antigravity / Gemini (engine: gemini)"
+  echo -e "  ${GREEN}antigravity${NC}   — Antigravity / Gemini (engine: antigravity)"
   echo ""
   echo -e "${BLUE}Quick start examples:${NC}"
   echo ""
   echo -e "  # Launch a Claude Code agent"
-  echo -e "  ${GREEN}CORTEX_AGENT_ID=claude-1 CORTEX_AGENT_IDE=claude-code $0 start --daemon${NC}"
+  echo -e "  ${GREEN}CORTEX_AGENT_IDE=claude-code CORTEX_AGENT_ID=claude-1 $0 start --daemon${NC}"
   echo ""
   echo -e "  # Launch a Codex agent"
-  echo -e "  ${GREEN}CORTEX_AGENT_ID=codex-1 CORTEX_AGENT_IDE=codex $0 start --daemon${NC}"
+  echo -e "  ${GREEN}CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=codex-1 $0 start --daemon${NC}"
   echo ""
   echo -e "  # Launch an Antigravity (Gemini) agent"
-  echo -e "  ${GREEN}CORTEX_AGENT_ID=gemini-1 CORTEX_AGENT_IDE=antigravity $0 start --daemon${NC}"
+  echo -e "  ${GREEN}CORTEX_AGENT_IDE=antigravity CORTEX_AGENT_ID=gemini-1 $0 start --daemon${NC}"
   echo ""
   echo -e "  # Launch a Cursor agent"
-  echo -e "  ${GREEN}CORTEX_AGENT_ID=cursor-1 CORTEX_AGENT_IDE=cursor $0 start --daemon${NC}"
+  echo -e "  ${GREEN}CORTEX_AGENT_IDE=cursor CORTEX_AGENT_ID=cursor-1 $0 start --daemon${NC}"
   echo ""
   echo -e "  # Stop a specific agent"
   echo -e "  ${GREEN}CORTEX_AGENT_ID=claude-1 $0 stop${NC}"
@@ -978,16 +980,16 @@ ${GREEN}IDE Presets:${NC}
 ${GREEN}Multi-Agent Examples:${NC}
 
   # 1) Claude Code agent (for coding tasks)
-  CORTEX_AGENT_ID=claude-1 CORTEX_AGENT_IDE=claude-code $0 start --daemon
+  CORTEX_AGENT_IDE=claude-code CORTEX_AGENT_ID=claude-1 $0 start --daemon
 
   # 2) Codex agent (for headless execution)
-  CORTEX_AGENT_ID=codex-1 CORTEX_AGENT_IDE=codex $0 start --daemon
+  CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=codex-1 $0 start --daemon
 
   # 3) Cursor agent
-  CORTEX_AGENT_ID=cursor-1 CORTEX_AGENT_IDE=cursor $0 start --daemon
+  CORTEX_AGENT_IDE=cursor CORTEX_AGENT_ID=cursor-1 $0 start --daemon
 
   # 4) Antigravity / Gemini agent
-  CORTEX_AGENT_ID=gemini-1 CORTEX_AGENT_IDE=antigravity $0 start --daemon
+  CORTEX_AGENT_IDE=antigravity CORTEX_AGENT_ID=gemini-1 $0 start --daemon
 
   # List all running agents
   $0 list
