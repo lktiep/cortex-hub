@@ -14,6 +14,7 @@ readonly PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 readonly DEFAULT_HUB_URL="ws://localhost:4000/ws/conductor"
 readonly IDENTITY_FILE="$PROJECT_ROOT/.cortex/agent-identity.json"
+readonly CAPABILITY_TEMPLATES="$PROJECT_ROOT/.cortex/capability-templates.json"
 readonly BASE_LOG_DIR="${CORTEX_AGENT_LOG_DIR:-/tmp/cortex-agent-logs}"
 readonly MAX_LOG_SIZE=10485760  # 10 MB
 readonly MAX_LOG_FILES=5
@@ -43,6 +44,54 @@ ide_description() {
     *)           echo "Generic cortex agent" ;;
   esac
 }
+
+# ── Capability Resolution ──────────────────────────────────
+# Resolve a preset name to its capabilities JSON array.
+# Returns empty string if preset not found.
+resolve_preset() {
+  local preset_name="$1"
+  if [ ! -f "$CAPABILITY_TEMPLATES" ]; then
+    echo ""
+    return
+  fi
+  node -e "
+    const d = require('$CAPABILITY_TEMPLATES');
+    const p = d.presets && d.presets['$preset_name'];
+    if (p && p.capabilities) { console.log(JSON.stringify(p.capabilities)); }
+    else { console.log(''); }
+  " 2>/dev/null || echo ""
+}
+
+# Convert a comma-separated capability string to JSON array.
+# e.g. "plan,backend,review" → '["plan","backend","review"]'
+caps_to_json() {
+  local caps_csv="$1"
+  node -e "
+    const caps = '$caps_csv'.split(',').map(c => c.trim()).filter(Boolean);
+    console.log(JSON.stringify(caps));
+  " 2>/dev/null || echo '[]'
+}
+
+# List all available presets from capability-templates.json
+list_presets() {
+  if [ ! -f "$CAPABILITY_TEMPLATES" ]; then
+    echo -e "  ${YELLOW}No capability-templates.json found.${NC}"
+    return
+  fi
+  node -e "
+    const d = require('$CAPABILITY_TEMPLATES');
+    const presets = d.presets || {};
+    for (const [name, info] of Object.entries(presets)) {
+      const caps = (info.capabilities || []).join(', ');
+      const pad = name + '            ';
+      console.log('  ' + pad.substring(0, 16) + '— ' + (info.description || '') + ' [' + caps + ']');
+    }
+  " 2>/dev/null || true
+}
+
+# Flags set by argument parsing (used by cmd_start before read_identity)
+_PRESET_FLAG=""
+_CAP_FLAG=""
 
 # PID_FILE and LOG_FILE are set after reading identity (need AGENT_ID)
 PID_FILE=""
@@ -183,6 +232,25 @@ read_identity() {
   AGENT_ID="${CORTEX_AGENT_ID:-$AGENT_ID}"
   AGENT_IDE="${CORTEX_AGENT_IDE:-$AGENT_IDE}"
 
+  # Apply --preset or --cap overrides (set before read_identity is called)
+  if [ -n "$_PRESET_FLAG" ]; then
+    local preset_caps
+    preset_caps=$(resolve_preset "$_PRESET_FLAG")
+    if [ -n "$preset_caps" ]; then
+      AGENT_CAPABILITIES="$preset_caps"
+      log_info "Capabilities set from preset '$_PRESET_FLAG': $preset_caps"
+    else
+      log_error "Unknown preset: $_PRESET_FLAG"
+      echo -e "${RED}Unknown preset: $_PRESET_FLAG${NC}"
+      echo -e "Available presets:"
+      list_presets
+      exit 1
+    fi
+  elif [ -n "$_CAP_FLAG" ]; then
+    AGENT_CAPABILITIES=$(caps_to_json "$_CAP_FLAG")
+    log_info "Capabilities set from --cap flag: $AGENT_CAPABILITIES"
+  fi
+
   # Resolve engine from IDE preset
   AGENT_ENGINE="$(ide_engine "$AGENT_IDE")"
 
@@ -319,11 +387,91 @@ cleanup_pid() {
   rm -f "$PID_FILE"
 }
 
+# ── Orchestrator Prompt Builder ──────────────────────────────
+build_orchestrator_prompt() {
+  local template_file="$SCRIPT_DIR/orchestrator-prompt.md"
+  if [ ! -f "$template_file" ]; then
+    log_warn "Orchestrator template not found at $template_file"
+    return 1
+  fi
+
+  local template
+  template=$(cat "$template_file")
+
+  local agents_list=""
+  local hub_api_url=""
+  local ws_url="${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}"
+  hub_api_url=$(node -e "
+    try {
+      const u = new URL('${ws_url}');
+      const proto = u.protocol === 'wss:' ? 'https:' : 'http:';
+      const port = u.port ? ':' + u.port : '';
+      console.log(proto + '//' + u.hostname + port + '/api/conductor/agents');
+    } catch(e) { console.log(''); }
+  " 2>/dev/null || echo "")
+
+  if [ -n "$hub_api_url" ]; then
+    local api_key="${CORTEX_HUB_API_KEY:-}"
+    local curl_auth=""
+    if [ -n "$api_key" ]; then
+      curl_auth="-H \"Authorization: Bearer ${api_key}\""
+    fi
+    local agents_json
+    agents_json=$(eval curl -s --max-time 5 "$curl_auth" "\"$hub_api_url\"" 2>/dev/null || echo "")
+    if [ -n "$agents_json" ]; then
+      agents_list=$(node -e "
+        try {
+          const data = JSON.parse(process.argv[1]);
+          const agents = data.agents || [];
+          if (agents.length === 0) { console.log('No agents currently online.'); }
+          else {
+            agents.forEach(a => {
+              const caps = (a.capabilities || []).join(', ') || 'none';
+              const status = a.status || 'unknown';
+              console.log('- **' + (a.agentId || a.id) + '** (' + status + ')');
+              console.log('  - Capabilities: ' + caps);
+              console.log('  - Platform: ' + (a.platform || a.os || 'unknown'));
+              console.log('  - IDE: ' + (a.ide || 'unknown'));
+            });
+          }
+        } catch(e) { console.log('Unable to parse agent data.'); }
+      " "$agents_json" 2>/dev/null || echo "Unable to fetch agent list.")
+    else
+      agents_list="Unable to reach Hub API."
+    fi
+  else
+    agents_list="Hub API URL could not be determined."
+  fi
+
+  local result
+  result=$(node -e "
+    const tpl = Buffer.from(process.argv[1], 'base64').toString('utf8');
+    const agents = Buffer.from(process.argv[2], 'base64').toString('utf8');
+    console.log(tpl.replace('{{AGENTS_LIST}}', agents));
+  " "$(printf '%s' "$template" | base64)" "$(printf '%s' "$agents_list" | base64)" 2>/dev/null)
+
+  if [ -n "$result" ]; then
+    printf '%s' "$result"
+  else
+    printf '%s' "$template"
+  fi
+}
+
 # ── Task Execution Engines ───────────────────────────────────
 execute_task_claude() {
   local task_id="$1"
   local prompt="$2"
   local working_dir="${3:-$PROJECT_ROOT}"
+
+  # Inject orchestrator prompt if agent has "orchestrate" capability
+  if echo "$AGENT_CAPABILITIES" | grep -q '"orchestrate"'; then
+    log_info "Injecting orchestrator prompt for task $task_id"
+    local orch_prompt
+    orch_prompt=$(build_orchestrator_prompt)
+    if [ -n "$orch_prompt" ]; then
+      prompt="$(printf '%s\n\n---\n\n## Task:\n%s' "$orch_prompt" "$prompt")"
+    fi
+  fi
 
   log_info "Spawning Claude for task $task_id"
   local output_file="$LOG_DIR/task-${task_id}.log"
@@ -754,6 +902,47 @@ run_agent() {
 
 # ── Commands ─────────────────────────────────────────────────
 cmd_start() {
+  # Parse flags from arguments (order-independent)
+  local daemon_flag=""
+  _PRESET_FLAG=""
+  _CAP_FLAG=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --daemon|-d)
+        daemon_flag="1"
+        shift
+        ;;
+      --preset)
+        shift
+        _PRESET_FLAG="${1:-}"
+        if [ -z "$_PRESET_FLAG" ]; then
+          echo -e "${RED}--preset requires a value (e.g. --preset fullstack)${NC}"
+          exit 1
+        fi
+        shift
+        ;;
+      --cap)
+        shift
+        _CAP_FLAG="${1:-}"
+        if [ -z "$_CAP_FLAG" ]; then
+          echo -e "${RED}--cap requires a value (e.g. --cap plan,backend,review)${NC}"
+          exit 1
+        fi
+        shift
+        ;;
+      *)
+        echo -e "${YELLOW}Unknown flag: $1${NC}"
+        shift
+        ;;
+    esac
+  done
+
+  # Validate: --preset and --cap are mutually exclusive
+  if [ -n "$_PRESET_FLAG" ] && [ -n "$_CAP_FLAG" ]; then
+    echo -e "${RED}Cannot use both --preset and --cap. Pick one.${NC}"
+    exit 1
+  fi
+
   read_identity
   ensure_log_dir
   rotate_logs
@@ -767,11 +956,12 @@ cmd_start() {
     exit 1
   fi
 
-  local daemon="${1:-}"
-  if [ "$daemon" = "--daemon" ] || [ "$daemon" = "-d" ]; then
+  if [ "$daemon_flag" = "1" ]; then
     log_info "Starting agent in daemon mode..."
-    # Pass identity env vars to the daemon subprocess
-    CORTEX_AGENT_ID="$AGENT_ID" CORTEX_AGENT_IDE="$AGENT_IDE" CORTEX_AGENT_DAEMON=1 \
+    # Pass identity env vars + capabilities to the daemon subprocess
+    CORTEX_AGENT_ID="$AGENT_ID" CORTEX_AGENT_IDE="$AGENT_IDE" \
+      CORTEX_AGENT_CAPABILITIES_OVERRIDE="$AGENT_CAPABILITIES" \
+      CORTEX_AGENT_DAEMON=1 \
       nohup "$0" _run >> "$LOG_FILE" 2>&1 &
     local bg_pid=$!
     echo "$bg_pid" > "$PID_FILE"
@@ -781,13 +971,16 @@ cmd_start() {
     display_api_key="${display_api_key:-not set (set CORTEX_HUB_API_KEY or configure MCP in your IDE)}"
     echo ""
     echo -e "${GREEN}Agent started in background (pid=$bg_pid)${NC}"
-    echo -e "  Agent ID:  ${BLUE}$AGENT_ID${NC}"
-    echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC} ($ide_desc)"
-    echo -e "  Engine:    ${BLUE}$AGENT_ENGINE${NC}"
-    echo -e "  Hub URL:   ${BLUE}$display_hub_url${NC}"
-    echo -e "  API Key:   ${BLUE}$display_api_key${NC}"
-    echo -e "  PID file:  ${BLUE}$PID_FILE${NC}"
-    echo -e "  Log file:  ${BLUE}$LOG_FILE${NC}"
+    local display_preset="${_PRESET_FLAG:-none}"
+    echo -e "  Agent ID:      ${BLUE}$AGENT_ID${NC}"
+    echo -e "  IDE:           ${BLUE}$AGENT_IDE${NC} ($ide_desc)"
+    echo -e "  Engine:        ${BLUE}$AGENT_ENGINE${NC}"
+    echo -e "  Preset:        ${BLUE}$display_preset${NC}"
+    echo -e "  Capabilities:  ${BLUE}$AGENT_CAPABILITIES${NC}"
+    echo -e "  Hub URL:       ${BLUE}$display_hub_url${NC}"
+    echo -e "  API Key:       ${BLUE}$display_api_key${NC}"
+    echo -e "  PID file:      ${BLUE}$PID_FILE${NC}"
+    echo -e "  Log file:      ${BLUE}$LOG_FILE${NC}"
     echo ""
     echo -e "${BLUE}Next steps:${NC}"
     echo -e "  1. Check logs:      ${GREEN}tail -f $LOG_FILE${NC}"
@@ -838,16 +1031,17 @@ cmd_status() {
     local display_api_key="${CORTEX_HUB_API_KEY:+configured}"
     display_api_key="${display_api_key:-not set}"
     echo -e "${GREEN}Agent is running (pid=$pid)${NC}"
-    echo -e "  Agent ID:  ${BLUE}$AGENT_ID${NC}"
-    echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC} ($ide_desc)"
-    echo -e "  Engine:    ${BLUE}$AGENT_ENGINE${NC}"
-    echo -e "  Hostname:  ${BLUE}$AGENT_HOSTNAME${NC}"
-    echo -e "  OS:        ${BLUE}$AGENT_OS${NC}"
-    echo -e "  Role:      ${BLUE}$AGENT_ROLE${NC}"
-    echo -e "  Hub URL:   ${BLUE}${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}${NC}"
-    echo -e "  API Key:   ${BLUE}$display_api_key${NC}"
-    echo -e "  PID file:  ${BLUE}$PID_FILE${NC}"
-    echo -e "  Log file:  ${BLUE}$LOG_FILE${NC}"
+    echo -e "  Agent ID:      ${BLUE}$AGENT_ID${NC}"
+    echo -e "  IDE:           ${BLUE}$AGENT_IDE${NC} ($ide_desc)"
+    echo -e "  Engine:        ${BLUE}$AGENT_ENGINE${NC}"
+    echo -e "  Hostname:      ${BLUE}$AGENT_HOSTNAME${NC}"
+    echo -e "  OS:            ${BLUE}$AGENT_OS${NC}"
+    echo -e "  Role:          ${BLUE}$AGENT_ROLE${NC}"
+    echo -e "  Capabilities:  ${BLUE}$AGENT_CAPABILITIES${NC}"
+    echo -e "  Hub URL:       ${BLUE}${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}${NC}"
+    echo -e "  API Key:       ${BLUE}$display_api_key${NC}"
+    echo -e "  PID file:      ${BLUE}$PID_FILE${NC}"
+    echo -e "  Log file:      ${BLUE}$LOG_FILE${NC}"
     if [ -f "$LOG_FILE" ]; then
       echo ""
       echo -e "${CYAN}Last 5 log lines:${NC}"
@@ -891,19 +1085,23 @@ cmd_list() {
   echo -e "  ${GREEN}cursor${NC}        — Cursor IDE (engine: claude)"
   echo -e "  ${GREEN}antigravity${NC}   — Antigravity / Gemini (engine: antigravity)"
   echo ""
+  echo -e "${BLUE}Available capability presets:${NC}"
+  echo ""
+  list_presets
+  echo ""
   echo -e "${BLUE}Quick start examples:${NC}"
+  echo ""
+  echo -e "  # Launch with a capability preset"
+  echo -e "  ${GREEN}$0 start --daemon --preset fullstack${NC}"
+  echo ""
+  echo -e "  # Launch with custom capabilities"
+  echo -e "  ${GREEN}$0 start --daemon --cap plan,backend,review${NC}"
   echo ""
   echo -e "  # Launch a Claude Code agent"
   echo -e "  ${GREEN}CORTEX_AGENT_IDE=claude-code CORTEX_AGENT_ID=claude-1 $0 start --daemon${NC}"
   echo ""
   echo -e "  # Launch a Codex agent"
   echo -e "  ${GREEN}CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=codex-1 $0 start --daemon${NC}"
-  echo ""
-  echo -e "  # Launch an Antigravity (Gemini) agent"
-  echo -e "  ${GREEN}CORTEX_AGENT_IDE=antigravity CORTEX_AGENT_ID=gemini-1 $0 start --daemon${NC}"
-  echo ""
-  echo -e "  # Launch a Cursor agent"
-  echo -e "  ${GREEN}CORTEX_AGENT_IDE=cursor CORTEX_AGENT_ID=cursor-1 $0 start --daemon${NC}"
   echo ""
   echo -e "  # Stop a specific agent"
   echo -e "  ${GREEN}CORTEX_AGENT_ID=claude-1 $0 stop${NC}"
@@ -949,13 +1147,19 @@ cmd_help() {
 ${BLUE}cortex-agent.sh${NC} — Cortex Hub WebSocket Agent Client
 
 ${GREEN}Commands:${NC}
-  $0 start [--daemon|-d]    Start the agent (optionally in background)
+  $0 start [flags]          Start the agent (see flags below)
   $0 stop                   Stop the current agent (by CORTEX_AGENT_ID)
   $0 stop-all               Stop ALL running agents
   $0 status                 Show agent status and recent logs
-  $0 list                   List running agents + IDE presets + examples
+  $0 list                   List running agents, presets, and examples
   $0 logs [N]               Show last N log lines (default: 50)
   $0 help                   Show this help message
+
+${GREEN}Start Flags:${NC}
+  --daemon, -d               Run in background (daemon mode)
+  --preset NAME              Use a capability preset (e.g. fullstack, reviewer, devops)
+  --cap cap1,cap2,...        Set capabilities directly (comma-separated)
+  Note: --preset and --cap are mutually exclusive.
 
 ${GREEN}Environment Variables:${NC}
   CORTEX_AGENT_ID            Agent ID (unique per instance, REQUIRED for multi-agent)
@@ -977,21 +1181,37 @@ ${GREEN}IDE Presets:${NC}
   cursor        → engine: claude   (claude -p --permission-mode accept)
   antigravity   → engine: gemini   (gemini)
 
+${GREEN}Capability Presets:${NC}
+  Use --preset to assign a predefined set of capabilities from
+  .cortex/capability-templates.json. Use --cap for custom capabilities.
+
+  # Full-stack developer preset
+  $0 start --daemon --preset fullstack
+
+  # Custom capabilities
+  $0 start --daemon --cap plan,backend,review
+
+  # Game developer preset
+  $0 start --daemon --preset game-dev
+
+  # Code reviewer preset
+  $0 start --daemon --preset reviewer
+
 ${GREEN}Multi-Agent Examples:${NC}
 
-  # 1) Claude Code agent (for coding tasks)
-  CORTEX_AGENT_IDE=claude-code CORTEX_AGENT_ID=claude-1 $0 start --daemon
+  # 1) Claude Code agent (full-stack preset)
+  CORTEX_AGENT_IDE=claude-code CORTEX_AGENT_ID=claude-1 $0 start --daemon --preset fullstack
 
-  # 2) Codex agent (for headless execution)
-  CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=codex-1 $0 start --daemon
+  # 2) Codex agent (backend preset)
+  CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=codex-1 $0 start --daemon --preset backend-dev
 
-  # 3) Cursor agent
-  CORTEX_AGENT_IDE=cursor CORTEX_AGENT_ID=cursor-1 $0 start --daemon
+  # 3) Cursor agent (UI preset)
+  CORTEX_AGENT_IDE=cursor CORTEX_AGENT_ID=cursor-1 $0 start --daemon --preset ui-dev
 
-  # 4) Antigravity / Gemini agent
-  CORTEX_AGENT_IDE=antigravity CORTEX_AGENT_ID=gemini-1 $0 start --daemon
+  # 4) Review agent
+  CORTEX_AGENT_ID=reviewer-1 $0 start --daemon --preset reviewer
 
-  # List all running agents
+  # List all running agents + available presets
   $0 list
 
   # Assign a task to a specific agent (via MCP or Dashboard)
@@ -1027,7 +1247,16 @@ main() {
     help|--help|-h) cmd_help ;;
     _run)
       # Internal: used by daemon mode to re-enter the script
+      # Pick up capabilities override passed from cmd_start daemon
+      if [ -n "${CORTEX_AGENT_CAPABILITIES_OVERRIDE:-}" ]; then
+        _CAP_FLAG=""
+        _PRESET_FLAG=""
+      fi
       read_identity
+      # Apply capabilities override after identity is read
+      if [ -n "${CORTEX_AGENT_CAPABILITIES_OVERRIDE:-}" ]; then
+        AGENT_CAPABILITIES="$CORTEX_AGENT_CAPABILITIES_OVERRIDE"
+      fi
       ensure_log_dir
       check_dependencies
       run_agent
