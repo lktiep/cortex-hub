@@ -66,18 +66,24 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # ── Logging ──────────────────────────────────────────────────
+# CORTEX_AGENT_DAEMON=1 suppresses console echo (avoids duplicate lines in log file)
 log() {
   local level="$1"; shift
   local timestamp
   timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
   local msg="[$timestamp] [$level] $*"
-  [ -n "$LOG_FILE" ] && echo "$msg" >> "$LOG_FILE" 2>/dev/null || true
-  case "$level" in
-    ERROR) echo -e "${RED}$msg${NC}" ;;
-    WARN)  echo -e "${YELLOW}$msg${NC}" ;;
-    INFO)  echo -e "${GREEN}$msg${NC}" ;;
-    DEBUG) [ "${CORTEX_AGENT_DEBUG:-0}" = "1" ] && echo -e "${CYAN}$msg${NC}" ;;
-  esac
+  if [ -n "$LOG_FILE" ]; then
+    echo "$msg" >> "$LOG_FILE" 2>/dev/null || true
+  fi
+  # Only echo to console if NOT running as daemon subprocess
+  if [ "${CORTEX_AGENT_DAEMON:-0}" != "1" ]; then
+    case "$level" in
+      ERROR) echo -e "${RED}$msg${NC}" ;;
+      WARN)  echo -e "${YELLOW}$msg${NC}" ;;
+      INFO)  echo -e "${GREEN}$msg${NC}" ;;
+      DEBUG) [ "${CORTEX_AGENT_DEBUG:-0}" = "1" ] && echo -e "${CYAN}$msg${NC}" ;;
+    esac
+  fi
 }
 
 log_info()  { log INFO "$@"; }
@@ -614,7 +620,7 @@ cmd_start() {
   if [ "$daemon" = "--daemon" ] || [ "$daemon" = "-d" ]; then
     log_info "Starting agent in daemon mode..."
     # Pass identity env vars to the daemon subprocess
-    CORTEX_AGENT_ID="$AGENT_ID" CORTEX_AGENT_IDE="$AGENT_IDE" \
+    CORTEX_AGENT_ID="$AGENT_ID" CORTEX_AGENT_IDE="$AGENT_IDE" CORTEX_AGENT_DAEMON=1 \
       nohup "$0" _run >> "$LOG_FILE" 2>&1 &
     local bg_pid=$!
     echo "$bg_pid" > "$PID_FILE"
