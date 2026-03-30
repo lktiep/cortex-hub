@@ -901,21 +901,6 @@ export interface ConductorAgent {
   activeTasks: Array<{ id: string; title: string; status: string }>
 }
 
-export interface ConductorTask {
-  id: string
-  from_agent: string
-  to_agent: string | null
-  project: string
-  task_summary: string
-  context: string
-  priority: number
-  status: string
-  claimed_by: string | null
-  created_at: string
-  expires_at: string | null
-  agent_active: number
-}
-
 export async function getConductorAgents() {
   return apiFetch<{ agents: ConductorAgent[] }>('/api/metrics/conductor/agents')
 }
@@ -923,7 +908,7 @@ export async function getConductorAgents() {
 export async function getConductorTasks(limit = 50, owner?: string) {
   const params = new URLSearchParams({ limit: String(limit) })
   if (owner) params.set('owner', owner)
-  return apiFetch<{ tasks: ConductorTask[]; grouped: Record<string, ConductorTask[]> }>(
+  return apiFetch<{ tasks: ConductorTask[]; stats: { pending: number; active: number; completed: number; total: number } }>(
     `/api/metrics/conductor/tasks?${params.toString()}`
   )
 }

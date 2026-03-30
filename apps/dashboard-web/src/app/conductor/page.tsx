@@ -12,7 +12,7 @@ import {
 import styles from './page.module.css'
 
 // ── Types ──
-type TaskFilter = 'all' | 'pending' | 'in_progress' | 'completed'
+type TaskFilter = 'all' | 'pending' | 'in_progress' | 'completed' | 'assigned'
 
 // ── Helpers ──
 function timeAgo(dateStr: string): string {
@@ -144,23 +144,30 @@ function TaskCard({ task }: { task: ConductorTask }) {
         <StatusBadge status={task.status} />
       </div>
 
-      <p className={styles.taskSummary}>{task.task_summary}</p>
+      <p className={styles.taskSummary}>{task.title}</p>
+      {task.description && (
+        <p className={styles.taskSummary} style={{ fontSize: '0.8rem', opacity: 0.7, marginTop: 2 }}>
+          {task.description.substring(0, 120)}{task.description.length > 120 ? '…' : ''}
+        </p>
+      )}
 
       <div className={styles.taskMeta}>
-        <div className={styles.taskMetaItem}>
-          <span className={styles.taskMetaLabel}>Project</span>
-          <span className={styles.taskMetaValue}>{task.project}</span>
-        </div>
+        {task.project_id && (
+          <div className={styles.taskMetaItem}>
+            <span className={styles.taskMetaLabel}>Project</span>
+            <span className={styles.taskMetaValue}>{task.project_id}</span>
+          </div>
+        )}
         <div className={styles.taskMetaItem}>
           <span className={styles.taskMetaLabel}>From</span>
           <span className={styles.taskMetaValue}>
-            <code>{task.from_agent}</code>
+            <code>{task.created_by_agent ?? '--'}</code>
           </span>
         </div>
         <div className={styles.taskMetaItem}>
-          <span className={styles.taskMetaLabel}>To</span>
+          <span className={styles.taskMetaLabel}>Assigned</span>
           <span className={styles.taskMetaValue}>
-            <code>{task.to_agent ?? '--'}</code>
+            <code>{task.assigned_to_agent ?? '--'}</code>
           </span>
         </div>
         <div className={styles.taskMetaItem}>
@@ -173,9 +180,9 @@ function TaskCard({ task }: { task: ConductorTask }) {
         <span className={styles.timestamp}>
           {task.created_at ? timeAgo(task.created_at) : '--'}
         </span>
-        {task.claimed_by && (
+        {task.assigned_to_agent && task.status !== 'pending' && (
           <span className={styles.claimedBy}>
-            Claimed by <code>{task.claimed_by}</code>
+            Assigned to <code>{task.assigned_to_agent}</code>
           </span>
         )}
       </div>
@@ -207,24 +214,27 @@ export default function ConductorPage() {
 
   const agents = agentData?.agents ?? []
   const allTasks = taskData?.tasks ?? []
-  const grouped = taskData?.grouped ?? {}
+  const taskStats = taskData?.stats
 
   const onlineCount = agents.filter((a) => a.status === 'online').length
   const idleCount = agents.filter((a) => a.status === 'idle').length
 
   const filteredTasks = useMemo(() => {
     if (taskFilter === 'all') return allTasks
+    if (taskFilter === 'in_progress') {
+      return allTasks.filter((t) => ['assigned', 'accepted', 'in_progress'].includes(t.status))
+    }
     return allTasks.filter((t) => t.status === taskFilter)
   }, [allTasks, taskFilter])
 
-  const pendingCount = allTasks.filter((t) => t.status === 'pending').length
-  const claimedCount = allTasks.filter((t) => t.status === 'in_progress').length
-  const completedCount = allTasks.filter((t) => t.status === 'completed').length
+  const pendingCount = taskStats?.pending ?? 0
+  const activeCount = taskStats?.active ?? 0
+  const completedCount = taskStats?.completed ?? 0
 
   const taskFilterTabs: { key: TaskFilter; label: string; count: number }[] = [
     { key: 'all', label: 'All', count: allTasks.length },
     { key: 'pending', label: 'Pending', count: pendingCount },
-    { key: 'in_progress', label: 'In Progress', count: claimedCount },
+    { key: 'in_progress', label: 'Active', count: activeCount },
     { key: 'completed', label: 'Completed', count: completedCount },
   ]
 
@@ -256,6 +266,13 @@ export default function ConductorPage() {
           <div>
             <div className={styles.statValue}>{pendingCount}</div>
             <div className={styles.statLabel}>Pending Tasks</div>
+          </div>
+        </div>
+        <div className={`card ${styles.statCard}`}>
+          <span className={styles.statIcon}>&#9881;</span>
+          <div>
+            <div className={styles.statValue}>{activeCount}</div>
+            <div className={styles.statLabel}>Active Tasks</div>
           </div>
         </div>
         <div className={`card ${styles.statCard}`}>
@@ -342,43 +359,16 @@ export default function ConductorPage() {
                 : 'No tasks yet.'}
             </p>
             <p className={styles.emptyHint}>
-              Tasks are created when agents start sessions via{' '}
-              <code>cortex.session.start</code>.
+              Tasks are created via <code>cortex_task_create</code> MCP tool
+              or the dashboard.
             </p>
           </div>
         ) : (
-          <>
-            {/* Grouped view */}
-            {Object.keys(grouped).length > 1 ? (
-              Object.entries(grouped).map(([agentId, agentTasks]) => {
-                const visibleTasks = agentTasks.filter(
-                  (t) => taskFilter === 'all' || t.status === taskFilter
-                )
-                if (visibleTasks.length === 0) return null
-                return (
-                  <div key={agentId} className={styles.taskGroup}>
-                    <div className={styles.taskGroupHeader}>
-                      <span className={styles.taskGroupName}>{agentId}</span>
-                      <span className={styles.taskGroupCount}>
-                        {visibleTasks.length} task{visibleTasks.length !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-                    <div className={styles.tasksGrid}>
-                      {visibleTasks.map((task) => (
-                        <TaskCard key={task.id} task={task} />
-                      ))}
-                    </div>
-                  </div>
-                )
-              })
-            ) : (
-              <div className={styles.tasksGrid}>
-                {filteredTasks.map((task) => (
-                  <TaskCard key={task.id} task={task} />
-                ))}
-              </div>
-            )}
-          </>
+          <div className={styles.tasksGrid}>
+            {filteredTasks.map((task) => (
+              <TaskCard key={task.id} task={task} />
+            ))}
+          </div>
         )}
       </div>
     </DashboardLayout>
