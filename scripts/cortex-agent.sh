@@ -14,13 +14,48 @@ readonly PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 readonly DEFAULT_HUB_URL="ws://localhost:4000/ws/conductor"
 readonly IDENTITY_FILE="$PROJECT_ROOT/.cortex/agent-identity.json"
-readonly PID_FILE="${CORTEX_AGENT_PID_FILE:-/tmp/cortex-agent.pid}"
-readonly LOG_DIR="${CORTEX_AGENT_LOG_DIR:-/tmp/cortex-agent-logs}"
-readonly LOG_FILE="$LOG_DIR/cortex-agent.log"
+readonly BASE_LOG_DIR="${CORTEX_AGENT_LOG_DIR:-/tmp/cortex-agent-logs}"
 readonly MAX_LOG_SIZE=10485760  # 10 MB
 readonly MAX_LOG_FILES=5
 readonly RECONNECT_BASE_DELAY=2
 readonly RECONNECT_MAX_DELAY=120
+
+# ── IDE Presets ─────────────────────────────────────────────
+# Maps IDE name → default engine. Works on bash 3+ (no associative arrays)
+ide_engine() {
+  case "$1" in
+    claude-code) echo "claude" ;;
+    vscode)      echo "claude" ;;
+    codex)       echo "codex" ;;
+    cursor)      echo "claude" ;;
+    antigravity) echo "gemini" ;;
+    *)           echo "claude" ;;
+  esac
+}
+
+ide_description() {
+  case "$1" in
+    claude-code) echo "Claude Code CLI (terminal)" ;;
+    vscode)      echo "VS Code with Claude extension" ;;
+    codex)       echo "OpenAI Codex (headless)" ;;
+    cursor)      echo "Cursor IDE" ;;
+    antigravity) echo "Antigravity (Gemini)" ;;
+    *)           echo "Generic cortex agent" ;;
+  esac
+}
+
+# PID_FILE and LOG_FILE are set after reading identity (need AGENT_ID)
+PID_FILE=""
+LOG_DIR=""
+LOG_FILE=""
+
+setup_paths() {
+  local safe_id
+  safe_id=$(echo "$AGENT_ID" | tr ' /' '-' | tr '[:upper:]' '[:lower:]')
+  LOG_DIR="$BASE_LOG_DIR/$safe_id"
+  LOG_FILE="$LOG_DIR/agent.log"
+  PID_FILE="${CORTEX_AGENT_PID_FILE:-$BASE_LOG_DIR/${safe_id}.pid}"
+}
 
 # ── Colors ───────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -36,7 +71,7 @@ log() {
   local timestamp
   timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
   local msg="[$timestamp] [$level] $*"
-  echo "$msg" >> "$LOG_FILE" 2>/dev/null || true
+  [ -n "$LOG_FILE" ] && echo "$msg" >> "$LOG_FILE" 2>/dev/null || true
   case "$level" in
     ERROR) echo -e "${RED}$msg${NC}" ;;
     WARN)  echo -e "${YELLOW}$msg${NC}" ;;
@@ -52,7 +87,11 @@ log_debug() { log DEBUG "$@"; }
 
 # ── Helpers ──────────────────────────────────────────────────
 ensure_log_dir() {
-  mkdir -p "$LOG_DIR"
+  if [ -n "$LOG_DIR" ]; then
+    mkdir -p "$LOG_DIR"
+  else
+    mkdir -p "$BASE_LOG_DIR"
+  fi
 }
 
 rotate_logs() {
@@ -137,6 +176,12 @@ read_identity() {
   # Allow env var overrides (highest priority)
   AGENT_ID="${CORTEX_AGENT_ID:-$AGENT_ID}"
   AGENT_IDE="${CORTEX_AGENT_IDE:-$AGENT_IDE}"
+
+  # Resolve engine from IDE preset
+  AGENT_ENGINE="$(ide_engine "$AGENT_IDE")"
+
+  # Setup per-agent paths
+  setup_paths
 }
 
 # ── PID Management ───────────────────────────────────────────
@@ -552,10 +597,10 @@ run_agent() {
 
 # ── Commands ─────────────────────────────────────────────────
 cmd_start() {
+  read_identity
   ensure_log_dir
   rotate_logs
   check_dependencies
-  read_identity
 
   if is_running; then
     local pid
@@ -568,24 +613,28 @@ cmd_start() {
   local daemon="${1:-}"
   if [ "$daemon" = "--daemon" ] || [ "$daemon" = "-d" ]; then
     log_info "Starting agent in daemon mode..."
-    nohup "$0" _run >> "$LOG_FILE" 2>&1 &
+    # Pass identity env vars to the daemon subprocess
+    CORTEX_AGENT_ID="$AGENT_ID" CORTEX_AGENT_IDE="$AGENT_IDE" \
+      nohup "$0" _run >> "$LOG_FILE" 2>&1 &
     local bg_pid=$!
     echo "$bg_pid" > "$PID_FILE"
+    local ide_desc="$(ide_description "$AGENT_IDE")"
     echo ""
     echo -e "${GREEN}Agent started in background (pid=$bg_pid)${NC}"
     echo -e "  Agent ID:  ${BLUE}$AGENT_ID${NC}"
-    echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC}"
+    echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC} ($ide_desc)"
+    echo -e "  Engine:    ${BLUE}$AGENT_ENGINE${NC}"
     echo -e "  Hub URL:   ${BLUE}${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}${NC}"
+    echo -e "  PID file:  ${BLUE}$PID_FILE${NC}"
+    echo -e "  Log file:  ${BLUE}$LOG_FILE${NC}"
     echo ""
     echo -e "${BLUE}Next steps:${NC}"
-    echo -e "  1. Check logs:     ${GREEN}tail -f $LOG_FILE${NC}"
-    echo -e "  2. Check status:   ${GREEN}$0 status${NC}"
-    echo -e "  3. Create a task:  Use Dashboard Conductor page or cortex_task_create MCP tool"
-    echo -e "  4. Agent will auto-pickup matching tasks and execute them"
-    echo -e "  5. Stop agent:     ${GREEN}$0 stop${NC}"
-    echo ""
-    echo -e "  ${YELLOW}Tip:${NC} Override identity with env vars:"
-    echo -e "    CORTEX_AGENT_ID=my-agent CORTEX_AGENT_IDE=claude-code $0 start --daemon"
+    echo -e "  1. Check logs:      ${GREEN}tail -f $LOG_FILE${NC}"
+    echo -e "  2. Check status:    ${GREEN}CORTEX_AGENT_ID=$AGENT_ID $0 status${NC}"
+    echo -e "  3. Create a task:   Dashboard → Conductor → + New Task (assign to '${AGENT_ID}')"
+    echo -e "                      or: cortex_task_create(title: '...', assignTo: '${AGENT_ID}')"
+    echo -e "  4. Agent auto-picks up matching tasks → executes via ${AGENT_ENGINE}"
+    echo -e "  5. Stop this agent: ${GREEN}CORTEX_AGENT_ID=$AGENT_ID $0 stop${NC}"
     echo ""
   else
     run_agent
@@ -621,16 +670,19 @@ cmd_stop() {
 
 cmd_status() {
   read_identity
+  local ide_desc="$(ide_description "$AGENT_IDE")"
   if is_running; then
     local pid
     pid=$(read_pid)
     echo -e "${GREEN}Agent is running (pid=$pid)${NC}"
     echo -e "  Agent ID:  ${BLUE}$AGENT_ID${NC}"
-    echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC}"
+    echo -e "  IDE:       ${BLUE}$AGENT_IDE${NC} ($ide_desc)"
+    echo -e "  Engine:    ${BLUE}$AGENT_ENGINE${NC}"
     echo -e "  Hostname:  ${BLUE}$AGENT_HOSTNAME${NC}"
     echo -e "  OS:        ${BLUE}$AGENT_OS${NC}"
     echo -e "  Role:      ${BLUE}$AGENT_ROLE${NC}"
     echo -e "  Hub URL:   ${BLUE}${CORTEX_HUB_WS_URL:-$DEFAULT_HUB_URL}${NC}"
+    echo -e "  PID file:  ${BLUE}$PID_FILE${NC}"
     echo -e "  Log file:  ${BLUE}$LOG_FILE${NC}"
     if [ -f "$LOG_FILE" ]; then
       echo ""
@@ -639,9 +691,83 @@ cmd_status() {
     fi
     exit 0
   else
-    echo -e "${YELLOW}Agent is not running.${NC}"
-    echo -e "Start with: ${GREEN}$0 start --daemon${NC}"
+    echo -e "${YELLOW}Agent '$AGENT_ID' is not running.${NC}"
+    echo -e "Start with: ${GREEN}CORTEX_AGENT_ID=$AGENT_ID $0 start --daemon${NC}"
     exit 1
+  fi
+}
+
+cmd_list() {
+  echo -e "${BLUE}Running cortex agents:${NC}"
+  echo ""
+  local found=0
+  for pidfile in "$BASE_LOG_DIR"/*.pid; do
+    [ -f "$pidfile" ] || continue
+    local pid
+    pid=$(cat "$pidfile")
+    local name
+    name=$(basename "$pidfile" .pid)
+    if kill -0 "$pid" 2>/dev/null; then
+      echo -e "  ${GREEN}●${NC} $name  (pid=$pid)"
+      found=$((found + 1))
+    else
+      # Stale PID file
+      rm -f "$pidfile"
+    fi
+  done
+  if [ "$found" -eq 0 ]; then
+    echo -e "  ${YELLOW}No agents running.${NC}"
+  fi
+  echo ""
+  echo -e "${BLUE}Available IDE presets:${NC}"
+  echo ""
+  echo -e "  ${GREEN}claude-code${NC}   — Claude Code CLI (engine: claude)"
+  echo -e "  ${GREEN}vscode${NC}        — VS Code + Claude extension (engine: claude)"
+  echo -e "  ${GREEN}codex${NC}         — OpenAI Codex headless (engine: codex)"
+  echo -e "  ${GREEN}cursor${NC}        — Cursor IDE (engine: claude)"
+  echo -e "  ${GREEN}antigravity${NC}   — Antigravity / Gemini (engine: gemini)"
+  echo ""
+  echo -e "${BLUE}Quick start examples:${NC}"
+  echo ""
+  echo -e "  # Launch a Claude Code agent"
+  echo -e "  ${GREEN}CORTEX_AGENT_ID=claude-1 CORTEX_AGENT_IDE=claude-code $0 start --daemon${NC}"
+  echo ""
+  echo -e "  # Launch a Codex agent"
+  echo -e "  ${GREEN}CORTEX_AGENT_ID=codex-1 CORTEX_AGENT_IDE=codex $0 start --daemon${NC}"
+  echo ""
+  echo -e "  # Launch an Antigravity (Gemini) agent"
+  echo -e "  ${GREEN}CORTEX_AGENT_ID=gemini-1 CORTEX_AGENT_IDE=antigravity $0 start --daemon${NC}"
+  echo ""
+  echo -e "  # Launch a Cursor agent"
+  echo -e "  ${GREEN}CORTEX_AGENT_ID=cursor-1 CORTEX_AGENT_IDE=cursor $0 start --daemon${NC}"
+  echo ""
+  echo -e "  # Stop a specific agent"
+  echo -e "  ${GREEN}CORTEX_AGENT_ID=claude-1 $0 stop${NC}"
+  echo ""
+  echo -e "  # Stop ALL agents"
+  echo -e "  ${GREEN}$0 stop-all${NC}"
+  echo ""
+}
+
+cmd_stop_all() {
+  local found=0
+  for pidfile in "$BASE_LOG_DIR"/*.pid; do
+    [ -f "$pidfile" ] || continue
+    local pid
+    pid=$(cat "$pidfile")
+    local name
+    name=$(basename "$pidfile" .pid)
+    if kill -0 "$pid" 2>/dev/null; then
+      echo -e "Stopping ${BLUE}$name${NC} (pid=$pid)..."
+      kill "$pid" 2>/dev/null || true
+      found=$((found + 1))
+    fi
+    rm -f "$pidfile"
+  done
+  if [ "$found" -eq 0 ]; then
+    echo -e "${YELLOW}No agents were running.${NC}"
+  else
+    echo -e "${GREEN}Stopped $found agent(s).${NC}"
   fi
 }
 
@@ -658,28 +784,60 @@ cmd_help() {
   cat << EOF
 ${BLUE}cortex-agent.sh${NC} — Cortex Hub WebSocket Agent Client
 
-${GREEN}Usage:${NC}
+${GREEN}Commands:${NC}
   $0 start [--daemon|-d]    Start the agent (optionally in background)
-  $0 stop                   Stop the running agent
+  $0 stop                   Stop the current agent (by CORTEX_AGENT_ID)
+  $0 stop-all               Stop ALL running agents
   $0 status                 Show agent status and recent logs
+  $0 list                   List running agents + IDE presets + examples
   $0 logs [N]               Show last N log lines (default: 50)
   $0 help                   Show this help message
 
 ${GREEN}Environment Variables:${NC}
-  CORTEX_HUB_WS_URL         Hub WebSocket URL (default: $DEFAULT_HUB_URL)
-  CORTEX_AGENT_ID            Override agent ID
-  CORTEX_AGENT_PID_FILE      Custom PID file location
-  CORTEX_AGENT_LOG_DIR       Custom log directory
-  CORTEX_AGENT_DEBUG         Set to 1 for debug logging
+  CORTEX_AGENT_ID            Agent ID (unique per instance, REQUIRED for multi-agent)
+  CORTEX_AGENT_IDE           IDE preset: claude-code | vscode | codex | cursor | antigravity
+  CORTEX_HUB_WS_URL          Hub WebSocket URL (default: $DEFAULT_HUB_URL)
+  CORTEX_AGENT_LOG_DIR        Custom log directory
+  CORTEX_AGENT_DEBUG          Set to 1 for debug logging
 
-${GREEN}Agent Identity:${NC}
-  Place a JSON file at: $IDENTITY_FILE
-  Fields: agentId, hostname, os, ide, role, capabilities
+${GREEN}IDE Presets:${NC}
+  claude-code   → engine: claude   (claude -p --permission-mode accept)
+  vscode        → engine: claude   (claude -p --permission-mode accept)
+  codex         → engine: codex    (codex exec)
+  cursor        → engine: claude   (claude -p --permission-mode accept)
+  antigravity   → engine: gemini   (gemini)
 
-${GREEN}Examples:${NC}
-  $0 start                  # Interactive mode (foreground)
-  $0 start --daemon         # Background daemon mode
-  CORTEX_HUB_WS_URL=ws://hub.example.com:4000/ws/conductor $0 start
+${GREEN}Multi-Agent Examples:${NC}
+
+  # 1) Claude Code agent (for coding tasks)
+  CORTEX_AGENT_ID=claude-1 CORTEX_AGENT_IDE=claude-code $0 start --daemon
+
+  # 2) Codex agent (for headless execution)
+  CORTEX_AGENT_ID=codex-1 CORTEX_AGENT_IDE=codex $0 start --daemon
+
+  # 3) Cursor agent
+  CORTEX_AGENT_ID=cursor-1 CORTEX_AGENT_IDE=cursor $0 start --daemon
+
+  # 4) Antigravity / Gemini agent
+  CORTEX_AGENT_ID=gemini-1 CORTEX_AGENT_IDE=antigravity $0 start --daemon
+
+  # List all running agents
+  $0 list
+
+  # Assign a task to a specific agent (via MCP or Dashboard)
+  cortex_task_create(title: "Fix bug", assignTo: "codex-1")
+
+  # Stop one agent
+  CORTEX_AGENT_ID=codex-1 $0 stop
+
+  # Stop ALL agents
+  $0 stop-all
+
+${GREEN}How It Works:${NC}
+  1. Agent connects to Hub via WebSocket
+  2. Hub pushes task.assigned events when a task matches this agent
+  3. Agent spawns the engine (claude/codex/gemini) to execute the task
+  4. Result is reported back via WebSocket → visible in Dashboard
 
 EOF
 }
@@ -690,16 +848,18 @@ main() {
   shift || true
 
   case "$command" in
-    start)   cmd_start "$@" ;;
-    stop)    cmd_stop ;;
-    status)  cmd_status ;;
-    logs)    cmd_logs "$@" ;;
+    start)    cmd_start "$@" ;;
+    stop)     read_identity; cmd_stop ;;
+    stop-all) cmd_stop_all ;;
+    status)   cmd_status ;;
+    list|ls)  cmd_list ;;
+    logs)     read_identity; cmd_logs "$@" ;;
     help|--help|-h) cmd_help ;;
     _run)
       # Internal: used by daemon mode to re-enter the script
+      read_identity
       ensure_log_dir
       check_dependencies
-      read_identity
       run_agent
       ;;
     *)
