@@ -248,33 +248,23 @@ detect_hub_config() {
     log_info "Auto-detected API key from $detected_from"
   fi
 
-  # Derive Hub WS URL if not already set
+  # Derive Hub WS URL from MCP URL if not already set
+  # WS proxy lives on the MCP server (same domain, /ws/conductor path)
+  # e.g. https://cortex-mcp.jackle.dev/mcp → wss://cortex-mcp.jackle.dev/ws/conductor
   if [ -z "${CORTEX_HUB_WS_URL:-}" ] && [ -n "$detected_mcp_url" ]; then
-    # MCP URL is like https://cortex-mcp.jackle.dev/mcp
-    # Hub API is typically at hub.<domain> (same base domain, different subdomain)
-    # Extract domain: cortex-mcp.jackle.dev → jackle.dev → hub.jackle.dev
     local hub_ws_url
     hub_ws_url=$(node -e "
       try {
         const u = new URL('$detected_mcp_url');
-        const host = u.hostname;
-        // cortex-mcp.example.com → extract base domain → hub.example.com
-        const parts = host.split('.');
-        let baseDomain;
-        if (parts.length > 2) {
-          baseDomain = parts.slice(-2).join('.');
-        } else {
-          baseDomain = host;
-        }
         const proto = u.protocol === 'https:' ? 'wss:' : 'ws:';
         const port = u.port ? ':' + u.port : '';
-        console.log(proto + '//hub.' + baseDomain + port + '/ws/conductor');
+        console.log(proto + '//' + u.hostname + port + '/ws/conductor');
       } catch(e) { console.log(''); }
     " 2>/dev/null || echo "")
 
     if [ -n "$hub_ws_url" ]; then
       CORTEX_HUB_WS_URL="$hub_ws_url"
-      log_info "Auto-detected Hub URL: $hub_ws_url (derived from MCP URL)"
+      log_info "Auto-detected Hub URL: $hub_ws_url (from MCP endpoint)"
     fi
   fi
 
@@ -424,6 +414,7 @@ const WebSocket = require('ws');
 const path = require('path');
 
 const HUB_URL = process.env.CORTEX_HUB_WS_URL;
+const API_KEY = process.env.CORTEX_HUB_API_KEY || '';
 const AGENT_ID = process.env.CORTEX_AGENT_ID;
 const AGENT_HOSTNAME = process.env.CORTEX_AGENT_HOSTNAME;
 const AGENT_OS = process.env.CORTEX_AGENT_OS;
@@ -448,8 +439,15 @@ function connect() {
     try { ws.terminate(); } catch (_) {}
   }
 
+  // Build connection URL with apiKey query param
+  const sep = HUB_URL.includes('?') ? '&' : '?';
+  const connectUrl = API_KEY ? `${HUB_URL}${sep}apiKey=${API_KEY}` : HUB_URL;
+  // Also send Authorization header for proxies that check headers
+  const wsOptions = API_KEY ? { headers: { 'Authorization': `Bearer ${API_KEY}` } } : {};
+
+  // Log URL without API key for security
   emit('status', { message: `Connecting to ${HUB_URL}...` });
-  ws = new WebSocket(HUB_URL);
+  ws = new WebSocket(connectUrl, wsOptions);
 
   ws.on('open', () => {
     reconnectAttempt = 0;
@@ -587,6 +585,7 @@ run_agent() {
   mkfifo "$pipe_out"
 
   export CORTEX_HUB_WS_URL="$hub_url"
+  export CORTEX_HUB_API_KEY="${CORTEX_HUB_API_KEY:-}"
   export CORTEX_AGENT_ID="$AGENT_ID"
   export CORTEX_AGENT_HOSTNAME="$AGENT_HOSTNAME"
   export CORTEX_AGENT_OS="$AGENT_OS"
