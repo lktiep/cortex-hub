@@ -4,16 +4,13 @@ import { db } from '../db/client.js'
 export const statsRouter = new Hono()
 
 const QDRANT_URL = () => process.env['QDRANT_URL'] || 'http://qdrant:6333'
-const MEM0_URL = () => process.env['MEM0_URL'] || 'http://mem0:8000'
+
 
 // ── Dashboard Stats (real data) ──
-statsRouter.get('/overview', overviewHandler)
-statsRouter.get('/overview-v2', overviewHandler) // backward compat alias
-
-async function overviewHandler(c: any) {
+statsRouter.get('/overview', async (c) => {
   try {
     const keyCount = (db.prepare('SELECT COUNT(*) as count FROM api_keys').get() as { count: number }).count
-    const agentCount = (db.prepare('SELECT COUNT(DISTINCT agent_id) as count FROM query_logs').get() as { count: number }).count
+    const agentCount = (db.prepare("SELECT COUNT(DISTINCT from_agent) as count FROM session_handoffs WHERE status = 'active'").get() as { count: number }).count
     const totalQueries = (db.prepare('SELECT COUNT(*) as count FROM query_logs').get() as { count: number }).count
     const totalSessions = (db.prepare('SELECT COUNT(*) as count FROM session_handoffs').get() as { count: number }).count
     const orgCount = (db.prepare('SELECT COUNT(*) as count FROM organizations').get() as { count: number }).count
@@ -58,7 +55,263 @@ async function overviewHandler(c: any) {
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
-}
+})
+
+// ── Enriched Overview (v2) — single call for dashboard ──
+import { getGitNexusRepos } from './intel.js'
+
+statsRouter.get('/overview-v2', async (c) => {
+  try {
+    // ── Pre-fetch GitNexus native repos ──
+    let gitNexusRepos: Array<{ projectId: string; symbols: number | string }> = []
+    try {
+      gitNexusRepos = await getGitNexusRepos()
+    } catch (e) {
+      console.warn('[overview-v2] gitnexus list_repos error:', e)
+    }
+
+    // ── Basic counts ──
+    const keyCount = (db.prepare('SELECT COUNT(*) as count FROM api_keys').get() as { count: number }).count
+    const agentCount = (db.prepare("SELECT COUNT(DISTINCT from_agent) as count FROM session_handoffs WHERE status = 'active'").get() as { count: number }).count
+    const totalQueries = (db.prepare('SELECT COUNT(*) as count FROM query_logs').get() as { count: number }).count
+    const totalSessions = (db.prepare('SELECT COUNT(*) as count FROM session_handoffs').get() as { count: number }).count
+    const orgCount = (db.prepare('SELECT COUNT(*) as count FROM organizations').get() as { count: number }).count
+    const today = new Date().toISOString().split('T')[0]
+    const todayStart = `${today} 00:00:00`  // SQLite uses space, not T
+    const todayQueries = (db.prepare("SELECT COUNT(*) as count FROM query_logs WHERE created_at >= ?").get(todayStart) as { count: number }).count
+    const todayTokens = (db.prepare("SELECT COALESCE(SUM(total_tokens), 0) as total FROM usage_logs WHERE created_at >= ?").get(todayStart) as { total: number }).total
+
+    // ── Memory nodes from Qdrant ──
+    let memoryNodes = 0
+    try {
+      const res = await fetch(`${QDRANT_URL()}/collections`, { signal: AbortSignal.timeout(3000) })
+      if (res.ok) {
+        const data = (await res.json()) as { result?: { collections?: { name: string }[] } }
+        const collections = data.result?.collections ?? []
+        for (const col of collections) {
+          try {
+            const colRes = await fetch(`${QDRANT_URL()}/collections/${col.name}`, { signal: AbortSignal.timeout(2000) })
+            if (colRes.ok) {
+              const colData = (await colRes.json()) as { result?: { points_count?: number } }
+              memoryNodes += colData.result?.points_count ?? 0
+            }
+          } catch { /* skip */ }
+        }
+      }
+    } catch { /* qdrant offline */ }
+
+    // ── Per-project summaries with index/mem9 status ──
+    const projects = db.prepare(`
+      SELECT p.id, p.name, p.slug, p.git_provider, p.git_repo_url,
+             p.indexed_symbols, p.indexed_at, p.created_at
+      FROM projects p ORDER BY p.created_at DESC
+    `).all() as Array<{
+      id: string; name: string; slug: string; git_provider: string | null
+      git_repo_url: string | null; indexed_symbols: number | null
+      indexed_at: string | null; created_at: string
+    }>
+
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+
+    const projectSummaries = projects.map((p) => {
+      // Latest indexing job
+      const job = db.prepare(`
+        SELECT id, branch, status, mem9_status, mem9_chunks, mem9_progress, mem9_total_chunks,
+               symbols_found, total_files, completed_at, created_at as started_at
+        FROM index_jobs WHERE project_id = ? ORDER BY completed_at DESC, created_at DESC LIMIT 1
+      `).get(p.id) as {
+        id: string; branch: string; status: string; mem9_status: string | null
+        mem9_chunks: number | null; mem9_progress: number | null; mem9_total_chunks: number | null
+        symbols_found: number | null
+        total_files: number | null; completed_at: string | null; started_at: string
+      } | undefined
+
+      // Weekly query count
+      const weeklyQueries = (db.prepare(
+        'SELECT COUNT(*) as count FROM query_logs WHERE project_id = ? AND created_at >= ?'
+      ).get(p.id, weekAgo) as { count: number }).count
+
+      // Active sessions
+      const activeSessions = (db.prepare(
+        "SELECT COUNT(*) as count FROM session_handoffs WHERE project_id = ? AND status = 'active'"
+      ).get(p.id) as { count: number }).count
+
+      // Knowledge documents for this project
+      // Note: buildKnowledgeFromDocs normalizes project_id to slug, so we query by both ID and slug
+      let knowledgeDocs = 0
+      let knowledgeChunks = 0
+      try {
+        const kStats = db.prepare(
+          "SELECT COUNT(*) as docs, COALESCE(SUM(chunk_count), 0) as chunks FROM knowledge_documents WHERE (project_id = ? OR project_id = ?) AND status = 'active'"
+        ).get(p.id, p.slug.toLowerCase()) as { docs: number; chunks: number }
+        knowledgeDocs = kStats.docs
+        knowledgeChunks = kStats.chunks
+      } catch { /* knowledge table may not exist yet */ }
+
+      return {
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        gitProvider: p.git_provider,
+        gitRepoUrl: p.git_repo_url,
+        gitnexus: (() => {
+          if (job) {
+            return {
+              status: job.status,
+              symbols: job.symbols_found ?? p.indexed_symbols ?? 0,
+              files: job.total_files ?? 0,
+              branch: job.branch,
+              completedAt: job.completed_at,
+            }
+          }
+          const nativeJob = gitNexusRepos.find(r => r.projectId === p.id)
+          if (nativeJob) {
+            return {
+              status: 'done',
+              symbols: typeof nativeJob.symbols === 'number' ? nativeJob.symbols : p.indexed_symbols ?? 0,
+              files: p.indexed_symbols ?? 0,
+              branch: 'main',
+              completedAt: p.created_at,
+            }
+          }
+          return { status: 'none', symbols: 0, files: 0, branch: null, completedAt: null }
+        })(),
+        mem9: job ? {
+          status: job.mem9_status ?? 'pending',
+          chunks: job.mem9_chunks ?? 0,
+          progress: job.mem9_progress ?? 0,
+          totalChunks: job.mem9_total_chunks ?? 0,
+        } : { status: 'none', chunks: 0, progress: 0, totalChunks: 0 },
+        knowledge: {
+          docs: knowledgeDocs,
+          chunks: knowledgeChunks,
+        },
+        weeklyQueries,
+        activeSessions,
+        createdAt: p.created_at,
+      }
+    })
+
+    // ── Quality summary ──
+    const lastReport = db.prepare(
+      'SELECT grade, score_total, created_at FROM quality_reports ORDER BY created_at DESC LIMIT 1'
+    ).get() as { grade: string; score_total: number; created_at: string } | undefined
+
+    const reportsToday = (db.prepare(
+      "SELECT COUNT(*) as count FROM quality_reports WHERE created_at >= ?"
+    ).get(todayStart) as { count: number }).count
+
+    const avgScore = (db.prepare(
+      'SELECT AVG(score_total) as avg FROM quality_reports'
+    ).get() as { avg: number | null }).avg ?? 0
+
+    // ── Knowledge stats ──
+    let knowledgeStats = { totalDocs: 0, totalChunks: 0, totalHits: 0 }
+    try {
+      const kDocs = (db.prepare('SELECT COUNT(*) as count FROM knowledge_documents').get() as { count: number }).count
+      const kChunks = (db.prepare('SELECT COALESCE(SUM(chunk_count), 0) as total FROM knowledge_documents').get() as { total: number }).total
+      const kHits = (db.prepare('SELECT COALESCE(SUM(hit_count), 0) as total FROM knowledge_documents').get() as { total: number }).total
+      knowledgeStats = { totalDocs: kDocs, totalChunks: kChunks, totalHits: kHits }
+    } catch (e) { console.warn('[overview-v2] knowledge stats error:', e) }
+
+    // ── Token savings (from Cortex tool calls) ──
+    // Estimation model: tokens saved = (estimated grep/manual cost) - (cortex response tokens)
+    // Grep alternative cost estimates per tool type (based on typical agent behavior):
+    //   code_search: grep would scan ~20 files × ~500 tokens = 10,000 tokens baseline
+    //   code_context: manual trace would read ~10 files × ~800 tokens = 8,000 tokens
+    //   code_impact: manual impact analysis ~15 files × ~600 tokens = 9,000 tokens
+    //   knowledge_search: agent would re-debug from scratch ~5,000 tokens wasted
+    //   memory_search: agent would re-discover context ~3,000 tokens
+    //   code_read: targeted read vs full file scan, ~3x savings
+    //   Other tools: conservative 2x savings
+    const GREP_BASELINE: Record<string, number> = {
+      code_search: 10000,
+      code_context: 8000,
+      code_impact: 9000,
+      knowledge_search: 5000,
+      memory_search: 3000,
+      code_read: 0, // calculated as 3x output
+      detect_changes: 6000,
+      cypher: 7000,
+    }
+
+    let tokenSavings = { totalTokensSaved: 0, totalToolCalls: 0, avgTokensPerCall: 0, totalDataBytes: 0, topTools: [] as { tool: string; tokensSaved: number; calls: number }[] }
+    try {
+      const savingsOverall = db.prepare(`
+        SELECT COUNT(*) as total_calls,
+               COALESCE(SUM(output_size), 0) as total_output_bytes,
+               COALESCE(SUM(input_size), 0) + COALESCE(SUM(output_size), 0) as total_data_bytes
+        FROM query_logs WHERE status = 'ok'
+      `).get() as { total_calls: number; total_output_bytes: number; total_data_bytes: number }
+
+      const topTools = db.prepare(`
+        SELECT tool, COUNT(*) as calls, COALESCE(SUM(output_size), 0) as output_bytes, COALESCE(SUM(compute_tokens), 0) as compute_tokens
+        FROM query_logs WHERE status = 'ok'
+        GROUP BY tool ORDER BY output_bytes DESC LIMIT 5
+      `).all() as Array<{ tool: string; calls: number; output_bytes: number; compute_tokens: number }>
+
+      // Calculate per-tool savings using baseline model
+      const allTools = db.prepare(`
+        SELECT tool, COUNT(*) as calls, COALESCE(SUM(output_size), 0) as output_bytes
+        FROM query_logs WHERE status = 'ok'
+        GROUP BY tool
+      `).all() as Array<{ tool: string; calls: number; output_bytes: number }>
+
+      let totalTokensSaved = 0
+      for (const t of allTools) {
+        const toolKey = t.tool.replace('cortex_', '')
+        const baseline = GREP_BASELINE[toolKey]
+        const cortexTokens = Math.round(t.output_bytes / 4)
+        if (baseline !== undefined) {
+          // Savings = (what grep would cost × calls) - (what cortex returned)
+          const grepCost = baseline > 0 ? baseline * t.calls : cortexTokens * 3
+          totalTokensSaved += Math.max(0, grepCost - cortexTokens)
+        } else {
+          // Unknown tool: conservative 2x estimate
+          totalTokensSaved += cortexTokens
+        }
+      }
+
+      tokenSavings = {
+        totalTokensSaved,
+        totalToolCalls: savingsOverall.total_calls,
+        avgTokensPerCall: savingsOverall.total_calls > 0 ? Math.round(totalTokensSaved / savingsOverall.total_calls) : 0,
+        totalDataBytes: savingsOverall.total_data_bytes,
+        topTools: topTools.map(t => {
+          const toolKey = t.tool.replace('cortex_', '')
+          const baseline = GREP_BASELINE[toolKey]
+          const cortexTokens = Math.round(t.output_bytes / 4)
+          const saved = baseline !== undefined
+            ? Math.max(0, (baseline > 0 ? baseline * t.calls : cortexTokens * 3) - cortexTokens)
+            : cortexTokens
+          return { tool: t.tool, tokensSaved: saved, calls: t.calls, computeTokens: t.compute_tokens }
+        }),
+      }
+    } catch (e) { console.warn('[overview-v2] token savings error:', e) }
+
+    return c.json({
+      activeKeys: keyCount,
+      totalAgents: agentCount,
+      memoryNodes,
+      uptime: Math.floor(process.uptime()),
+      totalQueries,
+      totalSessions,
+      organizations: orgCount,
+      today: { queries: todayQueries, tokens: todayTokens },
+      projects: projectSummaries,
+      quality: {
+        lastGrade: lastReport?.grade ?? 'N/A',
+        lastScore: lastReport?.score_total ?? 0,
+        reportsToday,
+        averageScore: Math.round(avgScore),
+      },
+      knowledge: knowledgeStats,
+      tokenSavings,
+    })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
 
 // ── Activity Feed (recent events) ──
 statsRouter.get('/activity', (c) => {
@@ -150,7 +403,7 @@ statsRouter.post('/budget', async (c) => {
 // ── Admin: Restart Docker service ──
 statsRouter.post('/admin/restart/:service', async (c) => {
   const service = c.req.param('service')
-  const allowed = ['cortex-mem0', 'cortex-llm-proxy', 'cortex-qdrant', 'cortex-neo4j']
+  const allowed = ['cortex-llm-proxy', 'cortex-qdrant']
 
   if (!allowed.includes(service)) {
     return c.json({ error: `Cannot restart "${service}". Allowed: ${allowed.join(', ')}` }, 400)
@@ -168,122 +421,34 @@ statsRouter.post('/admin/restart/:service', async (c) => {
   }
 })
 
-// ── Conductor: Active Agents ──
-statsRouter.get('/conductor/agents', (c) => {
+// ── Telemetry: Log MCP Tool Queries ──
+statsRouter.post('/query-log', async (c) => {
   try {
-    // Get agents with activity in the last 30 minutes from query_logs
-    const recentAgents = db.prepare(`
-      SELECT
-        agent_id,
-        COUNT(*) as query_count,
-        MAX(created_at) as last_activity,
-        GROUP_CONCAT(DISTINCT tool) as tools_used
-      FROM query_logs
-      WHERE created_at >= datetime('now', '-30 minutes')
-      GROUP BY agent_id
-      ORDER BY last_activity DESC
-    `).all() as {
-      agent_id: string
-      query_count: number
-      last_activity: string
-      tools_used: string
-    }[]
+    const { agentId, tool, params, status, latencyMs, error, projectId, inputSize, outputSize, computeTokens, computeModel } = await c.req.json()
+    const stmt = db.prepare('INSERT INTO query_logs (agent_id, tool, params, latency_ms, status, error, project_id, input_size, output_size, compute_tokens, compute_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    stmt.run(
+      agentId || 'unknown', 
+      tool || 'unknown',
+      params ? JSON.stringify(params) : null,
+      latencyMs || 0,
+      status || 'ok',
+      error || null,
+      projectId || null,
+      inputSize || 0,
+      outputSize || 0,
+      computeTokens || 0,
+      computeModel || null
+    )
 
-    // Also get session info for these agents
-    const recentSessions = db.prepare(`
-      SELECT
-        from_agent as agent_id,
-        COUNT(*) as session_count,
-        MAX(created_at) as last_session,
-        GROUP_CONCAT(DISTINCT project) as projects
-      FROM session_handoffs
-      WHERE created_at >= datetime('now', '-30 minutes')
-      GROUP BY from_agent
-    `).all() as {
-      agent_id: string
-      session_count: number
-      last_session: string
-      projects: string
-    }[]
-
-    const sessionMap = new Map(recentSessions.map(s => [s.agent_id, s]))
-
-    const agents = recentAgents.map(a => {
-      const session = sessionMap.get(a.agent_id)
-      const lastActivityDate = new Date(a.last_activity + 'Z')
-      const now = new Date()
-      const diffMin = (now.getTime() - lastActivityDate.getTime()) / 60000
-
-      let status: 'online' | 'idle' | 'offline'
-      if (diffMin <= 5) status = 'online'
-      else if (diffMin <= 30) status = 'idle'
-      else status = 'offline'
-
-      return {
-        agentId: a.agent_id,
-        queryCount: a.query_count,
-        lastActivity: a.last_activity,
-        toolsUsed: a.tools_used ? a.tools_used.split(',') : [],
-        sessionCount: session?.session_count ?? 0,
-        projects: session?.projects ? session.projects.split(',') : [],
-        status,
-      }
-    })
-
-    return c.json({ agents })
-  } catch (error) {
-    return c.json({ error: String(error) }, 500)
-  }
-})
-
-// ── Conductor: Tasks ──
-statsRouter.get('/conductor/tasks', (c) => {
-  try {
-    const limit = Number(c.req.query('limit') ?? 50)
-    const owner = c.req.query('owner') // optional filter by agent
-
-    let query = `
-      SELECT
-        sh.*,
-        (SELECT COUNT(*) FROM query_logs WHERE agent_id = sh.from_agent AND created_at >= datetime('now', '-5 minutes')) as agent_active
-      FROM session_handoffs sh
-    `
-    const params: (string | number)[] = []
-
-    if (owner) {
-      query += ' WHERE sh.from_agent = ?'
-      params.push(owner)
+    // Bridge backend LLM cost to the unified billing table
+    if (computeTokens && computeTokens > 0 && computeModel) {
+      const usageStmt = db.prepare('INSERT INTO usage_logs (agent_id, model, total_tokens, request_type, project_id) VALUES (?, ?, ?, ?, ?)')
+      usageStmt.run(agentId || 'unknown', computeModel, computeTokens, 'tool', projectId || null)
     }
 
-    query += ' ORDER BY sh.created_at DESC LIMIT ?'
-    params.push(limit)
-
-    const tasks = db.prepare(query).all(...params) as (Record<string, unknown> & {
-      id: string
-      from_agent: string
-      to_agent: string | null
-      project: string
-      task_summary: string
-      context: string
-      priority: number
-      status: string
-      claimed_by: string | null
-      created_at: string
-      expires_at: string | null
-      agent_active: number
-    })[]
-
-    // Group by from_agent
-    const grouped: Record<string, typeof tasks> = {}
-    for (const task of tasks) {
-      const key = task.from_agent
-      if (!grouped[key]) grouped[key] = []
-      grouped[key].push(task)
-    }
-
-    return c.json({ tasks, grouped })
-  } catch (error) {
-    return c.json({ error: String(error) }, 500)
+    return c.json({ success: true })
+  } catch (err) {
+    return c.json({ error: String(err) }, 500)
   }
 })
 
@@ -325,5 +490,349 @@ statsRouter.get('/projects/:id/analytics', (c) => {
     })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
+  }
+})
+
+// ── Tool Analytics — per-tool metrics for measuring Cortex effectiveness ──
+statsRouter.get('/tool-analytics', (c) => {
+  const days = Number(c.req.query('days') ?? 7)
+  const agentId = c.req.query('agentId')
+  const projectId = c.req.query('projectId')
+
+  try {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
+
+    // Build WHERE clause dynamically
+    const conditions = ['created_at >= ?']
+    const params: unknown[] = [since]
+    if (agentId) { conditions.push('agent_id = ?'); params.push(agentId) }
+    if (projectId) { conditions.push('project_id = ?'); params.push(projectId) }
+    const where = conditions.join(' AND ')
+
+    // Per-tool breakdown
+    const tools = db.prepare(`
+      SELECT 
+        tool,
+        COUNT(*) as total_calls,
+        SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) as success_count,
+        SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as error_count,
+        ROUND(AVG(latency_ms)) as avg_latency_ms,
+        ROUND(AVG(CASE WHEN input_size > 0 THEN input_size ELSE NULL END)) as avg_input_size,
+        ROUND(AVG(CASE WHEN output_size > 0 THEN output_size ELSE NULL END)) as avg_output_size,
+        COALESCE(SUM(input_size), 0) as total_input_bytes,
+        COALESCE(SUM(output_size), 0) as total_output_bytes,
+        COALESCE(SUM(compute_tokens), 0) as compute_tokens
+      FROM query_logs
+      WHERE ${where}
+      GROUP BY tool
+      ORDER BY total_calls DESC
+    `).all(...params) as Array<{
+      tool: string; total_calls: number; success_count: number; error_count: number
+      avg_latency_ms: number; avg_input_size: number | null; avg_output_size: number | null
+      total_input_bytes: number; total_output_bytes: number; compute_tokens: number
+    }>
+
+    // Enrich with success rate and estimated tokens
+    const enriched = tools.map(t => ({
+      tool: t.tool,
+      totalCalls: t.total_calls,
+      successRate: Math.round((t.success_count / t.total_calls) * 100 * 10) / 10,
+      errorCount: t.error_count,
+      avgLatencyMs: t.avg_latency_ms,
+      avgInputSize: t.avg_input_size,
+      avgOutputSize: t.avg_output_size,
+      // Token savings: (grep baseline cost × calls) - (cortex response tokens)
+      estimatedTokensSaved: (() => {
+        const toolKey = t.tool.replace('cortex_', '')
+        const baseline: Record<string, number> = { code_search: 10000, code_context: 8000, code_impact: 9000, knowledge_search: 5000, memory_search: 3000, code_read: 0, detect_changes: 6000, cypher: 7000 }
+        const cortexTokens = Math.round(t.total_output_bytes / 4)
+        const b = baseline[toolKey]
+        if (b !== undefined) return Math.max(0, (b > 0 ? b * t.total_calls : cortexTokens * 3) - cortexTokens)
+        return cortexTokens
+      })(),
+      computeTokens: t.compute_tokens,
+      totalInputBytes: t.total_input_bytes,
+      totalOutputBytes: t.total_output_bytes,
+    }))
+
+    // Overall summary
+    const totalCalls = enriched.reduce((s, t) => s + t.totalCalls, 0)
+    const totalSuccess = enriched.reduce((s, t) => s + Math.round(t.totalCalls * t.successRate / 100), 0)
+    const totalOutputBytes = enriched.reduce((s, t) => s + t.totalOutputBytes, 0)
+    const totalInputBytes = enriched.reduce((s, t) => s + t.totalInputBytes, 0)
+    const totalComputeTokens = enriched.reduce((s, t) => s + t.computeTokens, 0)
+
+    // Per-agent breakdown
+    const agents = db.prepare(`
+      SELECT agent_id, COUNT(*) as calls, 
+             SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) as successes
+      FROM query_logs WHERE ${where}
+      GROUP BY agent_id ORDER BY calls DESC
+    `).all(...params) as Array<{ agent_id: string; calls: number; successes: number }>
+
+    // Daily trend
+    const trend: Array<{ day: string; calls: number; errors: number }> = []
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i)
+      const day = d.toISOString().split('T')[0] as string
+      const dayConditions = [`created_at >= '${day} 00:00:00'`, `created_at < date('${day}', '+1 day')`]
+      if (agentId) dayConditions.push(`agent_id = '${agentId}'`)
+      if (projectId) dayConditions.push(`project_id = '${projectId}'`)
+      const dayWhere = dayConditions.join(' AND ')
+      const dayStat = db.prepare(`SELECT COUNT(*) as calls, SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors FROM query_logs WHERE ${dayWhere}`).get() as { calls: number; errors: number }
+      trend.push({ day, calls: dayStat.calls, errors: dayStat.errors ?? 0 })
+    }
+
+    return c.json({
+      period: { days, since },
+      summary: {
+        totalCalls,
+        overallSuccessRate: totalCalls > 0 ? Math.round((totalSuccess / totalCalls) * 100 * 10) / 10 : 0,
+        estimatedTokensSaved: tools.reduce((sum, t) => sum + ((t as unknown as Record<string, number>).estimatedTokensSaved || 0), 0),
+        totalDataBytes: totalInputBytes + totalOutputBytes,
+        activeAgents: agents.length,
+      },
+      tools: enriched,
+      agents: agents.map(a => ({
+        agentId: a.agent_id,
+        totalCalls: a.calls,
+        successRate: Math.round((a.successes / a.calls) * 100 * 10) / 10,
+      })),
+      trend,
+    })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+// ── Session Compliance Check ──
+// Returns which Cortex tools were used/missed in a session, with a compliance score
+statsRouter.get('/session-compliance/:sessionId', (c) => {
+  const sessionId = c.req.param('sessionId')
+
+  try {
+    // Get session info to find agent_id and time range
+    const session = db.prepare(
+      'SELECT id, from_agent, created_at, status FROM session_handoffs WHERE id = ?'
+    ).get(sessionId) as { id: string; from_agent: string; created_at: string; status: string } | undefined
+
+    if (!session) return c.json({ error: 'Session not found' }, 404)
+
+    // Get all tool calls made by this agent since session started
+    const toolCalls = db.prepare(`
+      SELECT DISTINCT tool FROM query_logs 
+      WHERE agent_id = ? AND created_at >= ?
+      ORDER BY tool
+    `).all(session.from_agent, session.created_at) as Array<{ tool: string }>
+
+    const usedTools = new Set(toolCalls.map(t => t.tool))
+
+    // Define recommended tool categories
+    const recommendedTools = {
+      discovery: ['cortex_code_search', 'cortex_code_context', 'cortex_cypher', 'cortex_code_read'],
+      safety: ['cortex_code_impact', 'cortex_detect_changes'],
+      learning: ['cortex_knowledge_search', 'cortex_memory_search'],
+      contribution: ['cortex_knowledge_store', 'cortex_memory_store'],
+      lifecycle: ['cortex_session_start', 'cortex_session_end', 'cortex_quality_report'],
+    }
+
+    // Calculate per-category compliance
+    const categories = Object.entries(recommendedTools).map(([category, tools]) => {
+      const used = tools.filter(t => usedTools.has(t))
+      const missing = tools.filter(t => !usedTools.has(t))
+      return {
+        category,
+        used,
+        missing,
+        score: tools.length > 0 ? Math.round((used.length / tools.length) * 100) : 100,
+      }
+    })
+
+    // Overall compliance score
+    const totalRecommended = Object.values(recommendedTools).flat()
+    const totalUsed = totalRecommended.filter(t => usedTools.has(t))
+    const overallScore = Math.round((totalUsed.length / totalRecommended.length) * 100)
+
+    // Generate improvement hints
+    const hints: string[] = []
+    const missingDiscovery = categories.find(c => c.category === 'discovery')?.missing ?? []
+    const missingSafety = categories.find(c => c.category === 'safety')?.missing ?? []
+    const missingLearning = categories.find(c => c.category === 'learning')?.missing ?? []
+    const missingContribution = categories.find(c => c.category === 'contribution')?.missing ?? []
+
+    if (missingDiscovery.length > 0) {
+      hints.push(`🔍 Use ${missingDiscovery.join(', ')} BEFORE grep/find for AST-aware search`)
+    }
+    if (missingSafety.length > 0) {
+      hints.push(`🛡️ Use ${missingSafety.join(', ')} before editing core files to check blast radius`)
+    }
+    if (missingLearning.length > 0) {
+      hints.push(`📚 Use ${missingLearning.join(', ')} when encountering errors — someone may have solved it already`)
+    }
+    if (missingContribution.length > 0) {
+      hints.push(`💡 Use ${missingContribution.join(', ')} to share your findings with other agents`)
+    }
+
+    return c.json({
+      sessionId,
+      agent: session.from_agent,
+      overallScore,
+      grade: overallScore >= 80 ? 'A' : overallScore >= 60 ? 'B' : overallScore >= 40 ? 'C' : 'D',
+      toolsUsed: [...usedTools],
+      totalUsed: totalUsed.length,
+      totalRecommended: totalRecommended.length,
+      categories,
+      hints,
+    })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+// ── Cortex Hints Engine ──
+// Returns contextual hints based on which tools an agent has/hasn't used recently
+statsRouter.get('/hints/:agentId', (c) => {
+  const agentId = c.req.param('agentId')
+  const currentTool = c.req.query('currentTool')
+
+  try {
+    // Get tools used by this agent in the last 2 hours (current session window)
+    const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    const recentTools = db.prepare(`
+      SELECT DISTINCT tool FROM query_logs 
+      WHERE agent_id = ? AND created_at >= ?
+    `).all(agentId, since) as Array<{ tool: string }>
+
+    const used = new Set(recentTools.map(t => t.tool))
+    const hints: string[] = []
+
+    // Context-aware hints based on current tool and what's missing
+    if (!used.has('cortex_session_start')) {
+      hints.push('⚠️ Start your session first: cortex_session_start tracks your work and enables compliance.')
+    }
+
+    if (currentTool === 'cortex_code_search' || currentTool === 'cortex_cypher' || currentTool === 'cortex_code_context') {
+      // Agent is doing code discovery — remind about impact checking
+      if (!used.has('cortex_code_impact')) {
+        hints.push('🛡️ Before editing, run cortex_code_impact to check blast radius of your changes.')
+      }
+      // P2: Suggest alternatives when search may fail
+      if (currentTool === 'cortex_code_search' && !used.has('cortex_code_context')) {
+        hints.push('🔍 If code_search returns empty (repo has 0 flows), try cortex_code_context or cortex_cypher for symbol-level queries.')
+      }
+      if (currentTool === 'cortex_code_search' && !used.has('cortex_code_read')) {
+        hints.push('📄 Use cortex_code_read to view full source files found by code_search. Requires projectId + file path.')
+      }
+      if (currentTool === 'cortex_code_context' && !used.has('cortex_list_repos')) {
+        hints.push('📦 If you get "symbol not found", use cortex_list_repos to find the correct projectId for your repository.')
+      }
+      if (currentTool === 'cortex_cypher') {
+        hints.push('💡 Cypher tips: Use labels(n) for type, n.name and n.filePath as properties. Example: MATCH (n) WHERE n.name CONTAINS "X" RETURN n.name, labels(n) LIMIT 20')
+      }
+    }
+
+    if (currentTool === 'cortex_list_repos') {
+      // Agent is discovering repos — suggest next code tools
+      hints.push('🔍 Now use the projectId from the list with cortex_code_search, cortex_code_context, or cortex_cypher.')
+    }
+
+    if (currentTool === 'cortex_quality_report') {
+      // Agent is reporting quality — check if they used discovery/safety tools
+      if (!used.has('cortex_code_search') && !used.has('cortex_cypher')) {
+        hints.push('🔍 You reported quality without using code search tools. Try cortex_code_search or cortex_cypher next time for better code understanding.')
+      }
+      if (!used.has('cortex_knowledge_store') && !used.has('cortex_memory_store')) {
+        hints.push('💡 Consider using cortex_knowledge_store or cortex_memory_store to share your findings.')
+      }
+    }
+
+    if (currentTool === 'cortex_session_end') {
+      // Session ending — give overall compliance hint
+      if (!used.has('cortex_quality_report')) {
+        hints.push('📊 You should call cortex_quality_report with build/typecheck/lint results before ending.')
+      }
+      if (!used.has('cortex_memory_store')) {
+        hints.push('🧠 Store what you learned: cortex_memory_store persists insights for your next session.')
+      }
+    }
+
+    // General hints based on low tool coverage
+    const discoveryTools = ['cortex_code_search', 'cortex_code_context', 'cortex_cypher', 'cortex_code_read']
+    const usedDiscovery = discoveryTools.filter(t => used.has(t)).length
+    if (usedDiscovery === 0 && used.size > 2) {
+      hints.push('🔍 You haven\'t used any code discovery tools yet. Try cortex_code_search before grep for better results.')
+    }
+
+    return c.json({ agentId, hints, toolsUsedCount: used.size })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+
+// ── Conductor: Live agent status ──
+statsRouter.get('/conductor/agents', (c) => {
+  try {
+    const cutoff30m = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    const agents = db.prepare(`
+      SELECT 
+        COALESCE(agent_id, 'unknown') as agentId,
+        COUNT(*) as queryCount,
+        MAX(created_at) as lastActivity,
+        COUNT(DISTINCT session_id) as sessionCount
+      FROM query_logs
+      WHERE created_at > ?
+      GROUP BY agent_id
+      ORDER BY lastActivity DESC
+    `).all(cutoff30m) as Array<{ agentId: string; queryCount: number; lastActivity: string; sessionCount: number }>
+
+    const now = Date.now()
+    const enriched = agents.map(a => {
+      const lastMs = new Date(a.lastActivity).getTime()
+      const diffMin = (now - lastMs) / 60000
+      return {
+        ...a,
+        status: diffMin < 5 ? 'online' : diffMin < 30 ? 'idle' : 'offline',
+        toolsUsed: [],
+        projects: [],
+      }
+    })
+
+    const online = enriched.filter(a => a.status === 'online').length
+    const idle = enriched.filter(a => a.status === 'idle').length
+
+    return c.json({ agents: enriched, online, idle, total: enriched.length })
+  } catch (error) {
+    return c.json({ agents: [], online: 0, idle: 0, total: 0, error: String(error) })
+  }
+})
+
+// ── Conductor: Task list from conductor_tasks table ──
+statsRouter.get('/conductor/tasks', (c) => {
+  try {
+    const limit = Number(c.req.query('limit') ?? 100)
+    const owner = c.req.query('owner')
+    
+    let query = 'SELECT * FROM conductor_tasks'
+    const params: unknown[] = []
+    if (owner) {
+      query += ' WHERE api_key_owner = ?'
+      params.push(owner)
+    }
+    query += ' ORDER BY created_at DESC LIMIT ?'
+    params.push(limit)
+    
+    const tasks = db.prepare(query).all(...params)
+    
+    const pending = db.prepare('SELECT COUNT(*) as c FROM conductor_tasks WHERE status = ?').get('pending') as { c: number }
+    const active = db.prepare('SELECT COUNT(*) as c FROM conductor_tasks WHERE status IN (?,?,?)').get('assigned', 'accepted', 'in_progress') as { c: number }
+    const completed = db.prepare('SELECT COUNT(*) as c FROM conductor_tasks WHERE status = ?').get('completed') as { c: number }
+    
+    return c.json({ 
+      tasks, 
+      stats: { pending: pending.c, active: active.c, completed: completed.c, total: tasks.length }
+    })
+  } catch (error) {
+    return c.json({ tasks: [], stats: { pending: 0, active: 0, completed: 0, total: 0 }, error: String(error) })
   }
 })
