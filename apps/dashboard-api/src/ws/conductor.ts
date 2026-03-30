@@ -10,6 +10,10 @@ interface ConnectedAgent {
   apiKeyOwner: string
   hostname?: string
   ide?: string
+  platform?: string
+  capabilities: string[]
+  /** 'idle' when no in_progress tasks, 'busy' otherwise */
+  status: 'idle' | 'busy'
   connectedAt: Date
   lastPing: Date
 }
@@ -27,6 +31,8 @@ export function setupConductorWebSocket(server: Server) {
     const agentId = url.searchParams.get('agentId') || 'unknown'
     const hostname = url.searchParams.get('hostname') || undefined
     const ide = url.searchParams.get('ide') || undefined
+    const platform = url.searchParams.get('platform') || undefined
+    const capabilitiesRaw = url.searchParams.get('capabilities') || '[]'
 
     if (!apiKey) {
       ws.close(4001, 'Missing apiKey')
@@ -45,6 +51,13 @@ export function setupConductorWebSocket(server: Server) {
     }
     const apiKeyOwner = keyRow.name
 
+    let capabilities: string[] = []
+    try {
+      capabilities = JSON.parse(capabilitiesRaw) as string[]
+    } catch {
+      capabilities = []
+    }
+
     // Register agent connection
     const agent: ConnectedAgent = {
       ws,
@@ -52,6 +65,9 @@ export function setupConductorWebSocket(server: Server) {
       apiKeyOwner,
       hostname,
       ide,
+      platform,
+      capabilities,
+      status: 'idle',
       connectedAt: new Date(),
       lastPing: new Date(),
     }
@@ -65,6 +81,8 @@ export function setupConductorWebSocket(server: Server) {
         agentId,
         hostname,
         ide,
+        capabilities,
+        platform,
         timestamp: new Date().toISOString(),
       },
       agentId,
@@ -170,6 +188,23 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       })
       break
 
+    case 'capabilities.update': {
+      // Allow agents to update their capabilities at runtime
+      const caps = msg['capabilities']
+      if (Array.isArray(caps)) {
+        agent.capabilities = caps as string[]
+      }
+      break
+    }
+
+    case 'status.update': {
+      const newStatus = msg['status'] as string | undefined
+      if (newStatus === 'idle' || newStatus === 'busy') {
+        agent.status = newStatus
+      }
+      break
+    }
+
     case 'message': {
       // Agent-to-agent messaging (same owner only)
       const targetId = msg['to'] as string | undefined
@@ -205,22 +240,31 @@ function broadcastToOwner(owner: string, msg: object, excludeId?: string) {
 }
 
 function getOnlineAgents(owner: string) {
-  const result: Array<{ agentId: string; hostname?: string; ide?: string }> = []
+  const result: Array<{ agentId: string; hostname?: string; ide?: string; capabilities: string[]; platform?: string }> = []
   for (const [, agent] of agents) {
     if (agent.apiKeyOwner === owner) {
-      result.push({ agentId: agent.agentId, hostname: agent.hostname, ide: agent.ide })
+      result.push({
+        agentId: agent.agentId,
+        hostname: agent.hostname,
+        ide: agent.ide,
+        capabilities: agent.capabilities,
+        platform: agent.platform,
+      })
     }
   }
   return result
 }
 
-/** Get ALL connected agents (for dashboard API) */
+/** Get ALL connected agents with capabilities (for dashboard API and orchestrator) */
 export function getAllConnectedAgents() {
   const result: Array<{
     agentId: string
     apiKeyOwner: string
     hostname?: string
     ide?: string
+    platform?: string
+    capabilities: string[]
+    status: 'idle' | 'busy'
     connectedAt: string
     lastPing: string
   }> = []
@@ -230,6 +274,9 @@ export function getAllConnectedAgents() {
       apiKeyOwner: agent.apiKeyOwner,
       hostname: agent.hostname,
       ide: agent.ide,
+      platform: agent.platform,
+      capabilities: agent.capabilities,
+      status: agent.status,
       connectedAt: agent.connectedAt.toISOString(),
       lastPing: agent.lastPing.toISOString(),
     })
@@ -281,4 +328,28 @@ export function pushTaskToAgent(
     }
   }
   return false
+}
+
+/** Notify specific agents about a task event via WebSocket */
+export function notifyAgents(
+  agentIds: string[],
+  message: Record<string, unknown>,
+): string[] {
+  const notified: string[] = []
+  for (const targetId of agentIds) {
+    const agent = agents.get(targetId)
+    if (agent && agent.ws.readyState === WebSocket.OPEN) {
+      agent.ws.send(JSON.stringify(message))
+      notified.push(targetId)
+    }
+  }
+  return notified
+}
+
+/** Mark an agent as busy/idle */
+export function setAgentStatus(agentId: string, status: 'idle' | 'busy'): void {
+  const agent = agents.get(agentId)
+  if (agent) {
+    agent.status = status
+  }
 }

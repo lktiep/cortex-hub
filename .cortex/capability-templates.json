@@ -1,0 +1,55 @@
+{
+  "presets": {
+    "fullstack": {
+      "description": "Full-stack developer",
+      "capabilities": ["plan", "backend", "frontend", "review", "database"]
+    },
+    "game-dev": {
+      "description": "Game developer",
+      "capabilities": ["godot", "resources", "game-logic", "server"]
+    },
+    "game-builder": {
+      "description": "Game build agent (platform auto-detected)",
+      "capabilities": ["build-game", "resources"]
+    },
+    "reviewer": {
+      "description": "Code reviewer & QA",
+      "capabilities": ["review", "security", "testing"]
+    },
+    "orchestrator": {
+      "description": "Task orchestrator & coordinator",
+      "capabilities": ["plan", "orchestrate", "review"]
+    },
+    "devops": {
+      "description": "CI/CD & infrastructure",
+      "capabilities": ["devops", "docker", "deploy"]
+    },
+    "ui-dev": {
+      "description": "UI/UX developer",
+      "capabilities": ["frontend", "design"]
+    },
+    "backend-dev": {
+      "description": "Backend/API developer",
+      "capabilities": ["backend", "database", "server"]
+    }
+  },
+  "available_capabilities": [
+    { "id": "plan", "label": "Architecture & Planning" },
+    { "id": "orchestrate", "label": "Task Orchestration" },
+    { "id": "backend", "label": "Backend / API" },
+    { "id": "frontend", "label": "Frontend / UI" },
+    { "id": "design", "label": "UI/UX Design" },
+    { "id": "review", "label": "Code Review & QA" },
+    { "id": "godot", "label": "Godot Engine" },
+    { "id": "resources", "label": "Asset Extraction" },
+    { "id": "game-logic", "label": "Game Logic" },
+    { "id": "server", "label": "Game/App Server" },
+    { "id": "build-game", "label": "Game Build (platform auto-detected)" },
+    { "id": "database", "label": "Database" },
+    { "id": "devops", "label": "CI/CD & Deploy" },
+    { "id": "security", "label": "Security Audit" },
+    { "id": "testing", "label": "Testing" },
+    { "id": "docker", "label": "Docker / Containers" },
+    { "id": "deploy", "label": "Deployment" }
+  ]
+}

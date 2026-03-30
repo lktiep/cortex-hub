@@ -954,3 +954,22 @@ export async function deleteConductorTask(id: string) {
   return apiFetch<{ success: boolean; id: string }>(`/api/conductor/${id}`, { method: 'DELETE' })
 }
 
+export async function autoAssignTask(taskId: string, requiredCapabilities: string[], preferredPlatform?: string) {
+  return apiFetch<{ assigned: boolean; agentId?: string; task?: ConductorTask }>('/api/conductor/auto-assign', {
+    method: 'POST',
+    body: { taskId, requiredCapabilities, preferredPlatform },
+  })
+}
+
+export interface ConductorActivity {
+  type: string
+  agent: string
+  message: string
+  timestamp: string
+  taskId?: string
+}
+
+export async function getConductorActivity(limit = 30) {
+  return apiFetch<{ activity: ConductorActivity[] }>(`/api/conductor/activity?limit=${limit}`)
+}
+

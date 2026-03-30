@@ -25,10 +25,6 @@ CREATE TABLE IF NOT EXISTS query_logs (
     status TEXT DEFAULT 'ok',
     error TEXT,
     project_id TEXT,
-    input_size INTEGER DEFAULT 0,
-    output_size INTEGER DEFAULT 0,
-    compute_tokens INTEGER DEFAULT 0,
-    compute_model TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -104,108 +100,6 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     created_at TEXT DEFAULT (datetime('now'))
 );
 
--- ── Provider Accounts (multi-account per provider) ──
-CREATE TABLE IF NOT EXISTS provider_accounts (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,                                  -- "OpenAI (Personal)"
-    type TEXT NOT NULL,                                  -- "openai_compat" | "gemini" | "anthropic"
-    auth_type TEXT DEFAULT 'api_key',                    -- "oauth" | "api_key"
-    api_base TEXT NOT NULL,                              -- "http://llm-proxy:8317/v1"
-    api_key TEXT,                                        -- stored for runtime use (TODO: encrypt)
-    status TEXT DEFAULT 'enabled',                       -- "enabled" | "disabled" | "error"
-    capabilities TEXT DEFAULT '["chat"]',                -- JSON: ["chat", "embedding", "code"]
-    models TEXT DEFAULT '[]',                            -- cached JSON array of model IDs
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
--- ── Model Routing (fallback chains per purpose) ──
-CREATE TABLE IF NOT EXISTS model_routing (
-    purpose TEXT PRIMARY KEY,                            -- "chat" | "embedding" | "code"
-    chain TEXT NOT NULL DEFAULT '[]',                    -- JSON: [{"accountId":"...","model":"gpt-5.4-mini"},...]
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
--- ── Change Events (cross-agent change awareness) ──
-CREATE TABLE IF NOT EXISTS change_events (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    branch TEXT NOT NULL,
-    agent_id TEXT,
-    commit_sha TEXT,
-    commit_message TEXT,
-    files_changed TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_change_events_project_created
-ON change_events(project_id, created_at DESC);
-
--- ── Agent Acknowledgements ──
-CREATE TABLE IF NOT EXISTS agent_ack (
-    agent_id TEXT NOT NULL,
-    project_id TEXT NOT NULL,
-    last_seen_event_id TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (agent_id, project_id)
-);
-
--- ── Knowledge Documents ──
-CREATE TABLE IF NOT EXISTS knowledge_documents (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    source TEXT DEFAULT 'manual',           -- 'manual' | 'agent' | 'import'
-    source_agent_id TEXT,
-    project_id TEXT,
-    tags TEXT DEFAULT '[]',                 -- JSON array of strings
-    status TEXT DEFAULT 'active',           -- 'active' | 'archived'
-    hit_count INTEGER DEFAULT 0,
-    chunk_count INTEGER DEFAULT 0,
-    content_preview TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_docs_project
-ON knowledge_documents(project_id);
-
--- ── Knowledge Chunks ──
-CREATE TABLE IF NOT EXISTS knowledge_chunks (
-    id TEXT PRIMARY KEY,                    -- doubles as Qdrant point ID
-    document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
-    chunk_index INTEGER NOT NULL,
-    content TEXT NOT NULL,
-    char_count INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_doc
-ON knowledge_chunks(document_id);
-
--- ── Quality Reports (4-dimension scoring) ──
-CREATE TABLE IF NOT EXISTS quality_reports (
-    id TEXT PRIMARY KEY,
-    project_id TEXT,
-    agent_id TEXT NOT NULL,
-    session_id TEXT,
-    gate_name TEXT NOT NULL,
-    score_build INTEGER NOT NULL DEFAULT 0,      -- 0-25
-    score_regression INTEGER NOT NULL DEFAULT 0,  -- 0-25
-    score_standards INTEGER NOT NULL DEFAULT 0,   -- 0-25
-    score_traceability INTEGER NOT NULL DEFAULT 0,-- 0-25
-    score_total INTEGER NOT NULL DEFAULT 0,       -- 0-100
-    grade TEXT NOT NULL DEFAULT 'F' CHECK(grade IN ('A','B','C','D','F')),
-    passed BOOLEAN NOT NULL DEFAULT 0,
-    details TEXT,                                  -- JSON
-    created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_quality_reports_project_created
-ON quality_reports(project_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_quality_reports_agent
-ON quality_reports(agent_id, created_at DESC);
-
 -- ── Conductor Tasks ──
 CREATE TABLE IF NOT EXISTS conductor_tasks (
     id TEXT PRIMARY KEY,
@@ -217,7 +111,7 @@ CREATE TABLE IF NOT EXISTS conductor_tasks (
     assigned_to_agent TEXT,
     assigned_session_id TEXT,
     status TEXT DEFAULT 'pending'
-        CHECK(status IN ('pending','assigned','accepted','in_progress','review','completed','failed','cancelled')),
+        CHECK(status IN ('pending','blocked','assigned','accepted','in_progress','review','approved','rejected','completed','failed','cancelled')),
     priority INTEGER DEFAULT 5,
     required_capabilities TEXT DEFAULT '[]',
     depends_on TEXT DEFAULT '[]',
@@ -234,6 +128,7 @@ CREATE TABLE IF NOT EXISTS conductor_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_conductor_tasks_assigned ON conductor_tasks(assigned_to_agent, status);
 CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_conductor_tasks_parent ON conductor_tasks(parent_task_id);
 
 CREATE TABLE IF NOT EXISTS conductor_task_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
