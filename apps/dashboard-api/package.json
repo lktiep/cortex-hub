@@ -14,13 +14,14 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-
     "@cortex/shared-mem9": "workspace:*",
     "@cortex/shared-types": "workspace:*",
     "@cortex/shared-utils": "workspace:*",
     "@hono/node-server": "^1.13.0",
+    "@types/ws": "^8.18.1",
     "better-sqlite3": "^11.0.0",
-    "hono": "^4.7.0"
+    "hono": "^4.7.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.0.0",
