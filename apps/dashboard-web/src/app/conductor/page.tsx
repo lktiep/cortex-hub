@@ -75,22 +75,47 @@ function AgentCard({ agent }: { agent: ConductorAgent }) {
         <span className={styles.agentStatus}>{statusLabel}</span>
       </div>
 
+      {/* Identity info */}
+      {(agent.hostname || agent.ide || agent.os) && (
+        <div className={styles.agentMetaRow} style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: 4 }}>
+          {agent.hostname && <span>{agent.hostname}</span>}
+          {agent.os && <span> · {agent.os}</span>}
+          {agent.ide && <span> · {agent.ide}</span>}
+        </div>
+      )}
+      {agent.project && (
+        <div className={styles.agentMetaRow} style={{ fontSize: '0.75rem', opacity: 0.7, marginBottom: 4 }}>
+          📁 {agent.project}{agent.branch ? ` @ ${agent.branch}` : ''}
+        </div>
+      )}
+      {agent.role && (
+        <div className={styles.agentMetaRow} style={{ fontSize: '0.75rem', opacity: 0.6, marginBottom: 4 }}>
+          Role: {agent.role}
+        </div>
+      )}
+
       <div className={styles.agentMeta}>
         <div className={styles.agentMetaRow}>
-          {agent.queryCount} queries &middot; {agent.sessionCount} sessions
-        </div>
-        <div className={styles.agentMetaRow}>
-          Last seen: <code>{timeAgo(agent.lastActivity)}</code>
+          {agent.queryCount} queries · Last seen: <code>{timeAgo(agent.lastActivity)}</code>
         </div>
       </div>
 
-      {agent.projects.length > 0 && (
+      {/* Active tasks */}
+      {agent.activeTasks && agent.activeTasks.length > 0 && (
         <div className={styles.agentProjects}>
-          {agent.projects.map((p) => (
-            <span key={p} className={styles.projectTag}>
-              {p}
+          {agent.activeTasks.map((t: { id: string; title: string; status: string }) => (
+            <span key={t.id} className={styles.projectTag} title={t.title}>
+              🔧 {t.title.substring(0, 30)}{t.title.length > 30 ? '...' : ''} ({t.status})
             </span>
           ))}
+        </div>
+      )}
+
+      {agent.project && (
+        <div className={styles.agentProjects}>
+            <span className={styles.projectTag}>
+              {agent.project.replace('https://github.com/', '')}
+            </span>
         </div>
       )}
 

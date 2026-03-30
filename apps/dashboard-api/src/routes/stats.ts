@@ -770,32 +770,82 @@ statsRouter.get('/hints/:agentId', (c) => {
 })
 
 
-// ── Conductor: Live agent status ──
+// ── Conductor: Live agent status (enriched with session identity) ──
 statsRouter.get('/conductor/agents', (c) => {
   try {
-    // SQLite datetime format: "2026-03-30 11:41:48" (no T, no Z)
     const cutoff30m = new Date(Date.now() - 30 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+
+    // Get active agents from query_logs (recent MCP tool calls)
     const agents = db.prepare(`
-      SELECT 
+      SELECT
         COALESCE(agent_id, 'unknown') as agentId,
         COUNT(*) as queryCount,
-        MAX(created_at) as lastActivity,
-        COUNT(*) as sessionCount
+        MAX(created_at) as lastActivity
       FROM query_logs
       WHERE created_at > ?
       GROUP BY agent_id
       ORDER BY lastActivity DESC
-    `).all(cutoff30m) as Array<{ agentId: string; queryCount: number; lastActivity: string; sessionCount: number }>
+    `).all(cutoff30m) as Array<{ agentId: string; queryCount: number; lastActivity: string }>
+
+    // Get recent tools used per agent
+    const toolsQuery = db.prepare(`
+      SELECT agent_id, tool, COUNT(*) as cnt
+      FROM query_logs WHERE created_at > ? AND agent_id = ?
+      GROUP BY tool ORDER BY cnt DESC LIMIT 5
+    `)
+
+    // Get latest session identity for each agent (from session_handoffs)
+    const sessionQuery = db.prepare(`
+      SELECT from_agent, hostname, os, ide, branch, role, capabilities, project, status, id as sessionId
+      FROM session_handoffs
+      WHERE from_agent = ? OR api_key_name = ?
+      ORDER BY created_at DESC LIMIT 1
+    `)
+
+    // Get active tasks for each agent
+    const taskQuery = db.prepare(`
+      SELECT id, title, status FROM conductor_tasks
+      WHERE assigned_to_agent = ? AND status IN ('assigned','accepted','in_progress')
+      LIMIT 3
+    `)
 
     const now = Date.now()
     const enriched = agents.map(a => {
-      const lastMs = new Date(a.lastActivity).getTime()
+      const lastMs = new Date(a.lastActivity + 'Z').getTime()
       const diffMin = (now - lastMs) / 60000
+
+      // Get tools
+      const tools = toolsQuery.all(cutoff30m, a.agentId) as Array<{ tool: string; cnt: number }>
+
+      // Get session identity
+      const session = sessionQuery.get(a.agentId, a.agentId) as {
+        from_agent: string; hostname: string | null; os: string | null; ide: string | null;
+        branch: string | null; role: string | null; capabilities: string | null;
+        project: string | null; status: string; sessionId: string;
+      } | undefined
+
+      // Get active tasks
+      let activeTasks: Array<{ id: string; title: string; status: string }> = []
+      try { activeTasks = taskQuery.all(a.agentId) as typeof activeTasks } catch { /* table may not exist */ }
+
       return {
-        ...a,
-        status: diffMin < 5 ? 'online' : diffMin < 30 ? 'idle' : 'offline',
-        toolsUsed: [],
-        projects: [],
+        agentId: a.agentId,
+        queryCount: a.queryCount,
+        lastActivity: a.lastActivity,
+        status: diffMin < 5 ? 'online' as const : diffMin < 30 ? 'idle' as const : 'offline' as const,
+        toolsUsed: tools.map(t => t.tool),
+        // Session identity
+        hostname: session?.hostname ?? null,
+        os: session?.os ?? null,
+        ide: session?.ide ?? null,
+        branch: session?.branch ?? null,
+        role: session?.role ?? null,
+        capabilities: session?.capabilities ? JSON.parse(session.capabilities) : [],
+        project: session?.project ?? null,
+        sessionId: session?.sessionId ?? null,
+        sessionStatus: session?.status ?? null,
+        // Active tasks
+        activeTasks,
       }
     })
 

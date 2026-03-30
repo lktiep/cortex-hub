@@ -886,9 +886,19 @@ export interface ConductorAgent {
   queryCount: number
   lastActivity: string
   toolsUsed: string[]
-  sessionCount: number
-  projects: string[]
   status: 'online' | 'idle' | 'offline'
+  // Session identity
+  hostname: string | null
+  os: string | null
+  ide: string | null
+  branch: string | null
+  role: string | null
+  capabilities: string[]
+  project: string | null
+  sessionId: string | null
+  sessionStatus: string | null
+  // Active tasks
+  activeTasks: Array<{ id: string; title: string; status: string }>
 }
 
 export interface ConductorTask {
