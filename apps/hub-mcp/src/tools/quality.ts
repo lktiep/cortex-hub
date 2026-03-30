@@ -10,7 +10,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 export function registerQualityTools(server: McpServer, env: Env) {
   // quality.report — upload AWF gate checks
   server.tool(
-    'cortex.quality.report',
+    'cortex_quality_report',
     'Report the results of a Quality Gate check (e.g. Forgewright Phase/Gate checks, test outputs, lint records)',
     {
       gate_name: z.string().describe('The name of the gate evaluated (e.g. "Gate 4")'),

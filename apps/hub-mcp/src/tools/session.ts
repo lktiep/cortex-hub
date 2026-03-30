@@ -5,13 +5,13 @@ import { z } from 'zod'
 /**
  * Register Session Tools
  *
- * cortex.session.start: Mandatory tool to begin a session.
+ * cortex_session_start: Mandatory tool to begin a session.
  * Returns the project mission brief and quality standards.
  * Enhanced with Conductor Phase 1v2 identity fields.
  */
 export function registerSessionTools(server: McpServer, env: Env) {
   server.tool(
-    'cortex.session.start',
+    'cortex_session_start',
     'Start a new execution session with optional agent identity metadata.',
     {
       repo: z.string().describe('The URL of the repository being worked on'),

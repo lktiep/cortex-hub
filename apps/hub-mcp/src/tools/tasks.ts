@@ -10,7 +10,7 @@ import type { Env } from '../types.js'
 export function registerTaskTools(server: McpServer, env: Env) {
   // task.create — create a new task and optionally assign to another agent
   server.tool(
-    'cortex.task.create',
+    'cortex_task_create',
     'Create a task and optionally assign it to another agent. Use for delegating work, tracking sub-tasks, or creating follow-ups.',
     {
       title: z.string().describe('Short title describing the task'),
@@ -79,7 +79,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
 
   // task.pickup — get tasks assigned to the calling agent
   server.tool(
-    'cortex.task.pickup',
+    'cortex_task_pickup',
     'Retrieve tasks assigned to the specified agent that are ready to be worked on (assigned, accepted, or in-progress).',
     {
       agentId: z.string().describe('The agent ID to retrieve tasks for'),
@@ -135,7 +135,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
 
   // task.accept — accept an assigned task
   server.tool(
-    'cortex.task.accept',
+    'cortex_task_accept',
     'Accept an assigned task, signaling that work will begin. Updates task status to accepted.',
     {
       taskId: z.string().describe('The ID of the task to accept'),
@@ -175,7 +175,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
 
   // task.update — update task status and add progress messages
   server.tool(
-    'cortex.task.update',
+    'cortex_task_update',
     'Update the status of a task. Use to transition tasks through their lifecycle: in_progress, review, completed, or failed.',
     {
       taskId: z.string().describe('The ID of the task to update'),
@@ -215,7 +215,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
 
   // task.list — query tasks with optional filters
   server.tool(
-    'cortex.task.list',
+    'cortex_task_list',
     'List tasks with optional filters for project, status, and assignee. Use to get an overview of task state.',
     {
       projectId: z.string().optional().describe('Filter by project ID'),
@@ -279,7 +279,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
 
   // task.status — get detailed status of a single task
   server.tool(
-    'cortex.task.status',
+    'cortex_task_status',
     'Get the detailed status of a specific task including its logs and history.',
     {
       taskId: z.string().describe('The ID of the task to inspect'),

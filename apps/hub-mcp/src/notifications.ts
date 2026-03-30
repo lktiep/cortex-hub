@@ -5,7 +5,7 @@ import type { Env } from './types.js'
  *
  * Used in two places:
  *   1. Injected automatically into every MCP tool response (index.ts response wrapper)
- *   2. Called explicitly by cortex.task.notifications tool
+ *   2. Called explicitly by cortex_task_notifications tool
  */
 
 interface ConductorTask {
