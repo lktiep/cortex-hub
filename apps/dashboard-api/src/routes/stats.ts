@@ -773,7 +773,8 @@ statsRouter.get('/hints/:agentId', (c) => {
 // ── Conductor: Live agent status ──
 statsRouter.get('/conductor/agents', (c) => {
   try {
-    const cutoff30m = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    // SQLite datetime format: "2026-03-30 11:41:48" (no T, no Z)
+    const cutoff30m = new Date(Date.now() - 30 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
     const agents = db.prepare(`
       SELECT 
         COALESCE(agent_id, 'unknown') as agentId,
