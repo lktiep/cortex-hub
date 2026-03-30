@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
 import { randomUUID } from 'crypto'
-import { getAllConnectedAgents } from '../ws/conductor.js'
+import { getAllConnectedAgents, pushTaskToAgent } from '../ws/conductor.js'
 
 export const conductorRouter = new Hono()
 
@@ -134,8 +134,8 @@ conductorRouter.post('/', async (c) => {
     if (!title) return c.json({ error: 'Title is required' }, 400)
 
     const id = `task_${randomUUID().replace(/-/g, '').slice(0, 16)}`
-    // Auto-set created_by_agent from available identity
-    const createdByAgent = agentId ?? apiKeyOwner ?? sessionAgent ?? null
+    // Auto-set created_by_agent from available identity, default to 'dashboard'
+    const createdByAgent = agentId ?? apiKeyOwner ?? sessionAgent ?? 'dashboard'
 
     db.prepare(`
       INSERT INTO conductor_tasks (id, title, description, priority, assigned_to_agent, created_by_agent, project_id, context)
@@ -150,6 +150,11 @@ conductorRouter.post('/', async (c) => {
       projectId ?? null,
       metadata ? JSON.stringify(metadata) : '{}'
     )
+
+    // Notify assigned agent via WebSocket
+    if (assignedTo) {
+      pushTaskToAgent(assignedTo, id, title, description ?? '')
+    }
 
     const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow
     return c.json({ task }, 201)

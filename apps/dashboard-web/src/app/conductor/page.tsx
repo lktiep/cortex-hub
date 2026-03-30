@@ -263,9 +263,11 @@ function TaskDetail({
 function CreateTaskForm({
   onClose,
   onCreated,
+  agents,
 }: {
   onClose: () => void
   onCreated: () => void
+  agents: ConductorAgent[]
 }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -283,6 +285,7 @@ function CreateTaskForm({
         description: description.trim() || undefined,
         assignedTo: assignedTo.trim() || undefined,
         priority,
+        agentId: 'dashboard-ui',
       })
       onCreated()
       onClose()
@@ -319,12 +322,18 @@ function CreateTaskForm({
           </div>
           <div className={styles.formGroup}>
             <label className={styles.formLabel}>Assign to agent</label>
-            <input
+            <select
               className={styles.formInput}
               value={assignedTo}
               onChange={(e) => setAssignedTo(e.target.value)}
-              placeholder="e.g. codex, claude-code (leave empty for any)"
-            />
+            >
+              <option value="">Any agent</option>
+              {agents.map((agent) => (
+                <option key={agent.agentId} value={agent.agentId}>
+                  {agent.agentId}{agent.ide ? ` (${agent.ide})` : ''}
+                </option>
+              ))}
+            </select>
           </div>
           <div className={styles.formGroup}>
             <label className={styles.formLabel}>Priority (1=highest, 10=lowest)</label>
@@ -557,6 +566,7 @@ export default function ConductorPage() {
         <CreateTaskForm
           onClose={() => setShowCreateForm(false)}
           onCreated={() => mutate()}
+          agents={agents}
         />
       )}
     </DashboardLayout>
