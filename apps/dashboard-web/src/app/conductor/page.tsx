@@ -711,6 +711,7 @@ export default function ConductorPage() {
             {agents.map((agent: ConductorAgent) => {
               const ideIcon = agent.ide === 'claude-code' ? 'C' : agent.ide === 'codex' ? 'X' : agent.ide === 'antigravity' ? 'G' : agent.ide === 'cursor' ? 'Cu' : 'A'
               const ideLabel = agent.ide === 'claude-code' ? 'Claude Code' : agent.ide === 'codex' ? 'OpenAI Codex' : agent.ide === 'antigravity' ? 'Antigravity (Gemini)' : agent.ide === 'cursor' ? 'Cursor' : agent.ide ?? 'Unknown'
+              const ideColor = agent.ide === 'claude-code' ? styles.ideBlue : agent.ide === 'codex' ? styles.ideGreen : agent.ide === 'antigravity' ? styles.idePurple : agent.ide === 'cursor' ? styles.ideOrange : ''
               const statusLabel = agent.status === 'idle' ? 'Idle' : agent.status === 'busy' ? 'Busy' : 'Online'
               const statusClass = agent.status === 'idle' ? styles.agentOnline : agent.status === 'busy' ? styles.agentBusy : styles.agentOnline
               const platform = agent.platform ?? (agent.hostname?.includes('Mac') ? 'macOS' : 'unknown')
@@ -718,7 +719,7 @@ export default function ConductorPage() {
               return (
                 <div key={agent.agentId} className={`card ${styles.agentCard}`}>
                   <div className={styles.agentHeader}>
-                    <span className={styles.agentIdeIcon}>{ideIcon}</span>
+                    <span className={`${styles.agentIdeIcon} ${ideColor}`}>{ideIcon}</span>
                     <div className={styles.agentIdentity}>
                       <strong className={styles.agentIdText}>{agent.agentId}</strong>
                       <span className={styles.agentIdeLabel}>{ideLabel}</span>
@@ -751,9 +752,14 @@ export default function ConductorPage() {
                   {/* Capabilities */}
                   {agent.capabilities && agent.capabilities.length > 0 ? (
                     <div className={styles.agentCaps}>
-                      {agent.capabilities.map((cap) => (
-                        <span key={cap} className={styles.capBadge}>{cap}</span>
-                      ))}
+                      {agent.capabilities.map((cap) => {
+                        const capColor = ['backend','frontend','database','server'].includes(cap) ? styles.capCode
+                          : ['review','testing'].includes(cap) ? styles.capReview
+                          : ['devops','docker','deploy'].includes(cap) ? styles.capDeploy
+                          : ['design'].includes(cap) ? styles.capDesign
+                          : ['security'].includes(cap) ? styles.capSecurity : ''
+                        return <span key={cap} className={`${styles.capBadge} ${capColor}`}>{cap}</span>
+                      })}
                     </div>
                   ) : (
                     <div className={styles.agentCapsEmpty}>No capabilities registered</div>

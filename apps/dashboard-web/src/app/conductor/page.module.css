@@ -11,6 +11,19 @@
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-5);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  animation: fadeInUp 0.4s ease both;
+}
+
+.statCard:nth-child(1) { animation-delay: 0ms; }
+.statCard:nth-child(2) { animation-delay: 60ms; }
+.statCard:nth-child(3) { animation-delay: 120ms; }
+.statCard:nth-child(4) { animation-delay: 180ms; }
+.statCard:nth-child(5) { animation-delay: 240ms; }
+
+.statCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
 }
 
 .statIcon {
@@ -20,9 +33,20 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--accent-glow);
   border-radius: var(--radius-md);
+  transition: transform 0.2s ease;
 }
+
+.statCard:hover .statIcon {
+  transform: scale(1.1);
+}
+
+/* Stat icon colors */
+.statCard:nth-child(1) .statIcon { background: rgba(99, 102, 241, 0.15); color: #6366f1; }
+.statCard:nth-child(2) .statIcon { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+.statCard:nth-child(3) .statIcon { background: rgba(59, 130, 246, 0.15); color: #3b82f6; animation: pulseGlow 2s ease infinite; }
+.statCard:nth-child(4) .statIcon { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+.statCard:nth-child(5) .statIcon { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
 
 .statValue {
   font-size: 1.5rem;
@@ -131,6 +155,7 @@
 
 .taskCardInProgress {
   border-left: 3px solid var(--primary, #3b82f6);
+  animation: borderPulse 2s ease infinite;
 }
 
 .taskCardCompleted {
@@ -553,6 +578,14 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  animation: fadeInUp 0.4s ease both;
+}
+
+.agentCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(99, 102, 241, 0.15);
+  border-color: var(--primary);
 }
 
 .agentHeader {
@@ -562,19 +595,30 @@
 }
 
 .agentIdeIcon {
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--accent-glow);
-  border-radius: var(--radius-md);
+  border-radius: 50%;
   font-size: 0.8125rem;
   font-weight: 700;
-  color: var(--primary);
   flex-shrink: 0;
   font-family: var(--font-mono);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  background: rgba(99, 102, 241, 0.15);
+  color: #6366f1;
 }
+
+.agentCard:hover .agentIdeIcon {
+  transform: scale(1.1);
+}
+
+/* IDE-specific colors via data attribute or nth-child overrides in JS */
+.ideBlue { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+.ideGreen { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+.idePurple { background: rgba(139, 92, 246, 0.15); color: #8b5cf6; }
+.ideOrange { background: rgba(249, 115, 22, 0.15); color: #f97316; }
 
 .agentIdentity {
   flex: 1;
@@ -624,6 +668,7 @@
 .agentOnline {
   background: var(--status-healthy);
   box-shadow: 0 0 6px var(--status-healthy);
+  animation: pingDot 2s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
 .agentBusy {
@@ -684,13 +729,25 @@
 
 .capBadge {
   font-size: 0.625rem;
-  padding: 1px 6px;
+  padding: 2px 8px;
   border-radius: 9999px;
   background: var(--accent-glow);
   color: var(--primary);
   font-family: var(--font-mono);
   font-weight: 500;
+  transition: transform 0.15s ease;
 }
+
+.capBadge:hover {
+  transform: scale(1.05);
+}
+
+/* Capability color categories */
+.capCode { background: rgba(59, 130, 246, 0.12); color: #3b82f6; }
+.capReview { background: rgba(139, 92, 246, 0.12); color: #8b5cf6; }
+.capDeploy { background: rgba(16, 185, 129, 0.12); color: #10b981; }
+.capDesign { background: rgba(249, 115, 22, 0.12); color: #f97316; }
+.capSecurity { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
 
 /* View Toggle */
 .viewToggle {
@@ -755,9 +812,21 @@
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.2s, transform 0.15s;
   min-height: 40px;
+  animation: fadeInUp 0.35s ease both;
 }
+
+.pipelineRow:nth-child(1) { animation-delay: 0ms; }
+.pipelineRow:nth-child(2) { animation-delay: 40ms; }
+.pipelineRow:nth-child(3) { animation-delay: 80ms; }
+.pipelineRow:nth-child(4) { animation-delay: 120ms; }
+.pipelineRow:nth-child(5) { animation-delay: 160ms; }
+.pipelineRow:nth-child(6) { animation-delay: 200ms; }
+.pipelineRow:nth-child(7) { animation-delay: 240ms; }
+.pipelineRow:nth-child(8) { animation-delay: 280ms; }
+.pipelineRow:nth-child(9) { animation-delay: 320ms; }
+.pipelineRow:nth-child(10) { animation-delay: 360ms; }
 
 .pipelineRow:last-child {
   border-bottom: none;
@@ -769,10 +838,17 @@
 
 .pipelineConnector {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
+  font-size: 0.8rem;
+  color: var(--border);
   white-space: pre;
   flex-shrink: 0;
+  opacity: 0.5;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.pipelineRow:hover .pipelineConnector {
+  opacity: 0.8;
+  color: var(--primary);
 }
 
 .pipelineDot {
@@ -882,4 +958,26 @@
   color: var(--text-tertiary);
   padding-left: 36px;
   line-height: 1;
+}
+
+/* ── Premium Animations ── */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.3); }
+  50% { box-shadow: 0 0 12px 4px rgba(59, 130, 246, 0.15); }
+}
+
+@keyframes pingDot {
+  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+  70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+@keyframes borderPulse {
+  0%, 100% { border-left-color: var(--primary, #3b82f6); }
+  50% { border-left-color: rgba(59, 130, 246, 0.3); }
 }
