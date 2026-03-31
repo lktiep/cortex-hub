@@ -2,7 +2,7 @@ import * as vscode from 'vscode'
 import { getConfig } from './config.js'
 import { ConductorClient, type ConnectionState } from './ws-client.js'
 import { CortexWebviewProvider, CortexPanel } from './webview/panel.js'
-import { fetchAllForWebview } from './hub-api.js'
+// hub-api.ts no longer needed — all data fetched via WS
 
 let client: ConductorClient | null = null
 let statusBarItem: vscode.StatusBarItem
@@ -84,39 +84,9 @@ async function executeTaskInChat(prompt: string, taskId: string): Promise<void> 
   vscode.window.showInformationMessage('Cortex: Task prompt copied to clipboard. Paste into AI chat to execute.')
 }
 
-async function refreshHubData(cfg: ReturnType<typeof getConfig>): Promise<void> {
-  try {
-    const data = await fetchAllForWebview(cfg)
-    if (!data) return
-
-    // Push overview stats
-    if (data.overview) {
-      const msg = { type: 'hubData' as const, payload: data }
-      sidebarProvider?.postMessage(msg as any)
-      CortexPanel.currentPanel?.postMessage(msg as any)
-    }
-
-    // Push tasks as task list
-    if (data.tasks.length > 0) {
-      const taskMsg = {
-        type: 'updateTasks' as const,
-        payload: data.tasks.map((t) => ({
-          id: t.id,
-          title: t.title,
-          status: t.status,
-          assignedAgent: t.assigned_to_agent ?? 'any',
-          createdBy: t.created_by_agent ?? 'unknown',
-          assignedTo: t.assigned_to_agent ?? 'unassigned',
-          createdAt: t.created_at,
-          parentId: t.parent_task_id ?? undefined,
-        })),
-      }
-      sidebarProvider?.postMessage(taskMsg as any)
-      CortexPanel.currentPanel?.postMessage(taskMsg as any)
-    }
-  } catch {
-    // silent fail
-  }
+/** Request data via WS — server responds with data.response */
+function refreshHubData(): void {
+  client?.send({ type: 'request.data' })
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -174,10 +144,10 @@ export function activate(context: vscode.ExtensionContext): void {
       CortexPanel.currentPanel?.postMessage(agentStatus)
 
       // Fetch and push Hub data
-      refreshHubData(cfg)
+      refreshHubData()
       // Refresh every 15s
       if (refreshTimer) clearInterval(refreshTimer)
-      refreshTimer = setInterval(() => refreshHubData(cfg), 15000)
+      refreshTimer = setInterval(() => refreshHubData(), 15000)
     })
 
     client.on('disconnected', (code: number, reason: string) => {
@@ -239,6 +209,30 @@ export function activate(context: vscode.ExtensionContext): void {
       log(`Agent offline: ${msg['agentId']}`)
     })
 
+    // Handle data.response — project data from Hub via WS
+    client.on('data.response', (msg: Record<string, unknown>) => {
+      log(`Data received: ${(msg['tasks'] as unknown[])?.length ?? 0} tasks, ${(msg['agents'] as unknown[])?.length ?? 0} agents`)
+      const hubData = { type: 'hubData' as const, payload: msg }
+      sidebarProvider?.postMessage(hubData as any)
+      CortexPanel.currentPanel?.postMessage(hubData as any)
+      // Also push tasks for task feed
+      const tasks = msg['tasks'] as Record<string, unknown>[] | undefined
+      if (tasks && tasks.length > 0) {
+        const taskMsg = {
+          type: 'updateTasks' as const,
+          payload: tasks.map(t => ({
+            id: t['id'], title: t['title'], status: t['status'],
+            assignedAgent: t['assigned_to_agent'] ?? 'any',
+            createdBy: t['created_by_agent'] ?? 'unknown',
+            assignedTo: t['assigned_to_agent'] ?? 'unassigned',
+            createdAt: t['created_at'], parentId: t['parent_task_id'] ?? undefined,
+          })),
+        }
+        sidebarProvider?.postMessage(taskMsg as any)
+        CortexPanel.currentPanel?.postMessage(taskMsg as any)
+      }
+    })
+
     client.connect()
   }
 
@@ -295,7 +289,7 @@ export function activate(context: vscode.ExtensionContext): void {
       sidebarProvider?.postMessage(agentMsg)
       CortexPanel.currentPanel?.postMessage(agentMsg)
       // Fetch hub data
-      if (cfg.apiKey) refreshHubData(cfg)
+      if (cfg.apiKey) refreshHubData()
     }),
   )
 

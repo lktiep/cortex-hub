@@ -341,14 +341,18 @@ function escapeHtml(str) {
 // ── Handle hubData (overview + tasks + sessions) ──────────────────────────
 window.addEventListener('message', (event) => {
   if (event.data.type === 'hubData') {
-    const { overview, tasks, sessions } = event.data.payload;
-    if (overview) {
+    const { taskStats, tasks, quality } = event.data.payload;
+    // Performance stats
+    if (taskStats) {
+      const total = taskStats.completed + taskStats.failed;
+      const successRate = total > 0 ? Math.round((taskStats.completed / total) * 100) : 0;
       renderStats({
-        tasksCompleted: overview.totalSessions || 0,
-        averageTime: overview.quality?.averageScore || 0,
-        successRate: overview.knowledge?.totalDocs || 0,
+        tasksCompleted: taskStats.completed || 0,
+        averageTime: quality?.avgScore || 0,
+        successRate: successRate,
       });
     }
+    // Tasks → task feed + pipeline
     if (tasks && tasks.length) {
       renderTaskList(tasks.map(t => ({
         id: t.id,

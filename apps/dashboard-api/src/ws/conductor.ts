@@ -284,6 +284,42 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       break
     }
 
+    case 'request.data': {
+      // Extension requests project data via WS (no HTTP needed)
+      const tasks = db.prepare(
+        'SELECT * FROM conductor_tasks ORDER BY created_at DESC LIMIT 30'
+      ).all() as Record<string, unknown>[]
+
+      const sessions = db.prepare(
+        'SELECT * FROM session_handoffs ORDER BY created_at DESC LIMIT 10'
+      ).all() as Record<string, unknown>[]
+
+      const qualitySummary = db.prepare(
+        "SELECT COUNT(*) as total, AVG(score_total) as avgScore FROM quality_reports WHERE created_at > datetime('now', '-7 days')"
+      ).get() as { total: number; avgScore: number | null } | undefined
+
+      const taskStats = {
+        total: tasks.length,
+        completed: tasks.filter(t => t['status'] === 'completed').length,
+        inProgress: tasks.filter(t => t['status'] === 'in_progress' || t['status'] === 'accepted').length,
+        pending: tasks.filter(t => t['status'] === 'pending').length,
+        failed: tasks.filter(t => t['status'] === 'failed').length,
+      }
+
+      const onlineAgents = getOnlineAgents(agent.apiKeyOwner)
+
+      agent.ws.send(JSON.stringify({
+        type: 'data.response',
+        tasks,
+        sessions,
+        agents: onlineAgents,
+        taskStats,
+        quality: qualitySummary ?? { total: 0, avgScore: null },
+        timestamp: new Date().toISOString(),
+      }))
+      break
+    }
+
     case 'message': {
       // Agent-to-agent messaging (same owner only)
       const targetId = msg['to'] as string | undefined

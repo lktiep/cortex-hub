@@ -167,6 +167,9 @@ export class ConductorClient extends EventEmitter {
       case 'agent.capabilities_updated':
         this.emit('agent.capabilities_updated', msg)
         break
+      case 'data.response':
+        this.emit('data.response', msg)
+        break
       case 'message':
         this.emit('agent.message', msg)
         break
