@@ -191,8 +191,6 @@ function PriorityBadge({ priority }: { priority: number }) {
 function TaskCard({
   task,
   onSelect,
-  onCancel,
-  onDelete,
 }: {
   task: ConductorTask
   onSelect: () => void
@@ -211,51 +209,17 @@ function TaskCard({
             : styles.taskCardCancelled
 
   return (
-    <div className={`card ${styles.taskCard} ${statusClass}`} onClick={onSelect}>
+    <div className={`card ${styles.taskCard} ${styles.taskCardCompact} ${statusClass}`} onClick={onSelect}>
       <div className={styles.taskHeader}>
         <h3 className={styles.taskTitle}>{task.title}</h3>
         <StatusBadge status={task.status} />
       </div>
 
-      {task.description && (
-        <p className={styles.taskDescription}>{task.description}</p>
-      )}
-
-      <div className={styles.taskMeta}>
-        <div className={styles.metaItem}>
-          <span className={styles.metaLabel}>Created by</span>
-          <code className={styles.agentName}>{task.created_by_agent ?? 'unknown'}</code>
-        </div>
-        <div className={styles.metaItem}>
-          <span className={styles.metaLabel}>Assigned to</span>
-          <code className={styles.agentName}>{task.assigned_to_agent ?? 'any'}</code>
-        </div>
-        <div className={styles.metaItem}>
-          <span className={styles.metaLabel}>Priority</span>
-          <PriorityBadge priority={task.priority} />
-        </div>
-        {task.completed_by && (
-          <div className={styles.metaItem}>
-            <span className={styles.metaLabel}>Completed by</span>
-            <code className={styles.agentName}>{task.completed_by}</code>
-          </div>
-        )}
-      </div>
-
-      <div className={styles.taskFooter}>
+      <div className={styles.taskCompactMeta}>
+        <code className={styles.agentName}>{task.assigned_to_agent ?? 'unassigned'}</code>
         <span className={styles.timestamp}>
           {task.created_at ? formatTimeAgo(task.created_at) : '--'}
         </span>
-        <div className={styles.taskActions} onClick={(e) => e.stopPropagation()}>
-          {(task.status === 'pending' || task.status === 'in_progress') && (
-            <button className={`${styles.actionBtn} ${styles.actionBtnDanger}`} onClick={onCancel}>
-              Cancel
-            </button>
-          )}
-          <button className={`${styles.actionBtn} ${styles.actionBtnDanger}`} onClick={onDelete}>
-            Delete
-          </button>
-        </div>
       </div>
     </div>
   )

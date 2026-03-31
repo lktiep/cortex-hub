@@ -128,7 +128,7 @@
 /* Task Cards Grid */
 .tasksGrid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: var(--space-4);
 }
 
@@ -141,6 +141,18 @@
   cursor: pointer;
   transition: border-color 0.15s, transform 0.15s;
   position: relative;
+}
+
+.taskCardCompact {
+  padding: var(--space-3) var(--space-4);
+  gap: var(--space-2);
+}
+
+.taskCompactMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
 }
 
 .taskCard:hover {
@@ -420,6 +432,100 @@
   border-top: 1px solid var(--border-subtle);
 }
 
+/* Result Display */
+.resultSubtasks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.resultSubtaskCard {
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s;
+}
+
+.resultSubtaskCard:hover {
+  border-color: var(--border);
+}
+
+.resultSubtaskHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: 2px;
+}
+
+.resultSubtaskTitle {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.resultSubtaskMsg {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: var(--space-1) 0 0;
+}
+
+.resultSubtaskAgent {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  color: var(--accent-primary);
+  margin-top: var(--space-1);
+  display: inline-block;
+}
+
+.resultSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+}
+
+.resultSummaryItem {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.resultSummaryKey {
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.resultSummaryValue {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.resultRawToggle {
+  margin-top: var(--space-2);
+}
+
+.resultRawLabel {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  user-select: none;
+  padding: var(--space-1) 0;
+}
+
+.resultRawLabel:hover {
+  color: var(--text-secondary);
+}
+
 .logEntry {
   padding: var(--space-2) var(--space-3);
   font-size: 0.75rem;
@@ -586,6 +692,44 @@
   transform: translateY(-2px);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(99, 102, 241, 0.15);
   border-color: var(--primary);
+}
+
+.agentCardClickable {
+  cursor: pointer;
+}
+
+/* Agent Detail Panel Identity */
+.agentDetailPanelIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: var(--space-4);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.agentDetailPanelName {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.agentDetailPanelIde {
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+}
+
+.agentDetailTaskCard {
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s;
+}
+
+.agentDetailTaskCard:hover {
+  border-color: var(--border);
 }
 
 .agentHeader {
@@ -803,6 +947,31 @@
   font-size: 0.75rem;
   color: var(--text-tertiary);
   font-family: var(--font-mono);
+}
+
+/* Pipeline Narrative */
+.pipelineNarrative {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  padding: var(--space-3) var(--space-5);
+  background: rgba(99, 102, 241, 0.04);
+  border-top: 1px dashed var(--border-subtle);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  line-height: 1.8;
+}
+
+.narrativeStep {
+  display: inline;
+}
+
+.narrativeArrow {
+  color: var(--primary);
+  font-weight: 600;
+  opacity: 0.7;
 }
 
 .pipelineRow {
