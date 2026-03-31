@@ -1,0 +1,6 @@
+.turbo/
+node_modules/
+src/**/*.ts
+tsconfig.json
+*.map
+.gitignore

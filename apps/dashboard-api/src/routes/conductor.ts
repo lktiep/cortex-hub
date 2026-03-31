@@ -149,7 +149,52 @@ export function resolveCompletionChain(completedTask: TaskRow): void {
     ).run(JSON.stringify(allNotified), completedId)
   }
 
-  // 3. Check if this is a subtask and all siblings are complete -> update parent
+  // 3. Auto-create review task if context has autoReview enabled
+  const ctx = safeJsonParse<Record<string, unknown>>(completedTask.context, {})
+  const reqCaps = safeJsonParse<string[]>(completedTask.required_capabilities, [])
+  const isReviewTask = reqCaps.includes('review') || completedTask.title.toLowerCase().includes('review')
+
+  if (!isReviewTask && ctx['autoReview'] !== false) {
+    // Check if a review task already exists for this task
+    const existingReview = db.prepare(
+      "SELECT id FROM conductor_tasks WHERE parent_task_id = ? AND title LIKE '%Review:%' AND status != 'cancelled'"
+    ).get(completedTask.parent_task_id ?? completedId) as { id: string } | undefined
+
+    if (!existingReview) {
+      // Find online reviewer agent
+      const connected = getAllConnectedAgents()
+      const reviewer = connected.find(a =>
+        a.capabilities.includes('review') && a.agentId !== completedTask.completed_by
+      )
+
+      if (reviewer) {
+        const reviewId = generateTaskId()
+        db.prepare(`
+          INSERT INTO conductor_tasks
+            (id, title, description, priority, assigned_to_agent, created_by_agent,
+             project_id, parent_task_id, required_capabilities, context, status, assigned_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
+        `).run(
+          reviewId,
+          `Review: ${completedTask.title}`,
+          `Auto-review of completed task ${completedId}.\n\nOriginal task: ${completedTask.title}\nCompleted by: ${completedTask.completed_by}\nResult preview: ${(completedTask.result ?? '').slice(0, 500)}\n\nReview the code changes. If issues found, reject with feedback. If OK, approve.`,
+          Math.max(1, completedTask.priority),
+          reviewer.agentId,
+          'auto-orchestrator',
+          completedTask.project_id,
+          completedTask.parent_task_id ?? completedId,
+          JSON.stringify(['review', 'security']),
+          JSON.stringify({ reviewOf: completedId, originalAgent: completedTask.completed_by }),
+        )
+
+        pushTaskToAgent(reviewer.agentId, reviewId, `Review: ${completedTask.title}`, `Auto-review of task by ${completedTask.completed_by}`)
+        logTaskAction(reviewId, null, 'auto_review', `Auto-created review for ${completedId}, assigned to ${reviewer.agentId}`)
+        console.log(`[conductor] Auto-review created: ${reviewId} → ${reviewer.agentId}`)
+      }
+    }
+  }
+
+  // 4. Check if this is a subtask and all siblings are complete -> update parent
   if (completedTask.parent_task_id) {
     checkParentCompletion(completedTask.parent_task_id)
   }

@@ -44,6 +44,80 @@ function formatJson(value: string | null): string {
   }
 }
 
+/** Parse result JSON into a structured display */
+function parseResult(value: string | null): { type: 'empty' } | { type: 'string'; text: string } | { type: 'subtasks'; items: { title?: string; status?: string; message?: string; agent?: string; [k: string]: unknown }[] } | { type: 'object'; summary: { key: string; value: string }[]; raw: string } {
+  if (!value) return { type: 'empty' }
+  try {
+    const parsed = JSON.parse(value)
+    if (typeof parsed === 'string') return { type: 'string', text: parsed }
+    if (Array.isArray(parsed)) {
+      return { type: 'subtasks', items: parsed }
+    }
+    if (parsed && typeof parsed === 'object') {
+      // Check for subtaskResults array
+      if (Array.isArray(parsed.subtaskResults)) {
+        return { type: 'subtasks', items: parsed.subtaskResults }
+      }
+      // Flatten object to key-value pairs for display
+      const summary: { key: string; value: string }[] = []
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+          summary.push({ key: k, value: String(v) })
+        } else if (v === null) {
+          summary.push({ key: k, value: '—' })
+        }
+      }
+      return { type: 'object', summary, raw: JSON.stringify(parsed, null, 2) }
+    }
+    return { type: 'string', text: String(parsed) }
+  } catch {
+    return { type: 'string', text: value }
+  }
+}
+
+function ResultDisplay({ result }: { result: string | null }) {
+  const parsed = parseResult(result)
+  if (parsed.type === 'empty') return null
+  if (parsed.type === 'string') return <p className={styles.detailText}>{parsed.text}</p>
+  if (parsed.type === 'subtasks') {
+    return (
+      <div className={styles.resultSubtasks}>
+        {parsed.items.map((item, i) => (
+          <div key={i} className={styles.resultSubtaskCard}>
+            <div className={styles.resultSubtaskHeader}>
+              <span className={styles.resultSubtaskTitle}>{item.title ?? `Subtask ${i + 1}`}</span>
+              {item.status && <StatusBadge status={item.status} />}
+            </div>
+            {item.message && <p className={styles.resultSubtaskMsg}>{item.message}</p>}
+            {item.agent && (
+              <code className={styles.resultSubtaskAgent}>{item.agent}</code>
+            )}
+          </div>
+        ))}
+      </div>
+    )
+  }
+  // type === 'object'
+  return (
+    <div>
+      {parsed.summary.length > 0 && (
+        <div className={styles.resultSummaryGrid}>
+          {parsed.summary.map(({ key, value }) => (
+            <div key={key} className={styles.resultSummaryItem}>
+              <span className={styles.resultSummaryKey}>{key.replace(/_/g, ' ')}</span>
+              <span className={styles.resultSummaryValue}>{value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <details className={styles.resultRawToggle}>
+        <summary className={styles.resultRawLabel}>Raw JSON</summary>
+        <pre className={styles.detailCode}>{parsed.raw}</pre>
+      </details>
+    </div>
+  )
+}
+
 /** Build a tree from flat task list using parent_task_id */
 function buildTaskTree(tasks: ConductorTask[]): TaskTreeNode[] {
   const taskMap = new Map<string, TaskTreeNode>()
@@ -367,7 +441,7 @@ function TaskDetail({
           {task.result && (
             <div className={styles.detailSection}>
               <h3 className={styles.detailSectionTitle}>Result</h3>
-              <pre className={styles.detailCode}>{formatJson(task.result)}</pre>
+              <ResultDisplay result={task.result} />
             </div>
           )}
 
@@ -619,25 +693,77 @@ function PipelineView({
   return (
     <div>
       {/* Pipeline tasks (trees) */}
-      {pipelineTasks.length > 0 && (
+      {withChildren.length > 0 && (
         <div className={`card ${styles.pipelineCard}`}>
           <div className={styles.pipelineHeader}>
             <h3 className={styles.pipelineHeaderTitle}>Task Pipeline</h3>
             <span className={styles.pipelineHeaderCount}>{pipelineTasks.length} tasks in {withChildren.length} pipelines</span>
           </div>
-          {pipelineTasks.map((node) => {
-            // Check if last sibling at this depth
-            const siblings = pipelineTasks.filter((n) =>
-              n.depth === node.depth && n.task.parent_task_id === node.task.parent_task_id
-            )
-            const isLast = siblings[siblings.length - 1]?.task.id === node.task.id
+          {withChildren.map((rootNode) => {
+            // Collect this root and all its descendants
+            const subtreeFlat = flattenTree([rootNode])
+            // Build narrative steps
+            const narrativeSteps: string[] = []
+            const root = rootNode.task
+            if (root.created_by_agent) {
+              narrativeSteps.push(`${root.created_by_agent} created "${root.title}"`)
+            }
+            for (const child of rootNode.children) {
+              const t = child.task
+              let step = ''
+              if (t.created_by_agent) step += `${t.created_by_agent} delegated`
+              else step += 'Delegated'
+              step += ` → ${t.assigned_to_agent ?? 'unassigned'}`
+              if (t.required_capabilities) {
+                try {
+                  const caps = JSON.parse(t.required_capabilities)
+                  if (Array.isArray(caps) && caps.length > 0) step += ` (${caps.join(', ')})`
+                } catch { /* ignore */ }
+              }
+              if (t.status === 'completed' && t.accepted_at && t.completed_at) {
+                const dur = Math.round((new Date(t.completed_at).getTime() - new Date(t.accepted_at).getTime()) / 60000)
+                step += ` → completed in ${dur}m`
+                if (t.completed_by && t.completed_by !== t.assigned_to_agent) {
+                  step += ` → reviewed by ${t.completed_by}`
+                }
+              } else if (t.status === 'in_progress') {
+                step += ' → in progress'
+              } else if (t.status === 'failed') {
+                step += ' → failed'
+              } else {
+                step += ` → ${t.status}`
+              }
+              narrativeSteps.push(step)
+            }
+
             return (
-              <PipelineRow
-                key={node.task.id}
-                node={node}
-                onSelect={() => onSelectTask(node.task)}
-                isLast={isLast}
-              />
+              <div key={rootNode.task.id}>
+                {subtreeFlat.map((node) => {
+                  const siblings = subtreeFlat.filter((n) =>
+                    n.depth === node.depth && n.task.parent_task_id === node.task.parent_task_id
+                  )
+                  const isLast = siblings[siblings.length - 1]?.task.id === node.task.id
+                  return (
+                    <PipelineRow
+                      key={node.task.id}
+                      node={node}
+                      onSelect={() => onSelectTask(node.task)}
+                      isLast={isLast}
+                    />
+                  )
+                })}
+                {/* Narrative summary */}
+                {narrativeSteps.length > 1 && (
+                  <div className={styles.pipelineNarrative}>
+                    {narrativeSteps.map((step, i) => (
+                      <span key={i} className={styles.narrativeStep}>
+                        {i > 0 && <span className={styles.narrativeArrow}> → </span>}
+                        {step}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             )
           })}
         </div>
@@ -664,6 +790,142 @@ function PipelineView({
   )
 }
 
+/** Agent detail slide-over panel */
+function AgentDetail({
+  agent,
+  allTasks,
+  onClose,
+}: {
+  agent: ConductorAgent
+  allTasks: ConductorTask[]
+  onClose: () => void
+}) {
+  const ideLabel = agent.ide === 'claude-code' ? 'Claude Code' : agent.ide === 'codex' ? 'OpenAI Codex' : agent.ide === 'antigravity' ? 'Antigravity (Gemini)' : agent.ide === 'cursor' ? 'Cursor' : agent.ide ?? 'Unknown'
+  const platform = agent.platform ?? (agent.hostname?.includes('Mac') ? 'macOS' : 'unknown')
+  const agentTasks = allTasks.filter((t) => t.assigned_to_agent === agent.agentId)
+  const currentTask = agentTasks.find((t) => t.status === 'in_progress' || t.status === 'accepted')
+  const recentCompleted = agentTasks.filter((t) => t.status === 'completed').slice(0, 5)
+
+  return (
+    <div className={styles.detailOverlay} onClick={onClose}>
+      <div className={styles.detailPanel} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.detailHeader}>
+          <h2 className={styles.detailTitle}>Agent Details</h2>
+          <button className={styles.detailClose} onClick={onClose}>x</button>
+        </div>
+
+        <div className={styles.detailBody}>
+          {/* Identity */}
+          <div className={styles.agentDetailPanelIdentity}>
+            <strong className={styles.agentDetailPanelName}>{agent.agentId}</strong>
+            <span className={styles.agentDetailPanelIde}>{ideLabel}</span>
+          </div>
+
+          <div className={styles.detailRow}>
+            <span className={styles.detailLabel}>Hostname</span>
+            <span className={styles.detailValue}>{agent.hostname ?? '-'}</span>
+          </div>
+          <div className={styles.detailRow}>
+            <span className={styles.detailLabel}>Platform</span>
+            <span className={styles.detailValue}>{platform}</span>
+          </div>
+          <div className={styles.detailRow}>
+            <span className={styles.detailLabel}>Owner</span>
+            <span className={styles.detailValue}>{agent.apiKeyOwner}</span>
+          </div>
+          <div className={styles.detailRow}>
+            <span className={styles.detailLabel}>Status</span>
+            <span className={`badge badge-${agent.status === 'busy' ? 'warning' : 'healthy'}`}>
+              {agent.status ?? 'online'}
+            </span>
+          </div>
+          <div className={styles.detailRow}>
+            <span className={styles.detailLabel}>Connected</span>
+            <span className={styles.detailValue}>{new Date(agent.connectedAt).toLocaleString()}</span>
+          </div>
+
+          {/* Capabilities */}
+          <div className={styles.detailSection}>
+            <h3 className={styles.detailSectionTitle}>Capabilities</h3>
+            {agent.capabilities && agent.capabilities.length > 0 ? (
+              <div className={styles.agentCaps}>
+                {agent.capabilities.map((cap) => {
+                  const capColor = ['backend','frontend','database','server'].includes(cap) ? styles.capCode
+                    : ['review','testing'].includes(cap) ? styles.capReview
+                    : ['devops','docker','deploy'].includes(cap) ? styles.capDeploy
+                    : ['design'].includes(cap) ? styles.capDesign
+                    : ['security'].includes(cap) ? styles.capSecurity : ''
+                  return <span key={cap} className={`${styles.capBadge} ${capColor}`}>{cap}</span>
+                })}
+              </div>
+            ) : (
+              <span className={styles.agentCapsEmpty}>No capabilities registered</span>
+            )}
+          </div>
+
+          {/* Current Task */}
+          {currentTask && (
+            <div className={styles.detailSection}>
+              <h3 className={styles.detailSectionTitle}>● Current Task</h3>
+              <div className={styles.agentDetailTaskCard}>
+                <div className={styles.resultSubtaskHeader}>
+                  <span className={styles.resultSubtaskTitle}>{currentTask.title}</span>
+                  <StatusBadge status={currentTask.status} />
+                </div>
+                {currentTask.description && (
+                  <p className={styles.resultSubtaskMsg}>{currentTask.description}</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Recent Completed Tasks */}
+          {recentCompleted.length > 0 && (
+            <div className={styles.detailSection}>
+              <h3 className={styles.detailSectionTitle}>Recent Completed ({recentCompleted.length})</h3>
+              <div className={styles.resultSubtasks}>
+                {recentCompleted.map((t) => (
+                  <div key={t.id} className={styles.agentDetailTaskCard}>
+                    <div className={styles.resultSubtaskHeader}>
+                      <span className={styles.resultSubtaskTitle}>{t.title}</span>
+                      <span className={styles.timestamp}>
+                        {t.completed_at ? formatTimeAgo(t.completed_at) : '--'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Total stats */}
+          <div className={styles.detailSection}>
+            <h3 className={styles.detailSectionTitle}>Task Summary</h3>
+            <div className={styles.resultSummaryGrid}>
+              <div className={styles.resultSummaryItem}>
+                <span className={styles.resultSummaryKey}>Total Assigned</span>
+                <span className={styles.resultSummaryValue}>{agentTasks.length}</span>
+              </div>
+              <div className={styles.resultSummaryItem}>
+                <span className={styles.resultSummaryKey}>Completed</span>
+                <span className={styles.resultSummaryValue}>{agentTasks.filter((t) => t.status === 'completed').length}</span>
+              </div>
+              <div className={styles.resultSummaryItem}>
+                <span className={styles.resultSummaryKey}>In Progress</span>
+                <span className={styles.resultSummaryValue}>{agentTasks.filter((t) => t.status === 'in_progress').length}</span>
+              </div>
+              <div className={styles.resultSummaryItem}>
+                <span className={styles.resultSummaryKey}>Failed</span>
+                <span className={styles.resultSummaryValue}>{agentTasks.filter((t) => t.status === 'failed').length}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ConductorPage() {
   const { data, error, isLoading, mutate } = useSWR('conductor-tasks', () => getConductorTasks({ limit: 200 }), {
     refreshInterval: 10000,
@@ -675,6 +937,7 @@ export default function ConductorPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [selectedTask, setSelectedTask] = useState<ConductorTask | null>(null)
+  const [selectedAgent, setSelectedAgent] = useState<ConductorAgent | null>(null)
   const [showCreateForm, setShowCreateForm] = useState(false)
 
   const allTasks = data?.tasks ?? []
@@ -781,7 +1044,7 @@ export default function ConductorPage() {
               const platform = agent.platform ?? (agent.hostname?.includes('Mac') ? 'macOS' : 'unknown')
 
               return (
-                <div key={agent.agentId} className={`card ${styles.agentCard}`}>
+                <div key={agent.agentId} className={`card ${styles.agentCard} ${styles.agentCardClickable}`} onClick={() => setSelectedAgent(agent)}>
                   <div className={styles.agentHeader}>
                     <span className={`${styles.agentIdeIcon} ${ideColor}`}>{ideIcon}</span>
                     <div className={styles.agentIdentity}>
@@ -927,6 +1190,15 @@ export default function ConductorPage() {
           onClose={() => setSelectedTask(null)}
           onCancel={() => handleCancel(selectedTask.id)}
           onDelete={() => handleDelete(selectedTask.id)}
+        />
+      )}
+
+      {/* Agent Detail Slide-over */}
+      {selectedAgent && (
+        <AgentDetail
+          agent={selectedAgent}
+          allTasks={allTasks}
+          onClose={() => setSelectedAgent(null)}
         />
       )}
 

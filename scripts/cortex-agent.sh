@@ -523,8 +523,8 @@ execute_task_antigravity() {
   local output_file="$LOG_DIR/task-${task_id}.log"
 
   if ! command -v antigravity >/dev/null 2>&1; then
-    log_error "Antigravity CLI not found. Install from: https://antigravity.dev"
-    log_error "Note: Antigravity ≠ Gemini CLI — different subscription/billing."
+    log_error "Antigravity CLI not found. Install Antigravity from: https://antigravity.dev"
+    log_error "Note: Antigravity has its own subscription. Do NOT use gemini CLI as substitute."
     return 1
   fi
 

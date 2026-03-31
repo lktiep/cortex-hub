@@ -1,0 +1,108 @@
+{
+  "name": "cortex-agent",
+  "displayName": "Cortex Agent",
+  "description": "VS Code extension for Cortex Hub — real-time agent orchestration via WebSocket conductor",
+  "version": "0.1.1",
+  "publisher": "cortex-hub",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cortex.connect",
+        "title": "Cortex: Connect to Hub"
+      },
+      {
+        "command": "cortex.disconnect",
+        "title": "Cortex: Disconnect from Hub"
+      },
+      {
+        "command": "cortex.showStatus",
+        "title": "Cortex: Show Connection Status"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cortex-sidebar",
+          "title": "Cortex Agent",
+          "icon": "$(symbol-event)"
+        }
+      ]
+    },
+    "views": {
+      "cortex-sidebar": [
+        {
+          "type": "webview",
+          "id": "cortex.agentPanel",
+          "name": "Agent Panel"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Cortex Hub",
+      "properties": {
+        "cortexHub.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "API key for Cortex Hub authentication. Falls back to `CORTEX_HUB_API_KEY` env var, then `~/.claude.json` MCP config."
+        },
+        "cortexHub.hubUrl": {
+          "type": "string",
+          "default": "wss://cortex-mcp.jackle.dev",
+          "markdownDescription": "Cortex Hub WebSocket URL. Falls back to `CORTEX_HUB_WS_URL` env var, then `~/.claude.json` MCP config."
+        },
+        "cortexHub.agentId": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Agent identifier sent to the conductor. Defaults to `<hostname>-vscode`."
+        },
+        "cortexHub.capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "code-edit",
+            "terminal",
+            "file-read"
+          ],
+          "markdownDescription": "Agent capabilities to register with the conductor."
+        },
+        "cortexHub.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Automatically connect to Hub on startup."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "watch": "pnpm build --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "package": "npx @vscode/vsce package --no-dependencies",
+    "release": "npm version patch && npm run build && npm run package",
+    "release:minor": "npm version minor && npm run build && npm run package",
+    "release:major": "npm version major && npm run build && npm run package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
