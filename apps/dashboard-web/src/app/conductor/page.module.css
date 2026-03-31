@@ -1,7 +1,3 @@
-/* ═══════════════════════════════════════════════════════════
-   Conductor Page — Premium Visual Design
-   ═══════════════════════════════════════════════════════════ */
-
 /* Stats Grid */
 .statsGrid {
   display: grid;
@@ -15,65 +11,17 @@
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-5);
-  position: relative;
-  overflow: hidden;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
-
-.statCard:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-}
-
-/* Subtle gradient backgrounds per stat */
-.statCardTotal { background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(99, 102, 241, 0.04) 100%); }
-.statCardPending { background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(245, 158, 11, 0.04) 100%); }
-.statCardRunning { background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(59, 130, 246, 0.04) 100%); }
-.statCardDone { background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(16, 185, 129, 0.04) 100%); }
-.statCardFailed { background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(239, 68, 68, 0.04) 100%); }
 
 .statIcon {
-  font-size: 1.25rem;
+  font-size: 1.5rem;
   width: 48px;
   height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  flex-shrink: 0;
-  transition: transform 0.2s ease;
-}
-
-.statCard:hover .statIcon {
-  transform: scale(1.08);
-}
-
-.statIconTotal {
-  background: rgba(99, 102, 241, 0.12);
-  color: #6366f1;
-}
-
-.statIconPending {
-  background: rgba(245, 158, 11, 0.12);
-  color: #f59e0b;
-}
-
-.statIconRunning {
-  background: rgba(59, 130, 246, 0.12);
-  color: #3b82f6;
-  animation: pulseGlow 2s ease-in-out infinite;
-}
-
-.statIconDone {
-  background: rgba(16, 185, 129, 0.12);
-  color: #10b981;
-}
-
-.statIconFailed {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
+  background: var(--accent-glow);
+  border-radius: var(--radius-md);
 }
 
 .statValue {
@@ -81,7 +29,6 @@
   font-weight: 700;
   color: var(--text-primary);
   font-family: var(--font-mono);
-  line-height: 1;
 }
 
 .statLabel {
@@ -89,7 +36,7 @@
   color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 /* Section */
@@ -168,14 +115,13 @@
   flex-direction: column;
   gap: var(--space-3);
   cursor: pointer;
-  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+  transition: border-color 0.15s, transform 0.15s;
   position: relative;
 }
 
 .taskCard:hover {
   border-color: var(--primary);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
 }
 
 /* Status-specific left border accent */
@@ -185,7 +131,6 @@
 
 .taskCardInProgress {
   border-left: 3px solid var(--primary, #3b82f6);
-  animation: borderPulse 2s ease-in-out infinite;
 }
 
 .taskCardCompleted {
@@ -569,29 +514,45 @@
   margin-bottom: var(--space-4);
 }
 
-/* ═══════════════════════════════════════════════════════════
-   Agent Cards — Premium Design
-   ═══════════════════════════════════════════════════════════ */
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 
+@keyframes slideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+  .statsGrid { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 1024px) {
+  .statsGrid { grid-template-columns: repeat(2, 1fr); }
+  .tasksGrid { grid-template-columns: 1fr; }
+  .agentsGrid { grid-template-columns: 1fr; }
+}
+
+/* Agents Grid */
 .agentsGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
 }
 
 .agentCard {
-  padding: var(--space-5) !important;
+  padding: var(--space-4) !important;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-  position: relative;
-}
-
-.agentCard:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(99, 102, 241, 0.1);
-  border-color: var(--primary);
 }
 
 .agentHeader {
@@ -600,47 +561,19 @@
   gap: var(--space-3);
 }
 
-/* IDE Icon — colored circle per IDE */
 .agentIdeIcon {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  font-size: 0.875rem;
+  background: var(--accent-glow);
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
   font-weight: 700;
+  color: var(--primary);
   flex-shrink: 0;
   font-family: var(--font-mono);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.agentCard:hover .agentIdeIcon {
-  transform: scale(1.1);
-}
-
-.ideBlue {
-  background: rgba(59, 130, 246, 0.15);
-  color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.08);
-}
-
-.ideGreen {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.08);
-}
-
-.idePurple {
-  background: rgba(139, 92, 246, 0.15);
-  color: #8b5cf6;
-  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.08);
-}
-
-.ideOrange {
-  background: rgba(249, 115, 22, 0.15);
-  color: #f97316;
-  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.08);
 }
 
 .agentIdentity {
@@ -665,40 +598,20 @@
   color: var(--text-tertiary);
 }
 
-/* Status badge — pill style */
 .agentStatusBadge {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 10px;
+  padding: 3px 8px;
   border-radius: 9999px;
   background: rgba(16, 185, 129, 0.08);
   flex-shrink: 0;
-  border: 1px solid rgba(16, 185, 129, 0.15);
-}
-
-.agentStatusBadgeBusy {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border-radius: 9999px;
-  background: rgba(245, 158, 11, 0.08);
-  flex-shrink: 0;
-  border: 1px solid rgba(245, 158, 11, 0.15);
-  animation: badgePulse 2s ease-in-out infinite;
 }
 
 .agentStatusText {
   font-size: 0.6875rem;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--status-healthy);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.agentStatusBadgeBusy .agentStatusText {
-  color: var(--status-warning, #f59e0b);
 }
 
 .agentDot {
@@ -711,7 +624,6 @@
 .agentOnline {
   background: var(--status-healthy);
   box-shadow: 0 0 6px var(--status-healthy);
-  animation: pingDot 2s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
 .agentBusy {
@@ -724,7 +636,6 @@
   background: var(--text-tertiary);
 }
 
-/* Agent detail grid — 2x2 with subtle background */
 .agentDetails {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -738,8 +649,7 @@
 .agentDetailRow {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: var(--space-1) var(--space-2);
+  gap: 1px;
 }
 
 .agentDetailLabel {
@@ -763,7 +673,6 @@
   font-style: italic;
 }
 
-/* Capability badges with color coding */
 .agentCaps {
   display: flex;
   flex-wrap: wrap;
@@ -775,51 +684,15 @@
 
 .capBadge {
   font-size: 0.625rem;
-  padding: 2px 8px;
+  padding: 1px 6px;
   border-radius: 9999px;
-  font-family: var(--font-mono);
-  font-weight: 500;
-  transition: transform 0.15s ease;
-}
-
-.capBadge:hover {
-  transform: scale(1.05);
-}
-
-.capCode {
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-  border: 1px solid rgba(59, 130, 246, 0.15);
-}
-
-.capTest {
-  background: rgba(245, 158, 11, 0.1);
-  color: #f59e0b;
-  border: 1px solid rgba(245, 158, 11, 0.15);
-}
-
-.capDeploy {
-  background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.15);
-}
-
-.capSearch {
-  background: rgba(139, 92, 246, 0.1);
-  color: #8b5cf6;
-  border: 1px solid rgba(139, 92, 246, 0.15);
-}
-
-.capDefault {
   background: var(--accent-glow);
   color: var(--primary);
-  border: 1px solid rgba(99, 102, 241, 0.1);
+  font-family: var(--font-mono);
+  font-weight: 500;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   View Toggle
-   ═══════════════════════════════════════════════════════════ */
-
+/* View Toggle */
 .viewToggle {
   display: flex;
   border: 1px solid var(--border-subtle);
@@ -847,10 +720,7 @@
   color: white;
 }
 
-/* ═══════════════════════════════════════════════════════════
-   Pipeline View — CSS-drawn tree lines
-   ═══════════════════════════════════════════════════════════ */
-
+/* Pipeline View */
 .pipelineCard {
   padding: 0;
   overflow: hidden;
@@ -878,7 +748,6 @@
   font-family: var(--font-mono);
 }
 
-/* Pipeline row with stagger animation */
 .pipelineRow {
   display: flex;
   align-items: center;
@@ -887,12 +756,7 @@
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
   transition: background 0.15s;
-  min-height: 44px;
-  position: relative;
-}
-
-.pipelineRowAnimated {
-  animation: fadeInUp 0.3s ease both;
+  min-height: 40px;
 }
 
 .pipelineRow:last-child {
@@ -903,107 +767,29 @@
   background: var(--bg-secondary);
 }
 
-/* CSS-drawn tree connector (replaces unicode characters) */
 .pipelineConnector {
-  position: relative;
-  width: 20px;
-  height: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  white-space: pre;
   flex-shrink: 0;
-  display: inline-block;
-  min-height: 20px;
 }
 
-/* Vertical line segment */
-.pipelineConnector::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: -50%;
-  width: 2px;
-  height: 100%;
-  border-radius: 1px;
-}
-
-/* Horizontal connector to the dot */
-.pipelineConnector::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  width: 16px;
-  height: 2px;
-  border-radius: 1px;
-  transform: translateY(-50%);
-}
-
-/* For middle children, vertical line extends full height */
-.connectorMid::before {
-  height: 200%;
-  top: -100%;
-}
-
-/* For last child, vertical line only extends to halfway */
-.connectorLast::before {
-  height: 50%;
-  top: -50%;
-  border-bottom-left-radius: 4px;
-}
-
-/* Status-colored connectors */
-.connectorCompleted::before,
-.connectorCompleted::after {
-  background: var(--status-healthy, #10b981);
-  opacity: 0.6;
-}
-
-.connectorInProgress::before,
-.connectorInProgress::after {
-  background: var(--primary, #3b82f6);
-  opacity: 0.6;
-  animation: lineGlow 2s ease-in-out infinite;
-}
-
-.connectorFailed::before,
-.connectorFailed::after {
-  background: var(--status-error, #ef4444);
-  opacity: 0.6;
-}
-
-.connectorPending::before,
-.connectorPending::after {
-  background: var(--status-warning, #f59e0b);
-  opacity: 0.4;
-}
-
-/* Status dot */
 .pipelineDot {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
-  position: relative;
 }
 
-.dotPending {
-  background: var(--status-warning, #f59e0b);
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
-  animation: amberPulse 2.5s ease-in-out infinite;
-}
+.dotPending { background: var(--status-warning, #f59e0b); }
+.dotInProgress { background: var(--primary, #3b82f6); box-shadow: 0 0 6px var(--primary); animation: pulse 2s infinite; }
+.dotCompleted { background: var(--status-healthy, #10b981); }
+.dotFailed { background: var(--status-error, #ef4444); }
 
-.dotInProgress {
-  background: var(--primary, #3b82f6);
-  box-shadow: 0 0 8px var(--primary, #3b82f6), 0 0 0 3px rgba(59, 130, 246, 0.2);
-  animation: dotPulseBlue 1.5s ease-in-out infinite;
-}
-
-.dotCompleted {
-  background: var(--status-healthy, #10b981);
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4), 0 0 0 3px rgba(16, 185, 129, 0.15);
-}
-
-.dotFailed {
-  background: var(--status-error, #ef4444);
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .pipelineTitle {
@@ -1017,11 +803,9 @@
 }
 
 .pipelineExpandIcon {
-  font-size: 0.5rem;
-  margin-right: 6px;
+  font-size: 0.625rem;
+  margin-right: 4px;
   opacity: 0.5;
-  display: inline-block;
-  transition: transform 0.2s ease;
 }
 
 /* Delegation flow (inline in pipeline row) */
@@ -1036,26 +820,23 @@
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   color: var(--accent-primary);
-  padding: 2px 6px;
+  padding: 1px 5px;
   background: var(--accent-glow);
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(99, 102, 241, 0.1);
 }
 
 .flowAgentDone {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   color: var(--status-healthy);
-  padding: 2px 6px;
+  padding: 1px 5px;
   background: rgba(16, 185, 129, 0.1);
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(16, 185, 129, 0.12);
 }
 
 .flowArrow {
   font-size: 0.75rem;
   color: var(--text-tertiary);
-  animation: arrowBounce 2s ease-in-out infinite;
 }
 
 /* Delegation Flow (in detail panel) */
@@ -1101,116 +882,4 @@
   color: var(--text-tertiary);
   padding-left: 36px;
   line-height: 1;
-  animation: arrowPulseDown 1.5s ease-in-out infinite;
-}
-
-/* ═══════════════════════════════════════════════════════════
-   Animations
-   ═══════════════════════════════════════════════════════════ */
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes slideIn {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
-}
-
-@keyframes scaleIn {
-  from { transform: scale(0.95); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
-}
-
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-@keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
-  50% { box-shadow: 0 0 12px 2px rgba(59, 130, 246, 0.15); }
-}
-
-@keyframes dotPulseBlue {
-  0%, 100% {
-    box-shadow: 0 0 8px rgba(59, 130, 246, 0.4), 0 0 0 3px rgba(59, 130, 246, 0.2);
-    transform: scale(1);
-  }
-  50% {
-    box-shadow: 0 0 14px rgba(59, 130, 246, 0.6), 0 0 0 5px rgba(59, 130, 246, 0.1);
-    transform: scale(1.15);
-  }
-}
-
-@keyframes amberPulse {
-  0%, 100% {
-    box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
-  }
-  50% {
-    box-shadow: 0 0 8px rgba(245, 158, 11, 0.3), 0 0 0 5px rgba(245, 158, 11, 0.1);
-  }
-}
-
-@keyframes pingDot {
-  0% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6);
-  }
-  70% {
-    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
-  }
-}
-
-@keyframes lineGlow {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.8; }
-}
-
-@keyframes borderPulse {
-  0%, 100% { border-left-color: var(--primary, #3b82f6); }
-  50% { border-left-color: rgba(59, 130, 246, 0.4); }
-}
-
-@keyframes arrowBounce {
-  0%, 100% { transform: translateX(0); }
-  50% { transform: translateX(3px); }
-}
-
-@keyframes arrowPulseDown {
-  0%, 100% { opacity: 0.5; transform: translateY(0); }
-  50% { opacity: 1; transform: translateY(2px); }
-}
-
-@keyframes badgePulse {
-  0%, 100% { background: rgba(245, 158, 11, 0.08); }
-  50% { background: rgba(245, 158, 11, 0.15); }
-}
-
-/* ═══════════════════════════════════════════════════════════
-   Responsive
-   ═══════════════════════════════════════════════════════════ */
-
-@media (max-width: 1200px) {
-  .statsGrid { grid-template-columns: repeat(3, 1fr); }
-}
-
-@media (max-width: 1024px) {
-  .statsGrid { grid-template-columns: repeat(2, 1fr); }
-  .tasksGrid { grid-template-columns: 1fr; }
-  .agentsGrid { grid-template-columns: 1fr; }
 }

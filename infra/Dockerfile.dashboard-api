@@ -37,13 +37,11 @@ WORKDIR /app
 
 ARG COMMIT_SHA=unknown
 ARG BUILD_DATE=unknown
-ARG NEXT_PUBLIC_API_URL=https://cortex-api.jackle.dev
 
 # Copy source code (deps already in node_modules)
 COPY . .
 
-# Build all apps — frontend uses external API URL to bypass Cloudflare Access
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+# Build all apps
 RUN npx turbo build --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web --filter=!@cortex/hub-mcp
 
 
