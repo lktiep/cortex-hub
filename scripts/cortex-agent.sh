@@ -518,43 +518,32 @@ execute_task_antigravity() {
   local prompt="$2"
   local working_dir="${3:-$PROJECT_ROOT}"
 
-  log_info "Spawning Antigravity for task $task_id"
+  log_info "Spawning Antigravity (Gemini CLI) for task $task_id"
   local output_file="$LOG_DIR/task-${task_id}.log"
 
-  if command -v antigravity >/dev/null 2>&1; then
-    (
-      cd "$working_dir"
-      antigravity -p "$prompt" 2>&1 | tee "$output_file"
-    )
-    local exit_code=$?
-    log_info "Antigravity finished task $task_id (exit=$exit_code)"
-    return $exit_code
+  # Antigravity = Gemini CLI with --yolo (auto-approve all)
+  local gemini_cmd=""
+  if command -v gemini >/dev/null 2>&1; then
+    gemini_cmd="gemini"
+  elif command -v antigravity >/dev/null 2>&1; then
+    gemini_cmd="antigravity"
   else
-    log_error "Antigravity CLI not found. Install: https://antigravity.dev"
+    log_error "Neither gemini nor antigravity CLI found. Install: npm i -g @anthropic-ai/gemini-cli"
     return 1
   fi
+
+  (
+    cd "$working_dir"
+    $gemini_cmd -p "$prompt" --yolo 2>&1 | tee "$output_file"
+  )
+  local exit_code=$?
+  log_info "Antigravity finished task $task_id (exit=$exit_code)"
+  return $exit_code
 }
 
 execute_task_gemini() {
-  local task_id="$1"
-  local prompt="$2"
-  local working_dir="${3:-$PROJECT_ROOT}"
-
-  log_info "Spawning Gemini for task $task_id"
-  local output_file="$LOG_DIR/task-${task_id}.log"
-
-  if command -v gemini >/dev/null 2>&1; then
-    (
-      cd "$working_dir"
-      echo "$prompt" | gemini 2>&1 | tee "$output_file"
-    )
-    local exit_code=$?
-    log_info "Gemini finished task $task_id (exit=$exit_code)"
-    return $exit_code
-  else
-    log_error "Gemini CLI not found"
-    return 1
-  fi
+  # Alias — gemini engine is same as antigravity
+  execute_task_antigravity "$@"
 }
 
 execute_task() {
