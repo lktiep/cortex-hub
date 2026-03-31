@@ -57,10 +57,12 @@ export class ConductorClient extends EventEmitter {
 
     this.ws.on('message', (data: Buffer) => {
       try {
-        const msg: ConductorMessage = JSON.parse(data.toString())
+        const raw = data.toString()
+        const msg: ConductorMessage = JSON.parse(raw)
+        console.log(`[WS] recv: type=${msg.type}`)
         this.handleMessage(msg)
-      } catch {
-        // Ignore malformed messages
+      } catch (e) {
+        console.log(`[WS] message parse error: ${e}`)
       }
     })
 
