@@ -156,28 +156,65 @@ CLAUDE_JSON="$HOME/.claude.json"
 MCP_CONFIGURED=false
 
 check_mcp() {
-  [ -f "$CLAUDE_JSON" ] || return 1
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c "
+  # Check all known IDE config files for cortex-hub MCP entry
+  local config_files="$CLAUDE_JSON"
+  config_files="$config_files $HOME/.cursor/mcp.json"
+  config_files="$config_files $HOME/.codeium/windsurf/mcp_config.json"
+  config_files="$config_files $HOME/.gemini/antigravity/mcp_config.json"
+  config_files="$config_files .vscode/mcp.json"
+
+  for cf in $config_files; do
+    [ -f "$cf" ] || continue
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -c "
 import json, sys
-with open('$CLAUDE_JSON') as f:
+with open('$cf') as f:
     config = json.load(f)
-if 'cortex-hub' in config.get('mcpServers', {}):
+servers = config.get('mcpServers', config.get('servers', {}))
+if 'cortex-hub' in servers:
     sys.exit(0)
 sys.exit(1)
-" 2>/dev/null
-  elif command -v jq >/dev/null 2>&1; then
-    jq -e '.mcpServers["cortex-hub"]' "$CLAUDE_JSON" >/dev/null 2>&1
-  else
-    grep -q "cortex-hub" "$CLAUDE_JSON" 2>/dev/null
-  fi
+" 2>/dev/null && return 0
+    elif grep -q "cortex-hub" "$cf" 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Also extract API key from existing IDE config if HUB_API_KEY not set
+detect_api_key_from_ide() {
+  [ -n "${HUB_API_KEY:-}" ] && return 0
+  local config_files="$CLAUDE_JSON $HOME/.cursor/mcp.json $HOME/.codeium/windsurf/mcp_config.json $HOME/.gemini/antigravity/mcp_config.json"
+  for cf in $config_files; do
+    [ -f "$cf" ] || continue
+    local key
+    key=$(python3 -c "
+import json, sys
+with open('$cf') as f:
+    config = json.load(f)
+servers = config.get('mcpServers', config.get('servers', {}))
+srv = servers.get('cortex-hub', {})
+env = srv.get('env', {})
+key = env.get('HUB_API_KEY', env.get('AUTH_HEADER', ''))
+if key.startswith('Bearer '): key = key[7:]
+if key: print(key)
+" 2>/dev/null || echo "")
+    if [ -n "$key" ]; then
+      HUB_API_KEY="$key"
+      export HUB_API_KEY
+      return 0
+    fi
+  done
+  return 1
 }
 
 if check_mcp; then
   MCP_CONFIGURED=true
-  ok "MCP: configured in ~/.claude.json"
+  ok "MCP: configured (found cortex-hub in IDE config)"
 else
-  # Try to find API key from env or .env file
+  # Try to find API key from IDE configs, env, or .env file
+  detect_api_key_from_ide 2>/dev/null || true
   API_KEY="${HUB_API_KEY:-}"
   [ -z "$API_KEY" ] && [ -f ".env" ] && API_KEY=$(grep -E '^HUB_API_KEY=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'" || true)
 

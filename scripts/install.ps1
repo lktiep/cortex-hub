@@ -112,10 +112,23 @@ if (-not $SkipGlobal -and -not $CheckOnly -and (Test-IDESelected "claude")) {
 $ClaudeJson = Join-Path $env:USERPROFILE ".claude.json"
 $McpConfigured = $false
 
-if ((Test-Path $ClaudeJson) -and (Select-String -Path $ClaudeJson -Pattern "cortex-hub" -Quiet)) {
-    $McpConfigured = $true
-    Write-Ok "MCP: configured in ~/.claude.json"
-} else {
+# Check ALL IDE config files for cortex-hub MCP entry
+$IdeConfigs = @(
+    $ClaudeJson,
+    (Join-Path $env:USERPROFILE ".cursor\mcp.json"),
+    (Join-Path $env:USERPROFILE ".codeium\windsurf\mcp_config.json"),
+    (Join-Path $env:USERPROFILE ".gemini\antigravity\mcp_config.json"),
+    ".vscode\mcp.json"
+)
+foreach ($cf in $IdeConfigs) {
+    if ((Test-Path $cf) -and (Select-String -Path $cf -Pattern "cortex-hub" -Quiet)) {
+        $McpConfigured = $true
+        Write-Ok "MCP: configured (found cortex-hub in $cf)"
+        break
+    }
+}
+
+if (-not $McpConfigured) {
     $ApiKey = $env:HUB_API_KEY
     if (-not $ApiKey -and (Test-Path ".env")) {
         $envLine = Select-String -Path ".env" -Pattern "^HUB_API_KEY=" | Select-Object -First 1

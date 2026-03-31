@@ -1178,6 +1178,7 @@ cmd_help() {
 ${BLUE}cortex-agent.sh${NC} — Cortex Hub WebSocket Agent Client
 
 ${GREEN}Commands:${NC}
+  $0 launch                 Interactive wizard — pick IDE, preset, launch
   $0 start [flags]          Start the agent (see flags below)
   $0 stop                   Stop the current agent (by CORTEX_AGENT_ID)
   $0 stop-all               Stop ALL running agents
@@ -1263,12 +1264,120 @@ ${GREEN}How It Works:${NC}
 EOF
 }
 
+# ── Interactive Launch Wizard ────────────────────────────────
+cmd_launch() {
+  echo ""
+  echo -e "${BLUE}╔══════════════════════════════════════════╗${NC}"
+  echo -e "${BLUE}║   ${GREEN}Cortex Agent — Interactive Launch${BLUE}      ║${NC}"
+  echo -e "${BLUE}╚══════════════════════════════════════════╝${NC}"
+  echo ""
+
+  # Step 1: Agent ID
+  local default_id="agent-$(date +%s | tail -c 5)"
+  echo -e "${CYAN}Step 1/4: Agent ID${NC}"
+  echo -e "  A unique name for this agent (e.g. claude-1, codex-review, my-agent)"
+  read -rp "  Agent ID [$default_id]: " input_id < /dev/tty
+  local agent_id="${input_id:-$default_id}"
+  echo ""
+
+  # Step 2: IDE / Engine
+  echo -e "${CYAN}Step 2/4: IDE / Engine${NC}"
+  echo -e "  ${GREEN}1)${NC} claude-code  — Claude Code CLI ${CYAN}(claude -p)${NC}"
+  echo -e "  ${GREEN}2)${NC} codex        — OpenAI Codex ${CYAN}(codex exec)${NC}"
+  echo -e "  ${GREEN}3)${NC} antigravity  — Antigravity/Gemini ${CYAN}(antigravity -p)${NC}"
+  echo -e "  ${GREEN}4)${NC} cursor       — Cursor IDE ${CYAN}(claude -p)${NC}"
+  read -rp "  Select [1-4, default=1]: " input_ide < /dev/tty
+  local ide
+  case "${input_ide:-1}" in
+    1) ide="claude-code" ;;
+    2) ide="codex" ;;
+    3) ide="antigravity" ;;
+    4) ide="cursor" ;;
+    *) ide="claude-code" ;;
+  esac
+  echo ""
+
+  # Step 3: Capability preset
+  echo -e "${CYAN}Step 3/4: Capability Preset${NC}"
+  echo ""
+  echo -e "  ${GREEN}1)${NC} fullstack     — plan, backend, frontend, review, database"
+  echo -e "  ${GREEN}2)${NC} backend-dev   — backend, database, server"
+  echo -e "  ${GREEN}3)${NC} ui-dev        — frontend, design"
+  echo -e "  ${GREEN}4)${NC} reviewer      — review, security, testing"
+  echo -e "  ${GREEN}5)${NC} devops        — devops, docker, deploy"
+  echo -e "  ${GREEN}6)${NC} orchestrator  — plan, orchestrate, review"
+  echo -e "  ${GREEN}7)${NC} game-dev      — godot, resources, game-logic, server"
+  echo -e "  ${GREEN}8)${NC} custom        — enter capabilities manually"
+  echo ""
+  read -rp "  Select [1-8, default=1]: " input_preset < /dev/tty
+  local preset_flag=""
+  local cap_flag=""
+  case "${input_preset:-1}" in
+    1) preset_flag="fullstack" ;;
+    2) preset_flag="backend-dev" ;;
+    3) preset_flag="ui-dev" ;;
+    4) preset_flag="reviewer" ;;
+    5) preset_flag="devops" ;;
+    6) preset_flag="orchestrator" ;;
+    7) preset_flag="game-dev" ;;
+    8)
+      echo ""
+      echo -e "  Available: plan, orchestrate, backend, frontend, design, review,"
+      echo -e "  godot, resources, game-logic, server, build-game, database,"
+      echo -e "  devops, security, testing, docker, deploy"
+      read -rp "  Enter capabilities (comma-separated): " cap_flag < /dev/tty
+      ;;
+    *) preset_flag="fullstack" ;;
+  esac
+  echo ""
+
+  # Step 4: Confirm
+  local engine="$(ide_engine "$ide")"
+  local ide_desc="$(ide_description "$ide")"
+  local caps_display=""
+  if [ -n "$preset_flag" ]; then
+    caps_display="$(resolve_preset "$preset_flag")"
+    [ -z "$caps_display" ] && caps_display="(preset: $preset_flag)"
+  else
+    caps_display="[$cap_flag]"
+  fi
+
+  echo -e "${CYAN}Step 4/4: Confirm${NC}"
+  echo ""
+  echo -e "  ┌─────────────────────────────────────────┐"
+  echo -e "  │ Agent ID:     ${GREEN}$agent_id${NC}"
+  echo -e "  │ IDE:          ${GREEN}$ide${NC} ($ide_desc)"
+  echo -e "  │ Engine:       ${GREEN}$engine${NC}"
+  if [ -n "$preset_flag" ]; then
+  echo -e "  │ Preset:       ${GREEN}$preset_flag${NC}"
+  fi
+  echo -e "  │ Capabilities: ${GREEN}$caps_display${NC}"
+  echo -e "  └─────────────────────────────────────────┘"
+  echo ""
+  read -rp "  Launch this agent? [Y/n]: " confirm < /dev/tty
+  if [ "${confirm:-Y}" = "n" ] || [ "${confirm:-Y}" = "N" ]; then
+    echo -e "${YELLOW}Cancelled.${NC}"
+    return 0
+  fi
+
+  # Launch
+  echo ""
+  local preset_arg=""
+  local cap_arg=""
+  [ -n "$preset_flag" ] && preset_arg="--preset $preset_flag"
+  [ -n "$cap_flag" ] && cap_arg="--cap $cap_flag"
+
+  CORTEX_AGENT_IDE="$ide" CORTEX_AGENT_ID="$agent_id" \
+    "$0" start --daemon $preset_arg $cap_arg
+}
+
 # ── Entry Point ──────────────────────────────────────────────
 main() {
   local command="${1:-help}"
   shift || true
 
   case "$command" in
+    launch)   cmd_launch ;;
     start)    cmd_start "$@" ;;
     stop)     read_identity; cmd_stop ;;
     stop-all) cmd_stop_all ;;
