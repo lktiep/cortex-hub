@@ -12,7 +12,6 @@ import {
   type ConductorTask,
   type ConductorAgent,
 } from '@/lib/api'
-import { config } from '@/lib/config'
 import styles from './page.module.css'
 
 // ── Types ──
@@ -190,27 +189,31 @@ function TaskCard({
 
 /** Live output panel — polls task logs and auto-scrolls */
 function LiveOutput({ taskId, isActive }: { taskId: string; isActive: boolean }) {
-  const { data } = useSWR(
-    isActive ? `task-logs-${taskId}` : null,
-    async () => {
-      const res = await fetch(`${config.api.base}/api/conductor/${taskId}`)
-      if (!res.ok) return { logs: [] }
-      const d = await res.json()
-      return { logs: d.logs ?? [] }
-    },
-    { refreshInterval: isActive ? 2000 : 0 }
-  )
+  const [logs, setLogs] = useState<{ id: number; message: string; created_at: string }[]>([])
   const scrollRef = useRef<HTMLPreElement>(null)
-  const logs = data?.logs ?? []
-  const progressLogs = logs.filter((l: { action: string }) => l.action === 'progress')
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    if (!isActive && logs.length > 0) return
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/conductor/${taskId}`)
+        if (!res.ok || cancelled) return
+        const d = await res.json()
+        const progressLogs = (d.logs ?? []).filter((l: { action: string }) => l.action === 'progress')
+        if (!cancelled) setLogs(progressLogs)
+      } catch { /* ignore */ }
     }
-  }, [progressLogs.length])
+    poll()
+    const interval = isActive ? setInterval(poll, 2000) : undefined
+    return () => { cancelled = true; if (interval) clearInterval(interval) }
+  }, [taskId, isActive])
 
-  if (progressLogs.length === 0) {
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [logs.length])
+
+  if (logs.length === 0) {
     return (
       <div className={styles.liveOutputEmpty}>
         {isActive ? 'Waiting for output...' : 'No output recorded'}
@@ -220,7 +223,7 @@ function LiveOutput({ taskId, isActive }: { taskId: string; isActive: boolean })
 
   return (
     <pre ref={scrollRef} className={styles.liveOutput}>
-      {progressLogs.map((log: { id: number; message: string; created_at: string }) => (
+      {logs.map((log) => (
         <div key={log.id} className={styles.liveOutputLine}>
           <span className={styles.liveOutputTime}>
             {new Date(log.created_at).toLocaleTimeString()}
