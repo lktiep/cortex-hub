@@ -465,17 +465,22 @@ function PipelineRow({
   const { task, children, depth } = node
   const hasChildren = children.length > 0
 
+  const statusColor = task.status === 'completed' ? 'completed'
+    : task.status === 'in_progress' ? 'inProgress'
+    : task.status === 'failed' ? 'failed' : 'pending'
+
   return (
     <div
-      className={styles.pipelineRow}
+      className={`${styles.pipelineRow} ${depth === 0 ? styles.pipelineRowRoot : ''}`}
       onClick={onSelect}
-      style={{ paddingLeft: `${depth * 28 + 16}px` }}
+      style={{ paddingLeft: `${depth * 36 + 20}px` }}
     >
-      {/* Connector */}
+      {/* CSS-drawn connector line */}
       {depth > 0 && (
-        <span className={styles.pipelineConnector}>
-          {isLast ? '└' : '├'}─
-        </span>
+        <span
+          className={`${styles.connector} ${isLast ? styles.connectorLast : styles.connectorMid}`}
+          data-status={statusColor}
+        />
       )}
 
       {/* Status dot */}
@@ -487,8 +492,8 @@ function PipelineRow({
       }`} />
 
       {/* Title */}
-      <span className={styles.pipelineTitle}>
-        {hasChildren && <span className={styles.pipelineExpandIcon}>▼</span>}
+      <span className={`${styles.pipelineTitle} ${depth === 0 ? styles.pipelineTitleRoot : ''}`}>
+        {hasChildren && <span className={styles.pipelineExpandIcon}>▾</span>}
         {task.title}
       </span>
 

@@ -836,32 +836,97 @@
   background: var(--bg-secondary);
 }
 
-.pipelineConnector {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--border);
-  white-space: pre;
+/* CSS-drawn connector lines */
+.connector {
+  position: relative;
+  width: 24px;
+  height: 100%;
   flex-shrink: 0;
-  opacity: 0.5;
-  transition: opacity 0.2s, color 0.2s;
+  min-height: 24px;
 }
 
-.pipelineRow:hover .pipelineConnector {
-  opacity: 0.8;
-  color: var(--primary);
+/* Vertical line (top to dot) */
+.connector::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border);
+  transition: background 0.3s;
+}
+
+/* Horizontal line (to dot) */
+.connector::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 20px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border);
+  transform: translateY(-1px);
+  transition: background 0.3s;
+}
+
+/* Middle child: vertical line full height */
+.connectorMid::before {
+  top: -50%;
+  height: 200%;
+}
+
+/* Last child: vertical line stops at center */
+.connectorLast::before {
+  top: -50%;
+  height: 100%;
+  border-bottom-left-radius: 6px;
+}
+
+/* Status-colored lines */
+.connector[data-status="completed"]::before,
+.connector[data-status="completed"]::after { background: var(--status-healthy, #10b981); opacity: 0.6; }
+
+.connector[data-status="inProgress"]::before,
+.connector[data-status="inProgress"]::after { background: var(--primary, #3b82f6); opacity: 0.8; animation: lineGlow 2s ease infinite; }
+
+.connector[data-status="failed"]::before,
+.connector[data-status="failed"]::after { background: var(--status-error, #ef4444); opacity: 0.6; }
+
+.connector[data-status="pending"]::before,
+.connector[data-status="pending"]::after { background: var(--status-warning, #f59e0b); opacity: 0.4; }
+
+/* Root task row — bolder */
+.pipelineRowRoot {
+  background: rgba(99, 102, 241, 0.03);
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.pipelineRowRoot:hover {
+  background: rgba(99, 102, 241, 0.06);
+}
+
+.pipelineTitleRoot {
+  font-weight: 600;
+  font-size: 0.875rem;
 }
 
 .pipelineDot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+  transition: transform 0.2s, box-shadow 0.2s;
 }
 
-.dotPending { background: var(--status-warning, #f59e0b); }
-.dotInProgress { background: var(--primary, #3b82f6); box-shadow: 0 0 6px var(--primary); animation: pulse 2s infinite; }
-.dotCompleted { background: var(--status-healthy, #10b981); }
-.dotFailed { background: var(--status-error, #ef4444); }
+.pipelineRow:hover .pipelineDot {
+  transform: scale(1.3);
+}
+
+.dotPending { background: var(--status-warning, #f59e0b); box-shadow: 0 0 4px rgba(245, 158, 11, 0.3); }
+.dotInProgress { background: var(--primary, #3b82f6); box-shadow: 0 0 8px rgba(59, 130, 246, 0.5); animation: pulse 2s infinite; }
+.dotCompleted { background: var(--status-healthy, #10b981); box-shadow: 0 0 4px rgba(16, 185, 129, 0.3); }
+.dotFailed { background: var(--status-error, #ef4444); box-shadow: 0 0 4px rgba(239, 68, 68, 0.3); }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -912,7 +977,13 @@
 
 .flowArrow {
   font-size: 0.75rem;
-  color: var(--text-tertiary);
+  color: var(--primary);
+  animation: arrowPulse 2s ease infinite;
+}
+
+@keyframes arrowPulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
 }
 
 /* Delegation Flow (in detail panel) */
@@ -980,4 +1051,9 @@
 @keyframes borderPulse {
   0%, 100% { border-left-color: var(--primary, #3b82f6); }
   50% { border-left-color: rgba(59, 130, 246, 0.3); }
+}
+
+@keyframes lineGlow {
+  0%, 100% { opacity: 0.8; box-shadow: none; }
+  50% { opacity: 1; box-shadow: 0 0 6px rgba(59, 130, 246, 0.4); }
 }
