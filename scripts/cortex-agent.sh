@@ -41,7 +41,8 @@ ide_description() {
     vscode)      echo "VS Code with Claude extension" ;;
     codex)       echo "OpenAI Codex (headless)" ;;
     cursor)      echo "Cursor IDE" ;;
-    antigravity) echo "Antigravity (Gemini)" ;;
+    antigravity) echo "Antigravity (own subscription)" ;;
+    gemini)      echo "Gemini CLI (Google AI)" ;;
     *)           echo "Generic cortex agent" ;;
   esac
 }
@@ -518,23 +519,18 @@ execute_task_antigravity() {
   local prompt="$2"
   local working_dir="${3:-$PROJECT_ROOT}"
 
-  log_info "Spawning Antigravity (Gemini CLI) for task $task_id"
+  log_info "Spawning Antigravity for task $task_id (separate subscription from Gemini CLI)"
   local output_file="$LOG_DIR/task-${task_id}.log"
 
-  # Antigravity = Gemini CLI with --yolo (auto-approve all)
-  local gemini_cmd=""
-  if command -v gemini >/dev/null 2>&1; then
-    gemini_cmd="gemini"
-  elif command -v antigravity >/dev/null 2>&1; then
-    gemini_cmd="antigravity"
-  else
-    log_error "Neither gemini nor antigravity CLI found. Install: npm i -g @anthropic-ai/gemini-cli"
+  if ! command -v antigravity >/dev/null 2>&1; then
+    log_error "Antigravity CLI not found. Install from: https://antigravity.dev"
+    log_error "Note: Antigravity ≠ Gemini CLI — different subscription/billing."
     return 1
   fi
 
   (
     cd "$working_dir"
-    $gemini_cmd -p "$prompt" --yolo 2>&1 | tee "$output_file"
+    antigravity -p "$prompt" --yolo 2>&1 | tee "$output_file"
   )
   local exit_code=$?
   log_info "Antigravity finished task $task_id (exit=$exit_code)"
@@ -542,8 +538,25 @@ execute_task_antigravity() {
 }
 
 execute_task_gemini() {
-  # Alias — gemini engine is same as antigravity
-  execute_task_antigravity "$@"
+  local task_id="$1"
+  local prompt="$2"
+  local working_dir="${3:-$PROJECT_ROOT}"
+
+  log_info "Spawning Gemini CLI for task $task_id"
+  local output_file="$LOG_DIR/task-${task_id}.log"
+
+  if ! command -v gemini >/dev/null 2>&1; then
+    log_error "Gemini CLI not found. Install: npm i -g @anthropic-ai/gemini-cli"
+    return 1
+  fi
+
+  (
+    cd "$working_dir"
+    gemini -p "$prompt" --yolo 2>&1 | tee "$output_file"
+  )
+  local exit_code=$?
+  log_info "Gemini finished task $task_id (exit=$exit_code)"
+  return $exit_code
 }
 
 execute_task() {
@@ -1271,17 +1284,19 @@ cmd_launch() {
 
   # Step 2: IDE / Engine
   echo -e "${CYAN}Step 2/4: IDE / Engine${NC}"
-  echo -e "  ${GREEN}1)${NC} claude-code  — Claude Code CLI ${CYAN}(claude -p)${NC}"
+  echo -e "  ${GREEN}1)${NC} claude-code  — Claude Code CLI ${CYAN}(claude -p --permission-mode auto)${NC}"
   echo -e "  ${GREEN}2)${NC} codex        — OpenAI Codex ${CYAN}(codex exec)${NC}"
-  echo -e "  ${GREEN}3)${NC} antigravity  — Antigravity/Gemini ${CYAN}(antigravity -p)${NC}"
-  echo -e "  ${GREEN}4)${NC} cursor       — Cursor IDE ${CYAN}(claude -p)${NC}"
-  read -rp "  Select [1-4, default=1]: " input_ide < /dev/tty
+  echo -e "  ${GREEN}3)${NC} antigravity  — Antigravity ${CYAN}(antigravity -p --yolo)${NC} ${YELLOW}← own subscription${NC}"
+  echo -e "  ${GREEN}4)${NC} gemini       — Gemini CLI ${CYAN}(gemini -p --yolo)${NC} ${YELLOW}← separate subscription${NC}"
+  echo -e "  ${GREEN}5)${NC} cursor       — Cursor IDE ${CYAN}(claude -p)${NC}"
+  read -rp "  Select [1-5, default=1]: " input_ide < /dev/tty
   local ide
   case "${input_ide:-1}" in
     1) ide="claude-code" ;;
     2) ide="codex" ;;
     3) ide="antigravity" ;;
-    4) ide="cursor" ;;
+    4) ide="gemini" ;;
+    5) ide="cursor" ;;
     *) ide="claude-code" ;;
   esac
   echo ""
