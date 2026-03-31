@@ -708,28 +708,59 @@ export default function ConductorPage() {
             </h2>
           </div>
           <div className={styles.agentsGrid}>
-            {agents.map((agent: ConductorAgent) => (
-              <div key={agent.agentId} className={`card ${styles.agentCard}`}>
-                <div className={styles.agentHeader}>
-                  <span className={`${styles.agentDot} ${styles.agentOnline}`} />
-                  <strong>{agent.agentId}</strong>
-                </div>
-                <div className={styles.agentMeta}>
-                  {agent.hostname && <span>Host: {agent.hostname}</span>}
-                  {agent.ide && <span>IDE: {agent.ide}</span>}
-                  <span>Owner: {agent.apiKeyOwner}</span>
-                  <span>Connected: {new Date(agent.connectedAt).toLocaleTimeString()}</span>
-                </div>
-                {/* Agent capabilities */}
-                {agent.capabilities && agent.capabilities.length > 0 && (
-                  <div className={styles.agentCaps}>
-                    {agent.capabilities.map((cap) => (
-                      <span key={cap} className={styles.capBadge}>{cap}</span>
-                    ))}
+            {agents.map((agent: ConductorAgent) => {
+              const ideIcon = agent.ide === 'claude-code' ? 'C' : agent.ide === 'codex' ? 'X' : agent.ide === 'antigravity' ? 'G' : agent.ide === 'cursor' ? 'Cu' : 'A'
+              const ideLabel = agent.ide === 'claude-code' ? 'Claude Code' : agent.ide === 'codex' ? 'OpenAI Codex' : agent.ide === 'antigravity' ? 'Antigravity (Gemini)' : agent.ide === 'cursor' ? 'Cursor' : agent.ide ?? 'Unknown'
+              const statusLabel = agent.status === 'idle' ? 'Idle' : agent.status === 'busy' ? 'Busy' : 'Online'
+              const statusClass = agent.status === 'idle' ? styles.agentOnline : agent.status === 'busy' ? styles.agentBusy : styles.agentOnline
+              const platform = agent.platform ?? (agent.hostname?.includes('Mac') ? 'macOS' : 'unknown')
+
+              return (
+                <div key={agent.agentId} className={`card ${styles.agentCard}`}>
+                  <div className={styles.agentHeader}>
+                    <span className={styles.agentIdeIcon}>{ideIcon}</span>
+                    <div className={styles.agentIdentity}>
+                      <strong className={styles.agentIdText}>{agent.agentId}</strong>
+                      <span className={styles.agentIdeLabel}>{ideLabel}</span>
+                    </div>
+                    <div className={styles.agentStatusBadge}>
+                      <span className={`${styles.agentDot} ${statusClass}`} />
+                      <span className={styles.agentStatusText}>{statusLabel}</span>
+                    </div>
                   </div>
-                )}
-              </div>
-            ))}
+
+                  <div className={styles.agentDetails}>
+                    <div className={styles.agentDetailRow}>
+                      <span className={styles.agentDetailLabel}>Host</span>
+                      <span className={styles.agentDetailValue}>{agent.hostname ?? '-'}</span>
+                    </div>
+                    <div className={styles.agentDetailRow}>
+                      <span className={styles.agentDetailLabel}>Platform</span>
+                      <span className={styles.agentDetailValue}>{platform}</span>
+                    </div>
+                    <div className={styles.agentDetailRow}>
+                      <span className={styles.agentDetailLabel}>Owner</span>
+                      <span className={styles.agentDetailValue}>{agent.apiKeyOwner}</span>
+                    </div>
+                    <div className={styles.agentDetailRow}>
+                      <span className={styles.agentDetailLabel}>Connected</span>
+                      <span className={styles.agentDetailValue}>{new Date(agent.connectedAt).toLocaleTimeString()}</span>
+                    </div>
+                  </div>
+
+                  {/* Capabilities */}
+                  {agent.capabilities && agent.capabilities.length > 0 ? (
+                    <div className={styles.agentCaps}>
+                      {agent.capabilities.map((cap) => (
+                        <span key={cap} className={styles.capBadge}>{cap}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className={styles.agentCapsEmpty}>No capabilities registered</div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </div>
       )}

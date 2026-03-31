@@ -549,19 +549,74 @@
 }
 
 .agentCard {
-  padding: var(--space-3) !important;
+  padding: var(--space-4) !important;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 .agentHeader {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  gap: var(--space-3);
+}
+
+.agentIdeIcon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-glow);
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--primary);
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+
+.agentIdentity {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.agentIdText {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentIdeLabel {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+}
+
+.agentStatusBadge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  background: rgba(16, 185, 129, 0.08);
+  flex-shrink: 0;
+}
+
+.agentStatusText {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--status-healthy);
 }
 
 .agentDot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -571,20 +626,51 @@
   box-shadow: 0 0 6px var(--status-healthy);
 }
 
-.agentIdle {
+.agentBusy {
   background: var(--status-warning);
+  box-shadow: 0 0 6px var(--status-warning);
+  animation: pulse 2s infinite;
 }
 
 .agentOffline {
   background: var(--text-tertiary);
 }
 
-.agentMeta {
+.agentDetails {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--bg-primary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.agentDetailRow {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+}
+
+.agentDetailLabel {
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.agentDetailValue {
   font-size: 0.75rem;
   color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentCapsEmpty {
+  font-size: 0.6875rem;
+  color: var(--text-tertiary);
+  font-style: italic;
 }
 
 .agentCaps {

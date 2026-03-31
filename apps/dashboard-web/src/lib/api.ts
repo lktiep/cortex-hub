@@ -895,7 +895,7 @@ export interface ConductorAgent {
   // Legacy fields (from stats endpoint, may be undefined)
   queryCount?: number
   lastActivity?: string
-  status?: 'online' | 'idle' | 'offline'
+  status?: 'online' | 'idle' | 'busy' | 'offline'
   project?: string | null
   sessionId?: string | null
 }
