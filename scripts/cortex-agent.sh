@@ -1377,8 +1377,54 @@ cmd_launch() {
 
 # ── Entry Point ──────────────────────────────────────────────
 main() {
-  local command="${1:-help}"
+  local command="${1:-}"
   shift || true
+
+  # No argument: show quick-start guide with both modes
+  if [ -z "$command" ]; then
+    echo ""
+    echo -e "${BLUE}╔══════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║   ${GREEN}Cortex Agent${BLUE} — AI Agent Daemon for Hub     ║${NC}"
+    echo -e "${BLUE}╚══════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${GREEN}Interactive mode:${NC}"
+    echo -e "  ${CYAN}$0 launch${NC}"
+    echo -e "  Step-by-step wizard: pick agent ID, IDE, capabilities, then launch."
+    echo ""
+    echo -e "${GREEN}Quick start (one-liner):${NC}"
+    echo -e "  ${CYAN}CORTEX_AGENT_IDE=claude-code CORTEX_AGENT_ID=claude-1 $0 start --daemon --preset fullstack${NC}"
+    echo ""
+    echo -e "${GREEN}Available IDE engines:${NC}"
+    echo -e "  claude-code   → claude -p --permission-mode auto"
+    echo -e "  codex         → codex exec"
+    echo -e "  antigravity   → antigravity -p --yolo  ${YELLOW}(own subscription)${NC}"
+    echo -e "  gemini        → gemini -p --yolo       ${YELLOW}(separate subscription)${NC}"
+    echo -e "  cursor        → claude -p"
+    echo ""
+    echo -e "${GREEN}Available presets:${NC}"
+    list_presets
+    echo ""
+    echo -e "${GREEN}Management:${NC}"
+    echo -e "  $0 list                   — Show running agents + presets"
+    echo -e "  $0 status                 — Show current agent status"
+    echo -e "  $0 stop                   — Stop current agent"
+    echo -e "  $0 stop-all               — Stop ALL agents"
+    echo -e "  $0 logs [N]               — Show last N log lines"
+    echo -e "  $0 help                   — Full help with all options"
+    echo ""
+    echo -e "${GREEN}Examples:${NC}"
+    echo ""
+    echo -e "  ${CYAN}# Backend developer${NC}"
+    echo -e "  CORTEX_AGENT_IDE=claude-code CORTEX_AGENT_ID=dev-1 $0 start -d --preset backend-dev"
+    echo ""
+    echo -e "  ${CYAN}# UI developer (Antigravity)${NC}"
+    echo -e "  CORTEX_AGENT_IDE=antigravity CORTEX_AGENT_ID=ui-1 $0 start -d --preset ui-dev"
+    echo ""
+    echo -e "  ${CYAN}# Code reviewer (Codex)${NC}"
+    echo -e "  CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=rev-1 $0 start -d --preset reviewer"
+    echo ""
+    return 0
+  fi
 
   case "$command" in
     launch)   cmd_launch ;;
