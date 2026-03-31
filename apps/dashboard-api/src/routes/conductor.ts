@@ -102,7 +102,7 @@ function allDependenciesMet(dependsOn: string[]): boolean {
  * 2. Notify agents in notify_on_complete
  * 3. Check if parent task's subtasks are all complete
  */
-function resolveCompletionChain(completedTask: TaskRow): void {
+export function resolveCompletionChain(completedTask: TaskRow): void {
   const completedId = completedTask.id
 
   // 1. Find tasks that depend on this completed task and unblock them

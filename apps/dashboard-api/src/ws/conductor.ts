@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { db } from '../db/client.js'
+import { resolveCompletionChain } from '../routes/conductor.js'
 
 // ── Load valid capabilities from templates ──
 let validCapabilityIds: Set<string> = new Set()
@@ -217,7 +218,8 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       break
     }
 
-    case 'task.complete':
+    case 'task.complete': {
+      const completedTaskId = msg['taskId'] as string
       db.prepare(
         'UPDATE conductor_tasks SET status = ?, result = ?, completed_at = datetime(?), completed_by = ? WHERE id = ?',
       ).run(
@@ -225,16 +227,24 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
         JSON.stringify(msg['result'] ?? {}),
         new Date().toISOString(),
         agent.agentId,
-        msg['taskId'] as string,
+        completedTaskId,
       )
       broadcastToOwner(agent.apiKeyOwner, {
         type: 'task.completed',
-        taskId: msg['taskId'],
+        taskId: completedTaskId,
         agentId: agent.agentId,
         result: msg['result'],
         timestamp: new Date().toISOString(),
       })
+      // Resolve dependency chain: unblock waiting tasks, notify, auto-complete parent
+      const completedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(completedTaskId)
+      if (completedTask) {
+        try { resolveCompletionChain(completedTask as Parameters<typeof resolveCompletionChain>[0]) } catch (e) {
+          console.error('[ws] resolveCompletionChain error:', e)
+        }
+      }
       break
+    }
 
     case 'agent.register': {
       // Handle registration message from cortex-agent.sh (capabilities + metadata)
