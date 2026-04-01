@@ -1,205 +1,77 @@
-#!/bin/bash
-# Cortex Hub — Remote Agent Launcher
-# Launch a Claude Code agent connected to Cortex Hub without cloning the repo.
+#!/usr/bin/env bash
+# ============================================================
+# Cortex Hub — Remote Agent Bootstrap
+# Downloads cortex-agent.sh + dependencies, then launches.
+# No repo clone needed.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash
-#   curl ... | bash -s -- --key YOUR_API_KEY
-#   curl ... | bash -s -- --key YOUR_API_KEY --url https://your-hub/mcp --agent my-agent --task "Build auth module"
-#
-# Options:
-#   --key, -k        API key (required, or set HUB_API_KEY env)
-#   --url, -u        Hub MCP URL (default: https://cortex-mcp.jackle.dev/mcp)
-#   --agent, -a      Agent name (default: hostname-based)
-#   --task, -t       Run a specific task then exit (headless mode)
-#   --budget         Max USD budget per run (default: 5.00)
-#   --turns          Max agentic turns (default: 50)
-#   --interactive    Launch in interactive mode (default if no --task)
-#   --skip-perms     Skip permission prompts (--dangerously-skip-permissions)
+#   curl ... | bash -s -- launch
+#   curl ... | bash -s -- start --daemon --preset fullstack
+#   curl ... | bash -s -- start -d CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=rev-1
+# ============================================================
 
 set -euo pipefail
 
-# ── Colors ──
-RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'
-YELLOW='\033[0;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+REPO_RAW="https://raw.githubusercontent.com/lktiep/cortex-hub/master"
+WORK_DIR="${CORTEX_AGENT_HOME:-${TMPDIR:-/tmp}/cortex-agent-remote}"
 
+RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()  { echo -e "${BLUE}[cortex]${NC} $*"; }
 ok()    { echo -e "${GREEN}[cortex]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[cortex]${NC} $*"; }
 err()   { echo -e "${RED}[cortex]${NC} $*" >&2; }
 
-# ── Defaults ──
-HUB_URL="${HUB_MCP_URL:-https://cortex-mcp.jackle.dev/mcp}"
-API_KEY="${HUB_API_KEY:-}"
-AGENT_NAME=""
-TASK=""
-BUDGET="5.00"
-MAX_TURNS="50"
-INTERACTIVE=false
-SKIP_PERMS=false
-
-# ── Parse Args ──
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --key|-k)         API_KEY="$2"; shift 2 ;;
-    --key=*)          API_KEY="${1#*=}"; shift ;;
-    --url|-u)         HUB_URL="$2"; shift 2 ;;
-    --url=*)          HUB_URL="${1#*=}"; shift ;;
-    --agent|-a)       AGENT_NAME="$2"; shift 2 ;;
-    --agent=*)        AGENT_NAME="${1#*=}"; shift ;;
-    --task|-t)        TASK="$2"; shift 2 ;;
-    --task=*)         TASK="${1#*=}"; shift ;;
-    --budget)         BUDGET="$2"; shift 2 ;;
-    --budget=*)       BUDGET="${1#*=}"; shift ;;
-    --turns)          MAX_TURNS="$2"; shift 2 ;;
-    --turns=*)        MAX_TURNS="${1#*=}"; shift ;;
-    --interactive|-i) INTERACTIVE=true; shift ;;
-    --skip-perms)     SKIP_PERMS=true; shift ;;
-    *)                shift ;;
-  esac
-done
-
-# ── Banner ──
-echo ""
-echo -e "${BOLD}${CYAN}  Cortex Hub — Remote Agent${NC}"
-echo -e "  Launch a Claude Code agent connected to Cortex Hub."
-echo -e "  No repo clone needed.\n"
-
 # ── Check prerequisites ──
-if ! command -v claude >/dev/null 2>&1; then
-  err "Claude Code CLI not found. Install: npm install -g @anthropic-ai/claude-code"
-  exit 1
-fi
-ok "Claude Code CLI found: $(command -v claude)"
-
-# ── Auto-detect Hub API key from existing IDE configs ──
-if [ -z "$API_KEY" ]; then
-  info "Detecting Cortex Hub API key from IDE configs..."
-  for cfg in "$HOME/.claude.json" "$HOME/.cursor/mcp.json" "$HOME/.codeium/windsurf/mcp_config.json" "$HOME/.gemini/antigravity/mcp_config.json"; do
-    [ -f "$cfg" ] || continue
-    if command -v python3 >/dev/null 2>&1; then
-      DETECTED_KEY=$(python3 -c "
-import json
-with open('$cfg') as f:
-    config = json.load(f)
-servers = config.get('mcpServers', config.get('servers', {}))
-hub = servers.get('cortex-hub', {})
-env = hub.get('env', {})
-auth = env.get('AUTH_HEADER', '')
-if auth.startswith('Bearer '): auth = auth[7:]
-if auth: print(auth)
-" 2>/dev/null || true)
-      if [ -n "$DETECTED_KEY" ]; then
-        API_KEY="$DETECTED_KEY"
-        ok "Found Hub API key in $cfg"
-        break
-      fi
-    fi
-  done
-fi
-
-if [ -z "$API_KEY" ]; then
-  read -rp "$(echo -e "${BLUE}Cortex Hub API Key${NC} (from Dashboard → Keys): ")" API_KEY < /dev/tty
-  if [ -z "$API_KEY" ]; then
-    err "Hub API key required. Get one from Hub Dashboard → Keys."
+for cmd in curl node; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    err "$cmd is required but not found."
     exit 1
   fi
-fi
+done
 
-if [ -z "$AGENT_NAME" ]; then
-  DEFAULT_AGENT="$(hostname | tr '[:upper:]' '[:lower:]' | tr ' ' '-')-agent"
-  read -rp "$(echo -e "${BLUE}Agent name${NC} [$DEFAULT_AGENT]: ")" AGENT_NAME < /dev/tty
-  AGENT_NAME="${AGENT_NAME:-$DEFAULT_AGENT}"
-fi
+# ── Setup workspace ──
+mkdir -p "$WORK_DIR/scripts" "$WORK_DIR/.cortex" "$WORK_DIR/node_modules"
+info "Workspace: $WORK_DIR"
 
-if [ -z "$TASK" ] && [ "$INTERACTIVE" = "false" ]; then
-  echo ""
-  echo -e "  ${CYAN}Mode:${NC}"
-  echo "  1) Interactive — chat with Cortex tools available"
-  echo "  2) Task — run a specific task then exit"
-  read -rp "$(echo -e "${BLUE}Select${NC} [1]: ")" MODE_CHOICE < /dev/tty
-  if [ "$MODE_CHOICE" = "2" ]; then
-    read -rp "$(echo -e "${BLUE}Task description${NC}: ")" TASK < /dev/tty
-  else
-    INTERACTIVE=true
+# ── Download files (only if missing or older than 1 hour) ──
+download_if_needed() {
+  local url="$1" dest="$2"
+  if [ -f "$dest" ]; then
+    # Re-download if older than 1 hour
+    local age=$(( $(date +%s) - $(stat -f%m "$dest" 2>/dev/null || stat -c%Y "$dest" 2>/dev/null || echo 0) ))
+    if [ "$age" -lt 3600 ]; then
+      return 0
+    fi
+  fi
+  curl -fsSL "$url" -o "$dest" 2>/dev/null
+}
+
+info "Downloading agent scripts..."
+download_if_needed "$REPO_RAW/scripts/cortex-agent.sh" "$WORK_DIR/scripts/cortex-agent.sh"
+chmod +x "$WORK_DIR/scripts/cortex-agent.sh"
+
+# Optional files (non-fatal if missing)
+download_if_needed "$REPO_RAW/scripts/orchestrator-prompt.md" "$WORK_DIR/scripts/orchestrator-prompt.md" 2>/dev/null || true
+download_if_needed "$REPO_RAW/.cortex/capability-templates.json" "$WORK_DIR/.cortex/capability-templates.json" 2>/dev/null || true
+download_if_needed "$REPO_RAW/.cortex/agent-identity.json" "$WORK_DIR/.cortex/agent-identity.json" 2>/dev/null || true
+
+# ── Install ws package if needed ──
+if ! node -e "require('ws')" 2>/dev/null; then
+  if ! node -e "require('$WORK_DIR/node_modules/ws')" 2>/dev/null; then
+    info "Installing ws package..."
+    (cd "$WORK_DIR" && npm install --no-save ws 2>/dev/null) || {
+      err "Failed to install ws package. Run: npm install -g ws"
+      exit 1
+    }
+    ok "ws package installed"
   fi
 fi
 
-# ── Create temp workspace ──
-WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cortex-agent-XXXXXX")
-trap 'rm -rf "$WORK_DIR"' EXIT
-info "Workspace: $WORK_DIR"
+# ── Add node_modules to NODE_PATH so ws is resolvable ──
+export NODE_PATH="$WORK_DIR/node_modules:${NODE_PATH:-}"
 
-# ── Download CLAUDE.md instructions from GitHub ──
-info "Downloading agent instructions..."
-CLAUDE_MD="$WORK_DIR/CLAUDE.md"
-INSTRUCTIONS_URL="https://raw.githubusercontent.com/lktiep/cortex-hub/master/templates/remote-agent-instructions.md"
-if curl -fsSL "$INSTRUCTIONS_URL" -o "$CLAUDE_MD" 2>/dev/null; then
-  ok "Instructions downloaded"
-else
-  # Fallback: generate minimal instructions inline
-  warn "Could not download instructions, using built-in defaults"
-  cat > "$CLAUDE_MD" << 'MDEOF'
-# Cortex Agent
-
-At the START of every conversation, call `cortex_session_start` with the repo URL and agentId.
-Use cortex tools (memory_search, knowledge_search, code_search) before grep/find.
-When done, call `cortex_session_end` with a summary.
-MDEOF
-fi
-
-# ── Generate MCP config ──
-info "Configuring MCP connection..."
-MCP_CONFIG="$WORK_DIR/mcp.json"
-cat > "$MCP_CONFIG" << MCPEOF
-{
-  "mcpServers": {
-    "cortex-hub": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "$HUB_URL", "--header", "Authorization:\${AUTH_HEADER}"],
-      "env": {
-        "AUTH_HEADER": "Bearer $API_KEY"
-      }
-    }
-  }
-}
-MCPEOF
-ok "MCP config ready → $MCP_CONFIG"
-
-# ── Build claude command ──
-CLAUDE_ARGS=(
-  "--mcp-config" "$MCP_CONFIG"
-  "--append-system-prompt-file" "$CLAUDE_MD"
-  "--max-turns" "$MAX_TURNS"
-)
-
-if [ "$SKIP_PERMS" = "true" ]; then
-  CLAUDE_ARGS+=("--dangerously-skip-permissions")
-else
-  CLAUDE_ARGS+=("--allowedTools" "Read,Glob,Grep,Bash,Edit,Write,mcp__cortex-hub__*")
-fi
-
-# ── Launch ──
-echo ""
-echo -e "${GREEN}${BOLD}  Launching agent: ${AGENT_NAME}${NC}"
-echo -e "  Hub: $HUB_URL"
-echo -e "  Budget: \$$BUDGET  |  Max turns: $MAX_TURNS"
+ok "Ready. Launching cortex-agent..."
 echo ""
 
-if [ -n "$TASK" ]; then
-  # Headless mode — run task and exit
-  info "Running task: $TASK"
-  PROMPT="You are Cortex agent '$AGENT_NAME'. Call cortex_session_start(repo: \"local\", mode: \"development\", agentId: \"$AGENT_NAME\") first, then execute this task:\n\n$TASK\n\nWhen done, call cortex_session_end with a summary."
-
-  claude "${CLAUDE_ARGS[@]}" \
-    --max-budget-usd "$BUDGET" \
-    -p "$PROMPT"
-else
-  # Interactive mode
-  info "Starting interactive session. Type your requests, Cortex tools are available."
-  CLAUDE_ARGS+=("--append-system-prompt" "You are Cortex agent '$AGENT_NAME'. Call cortex_session_start(repo: \"local\", mode: \"development\", agentId: \"$AGENT_NAME\") at the start of each session.")
-
-  claude "${CLAUDE_ARGS[@]}"
-fi
-
-ok "Agent session ended."
+# ── Forward all arguments to cortex-agent.sh ──
+exec "$WORK_DIR/scripts/cortex-agent.sh" "$@"

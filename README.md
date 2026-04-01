@@ -277,34 +277,39 @@ Cortex exposes **18 tools** via a single MCP endpoint. Any MCP-compatible client
 
 ### Run Agent (No Clone Needed)
 
-Launch a Claude Code agent connected to your Hub — one command, no repo clone:
+Launch a Cortex agent daemon without cloning the repo. Supports Claude, Codex, Antigravity, and Gemini:
 
 **macOS / Linux:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash
+# Interactive wizard — pick agent ID, IDE engine, capabilities
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- launch
+
+# Quick start — headless daemon with preset
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- \
+  start --daemon --preset fullstack
 ```
 
 **Windows (PowerShell):**
 ```powershell
-iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1" -OutFile $env:TEMP\run-agent.ps1; & $env:TEMP\run-agent.ps1
+iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1" -OutFile $env:TEMP\run-agent.ps1
+& $env:TEMP\run-agent.ps1 launch
 ```
 
-**With options (headless task):**
+**Multi-engine examples:**
 ```bash
-curl -fsSL .../run-agent.sh | bash -s -- \
-  --key YOUR_API_KEY \
-  --agent win-builder \
-  --task "Build Godot export templates for Windows" \
-  --budget 10.00
+# Claude Code backend dev
+curl ... | bash -s -- start -d CORTEX_AGENT_IDE=claude-code CORTEX_AGENT_ID=dev-1 --preset backend-dev
+
+# OpenAI Codex reviewer
+curl ... | bash -s -- start -d CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=rev-1 --preset reviewer
+
+# Antigravity UI developer
+curl ... | bash -s -- start -d CORTEX_AGENT_IDE=antigravity CORTEX_AGENT_ID=ui-1 --preset ui-dev
 ```
 
-The script:
-- Downloads agent instructions + MCP config to a temp directory
-- Launches `claude` CLI with Cortex Hub tools available
-- Interactive mode (chat) or headless mode (run task → exit)
-- Cleans up temp files on exit
+The bootstrap script downloads `cortex-agent.sh` + dependencies to a temp directory, installs `ws` (npm), then runs the full agent daemon — WebSocket connection, task pickup, auto-reconnect, log rotation.
 
-> **Prerequisite:** [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) must be installed (`npm i -g @anthropic-ai/claude-code`).
+> **Prerequisites:** Node.js, Git, and at least one AI engine CLI (claude, codex, antigravity, or gemini).
 
 ### One-Command Install (Full Project Setup)
 
