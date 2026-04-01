@@ -57,17 +57,26 @@ Download-IfNeeded "$RepoRaw/.cortex/capability-templates.json" "$WorkDir\.cortex
 Download-IfNeeded "$RepoRaw/.cortex/agent-identity.json" "$WorkDir\.cortex\agent-identity.json"
 
 # ── Install ws package if needed ──
-$wsCheck = & node -e "require('ws')" 2>&1
-if ($LASTEXITCODE -ne 0) {
+$wsFound = $false
+try {
+    & node -e "require('ws')" 2>$null
+    if ($LASTEXITCODE -eq 0) { $wsFound = $true }
+} catch { }
+
+if (-not $wsFound) {
     $wsNodeModules = "$($WorkDir -replace '\\','/')/node_modules/ws"
-    $wsCheck2 = & node -e "require('$wsNodeModules')" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Info "Installing ws package..."
-        Push-Location $WorkDir
-        & npm install --no-save ws 2>&1 | Out-Null
-        Pop-Location
-        Write-Ok "ws package installed"
-    }
+    try {
+        & node -e "require('$wsNodeModules')" 2>$null
+        if ($LASTEXITCODE -eq 0) { $wsFound = $true }
+    } catch { }
+}
+
+if (-not $wsFound) {
+    Write-Info "Installing ws package..."
+    Push-Location $WorkDir
+    try { & npm install --no-save ws 2>&1 | Out-Null } catch { }
+    Pop-Location
+    Write-Ok "ws package installed"
 }
 
 # ── Set NODE_PATH so ws is resolvable ──
