@@ -121,15 +121,39 @@ export function TaskBriefingWizard({ onClose, onCreated, agents, prefill }: Prop
         ? { attachments: images.map(img => ({ type: 'image', name: img.name, data: img.data })) }
         : undefined
 
+      // Build description with Lead Agent protocol instructions
+      const userBrief = [
+        description.trim(),
+        criteria.filter(c => c.text.trim()).length > 0
+          ? '\n\n**Acceptance Criteria:**\n' + criteria.filter(c => c.text.trim()).map(c => `- [ ] ${c.text}`).join('\n')
+          : '',
+        tags.length > 0 ? `\n\n**Tags:** ${tags.join(', ')}` : '',
+      ].join('')
+
+      const agentInstructions = [
+        '\n\n---',
+        '## Lead Agent Instructions (auto-generated)',
+        `You are the **Lead Agent** for this orchestrated task. Your role is to ANALYZE and PLAN, not to implement directly.`,
+        '',
+        '### Required steps:',
+        '1. **Analyze** the task brief above',
+        '2. **Call `cortex_task_submit_strategy`** with your proposed strategy:',
+        '   - `taskId`: this task ID',
+        '   - `summary`: your analysis summary',
+        '   - `roles[]`: team roles needed (e.g. ui, backend, review) with agent assignments',
+        '   - `subtasks[]`: work items for each role',
+        '   - `estimatedEffort`: effort estimate',
+        '3. **Wait** for user approval on the dashboard before proceeding',
+        '',
+        '### Available agents:',
+        agents.map(a => `- **${a.agentId}** (${a.ide ?? 'unknown'}) — capabilities: ${a.capabilities?.join(', ') || 'none'}`).join('\n'),
+        '',
+        '**DO NOT implement the task yourself. DO NOT skip the strategy step.**',
+      ].join('\n')
+
       const res = await createConductorTask({
         title: title.trim(),
-        description: [
-          description.trim(),
-          criteria.filter(c => c.text.trim()).length > 0
-            ? '\n\n**Acceptance Criteria:**\n' + criteria.filter(c => c.text.trim()).map(c => `- [ ] ${c.text}`).join('\n')
-            : '',
-          tags.length > 0 ? `\n\n**Tags:** ${tags.join(', ')}` : '',
-        ].join(''),
+        description: userBrief + agentInstructions,
         assignedTo: leadAgent,
         priority,
         agentId: 'dashboard-ui',
