@@ -421,8 +421,8 @@ if [ ! -f ".cortex/project-profile.json" ] || [ "$FORCE" = "true" ]; then
       fi
     done
     echo "$SCRIPTS" | grep -qw "test" && FULL+=("\"$PKG_MANAGER test\"")
-    PRE_COMMIT_CMDS=$(IFS=,; echo "${PRE_COMMIT[*]}")
-    FULL_CMDS=$(IFS=,; echo "${FULL[*]}")
+    PRE_COMMIT_CMDS=$(IFS=,; echo "${PRE_COMMIT[*]+"${PRE_COMMIT[*]}"}")
+    FULL_CMDS=$(IFS=,; echo "${FULL[*]+"${FULL[*]}"}")
   fi
 
   # ── Go ──
@@ -717,16 +717,51 @@ HOOKEOF
   chmod +x .claude/hooks/*.sh
   ok "Hooks: all 5 hooks installed (v${HOOKS_VERSION}.${HOOKS_MINOR})"
 
-  # ── settings.json ──
-  # Detect OS for hook command prefix
-  if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-    # Windows Git Bash — still use bash but with explicit path
-    HOOK_PREFIX="bash"
-  else
-    HOOK_PREFIX="bash"
-  fi
+  # ── Cross-platform hook runner ──
+  cat > .claude/hooks/run-hook.mjs << 'RUNHOOKEOF'
+#!/usr/bin/env node
+// Cross-platform hook runner for Claude Code
+// Delegates to .sh (macOS/Linux/Git Bash) or .ps1 (Windows native)
+import { execFileSync } from "child_process";
+import { existsSync } from "fs";
+import { join } from "path";
+import { platform } from "os";
 
-  cat > .claude/settings.json << EOF
+const hookName = process.argv[2];
+if (!hookName) {
+  console.error("Usage: run-hook.mjs <hook-name>");
+  process.exit(0);
+}
+
+const projectDir = process.env.CLAUDE_PROJECT_DIR || ".";
+const hooksDir = join(projectDir, ".claude", "hooks");
+const isWindows = platform() === "win32";
+
+const shPath = join(hooksDir, `${hookName}.sh`);
+const ps1Path = join(hooksDir, `${hookName}.ps1`);
+
+let cmd, args;
+
+if (isWindows && existsSync(ps1Path)) {
+  cmd = "powershell.exe";
+  args = ["-ExecutionPolicy", "Bypass", "-File", ps1Path];
+} else if (existsSync(shPath)) {
+  cmd = "bash";
+  args = [shPath];
+} else {
+  process.exit(0);
+}
+
+try {
+  execFileSync(cmd, args, { stdio: "inherit", env: process.env });
+} catch (err) {
+  process.exit(err.status ?? 1);
+}
+RUNHOOKEOF
+
+  # ── settings.json ──
+  # Use node-based cross-platform hook runner
+  cat > .claude/settings.json << 'EOF'
 {
   "hooks": {
     "SessionStart": [
@@ -735,7 +770,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "$HOOK_PREFIX \${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-init.sh"
+            "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs session-init"
           }
         ]
       }
@@ -746,7 +781,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "$HOOK_PREFIX \${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-session.sh"
+            "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs enforce-session"
           }
         ]
       },
@@ -755,7 +790,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "$HOOK_PREFIX \${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-commit.sh"
+            "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs enforce-commit"
           }
         ]
       }
@@ -766,7 +801,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "$HOOK_PREFIX \${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/track-quality.sh"
+            "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs track-quality"
           }
         ]
       }
@@ -777,7 +812,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "$HOOK_PREFIX \${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-end-check.sh"
+            "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs session-end-check"
           }
         ]
       }

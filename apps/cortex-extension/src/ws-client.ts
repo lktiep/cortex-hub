@@ -45,7 +45,9 @@ export class ConductorClient extends EventEmitter {
     this.setState('connecting')
 
     const capsEncoded = encodeURIComponent(JSON.stringify(this.config.capabilities))
-    const url = `${this.config.hubUrl}/ws/conductor?apiKey=${this.config.apiKey}&agentId=${encodeURIComponent(this.config.agentId)}&capabilities=${capsEncoded}&ide=${this.config.ide}&platform=${encodeURIComponent(this.config.platform)}&hostname=${encodeURIComponent(require('os').hostname())}`
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const hostname = encodeURIComponent(require('os').hostname())
+    const url = `${this.config.hubUrl}/ws/conductor?apiKey=${this.config.apiKey}&agentId=${encodeURIComponent(this.config.agentId)}&capabilities=${capsEncoded}&ide=${this.config.ide}&platform=${encodeURIComponent(this.config.platform)}&hostname=${hostname}`
 
     this.ws = new WebSocket(url)
 

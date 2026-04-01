@@ -5,6 +5,7 @@ import { CortexWebviewProvider, CortexPanel } from './webview/panel.js'
 // hub-api.ts no longer needed — all data fetched via WS
 
 // Antigravity SDK — optional, only available in Antigravity IDE
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let antigravitySdk: any = null
 
 let client: ConductorClient | null = null
@@ -33,6 +34,7 @@ function updateStatusBar(agentId: string, state: ConnectionState): void {
 
 /** Forward a WS task message to the sidebar and panel webviews */
 function forwardToWebview(type: 'newTask' | 'taskUpdate', payload: Record<string, unknown>): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const message = { type, payload } as any
   sidebarProvider?.postMessage(message)
   CortexPanel.currentPanel?.postMessage(message)
@@ -230,6 +232,7 @@ export function activate(context: vscode.ExtensionContext): void {
   if (config.ide === 'antigravity') {
     try {
       // Dynamic import — antigravity-sdk is optional peer dependency
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
       const { AntigravitySDK } = require('antigravity-sdk') as { AntigravitySDK: any }
       const sdk = new AntigravitySDK(context)
       sdk.initialize().then(() => {
@@ -397,7 +400,9 @@ export function activate(context: vscode.ExtensionContext): void {
     client.on('data.response', (msg: Record<string, unknown>) => {
       log(`Data received: ${(msg['tasks'] as unknown[])?.length ?? 0} tasks, ${(msg['agents'] as unknown[])?.length ?? 0} agents`)
       const hubData = { type: 'hubData' as const, payload: msg }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       sidebarProvider?.postMessage(hubData as any)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       CortexPanel.currentPanel?.postMessage(hubData as any)
       // Also push tasks for task feed
       const tasks = msg['tasks'] as Record<string, unknown>[] | undefined
@@ -412,7 +417,9 @@ export function activate(context: vscode.ExtensionContext): void {
             createdAt: t['created_at'], parentId: t['parent_task_id'] ?? undefined,
           })),
         }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         sidebarProvider?.postMessage(taskMsg as any)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         CortexPanel.currentPanel?.postMessage(taskMsg as any)
       }
     })

@@ -467,24 +467,26 @@ if ((Test-Path (Join-Path $StateDir "session-started")) -and -not (Test-Path (Jo
 exit 0
 '@ | Out-File -FilePath "$hooksDir\session-end-check.ps1" -Encoding utf8
 
-        # settings.json for Windows
-        # Windows: use PowerShell hooks (no Git Bash / jq / python dependency)
-        # Use forward slashes in JSON to avoid backslash escape issues
-        $prefix = 'powershell.exe -ExecutionPolicy Bypass -File .claude/hooks'
+        # settings.json — cross-platform via node hook runner
         $settingsContent = @'
 {
   "hooks": {
-    "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "PREFIX/session-init.ps1"}]}],
-    "PreToolUse": [
-      {"matcher": "Edit|Write|NotebookEdit|Bash", "hooks": [{"type": "command", "command": "PREFIX/enforce-session.ps1"}]},
-      {"matcher": "Bash", "hooks": [{"type": "command", "command": "PREFIX/enforce-commit.ps1"}]}
+    "SessionStart": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs session-init"}]}
     ],
-    "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "PREFIX/track-quality.ps1"}]}],
-    "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "PREFIX/session-end-check.ps1"}]}]
+    "PreToolUse": [
+      {"matcher": "Edit|Write|NotebookEdit|Bash", "hooks": [{"type": "command", "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs enforce-session"}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs enforce-commit"}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs track-quality"}]}
+    ],
+    "Stop": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "node ${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/run-hook.mjs session-end-check"}]}
+    ]
   }
 }
 '@
-        $settingsContent = $settingsContent -replace "PREFIX", $prefix
         [System.IO.File]::WriteAllText((Join-Path $ProjectDir ".claude/settings.json"), $settingsContent)
 
         Write-Ok ("Claude: PS1 hooks + settings.json installed (v" + $LATEST_VERSION + ")")
