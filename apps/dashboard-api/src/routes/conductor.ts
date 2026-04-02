@@ -160,63 +160,9 @@ export function resolveCompletionChain(completedTask: TaskRow): void {
       ).run(JSON.stringify(allNotified), completedId)
     }
 
-    // 3. Auto-create review task if context has autoReview enabled
-    //    GUARD: Skip if this task is itself a review/revision/auto-orchestrated/child task
-    const ctx = safeJsonParse<Record<string, unknown>>(completedTask.context, {})
-    const reqCaps = safeJsonParse<string[]>(completedTask.required_capabilities, [])
-    const titleLower = completedTask.title.toLowerCase()
-    const isReviewTask = reqCaps.includes('review') || titleLower.includes('review') || ctx['reviewType'] !== undefined || ctx['reviewOf'] !== undefined
-    const isRevisionTask = titleLower.includes('revision') || ctx['revisionOf'] !== undefined
-    const isAutoTask = completedTask.created_by_agent === 'auto-orchestrator'
-    const autoReviewDisabled = ctx['autoReview'] === false
-    const isSubtask = !!completedTask.parent_task_id
-
-    if (!isReviewTask && !isRevisionTask && !isAutoTask && !autoReviewDisabled && !isSubtask) {
-      // Check if a review task already exists for THIS specific task (not parent)
-      const existingReviewForThis = db.prepare(
-        "SELECT id FROM conductor_tasks WHERE context LIKE ? AND status NOT IN ('cancelled', 'failed')"
-      ).get(`%"reviewOf":"${completedId}"%`) as { id: string } | undefined
-
-      // Also check by parent+title pattern as fallback
-      const existingReviewByTitle = existingReviewForThis ?? db.prepare(
-        "SELECT id FROM conductor_tasks WHERE parent_task_id = ? AND title = ? AND status NOT IN ('cancelled', 'failed')"
-      ).get(completedId, `Review: ${completedTask.title}`) as { id: string } | undefined
-
-      if (!existingReviewByTitle) {
-        // Find online reviewer agent
-        const connected = getAllConnectedAgents()
-        const reviewer = connected.find(a =>
-          a.capabilities.includes('review') && a.agentId !== completedTask.completed_by
-        )
-
-        if (reviewer) {
-          const reviewId = generateTaskId()
-          db.prepare(`
-            INSERT INTO conductor_tasks
-              (id, title, description, priority, assigned_to_agent, created_by_agent,
-               project_id, parent_task_id, required_capabilities, context, status, assigned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
-          `).run(
-            reviewId,
-            `Review: ${completedTask.title}`,
-            `Auto-review of completed task ${completedId}.\n\nOriginal task: ${completedTask.title}\nCompleted by: ${completedTask.completed_by}\nResult preview: ${(completedTask.result ?? '').slice(0, 500)}\n\nReview the code changes. If issues found, reject with feedback. If OK, approve.`,
-            Math.max(1, completedTask.priority),
-            reviewer.agentId,
-            'auto-orchestrator',
-            completedTask.project_id,
-            completedId, // review is a CHILD of the completed task, not a sibling
-            JSON.stringify(['review', 'security']),
-            JSON.stringify({ reviewOf: completedId, originalAgent: completedTask.completed_by, autoReview: false }),
-          )
-
-          pushTaskToAgent(reviewer.agentId, reviewId, `Review: ${completedTask.title}`, `Auto-review of task by ${completedTask.completed_by}`)
-          logTaskAction(reviewId, null, 'auto_review', `Auto-created review for ${completedId}, assigned to ${reviewer.agentId}`)
-          console.log(`[conductor] Auto-review created: ${reviewId} → ${reviewer.agentId}`)
-        }
-      } else {
-        console.log(`[conductor] Auto-review skipped for ${completedId}: review already exists (${existingReviewByTitle.id})`)
-      }
-    }
+    // 3. Auto-review DISABLED — was causing recursive task spam loops.
+    //    Reviews should be explicitly created by the strategy/pipeline, not auto-generated.
+    //    TODO: Re-enable when review scheduling is properly integrated into pipeline strategy.
 
     // 4. Check if this is a subtask and all siblings are complete -> update parent
     if (completedTask.parent_task_id) {

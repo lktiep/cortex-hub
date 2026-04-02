@@ -285,9 +285,9 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
         }
       }
 
-      // Auto-push next task: find the next incomplete task for this agent and push it
+      // Auto-push next task: find the next incomplete NON-REVIEW task for this agent
       const nextTask = db.prepare(
-        "SELECT id, title, description FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'in_progress', 'pending', 'assigned') AND id != ? ORDER BY priority ASC, created_at ASC LIMIT 1"
+        "SELECT id, title, description FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'in_progress', 'pending', 'assigned') AND id != ? AND title NOT LIKE '[Review]%' AND title NOT LIKE 'Review:%' ORDER BY priority ASC, created_at ASC LIMIT 1"
       ).get(agent.agentId, completedTaskId) as { id: string; title: string; description: string } | undefined
       if (nextTask) {
         agent.ws.send(
