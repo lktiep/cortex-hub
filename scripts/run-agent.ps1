@@ -86,7 +86,7 @@ Write-Ok "Ready. Launching cortex-agent..."
 Write-Host ""
 
 # ── Forward to native cortex-agent.ps1 ──
-$agentScript = Join-Path $WorkDir "scripts" "cortex-agent.ps1"
+$agentScript = Join-Path (Join-Path $WorkDir "scripts") "cortex-agent.ps1"
 $psArgs = @()
 if ($Command) { $psArgs += $Command }
 if ($Daemon) { $psArgs += "-Daemon" }
