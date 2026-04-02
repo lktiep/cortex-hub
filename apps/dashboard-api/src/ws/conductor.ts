@@ -384,6 +384,20 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       const title = msg['title'] as string
       if (!title) break
 
+      // Global rate limiter: max 5 tasks per agent per 60 seconds
+      const recentCount = db.prepare(
+        "SELECT COUNT(*) as c FROM conductor_tasks WHERE created_by_agent = ? AND created_at > datetime('now', '-60 seconds')"
+      ).get(agent.agentId) as { c: number }
+      if (recentCount.c >= 5) {
+        console.warn(`[ws] task.create: RATE LIMITED ${agent.agentId} (${recentCount.c} tasks in last 60s)`)
+        agent.ws.send(JSON.stringify({
+          type: 'error',
+          message: `Rate limited: too many tasks created (${recentCount.c}/5 per minute)`,
+          timestamp: new Date().toISOString(),
+        }))
+        break
+      }
+
       const assignTo = msg['assignTo'] as string | undefined
       let parentTaskId = msg['parentTaskId'] as string | undefined
       const description = (msg['description'] as string) ?? ''
