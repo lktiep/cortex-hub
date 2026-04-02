@@ -229,6 +229,18 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
         break
       }
 
+      // Guard: block completion if task is awaiting user approval (strategy_review)
+      if (preCheck.status === 'strategy_review') {
+        console.warn(`[ws] task.complete: BLOCKED ${completedTaskId} — task is awaiting strategy approval, agent cannot complete`)
+        agent.ws.send(JSON.stringify({
+          type: 'error',
+          message: `Cannot complete task ${completedTaskId}: strategy awaiting user approval`,
+          taskId: completedTaskId,
+          timestamp: new Date().toISOString(),
+        }))
+        break
+      }
+
       db.prepare(
         'UPDATE conductor_tasks SET status = ?, result = ?, completed_at = datetime(?), completed_by = ? WHERE id = ? AND status NOT IN (?, ?, ?)',
       ).run(

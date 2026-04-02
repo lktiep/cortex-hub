@@ -740,6 +740,11 @@ conductorRouter.put('/:id', async (c) => {
     const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow | undefined
     if (!existing) return c.json({ error: 'Task not found' }, 404)
 
+    // Block agents from completing/progressing a task that awaits user strategy approval
+    if (existing.status === 'strategy_review' && status && status !== 'strategy_review') {
+      return c.json({ error: 'Task is awaiting strategy approval — only the dashboard can change its status' }, 403)
+    }
+
     const updates: string[] = []
     const params: (string | number | null)[] = []
 
