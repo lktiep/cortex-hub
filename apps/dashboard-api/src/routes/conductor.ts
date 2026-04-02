@@ -636,6 +636,16 @@ conductorRouter.post('/', async (c) => {
     const id = generateTaskId()
     const createdByAgent = agentId ?? apiKeyOwner ?? sessionAgent ?? 'dashboard'
 
+    // Auto-link: if an agent creates a task without parentTaskId, link to their active task
+    if (!parentTaskId && createdByAgent !== 'dashboard' && createdByAgent !== 'dashboard-ui') {
+      const activeTask = db.prepare(
+        "SELECT id FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'in_progress') ORDER BY accepted_at DESC LIMIT 1"
+      ).get(createdByAgent) as { id: string } | undefined
+      if (activeTask) {
+        parentTaskId = activeTask.id
+      }
+    }
+
     // Determine initial status: 'blocked' if dependencies are not all met, else 'pending'
     let initialStatus = 'pending'
     if (deps.length > 0 && !allDependenciesMet(deps)) {
@@ -770,6 +780,13 @@ conductorRouter.put('/:id', async (c) => {
       const existingCtx = safeJsonParse<Record<string, unknown>>(existing.context, {})
       updates.push('context = ?')
       params.push(JSON.stringify({ ...existingCtx, ...context }))
+    }
+
+    // Allow re-parenting tasks (fix orphans)
+    const parentTaskId = (body as Record<string, unknown>).parentTaskId as string | undefined
+    if (parentTaskId !== undefined) {
+      updates.push('parent_task_id = ?')
+      params.push(parentTaskId || null)
     }
 
     if (updates.length === 0) {

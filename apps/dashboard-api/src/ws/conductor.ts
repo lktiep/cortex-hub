@@ -348,10 +348,22 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       if (!title) break
 
       const assignTo = msg['assignTo'] as string | undefined
-      const parentTaskId = msg['parentTaskId'] as string | undefined
+      let parentTaskId = msg['parentTaskId'] as string | undefined
       const description = (msg['description'] as string) ?? ''
       const priority = (msg['priority'] as number) ?? 5
       const context = (msg['context'] as string) ?? '{}'
+
+      // Auto-link: if agent has an active (accepted/in_progress) task and didn't set parentTaskId,
+      // automatically set parent to the agent's current task
+      if (!parentTaskId) {
+        const activeTask = db.prepare(
+          "SELECT id FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'in_progress') ORDER BY accepted_at DESC LIMIT 1"
+        ).get(agent.agentId) as { id: string } | undefined
+        if (activeTask) {
+          parentTaskId = activeTask.id
+          console.log(`[ws] task.create: auto-linked "${title}" to parent ${activeTask.id} (agent ${agent.agentId}'s active task)`)
+        }
+      }
 
       // Block review task spam: if title starts with [Review], limit to 1 per parent per 5 minutes
       const titleLower = title.toLowerCase()
