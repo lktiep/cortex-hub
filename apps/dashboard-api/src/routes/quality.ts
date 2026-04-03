@@ -394,6 +394,13 @@ sessionsRouter.post('/start', async (c) => {
     const projectDesc = (project?.description as string) ?? ''
     const orgId = (project?.org_id as string) ?? ''
 
+    // Resolve project display name: use DB project name if found, otherwise extract from repo URL
+    const resolvedProject = projectName !== 'Unknown Project'
+      ? projectName
+      : normalizedRepo !== 'unknown'
+        ? normalizedRepo.split('/').pop() ?? normalizedRepo
+        : 'unknown'
+
     if (!existingSession) {
       const insertStmt = db.prepare(
         'INSERT INTO session_handoffs (id, from_agent, project, task_summary, context, status, api_key_name, hostname, os, ide, branch, capabilities, role, last_activity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))'
@@ -401,7 +408,7 @@ sessionsRouter.post('/start', async (c) => {
       insertStmt.run(
         sessionId,
         agentId,
-        normalizedRepo,
+        resolvedProject,
         `Session started: mode=${mode ?? 'development'}`,
         JSON.stringify({ repo, mode, agentId, projectId: project?.id }),
         'active',
@@ -445,6 +452,15 @@ sessionsRouter.post('/start', async (c) => {
 
 sessionsRouter.get('/all', (c) => {
   try {
+    // Auto-close stale sessions: mark "active" sessions older than 2 hours as "completed"
+    db.prepare(
+      `UPDATE session_handoffs
+       SET status = 'completed',
+           task_summary = task_summary || ' [auto-closed: stale >2h]'
+       WHERE status = 'active'
+         AND created_at <= datetime('now', '-2 hours')`
+    ).run()
+
     const limit = Number(c.req.query('limit') || '50')
     const status = c.req.query('status')
     const stmt = status
@@ -484,6 +500,39 @@ sessionsRouter.get('/all', (c) => {
     })
 
     return c.json({ sessions: sessionsWithSavings })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+sessionsRouter.post('/:id/end', async (c) => {
+  const { id } = c.req.param()
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    const { summary } = body as { summary?: string }
+
+    const existing = db.prepare('SELECT id, status, created_at FROM session_handoffs WHERE id = ?').get(id) as
+      { id: string; status: string; created_at: string } | undefined
+    if (!existing) return c.json({ error: 'Session not found' }, 404)
+
+    const durationMs = existing.created_at
+      ? Date.now() - new Date(existing.created_at).getTime()
+      : null
+
+    db.prepare(
+      `UPDATE session_handoffs
+       SET status = 'completed', task_summary = COALESCE(?, task_summary)
+       WHERE id = ?`
+    ).run(summary ?? null, id)
+
+    return c.json({
+      success: true,
+      session: {
+        id,
+        status: 'completed',
+        duration: durationMs ? Math.round(durationMs / 1000) : null,
+      },
+    })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }

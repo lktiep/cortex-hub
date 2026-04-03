@@ -6,11 +6,11 @@ import useSWR from 'swr'
 import { getSessions, type SessionHandoff } from '@/lib/api'
 import { SkeletonText, SkeletonCircle } from '@/components/ui/Skeleton'
 import { NumberTransition } from '@/components/ui/NumberTransition'
-import { Clock, RefreshCw, CheckCircle, ClipboardList, AlertTriangle, KeyRound, Gem, ICON_INLINE } from '@/lib/icons'
+import { Clock, RefreshCw, CheckCircle, ClipboardList, AlertTriangle, KeyRound, Gem, Zap, ICON_INLINE } from '@/lib/icons'
 import styles from './page.module.css'
 
 // ── Types ──
-type StatusFilter = 'all' | 'pending' | 'claimed' | 'completed'
+type StatusFilter = 'all' | 'pending' | 'active' | 'claimed' | 'completed'
 
 // ── Components ──
 function PriorityBadge({ priority }: { priority: number }) {
@@ -27,11 +27,13 @@ function StatusBadge({ status }: { status: string }) {
   const variant =
     status === 'completed'
       ? 'healthy'
-      : status === 'claimed'
-        ? 'warning'
-        : status === 'pending'
+      : status === 'active'
+        ? 'healthy'
+        : status === 'claimed'
           ? 'warning'
-          : 'error'
+          : status === 'pending'
+            ? 'warning'
+            : 'error'
   return <span className={`badge badge-${variant}`}>{status}</span>
 }
 
@@ -246,12 +248,14 @@ export default function SessionsPage() {
   }, [allSessions, statusFilter])
 
   const pendingCount = allSessions.filter((s) => s.status === 'pending').length
+  const activeCount = allSessions.filter((s) => s.status === 'active').length
   const claimedCount = allSessions.filter((s) => s.status === 'claimed').length
   const completedCount = allSessions.filter((s) => s.status === 'completed').length
 
   const filterTabs: { key: StatusFilter; label: string; count: number }[] = [
     { key: 'all', label: 'All', count: allSessions.length },
     { key: 'pending', label: 'Pending', count: pendingCount },
+    { key: 'active', label: 'Active', count: activeCount },
     { key: 'claimed', label: 'In Progress', count: claimedCount },
     { key: 'completed', label: 'Completed', count: completedCount },
   ]
@@ -274,13 +278,20 @@ export default function SessionsPage() {
           </div>
         </div>
         <div className={`card ${styles.statCard}`} style={{ '--stagger-index': 2 } as React.CSSProperties}>
+          <span className={styles.statIcon}><Zap {...ICON_INLINE} /></span>
+          <div>
+            <div className={`${styles.statValue} live-value`}><NumberTransition value={activeCount} /></div>
+            <div className={styles.statLabel}>Active</div>
+          </div>
+        </div>
+        <div className={`card ${styles.statCard}`} style={{ '--stagger-index': 3 } as React.CSSProperties}>
           <span className={styles.statIcon}><RefreshCw {...ICON_INLINE} /></span>
           <div>
             <div className={`${styles.statValue} live-value`}><NumberTransition value={claimedCount} /></div>
             <div className={styles.statLabel}>In Progress</div>
           </div>
         </div>
-        <div className={`card ${styles.statCard}`} style={{ '--stagger-index': 3 } as React.CSSProperties}>
+        <div className={`card ${styles.statCard}`} style={{ '--stagger-index': 4 } as React.CSSProperties}>
           <span className={styles.statIcon}><CheckCircle {...ICON_INLINE} /></span>
           <div>
             <div className={`${styles.statValue} live-value`}><NumberTransition value={completedCount} /></div>
