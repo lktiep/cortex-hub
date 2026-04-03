@@ -285,11 +285,32 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
         }
       }
 
-      // Auto-push next task: find the next incomplete NON-REVIEW task for this agent
-      const nextTask = db.prepare(
-        "SELECT id, title, description FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'in_progress', 'pending', 'assigned') AND id != ? AND title NOT LIKE '[Review]%' AND title NOT LIKE 'Review:%' ORDER BY priority ASC, created_at ASC LIMIT 1"
-      ).get(agent.agentId, completedTaskId) as { id: string; title: string; description: string } | undefined
+      // Auto-push next task: find next incomplete sibling or agent task
+      // 1. First check siblings (same parent) — ensures pipeline sequential flow
+      // 2. Fallback to any task assigned to this agent
+      const completedRow = db.prepare('SELECT parent_task_id FROM conductor_tasks WHERE id = ?').get(completedTaskId) as { parent_task_id: string | null } | undefined
+      const parentId = completedRow?.parent_task_id
+
+      let nextTask: { id: string; title: string; description: string } | undefined
+
+      if (parentId) {
+        // Find next sibling that hasn't started yet
+        nextTask = db.prepare(
+          "SELECT id, title, description FROM conductor_tasks WHERE parent_task_id = ? AND status IN ('accepted', 'pending', 'assigned', 'review') AND id != ? AND title NOT LIKE '[Review]%' AND title NOT LIKE 'Review:%' ORDER BY created_at ASC LIMIT 1"
+        ).get(parentId, completedTaskId) as typeof nextTask
+      }
+
+      if (!nextTask) {
+        // Fallback: any task assigned to this agent
+        nextTask = db.prepare(
+          "SELECT id, title, description FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'pending', 'assigned') AND id != ? AND title NOT LIKE '[Review]%' AND title NOT LIKE 'Review:%' ORDER BY priority ASC, created_at ASC LIMIT 1"
+        ).get(agent.agentId, completedTaskId) as typeof nextTask
+      }
+
       if (nextTask) {
+        // Update status to accepted before pushing
+        db.prepare("UPDATE conductor_tasks SET status = 'accepted', accepted_at = datetime('now') WHERE id = ? AND status IN ('pending', 'assigned', 'review')").run(nextTask.id)
+
         agent.ws.send(
           JSON.stringify({
             type: 'task.assigned',
