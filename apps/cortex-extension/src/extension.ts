@@ -249,6 +249,49 @@ function startCompletionMonitor(taskId: string, logFn: (msg: string) => void): (
   return () => { running = false }
 }
 
+/** Idle watchdog — if agent is idle with tasks in queue, auto-drain */
+let idleWatchdog: ReturnType<typeof setInterval> | null = null
+
+function startIdleWatchdog(logFn: (msg: string) => void): void {
+  if (idleWatchdog) return
+  idleWatchdog = setInterval(() => {
+    // If conversation is done (or no active task) and queue has items, drain
+    if ((conversationDone || !currentTaskId) && taskQueue.length > 0) {
+      logFn(`Idle watchdog: conversation done=${conversationDone}, queue=${taskQueue.length} — draining`)
+      drainTaskQueue(logFn)
+    }
+    // Also check: if current task is completed on server but extension didn't notice
+    if (currentTaskId && !conversationDone && taskQueue.length > 0) {
+      // Check via Antigravity SDK if conversation is idle
+      if (antigravitySdk) {
+        antigravitySdk.cascade.getSessions().then((sessions: { stepCount: number }[]) => {
+          if (!sessions || sessions.length === 0) return
+          const latest = sessions[0]
+          // If agent hasn't produced new steps in the check interval, consider done
+          if (latest && latest.stepCount > 0 && lastDetectedStepCount === latest.stepCount) {
+            idleCheckCount++
+            if (idleCheckCount >= 2) { // 2 checks × 10s = 20s idle
+              logFn(`Idle watchdog: agent idle for 20s (steps stable at ${latest.stepCount}) — completing task ${currentTaskId}`)
+              // Send task.complete and drain
+              client?.send({ type: 'task.complete', taskId: currentTaskId, result: { completedBy: 'idle-watchdog' } })
+              conversationDone = true
+              if (completionMonitorStop) { completionMonitorStop(); completionMonitorStop = null }
+              client?.updateStatus('idle')
+              drainTaskQueue(logFn)
+            }
+          } else {
+            lastDetectedStepCount = latest?.stepCount ?? 0
+            idleCheckCount = 0
+          }
+        }).catch(() => {})
+      }
+    }
+  }, 10000)
+}
+
+let lastDetectedStepCount = 0
+let idleCheckCount = 0
+
 /** Process next task in the queue — starts a fresh conversation */
 function drainTaskQueue(logFn: (msg: string) => void): void {
   if (taskQueue.length === 0) {
@@ -256,6 +299,10 @@ function drainTaskQueue(logFn: (msg: string) => void): void {
     currentTaskId = null
     return
   }
+
+  // Reset idle detection for new task
+  lastDetectedStepCount = 0
+  idleCheckCount = 0
 
   const next = taskQueue.shift()!
   logFn(`Draining queue — starting task ${next.taskId}: ${next.title}`)
@@ -442,6 +489,7 @@ export function activate(context: vscode.ExtensionContext): void {
     client.on('welcome', (msg: Record<string, unknown>) => {
       const agents = msg['onlineAgents'] as unknown[]
       log(`Welcome — ${agents?.length ?? 0} agent(s) online`)
+      startIdleWatchdog(log)
     })
 
     // Forward task.assigned to webview
