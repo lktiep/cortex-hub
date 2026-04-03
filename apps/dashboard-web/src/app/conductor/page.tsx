@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo, useCallback } from 'react'
+import { Target } from 'lucide-react'
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import useSWR from 'swr'
 import {
@@ -341,10 +342,12 @@ function PipelineGrid({
 
   if (tree.length === 0) {
     return (
-      <div className={`card ${styles.emptyState}`}>
-        <span className={styles.emptyIcon}>T</span>
-        <p>No conductor tasks yet.</p>
-        <p className={styles.emptyHint}>
+      <div className={`card empty-state`}>
+        <div className="empty-state-icon" data-section="conductor">
+          <Target size={32} strokeWidth={1.5} />
+        </div>
+        <p className="empty-state-title">No conductor tasks yet</p>
+        <p className="empty-state-desc">
           Create tasks via the dashboard or the <code>cortex_task_create</code> MCP tool.
         </p>
       </div>
@@ -504,7 +507,7 @@ export default function ConductorPage() {
   ]
 
   return (
-    <DashboardLayout title="Conductor" subtitle="Task assignment and agent orchestration">
+    <DashboardLayout title="Conductor" subtitle="Task assignment and agent orchestration" section="conductor">
       {/* Stats */}
       <div className={styles.statsGrid}>
         <div className={`card ${styles.statCard}`}>

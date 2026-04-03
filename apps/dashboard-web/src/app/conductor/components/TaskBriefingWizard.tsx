@@ -356,8 +356,28 @@ export function TaskBriefingWizard({ onClose, onCreated, agents, prefill, resume
     try {
       const taskIds = [createdTask.id]
 
-      // Create subtasks for each role
+      // Create subtasks with dependencies:
+      // - Implementation tasks: sequential (each depends on previous)
+      // - Review/QA tasks: depend on ALL implementation tasks
+      const implTaskIds: string[] = []
+      const reviewSubtasks: typeof approvedStrategy.subtasks = []
+      const implSubtasks: typeof approvedStrategy.subtasks = []
+
       for (const subtask of approvedStrategy.subtasks) {
+        const roleLower = subtask.role.toLowerCase()
+        const titleLower = subtask.title.toLowerCase()
+        const isReviewQA = roleLower.includes('review') || roleLower.includes('qa') ||
+          titleLower.includes('review') || titleLower.includes('qa') || titleLower.includes('audit')
+        if (isReviewQA) {
+          reviewSubtasks.push(subtask)
+        } else {
+          implSubtasks.push(subtask)
+        }
+      }
+
+      // Create implementation tasks sequentially
+      let prevTaskId: string | null = null
+      for (const subtask of implSubtasks) {
         const role = approvedStrategy.roles.find(r => r.role === subtask.role)
         if (!role?.agent) continue
 
@@ -373,11 +393,43 @@ export function TaskBriefingWizard({ onClose, onCreated, agents, prefill, resume
           assignedTo: role.agent,
           priority,
           agentId: 'dashboard-ui',
+          parentTaskId: createdTask.id,
+          dependsOn: prevTaskId ? [prevTaskId] : undefined,
           metadata: {
-            parentTaskId: createdTask.id,
             role: role.role,
             workflow: 'orchestrated',
             phase: 'execution',
+          },
+        })
+        taskIds.push(subRes.task.id)
+        implTaskIds.push(subRes.task.id)
+        prevTaskId = subRes.task.id
+      }
+
+      // Create review/QA tasks — depend on ALL implementation tasks
+      for (const subtask of reviewSubtasks) {
+        const role = approvedStrategy.roles.find(r => r.role === subtask.role)
+        if (!role?.agent) continue
+
+        const subRes = await createConductorTask({
+          title: subtask.title,
+          description: [
+            subtask.description ?? '',
+            `\n\nRole: ${role.label}`,
+            `Parent task: ${title.trim()}`,
+            `\n\nThis is a QA/Review task. Wait for ALL implementation tasks to complete before starting. Review the combined output of all tasks.`,
+            `\n\n---`,
+            `**IMPORTANT:** When you finish this task, you MUST call \`cortex_task_update\` with the task ID from the \`[Cortex Task ...]\` header and \`status: "completed"\`. Include a \`result\` object summarizing what was done (files changed, key decisions). Do NOT skip this step — the pipeline cannot continue without it.`,
+          ].join(''),
+          assignedTo: role.agent,
+          priority: Math.max(1, priority - 1),
+          agentId: 'dashboard-ui',
+          parentTaskId: createdTask.id,
+          dependsOn: implTaskIds.length > 0 ? implTaskIds : undefined,
+          metadata: {
+            role: role.role,
+            workflow: 'orchestrated',
+            phase: 'review',
           },
         })
         taskIds.push(subRes.task.id)

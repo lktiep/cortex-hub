@@ -943,6 +943,8 @@ export async function createConductorTask(data: {
   projectId?: string
   agentId?: string
   apiKeyOwner?: string
+  parentTaskId?: string
+  dependsOn?: string[]
   metadata?: Record<string, unknown>
 }) {
   return apiFetch<{ task: ConductorTask }>('/api/conductor', { method: 'POST', body: data })
