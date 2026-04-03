@@ -10,9 +10,11 @@ interface DashboardLayoutProps {
   children: React.ReactNode
   title?: string
   subtitle?: string
+  /** Optional section identifier (used by pages like Conductor) */
+  section?: string
 }
 
-export default function DashboardLayout({ children, title, subtitle }: DashboardLayoutProps) {
+export default function DashboardLayout({ children, title, subtitle, section: _section }: DashboardLayoutProps) {
   const pathname = usePathname()
   const [isVisible, setIsVisible] = useState(false)
   const prevPathRef = useRef(pathname)
