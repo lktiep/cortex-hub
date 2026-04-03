@@ -266,15 +266,7 @@ export function TaskDetail({
                   onDecisionChange={refreshDecisions}
                 />
               ) : (
-                <>
-                  {(() => {
-                    const summary = getResultSummary(task.result)
-                    return summary ? (
-                      <MarkdownRenderer content={summary} />
-                    ) : null
-                  })()}
-                  <ResultDisplay result={task.result} />
-                </>
+                <ResultDisplay result={task.result} />
               )}
               {onNewTaskFromOutcome && (
                 <button

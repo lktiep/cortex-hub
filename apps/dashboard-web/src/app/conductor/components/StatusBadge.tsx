@@ -59,7 +59,9 @@ export function ResultDisplay({ result }: { result: string | null }) {
           {parsed.summary.map(({ key, value }) => (
             <div key={key} className={styles.resultSummaryItem}>
               <span className={styles.resultSummaryKey}>{key.replace(/_/g, ' ')}</span>
-              <span className={styles.resultSummaryValue}>{value}</span>
+              <span className={styles.resultSummaryValue}>
+                {value.length > 100 ? <MarkdownRenderer content={value} /> : value}
+              </span>
             </div>
           ))}
         </div>
