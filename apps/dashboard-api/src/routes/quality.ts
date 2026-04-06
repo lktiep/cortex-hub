@@ -536,11 +536,43 @@ sessionsRouter.post('/:id/end', async (c) => {
       ? Date.now() - new Date(existing.created_at).getTime()
       : null
 
+    // Get session details before closing (for recipe capture)
+    const session = db.prepare('SELECT from_agent, project_id, project FROM session_handoffs WHERE id = ?')
+      .get(id) as { from_agent: string; project_id: string | null; project: string } | undefined
+
     db.prepare(
       `UPDATE session_handoffs
        SET status = 'completed', task_summary = COALESCE(?, task_summary)
        WHERE id = ?`
     ).run(summary ?? null, id)
+
+    // Fire-and-forget recipe capture from session summary
+    if (summary && summary.length > 50 && session) {
+      import('../services/recipe-capture.js').then(({ captureFromSession }) =>
+        captureFromSession({
+          sessionId: id,
+          summary,
+          agentId: session.from_agent,
+          projectId: session.project_id,
+        }).catch(e => {
+          console.warn('[recipe-capture] Session capture error:', (e as Error).message)
+          try {
+            db.prepare(
+              `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, error_message)
+               VALUES ('session', ?, ?, ?, 'error', ?)`
+            ).run(id, session.from_agent ?? null, session.project_id ?? null, (e as Error).message?.slice(0, 500))
+          } catch { /* ignore */ }
+        })
+      ).catch((e) => {
+        console.warn('[recipe-capture] Module load error:', (e as Error).message)
+        try {
+          db.prepare(
+            `INSERT INTO recipe_capture_log (source, source_id, status, error_message)
+             VALUES ('session', ?, 'error', ?)`
+          ).run(id, `Module load: ${(e as Error).message}`.slice(0, 500))
+        } catch { /* ignore */ }
+      })
+    }
 
     return c.json({
       success: true,
