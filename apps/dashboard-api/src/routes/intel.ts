@@ -894,9 +894,22 @@ intelRouter.post('/file-content', async (c) => {
     if (!projectId) return c.json({ error: 'projectId is required' }, 400)
     if (!file) return c.json({ error: 'file path is required' }, 400)
 
+    // Resolve any identifier (project ID, name, slug, URL) → actual directory
+    // Uses the same resolveRepoNames logic as code_search/code_context
+    let resolvedId = projectId
+    if (!existsSync(join(REPOS_DIR, projectId))) {
+      const candidates = resolveRepoNames(projectId)
+      for (const candidate of candidates) {
+        if (existsSync(join(REPOS_DIR, candidate))) {
+          resolvedId = candidate
+          break
+        }
+      }
+    }
+
     // Security: prevent path traversal
     const normalized = file.replace(/\\/g, '/').replace(/\.\.\/|\.\.$/g, '')
-    const repoDir = join(REPOS_DIR, projectId)
+    const repoDir = join(REPOS_DIR, resolvedId)
     const fullPath = join(repoDir, normalized)
 
     // Ensure path stays within repo dir
