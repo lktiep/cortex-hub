@@ -105,7 +105,7 @@ async function generateFix(doc: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: process.env.RECIPE_LLM_MODEL || 'gemini-2.5-flash',
+        model: process.env.RECIPE_LLM_MODEL || 'gpt-5.4-mini',
         messages: [
           {
             role: 'system',
