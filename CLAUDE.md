@@ -59,19 +59,19 @@ camelCase vars/functions, PascalCase types. `@cortex/*` path aliases. No `any` w
 <!-- cortex-hub:auto-mcp -->
 ## Cortex Hub — MANDATORY (enforced by hooks — violations are BLOCKED)
 
-**YOUR FIRST ACTION in every conversation MUST be calling `cortex_session_start`.
+**YOUR FIRST ACTION in every conversation MUST be running `/cs` (Cortex Start v2.0).**
+This runs all mandatory init steps: session_start, knowledge recall, memory recall, task pickup, detect changes, and workflow activation.
 If you skip this, all Edit/Write/file-modifying Bash commands will return exit code 2 (BLOCKED).
-This is not optional — it is enforced by pre-tool hooks.**
 
-```
-cortex_session_start(repo: "https://github.com/lktiep/cortex-hub.git", mode: "development", agentId: "claude-code")
-```
+**If `/cs` is unavailable**, run these steps manually IN ORDER:
+1. `cortex_session_start(repo: "https://github.com/lktiep/cortex-hub.git", mode: "development", agentId: "claude-code")`
+2. `cortex_knowledge_search(query: "session summary progress next session")`
+3. `cortex_memory_search(query: "session context decisions lessons")`
+4. `cortex_task_pickup()` — check for assigned tasks
+5. Summarize findings and confirm with user before starting work
 
-Then:
-- If `recentChanges.count > 0` in the response, warn the user and run `git pull`
-- Call `cortex_knowledge_search` with "session summary progress next session" to restore project context from previous sessions
-- Call `cortex_memory_search` to recall agent-specific decisions and lessons
-- Summarize what you found and confirm with the user before starting work
+**Hooks enforce**: Edit/Write BLOCKED until knowledge_search AND memory_search called.
+**Commit BLOCKED** until discovery tools used AND quality gates passed.
 
 ### Agent Identity (send with session_start if available)
 

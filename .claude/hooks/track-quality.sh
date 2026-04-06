@@ -51,9 +51,11 @@ fi
 
 # Track cortex discovery tool usage
 [[ "$TOOL_NAME" =~ cortex_code_search ]]      && touch "$STATE_DIR/discovery-used"
-[[ "$TOOL_NAME" =~ cortex_knowledge_search ]] && touch "$STATE_DIR/discovery-used"
-[[ "$TOOL_NAME" =~ cortex_memory_search ]]    && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_knowledge_search ]] && touch "$STATE_DIR/discovery-used" && touch "$STATE_DIR/knowledge-recalled"
+[[ "$TOOL_NAME" =~ cortex_memory_search ]]    && touch "$STATE_DIR/discovery-used" && touch "$STATE_DIR/memory-recalled"
 [[ "$TOOL_NAME" =~ cortex_code_context ]]     && touch "$STATE_DIR/discovery-used"
 [[ "$TOOL_NAME" =~ cortex_code_impact ]]      && touch "$STATE_DIR/discovery-used"
 [[ "$TOOL_NAME" =~ cortex_cypher ]]           && touch "$STATE_DIR/discovery-used"
+[[ "$TOOL_NAME" =~ cortex_task_pickup ]]      && touch "$STATE_DIR/tasks-checked"
+[[ "$TOOL_NAME" =~ cortex_detect_changes ]]   && touch "$STATE_DIR/changes-checked"
 exit 0

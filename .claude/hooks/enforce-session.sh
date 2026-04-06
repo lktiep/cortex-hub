@@ -3,7 +3,7 @@
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 
-# Session started — enforce discovery-first
+# Session started — enforce discovery-first + knowledge/memory recall
 if [ -f "$STATE_DIR/session-started" ]; then
   if [ ! -f "$STATE_DIR/discovery-used" ]; then
     INPUT_PEEK=$(cat)
@@ -16,6 +16,13 @@ if [ -f "$STATE_DIR/session-started" ]; then
     if [[ "$PEEK_TOOL" = "Bash" ]] && [[ "$PEEK_CMD" =~ ^(find |grep |rg |ag ) ]]; then
       echo "BLOCKED: Use cortex_code_search FIRST. find/grep unlocked after cortex discovery tools. Run /cs to auto-complete all steps." >&2
       exit 2
+    fi
+    # Block edits until knowledge + memory recalled (full /cs workflow)
+    if [[ "$PEEK_TOOL" = "Edit" || "$PEEK_TOOL" = "Write" ]]; then
+      if [ ! -f "$STATE_DIR/knowledge-recalled" ] || [ ! -f "$STATE_DIR/memory-recalled" ]; then
+        echo "BLOCKED: Run cortex_knowledge_search and cortex_memory_search before editing. These restore context from previous sessions. Run /cs to auto-complete all steps." >&2
+        exit 2
+      fi
     fi
   fi
   exit 0
