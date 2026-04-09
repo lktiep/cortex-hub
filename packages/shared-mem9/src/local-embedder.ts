@@ -50,9 +50,11 @@ async function getPipeline(modelId: string): Promise<FeatureExtractionPipeline> 
       transformers.env.useFSCache = true
     }
 
+    // dtype 'quantized' maps to model_quantized.onnx (smallest, ~25MB for MiniLM)
+    // 'q8' maps to model_q8.onnx which doesn't ship for all models — caused
+    // 'Unable to get model file path or buffer' error on the all-MiniLM-L6-v2 case.
     const pipe = await transformers.pipeline('feature-extraction', modelId, {
-      // dtype 'q8' = 8-bit quantized — smaller download, faster, slight precision loss
-      dtype: 'q8',
+      dtype: 'quantized',
     })
     return pipe
   })()
