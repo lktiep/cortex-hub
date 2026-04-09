@@ -376,13 +376,25 @@ intelRouter.post('/search', async (c) => {
         const keywords = query.split(/\s+/).filter(w => w.length >= 3)
         if (keywords.length === 0) keywords.push(query)
 
-        // Build OR cypher: match any keyword (case-insensitive)
-        const conditions = keywords.map(k => `toLower(n.name) CONTAINS toLower("${k.replace(/"/g, '\\"')}")`).join(' OR ')
-        const cypherQuery = `MATCH (n) WHERE ${conditions} RETURN n.name as name, labels(n) as labels, n.filePath as file LIMIT 30`
+        // Capitalize first letter for camelCase variants (e.g. "dialog" → "Dialog")
+        const expandKeyword = (k: string): string[] => {
+          const variants = new Set<string>([k])
+          variants.add(k.charAt(0).toUpperCase() + k.slice(1))
+          variants.add(k.toLowerCase())
+          return Array.from(variants)
+        }
 
-        // Helper: parse GitNexus cypher response (rows OR markdown table)
+        // Helper: parse GitNexus cypher response — handles raw text wrapper
         const parseCypherRows = (r: Record<string, unknown>): Array<{ name: string; type: string; file: string }> => {
-          const rows = (r?.rows ?? r?.results ?? r?.data) as Array<Record<string, unknown>> | undefined
+          let payload: Record<string, unknown> = r
+          // GitNexus returns JSON + "---\nNext: ..." footer → callGitNexus wraps as {raw: "..."}
+          if (r?.raw && typeof r.raw === 'string') {
+            const rawText = r.raw as string
+            const jsonEnd = rawText.indexOf('\n---')
+            const jsonStr = jsonEnd > 0 ? rawText.slice(0, jsonEnd).trim() : rawText.trim()
+            try { payload = JSON.parse(jsonStr) as Record<string, unknown> } catch { /* not JSON */ }
+          }
+          const rows = (payload?.rows ?? payload?.results ?? payload?.data) as Array<Record<string, unknown>> | undefined
           if (Array.isArray(rows) && rows.length > 0) {
             return rows.map(row => ({
               name: String(row.name ?? '?'),
@@ -390,12 +402,10 @@ intelRouter.post('/search', async (c) => {
               file: String(row.file ?? ''),
             }))
           }
-          // Parse markdown table from { markdown: "| name | labels | file |\n| --- | ... |\n| val | val | val |" }
-          const md = (r?.markdown as string) ?? ''
+          const md = (payload?.markdown as string) ?? ''
           if (md && md.includes('|')) {
             const lines = md.split('\n').filter(l => l.includes('|') && !l.match(/^\|\s*-+/))
-            const dataLines = lines.slice(1) // skip header
-            return dataLines.map(l => {
+            return lines.slice(1).map(l => {
               const cells = l.split('|').map(c => c.trim()).filter(c => c.length > 0)
               return { name: cells[0] ?? '?', type: cells[1] ?? '', file: cells[2] ?? '' }
             }).filter(x => x.name !== '?')
@@ -409,24 +419,50 @@ intelRouter.post('/search', async (c) => {
           return keywords.filter(k => lower.includes(k.toLowerCase())).length
         }
 
+        // GitNexus has bugs with OR clauses + toLower() → run separate query per keyword variant.
+        // Run sequentially per project to avoid hammering GitNexus.
         for (let i = 0; i < allProjects.length; i += CONCURRENCY) {
           const batch = allProjects.slice(i, i + CONCURRENCY)
           const batchResults = await Promise.allSettled(
             batch.map(async (p) => {
               const candidates = resolveRepoNames(p.id)
+              const allSymbols: Array<{ name: string; type: string; file: string }> = []
+              const seen = new Set<string>()
               let lastErr: unknown = null
+
+              // Try each candidate repo name
               for (const candidate of candidates) {
-                try {
-                  const r = await callGitNexus('cypher', { query: cypherQuery, repo: candidate }) as Record<string, unknown>
-                  const symbols = parseCypherRows(r)
-                  if (symbols.length > 0) {
-                    const scored = symbols
-                      .map(s => ({ ...s, relevance: scoreSymbol(s.name) }))
-                      .sort((a, b) => b.relevance - a.relevance)
-                    const totalScore = scored.reduce((sum, s) => sum + s.relevance, 0)
-                    return { project: p, symbols: scored.slice(0, 10), count: symbols.length, score: totalScore }
+                let candidateWorked = false
+                // For each keyword + its variants, run a simple query
+                for (const keyword of keywords) {
+                  for (const variant of expandKeyword(keyword)) {
+                    try {
+                      const safeVariant = variant.replace(/"/g, '\\"')
+                      const cypherQuery = `MATCH (n) WHERE n.name CONTAINS "${safeVariant}" RETURN n.name as name, labels(n) as labels, n.filePath as file LIMIT 15`
+                      const r = await callGitNexus('cypher', { query: cypherQuery, repo: candidate }) as Record<string, unknown>
+                      const symbols = parseCypherRows(r)
+                      if (symbols.length > 0) {
+                        candidateWorked = true
+                        for (const s of symbols) {
+                          const key = `${s.name}|${s.file}`
+                          if (!seen.has(key)) {
+                            seen.add(key)
+                            allSymbols.push(s)
+                          }
+                        }
+                      }
+                    } catch (e) { lastErr = e }
                   }
-                } catch (e) { lastErr = e }
+                }
+                if (candidateWorked) break // stop trying other candidates if one worked
+              }
+
+              if (allSymbols.length > 0) {
+                const scored = allSymbols
+                  .map(s => ({ ...s, relevance: scoreSymbol(s.name) }))
+                  .sort((a, b) => b.relevance - a.relevance)
+                const totalScore = scored.reduce((sum, s) => sum + s.relevance, 0)
+                return { project: p, symbols: scored.slice(0, 10), count: allSymbols.length, score: totalScore }
               }
               if (lastErr) logger.debug(`Cypher search failed for ${p.id}: ${String(lastErr).slice(0, 100)}`)
               return null
