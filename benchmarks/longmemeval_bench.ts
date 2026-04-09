@@ -80,10 +80,12 @@ interface NormalisedQuestion {
 
 interface CliOptions {
   limit: number
+  offset: number
   apiUrl: string
   cleanup: boolean
   skipImport: boolean
   verbose: boolean
+  stratified: boolean
 }
 
 interface KnowledgeSearchResultItem {
@@ -161,10 +163,12 @@ interface BenchSummary {
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     limit: DEFAULT_LIMIT,
+    offset: 0,
     apiUrl: DEFAULT_API_URL,
     cleanup: false,
     skipImport: false,
     verbose: false,
+    stratified: false,
   }
 
   for (let i = 0; i < argv.length; i++) {
@@ -181,6 +185,19 @@ function parseArgs(argv: string[]): CliOptions {
         opts.limit = Math.floor(n)
         break
       }
+      case '--offset': {
+        const raw = argv[++i]
+        if (raw === undefined) throw new Error('--offset requires a value')
+        const n = Number(raw)
+        if (!Number.isFinite(n) || n < 0) {
+          throw new Error(`--offset expected a non-negative number, got "${raw}"`)
+        }
+        opts.offset = Math.floor(n)
+        break
+      }
+      case '--stratified':
+        opts.stratified = true
+        break
       case '--api-url': {
         const raw = argv[++i]
         if (raw === undefined) throw new Error('--api-url requires a value')
@@ -274,7 +291,7 @@ async function downloadDataset(): Promise<void> {
 
 // ── Dataset parsing ────────────────────────────────────────────────────────
 
-async function loadQuestions(limit: number): Promise<NormalisedQuestion[]> {
+async function loadQuestions(limit: number, offset: number = 0, stratified: boolean = false): Promise<NormalisedQuestion[]> {
   const raw = await readFile(DATASET_PATH, 'utf8')
   let parsed: unknown
   try {
@@ -293,8 +310,40 @@ async function loadQuestions(limit: number): Promise<NormalisedQuestion[]> {
     throw new Error('Dataset parsed to zero questions — unexpected shape')
   }
 
+  // Stratified sampling: pick `limit / numTypes` questions from EACH question_type
+  if (stratified) {
+    const byType = new Map<string, RawQuestion[]>()
+    for (const entry of entries) {
+      const t = entry.question_type ?? 'unknown'
+      const list = byType.get(t) ?? []
+      list.push(entry)
+      byType.set(t, list)
+    }
+    const types = Array.from(byType.keys()).sort()
+    const perType = Math.max(1, Math.floor(limit / types.length))
+    const normalised: NormalisedQuestion[] = []
+    for (const type of types) {
+      const list = byType.get(type) ?? []
+      let added = 0
+      for (const entry of list) {
+        if (added >= perType) break
+        const q = normaliseQuestion(entry)
+        if (q !== null) {
+          normalised.push(q)
+          added++
+        }
+      }
+    }
+    return normalised
+  }
+
   const normalised: NormalisedQuestion[] = []
+  let skipped = 0
   for (const entry of entries) {
+    if (skipped < offset) {
+      skipped++
+      continue
+    }
     const q = normaliseQuestion(entry)
     if (q !== null) normalised.push(q)
     if (normalised.length >= limit) break
@@ -305,15 +354,31 @@ async function loadQuestions(limit: number): Promise<NormalisedQuestion[]> {
 function normaliseQuestion(raw: RawQuestion): NormalisedQuestion | null {
   if (!raw.question_id || !raw.question) return null
 
-  // haystack_sessions may be an array or a map keyed by session_id.
+  // LongMemEval-S format: haystack_sessions is parallel array where each entry is
+  // a messages array (not a session object). Session IDs come from haystack_session_ids.
   const sessions: NormalisedSession[] = []
   const haystack = raw.haystack_sessions
+  const sessionIds = Array.isArray(raw.haystack_session_ids) ? raw.haystack_session_ids : []
+
   if (Array.isArray(haystack)) {
-    for (const s of haystack) {
-      const session = normaliseSession(s)
-      if (session !== null) sessions.push(session)
+    for (let i = 0; i < haystack.length; i++) {
+      const item = haystack[i]
+      // Case A: parallel-array format — item is messages array, session_id from sessionIds[i]
+      if (Array.isArray(item)) {
+        const sid = sessionIds[i]
+        if (typeof sid !== 'string') continue
+        const session = normaliseSession({ session_id: sid, messages: item as RawSession['messages'] })
+        if (session !== null) sessions.push(session)
+        continue
+      }
+      // Case B: object-style — {session_id, messages}
+      if (item && typeof item === 'object') {
+        const session = normaliseSession(item as RawSession)
+        if (session !== null) sessions.push(session)
+      }
     }
   } else if (haystack !== undefined && haystack !== null && typeof haystack === 'object') {
+    // Case C: map keyed by session_id
     for (const [key, value] of Object.entries(haystack)) {
       if (value === null || typeof value !== 'object') continue
       const session = normaliseSession({ ...(value as RawSession), session_id: key })
@@ -323,12 +388,10 @@ function normaliseQuestion(raw: RawQuestion): NormalisedQuestion | null {
 
   if (sessions.length === 0) return null
 
-  // Gold session identifiers can live under multiple keys depending on dataset revision.
+  // Gold session identifiers — answer_session_ids is the canonical "correct" set in LongMemEval
   let gold: string[] = []
   if (Array.isArray(raw.answer_session_ids)) {
     gold = raw.answer_session_ids.filter((s): s is string => typeof s === 'string')
-  } else if (Array.isArray(raw.haystack_session_ids)) {
-    gold = raw.haystack_session_ids.filter((s): s is string => typeof s === 'string')
   }
   if (gold.length === 0) return null
 
@@ -349,9 +412,15 @@ function normaliseSession(raw: RawSession): NormalisedSession | null {
   const messages = Array.isArray(raw.messages) ? raw.messages : []
   if (messages.length === 0) return null
 
-  const lines: string[] = []
+  // ── Match MemPalace methodology: only index USER messages ──
+  // Their longmemeval_bench.py granularity="session" mode does:
+  //   user_turns = [t["content"] for t in session if t["role"] == "user"]
+  //   doc = "\n".join(user_turns)
+  // Including assistant messages pollutes embeddings with boilerplate.
+  const userContent: string[] = []
   for (const msg of messages) {
     const role = typeof msg.role === 'string' ? msg.role : 'user'
+    if (role !== 'user') continue
     const content =
       typeof msg.content === 'string'
         ? msg.content
@@ -359,11 +428,11 @@ function normaliseSession(raw: RawSession): NormalisedSession | null {
           ? msg.text
           : ''
     if (content.length === 0) continue
-    lines.push(`${role}: ${content}`)
+    userContent.push(content)
   }
-  if (lines.length === 0) return null
+  if (userContent.length === 0) return null
 
-  return { sessionId, content: lines.join('\n\n') }
+  return { sessionId, content: userContent.join('\n') }
 }
 
 // ── HTTP helpers ───────────────────────────────────────────────────────────
@@ -627,7 +696,7 @@ async function run(): Promise<number> {
   }
 
   const datasetSize = (await stat(DATASET_PATH)).size
-  const questions = await loadQuestions(opts.limit)
+  const questions = await loadQuestions(opts.limit, opts.offset, opts.stratified)
   log(`Loaded ${questions.length} question(s) from dataset (${formatBytes(datasetSize)})`)
 
   const outcomes: QuestionOutcome[] = []
@@ -644,14 +713,21 @@ async function run(): Promise<number> {
     const importStart = Date.now()
 
     if (!opts.skipImport) {
-      for (const session of q.sessions) {
-        try {
-          const docId = await importSession(opts.apiUrl, session)
-          docIdBySessionId.set(session.sessionId, docId)
-        } catch (err) {
-          importFailures++
-          if (opts.verbose) {
-            log(`  ! import ${session.sessionId}: ${(err as Error).message}`)
+      // Parallel import with concurrency limit (Gemini embedding API allows ~10 concurrent)
+      const CONCURRENCY = 10
+      for (let i = 0; i < q.sessions.length; i += CONCURRENCY) {
+        const batch = q.sessions.slice(i, i + CONCURRENCY)
+        const results = await Promise.allSettled(
+          batch.map(session => importSession(opts.apiUrl, session).then(docId => ({ session, docId }))),
+        )
+        for (const r of results) {
+          if (r.status === 'fulfilled') {
+            docIdBySessionId.set(r.value.session.sessionId, r.value.docId)
+          } else {
+            importFailures++
+            if (opts.verbose) {
+              log(`  ! import failed: ${(r.reason as Error).message}`)
+            }
           }
         }
       }

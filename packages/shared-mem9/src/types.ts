@@ -15,10 +15,10 @@ export interface LlmConfig {
 
 export interface EmbedderConfig {
   /** Embedding provider */
-  provider: 'gemini' | 'openai'
-  /** API key for the embedding provider */
+  provider: 'gemini' | 'openai' | 'local'
+  /** API key for the embedding provider (not needed for 'local') */
   apiKey: string
-  /** Model name (e.g. gemini-embedding-2-preview) */
+  /** Model name. For 'local', use a HuggingFace ID like 'Xenova/all-MiniLM-L6-v2' */
   model: string
   /** Dimensions override (leave undefined for provider default) */
   dimensions?: number

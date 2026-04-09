@@ -1029,12 +1029,19 @@ intelRouter.post('/code-search', async (c) => {
     // Resolve collection name
     const collectionName = `cortex-project-${projectId}`
 
-    // Embed the query
-    const config: EmbedderConfig = {
-      provider: 'gemini' as const,
-      apiKey: resolveGeminiApiKey(),
-      model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-exp-03-07',
-    }
+    // Embed the query — respects EMBEDDING_PROVIDER env var
+    const provider = (process.env['EMBEDDING_PROVIDER'] || 'gemini') as 'gemini' | 'local'
+    const config: EmbedderConfig = provider === 'local'
+      ? {
+          provider: 'local' as const,
+          apiKey: '',
+          model: process.env['LOCAL_EMBEDDING_MODEL'] || 'Xenova/all-MiniLM-L6-v2',
+        }
+      : {
+          provider: 'gemini' as const,
+          apiKey: resolveGeminiApiKey(),
+          model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-exp-03-07',
+        }
     const embedder = new Embedder(config)
     const vector = await embedder.embed(query)
 

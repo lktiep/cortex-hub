@@ -9,6 +9,7 @@
 
 export { Mem9 } from './memory.js'
 export { Embedder } from './embedder.js'
+export { embedLocal, embedLocalBatch, getLocalEmbeddingDim } from './local-embedder.js'
 export { VectorStore } from './vector-store.js'
 export { LlmClient } from './llm.js'
 export { HistoryStore } from './history.js'

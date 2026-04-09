@@ -6,6 +6,7 @@
  */
 
 import type { EmbedderConfig, ModelSlot } from './types.js'
+import { embedLocal, embedLocalBatch } from './local-embedder.js'
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
@@ -36,6 +37,10 @@ export class Embedder {
 
   /** Embed a single text string → float vector */
   async embed(text: string): Promise<number[]> {
+    // Local provider — runs in-process via @xenova/transformers, no network
+    if (this.config.provider === 'local') {
+      return embedLocal(text, this.config.model)
+    }
     // Route through gateway if configured
     if (this.gatewayUrl) {
       return this.embedViaGateway(text)
@@ -77,6 +82,10 @@ export class Embedder {
 
   /** Embed multiple texts in batch */
   async embedBatch(texts: string[]): Promise<number[][]> {
+    // Local provider supports true batching for major speedup
+    if (this.config.provider === 'local') {
+      return embedLocalBatch(texts, this.config.model)
+    }
     return Promise.all(texts.map((t) => this.embed(t)))
   }
 
