@@ -511,17 +511,32 @@ async function importSession(
     origin: 'manual',
     category: 'benchmark',
   }
-  const created = await postJson<{ id?: string; error?: string }>(
-    `${apiUrl}/api/knowledge`,
-    body,
-    60_000,
-  )
-  if (!created.id) {
-    throw new Error(
-      `Knowledge create returned no id: ${JSON.stringify(created).slice(0, 200)}`,
-    )
+  // Retry on transient network errors (SSH tunnel drops, fetch failed, etc.)
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const created = await postJson<{ id?: string; error?: string }>(
+        `${apiUrl}/api/knowledge`,
+        body,
+        60_000,
+      )
+      if (!created.id) {
+        throw new Error(
+          `Knowledge create returned no id: ${JSON.stringify(created).slice(0, 200)}`,
+        )
+      }
+      return created.id
+    } catch (err) {
+      lastErr = err
+      const msg = (err as Error).message
+      if (msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('ETIMEDOUT')) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+        continue
+      }
+      throw err
+    }
   }
-  return created.id
+  throw lastErr
 }
 
 async function searchKnowledge(

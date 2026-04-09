@@ -157,15 +157,14 @@ Plus **plan quality** (`cortex_plan_quality`) — 8-criterion plan assessment be
 
 Reproducible retrieval benchmarks against industry-standard datasets, comparing Cortex Hub against [MemPalace](https://github.com/milla-jovovich/mempalace) (96.6% R@5 published baseline).
 
-### LongMemEval-S (30 questions stratified, 6 categories)
+### LongMemEval-S full 500 questions
 
 | Setup | R@5 | R@10 | NDCG@10 | Duration | Cost |
 |---|---|---|---|---|---|
-| Cortex Hub (Gemini 768d) | **96.7%** | 96.7% | 1.31 | 480s | $$ |
-| **Cortex Hub (local MiniLM 384d)** | **96.7%** ⭐ | **100%** | 1.28 | **75s** | **$0** |
+| **Cortex Hub** (local MiniLM 384d) | **93.8%** | **97.0%** | **1.36** | 20.7 min | **$0** |
 | MemPalace (raw) | 96.6% | 98.2% | 0.889 | ~5 min | $0 |
 
-**Cortex matches MemPalace's R@5 with both providers and beats it on R@10 + NDCG@10.** Local embedding (~25MB MiniLM via `@huggingface/transformers`) gives identical retrieval quality to Gemini at 6.4x the speed and zero cost.
+Cortex is **2.8 points behind on R@5** but **53% ahead on NDCG@10** — when Cortex retrieves the right session, it puts it at rank #1 far more often. Strong on `knowledge-update` (97.4%) and `multi-session` (97.0%). Weakest on `temporal-reasoning` (90.2%) and `single-session-preference` (90%).
 
 ```bash
 # Run with local embedder (no API key needed, fastest)
@@ -180,8 +179,7 @@ pnpm --filter @cortex/benchmarks bench:longmemeval --cleanup
 
 | Benchmark | Status | Our Score | Reference |
 |-----------|--------|-----------|-----------|
-| **LongMemEval (30 stratified)** | ✅ Done | **96.7% R@5** | MemPalace 96.6% R@5 |
-| LongMemEval (full 500) | 🔄 Pending | TBD | MemPalace 96.6% R@5 |
+| **LongMemEval (full 500)** | ✅ Done | **93.8% R@5, NDCG 1.36** | MemPalace 96.6% R@5, 0.89 NDCG |
 | ConvoMem | 📋 Planned | TBD | MemPalace 92.9% |
 | LoCoMo | 📋 Planned | TBD | — |
 | MemBench | 📋 Planned | TBD | MemPalace 80.3% R@5 |

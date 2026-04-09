@@ -132,29 +132,39 @@ placement show up there before they show up in R@5.
 
 | Date       | Cortex ver | Embedder            | Slice               | R@5    | R@10   | NDCG@10 | Duration | Notes                              |
 | ---------- | ---------- | ------------------- | ------------------- | ------ | ------ | ------- | -------- | ---------------------------------- |
-| 2026-04-09 | v0.5.45    | Gemini API (768d)   | 30 stratified       | 96.7%  | 96.7%  | 1.314   | 480s     | Apples-to-apples vs MemPalace      |
-| 2026-04-09 | v0.5.50    | local MiniLM (384d) | 30 stratified       | 96.7%  | 100%   | 1.279   | 75s      | **Same score, 6.4x faster, free**  |
-| -          | -          | -                   | MemPalace baseline  | 96.6%  | 98.2%  | 0.889   | 5 min    | Published headline (raw mode)      |
+| 2026-04-09 | v0.5.52    | local MiniLM (384d) | **full 500**        | **93.8%** | **97.0%** | **1.363** | **20.7m** | **Definitive run**                 |
+| 2026-04-09 | v0.5.50    | local MiniLM (384d) | 30 stratified       | 96.7%  | 100%   | 1.279   | 75s      | Stratified sample                  |
+| 2026-04-09 | v0.5.45    | Gemini API (768d)   | 30 stratified       | 96.7%  | 96.7%  | 1.314   | 480s     | Cross-check Gemini vs local        |
+| -          | -          | -                   | MemPalace baseline  | 96.6%  | 98.2%  | 0.889   | ~5 min   | Published headline (raw mode)      |
+
+**Headline (full 500 questions, local embedder)**
+
+- **R@5 93.8%** — 2.8 points behind MemPalace (96.6%)
+- **R@10 97.0%** — 1.2 points behind MemPalace (98.2%)
+- **NDCG@10 1.363** — **53% higher than MemPalace's 0.889** (top results much more relevant)
+- 500 questions in 20.7 minutes = 2.5s/question on a $4.50/mo VPS
+- Search latency: 15-25ms per query (no API, pure local)
+
+**Per-category (full 500, local embedder)**
+
+| Type                       | N   | R@5   | R@10  | NDCG@10 | Notes                                  |
+| -------------------------- | --- | ----- | ----- | ------- | -------------------------------------- |
+| knowledge-update           | 78  | 97.4% | 100%  | 1.55    | Best — temporal fact updates           |
+| multi-session              | 133 | 97.0% | 98.5% | 1.68    | Best — cross-session retrieval         |
+| single-session-assistant   | 56  | 94.6% | 96.4% | 0.99    |                                        |
+| single-session-user        | 70  | 91.4% | 95.7% | 0.82    |                                        |
+| temporal-reasoning         | 133 | 90.2% | 94.7% | 1.50    | Weakest — needs date reasoning         |
+| single-session-preference  | 30  | 90.0% | 96.7% | 0.84    | Weakest — indirect preferences         |
 
 **Observations**
 
-- Cortex matches MemPalace's R@5 (96.7% vs 96.6%) on stratified 30-question sample
-- Local embedding produces **identical R@5** to Gemini at **6.4x the speed**
-- Local mode actually beats Gemini on `multi-session` (100% vs 80%) and on R@10 (100% vs 96.7%)
-- NDCG@10 noticeably higher than MemPalace's 0.889 — top-ranked results are stronger
-- Misses are concentrated in `single-session-user` (80% — 1 out of 5) — same model, dataset
-  category-specific weakness, not a system issue
-
-**Per-category (stratified 30, local embedder)**
-
-| Type                       | R@5   |
-| -------------------------- | ----- |
-| knowledge-update           | 100%  |
-| multi-session              | 100%  |
-| single-session-assistant   | 100%  |
-| single-session-preference  | 100%  |
-| single-session-user        | 80%   |
-| temporal-reasoning         | 100%  |
+- Cortex matches MemPalace within ~3% on full dataset using free local embedding
+- NDCG@10 of 1.363 is dramatically higher than MemPalace's 0.889 — when Cortex gets it
+  right, it nails the top rank, not just top-5
+- Multi-session and knowledge-update are STRONG (>97%), suggesting embedding does
+  generalize across conversation boundaries
+- Temporal reasoning + indirect preferences are the systematic weakness — opportunity
+  for improvement via hall_type filtering or temporal-aware re-ranking
 
 ## Roadmap
 
