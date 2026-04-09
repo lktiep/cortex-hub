@@ -52,7 +52,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
   // ── code_search — query codebase concepts and workflows ──
   server.tool(
     'cortex_code_search',
-    'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. Accepts repo name (e.g. "cortex-hub"), git URL, or projectId.',
+    'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. Accepts repo name (e.g. "cortex-hub"), git URL, or projectId. OMIT repo to search across ALL indexed projects in parallel and get ranked hints (perfect when you don\'t know which project has the code).',
     {
       query: z.string().describe('Natural language or code query to search for'),
       repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL. Preferred over projectId.'),

@@ -301,53 +301,139 @@ intelRouter.post('/search', async (c) => {
       limit: limit ?? 5,
       content: true,
     }
-
-    // Smart repo name resolution with multi-candidate fallback
-    const repoCandidates: string[] = projectId ? resolveRepoNames(projectId) : []
-    if (projectId) {
-      params.repo = repoCandidates[0]
-      logger.info(`Code search: trying candidates ${JSON.stringify(repoCandidates)} from "${projectId}"`)
-    }
-
     if (branch) {
       params.branch = branch
     }
 
+    // ── No projectId: smart fan-out search across ALL indexed repos ──
+    if (!projectId) {
+      logger.info(`Code search: fan-out across all repos for "${query}"`)
+      const allProjects = db.prepare(
+        `SELECT id, slug, name, indexed_symbols FROM projects
+         WHERE indexed_symbols > 0
+         ORDER BY indexed_symbols DESC`
+      ).all() as Array<{ id: string; slug: string; name: string; indexed_symbols: number }>
+
+      if (allProjects.length === 0) {
+        return c.json({
+          success: true,
+          data: {
+            query,
+            limit: limit ?? 5,
+            source: 'gitnexus',
+            formatted: '⚠️ No indexed repositories found. Index a project via Code Indexing in the dashboard.',
+            results: null,
+          },
+        })
+      }
+
+      // Run searches in parallel with concurrency limit
+      const CONCURRENCY = 8
+      type ProjectHit = { project: typeof allProjects[0]; result: unknown; error?: string }
+      const hits: ProjectHit[] = []
+
+      for (let i = 0; i < allProjects.length; i += CONCURRENCY) {
+        const batch = allProjects.slice(i, i + CONCURRENCY)
+        const batchResults = await Promise.allSettled(
+          batch.map(async (p) => {
+            const candidates = resolveRepoNames(p.id)
+            for (const candidate of candidates) {
+              try {
+                const r = await callGitNexus('query', { ...params, repo: candidate, limit: 3 })
+                return { project: p, result: r }
+              } catch { /* try next candidate */ }
+            }
+            return { project: p, result: null, error: 'no candidates worked' }
+          })
+        )
+        for (const r of batchResults) {
+          if (r.status === 'fulfilled' && r.value.result) {
+            hits.push(r.value as ProjectHit)
+          }
+        }
+      }
+
+      // Filter out empty results — count meaningful hits per project
+      type ScoredHit = { project: typeof allProjects[0]; result: unknown; score: number }
+      const scoredHits: ScoredHit[] = hits.map(h => {
+        const r = h.result as Record<string, unknown> | null
+        const raw = (r?.raw as string) ?? ''
+        // Score: count process/definition mentions (rough relevance)
+        const isEmpty = raw.includes('No matching execution flows') || raw.includes('No matching results')
+        const procCount = (raw.match(/▸/g) ?? []).length
+        const defCount = (raw.match(/→/g) ?? []).length
+        return {
+          project: h.project,
+          result: h.result,
+          score: isEmpty ? 0 : procCount * 10 + defCount,
+        }
+      }).filter(s => s.score > 0)
+
+      scoredHits.sort((a, b) => b.score - a.score)
+
+      // Build aggregated formatted output
+      const lines: string[] = []
+      lines.push(`🔍 Multi-project search: "${query}"`)
+      lines.push(`Scanned ${allProjects.length} repos, found matches in ${scoredHits.length}\n`)
+
+      if (scoredHits.length === 0) {
+        lines.push('⚠️ No matches found in any indexed repository.')
+        lines.push('\n**Hints:**')
+        lines.push('• Try broader search terms')
+        lines.push('• Use cortex_cypher for direct symbol queries')
+        lines.push('• Check cortex_list_repos to verify your target project is indexed')
+      } else {
+        // Show top results from top projects
+        const topProjects = scoredHits.slice(0, 5)
+        for (const hit of topProjects) {
+          const projName = hit.project.name || hit.project.slug || hit.project.id
+          lines.push(`\n## ${projName} (${hit.project.indexed_symbols} symbols)`)
+          const raw = ((hit.result as Record<string, unknown>)?.raw as string) ?? ''
+          // Show first ~15 lines of result
+          const truncated = raw.split('\n').slice(0, 15).join('\n')
+          lines.push(truncated)
+          lines.push(`💡 Refine: cortex_code_search(query: "${query}", repo: "${hit.project.slug ?? hit.project.name}")`)
+        }
+
+        if (scoredHits.length > 5) {
+          lines.push(`\n_+${scoredHits.length - 5} more projects with matches. Use \`repo:\` to narrow._`)
+        }
+      }
+
+      return c.json({
+        success: true,
+        data: {
+          query,
+          limit: limit ?? 5,
+          source: 'gitnexus',
+          formatted: lines.join('\n'),
+          results: { multiProject: true, hits: scoredHits.length, scanned: allProjects.length },
+        },
+      })
+    }
+
+    // ── projectId provided: original single-repo search with fallback ──
+    const repoCandidates: string[] = resolveRepoNames(projectId)
+    params.repo = repoCandidates[0]
+    logger.info(`Code search: trying candidates ${JSON.stringify(repoCandidates)} from "${projectId}"`)
+
     let results: unknown
     let lastError: unknown = null
 
-    // Try each candidate repo name until one works
-    if (repoCandidates.length > 0) {
-      for (const candidate of repoCandidates) {
-        try {
-          params.repo = candidate
-          results = await callGitNexus('query', params)
-          logger.info(`Code search: success with repo "${candidate}"`)
-          lastError = null
-          break
-        } catch (err) {
-          lastError = err
-          logger.info(`Code search: "${candidate}" failed, trying next...`)
-        }
+    for (const candidate of repoCandidates) {
+      try {
+        params.repo = candidate
+        results = await callGitNexus('query', params)
+        logger.info(`Code search: success with repo "${candidate}"`)
+        lastError = null
+        break
+      } catch (err) {
+        lastError = err
+        logger.info(`Code search: "${candidate}" failed, trying next...`)
       }
-
-      // Final fallback: try without repo filter (search all repos)
-      if (lastError) {
-        logger.info('Code search: all candidates failed, trying without repo filter')
-        delete params.repo
-        try {
-          results = await callGitNexus('query', params)
-          lastError = null
-        } catch (err) {
-          lastError = err
-        }
-      }
-
-      if (lastError) throw lastError
-    } else {
-      // No projectId — search across all repos
-      results = await callGitNexus('query', params)
     }
+
+    if (lastError) throw lastError
 
     // Format results as readable report
     const formatted = formatSearchResults(query, results)
