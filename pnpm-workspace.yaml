@@ -1,6 +1,7 @@
 packages:
   - 'packages/*'
   - 'apps/*'
+  - 'benchmarks'
 allowBuilds:
   better-sqlite3: true
   esbuild: true

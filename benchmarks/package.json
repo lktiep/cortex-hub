@@ -1,0 +1,16 @@
+{
+  "name": "@cortex/benchmarks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reproducible retrieval-quality benchmarks for Cortex Hub knowledge_search",
+  "scripts": {
+    "bench:longmemeval": "tsx longmemeval_bench.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.19.0"
+  }
+}
