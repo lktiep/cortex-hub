@@ -176,7 +176,12 @@ knowledgeRouter.post('/', async (c) => {
       const testVec = await embedder.embed('test')
       vectorSize = testVec.length
     } catch (err) {
-      return c.json({ error: `Embedding failed: ${String(err).slice(0, 200)}` }, 500)
+      const stack = (err as Error)?.stack ?? ''
+      logger.error(`[knowledge] Embedding test failed: ${String(err)}\n${stack}`)
+      return c.json({
+        error: `Embedding failed: ${String(err).slice(0, 200)}`,
+        stack: stack.slice(0, 1500),
+      }, 500)
     }
 
     await vectorStore.ensureCollection(vectorSize)
