@@ -8,14 +8,14 @@
 <h1 align="center">Cortex Hub</h1>
 
 <p align="center">
-  <strong>Self-hosted AI Agent Intelligence Platform</strong><br/>
-  <em>Unified MCP gateway · Persistent memory · Code intelligence · Quality enforcement</em>
+  <strong>Self-hosted AI Agent Memory + Code Intelligence Platform</strong><br/>
+  <em>One MCP endpoint for every AI agent — persistent memory, AST-aware code search, quality enforcement.</em>
 </p>
 
 <p align="center">
-  <a href="#why-cortex">Why Cortex</a> ·
-  <a href="#architecture">Architecture</a> ·
+  <a href="#why-cortex">Why</a> ·
   <a href="#features">Features</a> ·
+  <a href="#benchmarks">Benchmarks</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#mcp-tools">MCP Tools</a> ·
   <a href="#docs">Docs</a>
@@ -26,7 +26,6 @@
   <img src="https://img.shields.io/badge/node-%E2%89%A522-43853d?style=flat-square&logo=node.js&logoColor=white" alt="Node" />
   <img src="https://img.shields.io/badge/pnpm-9.x-F69220?style=flat-square&logo=pnpm&logoColor=white" alt="pnpm" />
   <img src="https://img.shields.io/badge/docker-24%2B-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" />
-  <img src="https://img.shields.io/badge/phase_6-GA_polish-blue?style=flat-square" alt="Phase" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License" />
 </p>
 
@@ -34,31 +33,148 @@
 
 ## Why Cortex?
 
-Every AI coding agent today works in **isolation** — no shared memory, no knowledge transfer, no quality tracking. When you switch between Claude Code, Cursor, Gemini, or a headless bot, each starts from zero.
+Every AI coding agent works in **isolation** — no shared memory, no knowledge transfer, no cross-project search. When you switch from Claude Code to Cursor to Antigravity, each starts from zero.
 
-**Cortex Hub** solves this by providing a single self-hosted backend that **all your agents connect to** via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/):
+**Cortex Hub** is a single self-hosted backend that **all your agents connect to** via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/):
 
 ```
-                    You
-                     │
-        ┌────────────┼────────────┐
-        ▼            ▼            ▼
-   Claude Code    Cursor     Antigravity
-        │            │            │
-        └────────────┼────────────┘
-                     │
-              ┌──────▼──────┐
-              │  Cortex Hub │  ← single MCP endpoint
-              │             │
-              │  Memory     │  Agents remember across sessions
-              │  Knowledge  │  Shared, searchable knowledge base
-              │  Code Intel │  AST-aware search + impact analysis
-              │  Quality    │  Build/typecheck/lint enforcement
-              │  Sessions   │  Cross-agent task handoff
-              └─────────────┘
+        Claude Code    Cursor    Antigravity    Codex    Gemini
+              │          │            │           │         │
+              └──────────┴────────────┴───────────┴─────────┘
+                                  │
+                          ┌───────▼────────┐
+                          │  Cortex Hub    │  ← single MCP endpoint
+                          │                │
+                          │  Memory        │  Hierarchical, temporal-aware
+                          │  Knowledge     │  Recipe-driven auto-learning
+                          │  Code Intel    │  AST graph + multi-project search
+                          │  LLM Gateway   │  Multi-provider with budget
+                          │  Quality Gates │  Build/typecheck/lint enforcement
+                          └────────────────┘
 ```
 
-> **Zero data leaves your infrastructure.** Every component runs on your own server behind a Cloudflare Tunnel.
+> **Zero data leaves your infrastructure.** Runs on your own server behind a Cloudflare Tunnel. ~$5/month VPS handles 5+ concurrent agents.
+
+---
+
+## Features
+
+### 🧠 Code Intelligence (GitNexus)
+
+| Capability | Tool | What It Does |
+|---|---|---|
+| **Multi-project search** | `cortex_code_search` | Omit `repo` to scan ALL indexed projects in parallel — ranked hints |
+| **360° symbol context** | `cortex_code_context` | Callers, callees, execution flows for any function/class |
+| **Blast radius** | `cortex_code_impact` | See downstream impact before editing |
+| **Pre-commit risk** | `cortex_detect_changes` | Analyze uncommitted changes, find affected flows |
+| **Direct graph queries** | `cortex_cypher` | Cypher against the AST knowledge graph |
+| **Multi-repo registry** | `cortex_list_repos` | All indexed repos discoverable by name or slug |
+| **Auto-reindex** | `cortex_code_reindex` | Trigger after pushes |
+| **Read source** | `cortex_code_read` | Fetch raw file content from any indexed repo |
+
+**Smart cross-project search** (added Apr 2026): call `cortex_code_search(query: "...")` without specifying `repo` and Cortex fans out across every indexed repo, runs both flow + symbol search, and returns a ranked list with refine hints. No more `list_repos → guess → retry` loops.
+
+### 💾 Hierarchical Memory + Knowledge
+
+**Memory** (per-agent, semantic recall across sessions):
+- `cortex_memory_store` / `cortex_memory_search`
+- Branch-scoped, project-scoped, with semantic deduplication
+
+**Knowledge Base** (team-wide, structured):
+- `cortex_knowledge_store` / `cortex_knowledge_search`
+- **Hall types** (MemPalace-inspired): `fact`, `event`, `discovery`, `preference`, `advice`, `general`
+- **Temporal validity**: `valid_from` / `invalidated_at` — query "what was true on date X"
+- **Supersession chain**: mark old facts as replaced by new ones
+- **Timeline view**: `GET /api/knowledge/timeline` — chronological exploration
+
+```typescript
+// Store a fact with validity window
+cortex_knowledge_store({
+  title: "JWT secret rotation policy",
+  content: "Rotate every 90 days, ...",
+  hallType: "fact",
+  validFrom: "2026-01-01"
+})
+
+// Later, when policy changes:
+POST /api/knowledge/{id}/invalidate
+  body: { supersededBy: "new-doc-id" }
+```
+
+### 🍳 Recipe System (Auto-Learning)
+
+Inspired by [HKUDS/OpenSpace](https://github.com/HKUDS/OpenSpace) — Cortex captures patterns from completed work automatically:
+
+- **Auto-capture** on `task.complete` and `session_end` — if execution log shows a non-trivial workflow, an LLM extracts it as a reusable recipe
+- **Quality metrics**: `selection_count`, `applied_count`, `completion_count`, `fallback_count` per doc
+- **Hybrid search ranking**: `vector_similarity * 0.6 + effective_rate * 0.3 + recency * 0.1` (only when `selection_count >= 3`)
+- **Evolution**: docs with `fallback_rate > 0.4` flagged for LLM rewrite via `/health-check`
+- **Lineage DAG**: parent → derived → fixed relationships tracked
+
+Dashboard `/knowledge` page shows the **Recipe Health Panel** — capture pipeline status, quality distribution, origin breakdown (manual/captured/derived/fixed), recent capture log.
+
+### 🔀 LLM Gateway (CLIProxy)
+
+- **Multi-provider**: Gemini, OpenAI, Anthropic, any OpenAI-compatible
+- **Ordered fallback chains** with automatic retry (429/502/503/504)
+- **Format translation** (Gemini ↔ OpenAI) handled transparently
+- **Budget enforcement** — daily/monthly token limits from Dashboard
+- **Complexity-based routing** — `model: "auto"` selects tier based on task
+
+### 🛡️ Quality Gates
+
+4-dimension scoring after every session:
+
+| Dimension | Weight | Measures |
+|-----------|--------|----------|
+| Build | 25 | Code compiles |
+| Regression | 25 | No existing tests broken |
+| Standards | 25 | Follows conventions |
+| Traceability | 25 | Changes linked to requirements |
+
+Plus **plan quality** (`cortex_plan_quality`) — 8-criterion plan assessment before execution.
+
+### 🔒 Compliance Enforcement
+
+- **Session compliance score** — graded A/B/C/D at session end across 5 categories (Discovery, Safety, Learning, Contribution, Lifecycle)
+- **Adaptive hints** — every MCP response includes context-aware suggestions
+- **Hook-enforced workflow** — `/cs` v2.0 blocks edits until knowledge + memory recall called
+- **Pre-commit gates** — git commits blocked until quality gates pass
+
+### 📊 Dashboard (13 pages)
+
+- **Overview** — hero stats + per-project cards + recipe health
+- **Sessions** — agent session list with API key tracking
+- **Quality** — A→F grades with trend charts
+- **Knowledge** — browse + Recipe Health Panel + capture log
+- **Projects** — repo management with branch-aware indexing
+- **Providers / Usage / Keys / Organizations / Settings** — full admin
+- Mobile-responsive, dark theme
+
+---
+
+## Benchmarks
+
+We're building reproducible benchmarks against industry-standard datasets to measure where we stand vs alternatives like [MemPalace](https://github.com/milla-jovovich/mempalace) (96.6% R@5 LongMemEval).
+
+```bash
+# Run LongMemEval against our knowledge_search
+pnpm --filter @cortex/benchmarks bench:longmemeval --limit 50 --api-url http://localhost:4000
+
+# Cleanup test data
+pnpm --filter @cortex/benchmarks bench:longmemeval --cleanup
+```
+
+**Status:**
+
+| Benchmark | Status | Our Score | Reference |
+|-----------|--------|-----------|-----------|
+| LongMemEval | 🔄 Setup ready | TBD | MemPalace 96.6% R@5 |
+| ConvoMem | 📋 Planned | TBD | MemPalace 92.9% |
+| LoCoMo | 📋 Planned | TBD | — |
+| MemBench | 📋 Planned | TBD | MemPalace 80.3% R@5 |
+
+See [`benchmarks/README.md`](benchmarks/README.md) for methodology and how to interpret results.
 
 ---
 
@@ -67,17 +183,17 @@ Every AI coding agent today works in **isolation** — no shared memory, no know
 ```mermaid
 graph TB
     subgraph Agents["AI Agents (any MCP client)"]
-        AG["🤖 Antigravity<br/>(Gemini)"]
-        CC["🐙 Claude Code"]
-        CU["⚡ Cursor"]
-        WS["🌊 Windsurf"]
-        BOT["🤖 Headless Bots"]
+        AG["Antigravity"]
+        CC["Claude Code"]
+        CU["Cursor"]
+        WS["Windsurf"]
+        CX["Codex"]
     end
 
     subgraph Gateway["Hub MCP Server"]
-        AUTH["🔐 API Key Auth"]
-        ROUTER["🔀 Tool Router (18 tools)"]
-        TEL["📊 Telemetry + Hints Engine"]
+        AUTH["API Key Auth"]
+        ROUTER["Tool Router (18+ tools)"]
+        TEL["Telemetry + Hints Engine"]
     end
 
     subgraph Services["Backend Services (Docker)"]
@@ -89,313 +205,129 @@ graph TB
     end
 
     subgraph Frontend["Dashboard"]
-        DASH["Next.js 15<br/>React 19<br/>(13 pages)"]
+        DASH["Next.js 15<br/>(13 pages, static export)"]
     end
 
     Agents --> AUTH --> ROUTER --> TEL
     TEL --> Services
-    ROUTER -->|"code_search, code_context<br/>code_impact, cypher"| GN
-    ROUTER -->|"memory_search, memory_store<br/>knowledge_search"| QD
-    ROUTER -->|"quality_report, session_start<br/>plan_quality"| DB
-    CLIP --> GEM["Gemini"] & OAI["OpenAI"] & ANT["Anthropic"]
     DASH --> DB
 ```
-
-> **Note:** mem9 (embedding pipeline) runs in-process within the Dashboard API container — not as a separate service. It connects to Qdrant for vector storage.
 
 ### Network Topology
 
 ```
 Internet
-  │
-  ├── cortex-mcp.jackle.dev ──── Hub MCP Server (Hono, Streamable HTTP)
-  └── hub.jackle.dev ─────────── Dashboard UI (Nginx proxied to /api/)
+  ├── cortex-mcp.jackle.dev ──── Hub MCP Server
+  └── hub.jackle.dev ─────────── Dashboard UI
                                     │
                               Cloudflare Tunnel
                                     │
                           ┌─────────┼─────────┐
                           │  Docker Compose    │
-                          │  ├─ dashboard-web  │  ← Nginx (UI + API Proxy)
-                          │  ├─ cortex-api     │  ← Internal API + mem9
-                          │  ├─ cortex-mcp     │  ← 18 MCP tools
-                          │  ├─ qdrant         │  ← vectors + knowledge
-                          │  ├─ gitnexus       │  ← AST code graph
-                          │  ├─ llm-proxy      │  ← CLIProxy (internal)
-                          │  └─ watchtower     │  ← auto-update images
+                          │  ├─ dashboard-web  │  Nginx (UI + API proxy)
+                          │  ├─ cortex-api     │  Internal API + mem9
+                          │  ├─ cortex-mcp     │  18+ MCP tools
+                          │  ├─ qdrant         │  vectors + knowledge
+                          │  ├─ gitnexus       │  AST code graph
+                          │  ├─ llm-proxy      │  CLIProxy
+                          │  └─ watchtower     │  auto-update
                           └────────────────────┘
-                          All ports internal.
                           Zero open ports on host.
 ```
 
 ---
 
-## Features
-
-### 🧠 Code Intelligence — GitNexus
-
-| Capability | Tool | How It Works |
-|---|---|---|
-| **Semantic code search** | `cortex_code_search` | Natural language → AST-aware execution flows across all repos |
-| **360° symbol context** | `cortex_code_context` | Every caller, callee, import chain for any function/class |
-| **Blast radius analysis** | `cortex_code_impact` | See downstream impact before editing any symbol |
-| **Pre-commit risk** | `cortex_detect_changes` | Analyze uncommitted changes, find affected flows |
-| **Graph queries** | `cortex_cypher` | Direct Cypher queries against the code knowledge graph |
-| **Multi-repo indexing** | `cortex_list_repos` | All repositories in a single graph, discoverable by agents |
-| **Auto-reindexing** | `cortex_code_reindex` | Trigger re-indexing after code changes |
-
-### 💾 Persistent Agent Memory
-
-Agents **remember** across sessions and conversations.
-
-```
-Session 1 (Claude Code):  "The auth middleware uses JWT with RS256"
-                                    ↓ cortex_memory_store
-Session 2 (Cursor):        cortex_memory_search("auth middleware") 
-                                    → "JWT with RS256" ✓
-```
-
-- Per-agent and per-project isolation with optional shared spaces
-- Semantic recall (search by meaning, not keywords)
-- Scoped to branch — agents on `feature/auth` recall branch-specific context
-- Automatic deduplication and relevance ranking
-
-### 📚 Shared Knowledge Base — Qdrant
-
-Agents contribute and consume a team-wide knowledge base:
-
-- **Auto-contribution** — agents store bug fixes, patterns, and decisions during work
-- **Semantic search** — find relevant knowledge by concept, not exact match
-- **Tag & project filtering** — organized by domain and repository
-- **Cross-project sharing** — deployment patterns, API conventions, etc.
-- **Auto-docs pipeline** — index repo docs → mem9 embed → auto-build knowledge items
-
-### 🔀 LLM API Gateway
-
-Centralized proxy for all LLM/embedding calls:
-
-- **Multi-provider** — Gemini, OpenAI, Anthropic, or any OpenAI-compatible API
-- **Ordered fallback chains** — automatic retry on 429 / 502 / 503 / 504
-- **Gemini ↔ OpenAI format translation** — handled transparently
-- **Budget enforcement** — daily/monthly token limits from Dashboard
-- **Usage logging** — exact token counts per agent, model, and day
-- **Complexity-based routing** — `model: "auto"` auto-selects tier based on task complexity
-- **OpenAI-compatible** — `/v1/embeddings` + `/v1/chat/completions`
-
-### 🛡️ Quality Gates
-
-4-dimension scoring after every work session:
-
-| Dimension | Weight | What It Measures |
-|-----------|--------|-----------------|
-| Build | 25 | Code compiles without errors |
-| Regression | 25 | No existing tests broken |
-| Standards | 25 | Follows code-conventions.md |
-| Traceability | 25 | Changes linked to requirements |
-
-Grades A→F with trend tracking. Auto-generated git hooks via `project-profile.json`.
-
-### 🔄 Session Handoff
-
-One agent picks up where another left off:
-
-- **Structured context** — files changed, decisions made, blockers
-- **API key tracking** — see which key initiated each session
-- **Priority queue** — pick up the most important work first
-- **Auto-expiry** — stale handoffs expire after 7 days
-
-### 📊 Dashboard
-
-![Cortex Hub Main Dashboard](docs/assets/dashboard-main.png)
-*System overview and project health tracking.*
-
-![Cortex Hub Usage Analytics](docs/assets/dashboard-usage.png)
-*Token consumption and API request analytics.*
-
-Real-time monitoring and management (13 pages):
-
-- **Overview** — hero stats bar + per-project cards with GitNexus/mem9 status
-- **Sessions** — agent session list with API key tracking + detail panel
-- **Quality** — quality reports with grade trending (A→F) + trends chart
-- **Projects** — repo management, branch-aware indexing, embedding status
-- **Knowledge** — browse and search the shared knowledge base
-- **Providers** — LLM provider management: add/test/configure, smart model discovery
-- **Usage** — token consumption by model, agent, time period + budget controls
-- **Keys** — API key management with per-key permissions
-- **Organizations** — multi-tenant org management
-- **Settings** — system configuration + version info
-- **Setup** — first-time wizard with provider configuration
-- Mobile-responsive: hamburger sidebar, 3-tier CSS breakpoints
-
-### 🔒 Compliance Enforcement
-
-Automatic tool usage tracking and guidance:
-
-- **Session compliance score** — graded A/B/C/D at session end across 5 categories (Discovery, Safety, Learning, Contribution, Lifecycle)
-- **Context-aware hints** — MCP responses include smart suggestions for what tool to use next
-- **Quality gates** — 4D scoring (Build/Regression/Standards/Traceability) with A→F grades
-- **Plan quality assessment** — `cortex_plan_quality` scores plans against 8 criteria before execution
-
----
-
 ## MCP Tools
 
-Cortex exposes **18 tools** via a single MCP endpoint. Any MCP-compatible client can use them:
+Cortex exposes **18+ tools** via a single MCP endpoint:
 
 | # | Tool | Purpose |
 |---|------|---------|
-| 1 | `cortex_session_start` | Start a development session, get project context |
+| 1 | `cortex_session_start` | Start session, get project context + relevant knowledge |
 | 2 | `cortex_session_end` | Close session with compliance grade |
-| 3 | `cortex_changes` | Check for unseen code changes from other agents |
-| 4 | `cortex_code_search` | AST-aware semantic code search (GitNexus) |
-| 5 | `cortex_code_context` | 360° symbol view: callers, callees, execution flows |
-| 6 | `cortex_code_impact` | Blast radius analysis before editing |
-| 7 | `cortex_code_reindex` | Trigger re-indexing after code changes |
-| 8 | `cortex_list_repos` | List indexed repos with project ID mapping |
-| 9 | `cortex_cypher` | Direct Cypher queries against code knowledge graph |
-| 10 | `cortex_detect_changes` | Pre-commit risk analysis on uncommitted changes |
-| 11 | `cortex_memory_search` | Recall agent memories by semantic similarity |
-| 12 | `cortex_memory_store` | Store findings for future recall |
-| 13 | `cortex_knowledge_search` | Search shared knowledge base |
-| 14 | `cortex_knowledge_store` | Contribute bug fixes, patterns, decisions |
-| 15 | `cortex_quality_report` | Report build/typecheck/lint results (4D scoring) |
-| 16 | `cortex_plan_quality` | Assess implementation plan quality before execution |
-| 17 | `cortex_tool_stats` | View token savings, tool usage analytics |
-| 18 | `cortex_health` | Check all backend service health |
+| 3 | `cortex_changes` | Check unseen changes from other agents |
+| 4 | `cortex_code_search` | Multi-project AST/symbol search with smart fan-out |
+| 5 | `cortex_code_context` | 360° symbol view |
+| 6 | `cortex_code_impact` | Blast radius analysis |
+| 7 | `cortex_code_read` | Read raw source from any indexed repo |
+| 8 | `cortex_code_reindex` | Trigger re-indexing |
+| 9 | `cortex_list_repos` | List indexed repos with names + slugs |
+| 10 | `cortex_cypher` | Direct graph queries |
+| 11 | `cortex_detect_changes` | Pre-commit risk analysis |
+| 12 | `cortex_memory_search` | Recall agent memories |
+| 13 | `cortex_memory_store` | Store findings |
+| 14 | `cortex_knowledge_search` | Search knowledge base (with hall_type + asOf filters) |
+| 15 | `cortex_knowledge_store` | Store knowledge with hall type + validity |
+| 16 | `cortex_quality_report` | Report build/test/lint results |
+| 17 | `cortex_plan_quality` | 8-criterion plan assessment |
+| 18 | `cortex_tool_stats` | Token savings + tool usage analytics |
+| 19 | `cortex_health` | Backend service health check |
 
-> **Full API reference:** [`docs/api/hub-mcp-reference.md`](docs/api/hub-mcp-reference.md)
+**Cross-project search just works** — no repo lookup needed:
+```typescript
+cortex_code_search(query: "auth middleware jwt")  // scans ALL projects
+cortex_code_search(query: "auth middleware jwt", repo: "cortex-hub")  // narrow to one
+```
+
+> Full API reference: [`docs/api/hub-mcp-reference.md`](docs/api/hub-mcp-reference.md)
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-
-- Docker 24+ with Compose v2
-- Node.js 22 LTS
-- pnpm 9.x
-- A Cloudflare account (free tier)
-
 ### Run Agent (No Clone Needed)
 
-Launch a Cortex agent daemon on any machine — no repo clone required. The bootstrap script downloads everything to a temp directory, installs the `ws` npm package, and starts the full agent daemon with WebSocket connection, task pickup, auto-reconnect, and log rotation.
-
-> **Prerequisites:** Node.js 22+, npm, and at least one AI engine CLI installed.
-
-**Supported engines:**
-
-| Engine | CLI | Install |
-|--------|-----|---------|
-| Claude Code | `claude` | `npm i -g @anthropic-ai/claude-code` |
-| OpenAI Codex | `codex` | `npm i -g @openai/codex` |
-| Antigravity | `antigravity` | [antigravity.dev](https://antigravity.dev) (own subscription) |
-| Gemini CLI | `gemini` | `npm i -g @anthropic-ai/gemini-cli` |
-
-**macOS / Linux:**
 ```bash
-# Interactive wizard — pick agent ID, IDE engine, capabilities
+# macOS / Linux — interactive wizard
 curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- launch
 
-# Quick start — headless daemon with preset
-curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- \
-  start --daemon --preset fullstack
-
-# Specific engine + agent ID
-curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- start -d \
-  CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=reviewer-1 --preset reviewer
+# Headless daemon with preset
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- start --daemon --preset fullstack
 ```
 
-**Windows (PowerShell) — native, no bash needed:**
 ```powershell
-# Download and run (one-liner)
-iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1" -OutFile $env:TEMP\run-agent.ps1; & $env:TEMP\run-agent.ps1 start
-
-# Or with daemon mode
-& $env:TEMP\run-agent.ps1 start -Daemon
+# Windows
+iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1" -OutFile $env:TEMP\run-agent.ps1
+& $env:TEMP\run-agent.ps1 start
 ```
 
-**Management (after agent is running):**
-```bash
-./scripts/cortex-agent.sh status         # Show agent status
-./scripts/cortex-agent.sh logs 100       # Last 100 log lines
-./scripts/cortex-agent.sh stop           # Stop current agent
-./scripts/cortex-agent.sh stop-all       # Stop ALL agents
-./scripts/cortex-agent.sh list           # List running agents + presets
-```
-
-The agent auto-detects Hub API key and URL from existing IDE configs (`~/.claude.json`, `~/.cursor/mcp.json`, etc.) — no manual configuration if you've already run the installer once.
-
-### One-Command Install (Full Project Setup)
-
-**macOS / Linux:**
-```bash
-curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh?t=$(date +%s)" | bash
-```
-
-**Windows (PowerShell):**
-```powershell
-$t = [int](Get-Date -UFormat %s); iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.ps1?t=$t" -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
-```
-
-**Inside Claude Code (after first install):**
-```
-/install
-```
-
-The unified `install.sh` does everything in one step:
-- ✅ Installs `/install` slash command globally (works in any project)
-- ✅ Auto-detects IDEs (Claude, Gemini, Cursor, Windsurf, VS Code, Codex)
-- ✅ Configures MCP for each detected IDE
-- ✅ Smart stack detection (Node, Go, Rust, Python, .NET, Godot — including mixed projects)
-- ✅ Glob-filtered pipelines — each check only runs when relevant files change
-- ✅ Installs enforcement hooks (Claude Code + Gemini CLI)
-- ✅ Creates instruction files (`.cursorrules`, `.windsurfrules`, etc.)
-- ✅ Injects cortex integration into `CLAUDE.md`
-- ✅ Version tracking + auto-update
-- ✅ Idempotent — safe to run multiple times
+### One-Command Project Setup
 
 ```bash
-# Check status
-bash scripts/install.sh --check
+# macOS / Linux
+curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh" | bash
 
-# Force regenerate everything
-bash scripts/install.sh --force
-
-# Specific IDEs only
-bash scripts/install.sh --tools claude,gemini
+# Windows
+iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.ps1" -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
 ```
+
+**Or inside Claude Code:** type `/install`
+
+The installer:
+- Auto-detects IDEs (Claude, Gemini, Cursor, Windsurf, VS Code, Codex)
+- Configures MCP for each
+- Installs enforcement hooks (`.claude/hooks/*`)
+- Creates project profile with stack detection
+- Auto-adds `.gitignore` entries for generated files
+- Idempotent — safe to re-run
 
 ### Server Setup (Admin)
 
 ```bash
-# 1. Clone
 git clone https://github.com/lktiep/cortex-hub.git
 cd cortex-hub
-
-# 2. Install
 corepack enable && pnpm install
-
-# 3. Configure
-cp .env.example .env
-# Edit .env with your API keys (Gemini, OpenAI, etc.)
-
-# 4. Start backend
+cp .env.example .env  # add API keys
 cd infra && docker compose up -d
-
-# 5. Build & run
-pnpm build && pnpm dev
 ```
 
-Or use the admin bootstrap:
-```bash
-bash scripts/bootstrap.sh   # Select "1) Administrator"
-```
+---
 
-### Verify
+## Multi-Agent Conductor
 
-```bash
-curl https://cortex-api.jackle.dev/health     # Dashboard API
-curl https://cortex-mcp.jackle.dev/health     # MCP Server
-```
+Cortex includes an **experimental** multi-agent orchestration layer for cross-IDE task delegation. **It is not feature-complete** — agents can already create/pickup tasks, but autonomous strategy execution and smart agent matching are still WIP.
+
+📖 See [`docs/conductor.md`](docs/conductor.md) for current capabilities, limitations, and the rough edges to expect.
 
 ---
 
@@ -403,17 +335,17 @@ curl https://cortex-mcp.jackle.dev/health     # MCP Server
 
 | Layer | Technology | Role |
 |---|---|---|
-| **MCP Server** | Hono (Node.js, Docker) | Streamable HTTP + JSON-RPC gateway (17 tools) |
-| **Code Intel** | GitNexus | AST parsing, execution flow, impact analysis, Cypher graph |
-| **Embeddings** | mem9 + Qdrant | In-process embedding pipeline → vector search |
-| **LLM Proxy** | CLIProxy | Multi-provider gateway with fallback chains |
-| **App DB** | SQLite (WAL) | Sessions, quality, usage, providers, budgets, orgs |
-| **API** | Hono | Dashboard backend REST API + mem9 in-process |
-| **Frontend** | Next.js 15 + React 19 | Dashboard web interface (static export, 13 pages) |
+| **MCP Server** | Hono on Node.js | Streamable HTTP + JSON-RPC, 18+ tools |
+| **Code Intel** | GitNexus | AST parsing, execution flow, Cypher graph |
+| **Embeddings** | mem9 + Qdrant | Vector search with semantic recall |
+| **LLM Proxy** | CLIProxy | Multi-provider with fallback chains |
+| **App DB** | SQLite (WAL) | Sessions, quality, usage, knowledge metadata |
+| **API** | Hono | Dashboard backend + mem9 in-process |
+| **Frontend** | Next.js 15 + React 19 | Static export, served by nginx |
 | **Infra** | Docker Compose | Service orchestration |
-| **Tunnel** | Cloudflare Tunnel | Secure exposure, zero open ports |
-| **Hooks** | Lefthook | Smart glob-filtered git hooks from `project-profile.json` |
-| **Monorepo** | pnpm + Turborepo | Build orchestration + caching |
+| **Tunnel** | Cloudflare Tunnel | Zero open ports |
+| **Hooks** | Lefthook | Stack-aware git hooks |
+| **Monorepo** | pnpm + Turborepo | Build orchestration |
 
 ---
 
@@ -422,41 +354,29 @@ curl https://cortex-mcp.jackle.dev/health     # MCP Server
 ```
 cortex-hub/
 ├── apps/
-│   ├── hub-mcp/                 # MCP Server (Hono, Streamable HTTP)
-│   │   └── src/tools/           #   18 MCP tools (code, memory, knowledge, quality, session, analytics)
-│   ├── dashboard-api/           # Dashboard Backend (Hono + SQLite + mem9)
-│   │   ├── routes/llm.ts        #   LLM Gateway (multi-provider proxy + complexity routing)
-│   │   ├── routes/quality.ts    #   Quality gates + session handoffs
-│   │   ├── routes/stats.ts      #   Analytics, telemetry, compliance scoring, hints engine
-│   │   ├── routes/intel.ts      #   Code intelligence proxy (GitNexus)
-│   │   └── routes/knowledge.ts  #   Knowledge base management
-│   └── dashboard-web/           # Dashboard Frontend (Next.js 15)
-│       └── src/app/             #   13 pages: dashboard, sessions, quality, orgs, ...
+│   ├── hub-mcp/                 # MCP Server — 18+ tools
+│   ├── dashboard-api/           # Hono API + mem9 + recipe pipeline
+│   └── dashboard-web/           # Next.js dashboard (13 pages)
 ├── packages/
-│   ├── shared-types/            # TypeScript type definitions
-│   ├── shared-utils/            # Logger, error classes, common utilities
-│   └── shared-mem9/             # Embedding pipeline + vector store client
+│   ├── shared-types/            # TS type definitions
+│   ├── shared-utils/            # Logger, common utilities
+│   └── shared-mem9/             # Embedding pipeline + vector store
+├── benchmarks/                  # Reproducible benchmarks (LongMemEval, etc.)
 ├── infra/
-│   ├── docker-compose.yml       # Full stack: Qdrant, GitNexus, CLIProxy, API, MCP, Watchtower
-│   ├── Dockerfile.dashboard-api #   API + mem9 in-process
-│   ├── Dockerfile.hub-mcp       #   MCP server
-│   ├── Dockerfile.dashboard-web #   Next.js static export
-│   └── Dockerfile.gitnexus      #   GitNexus eval-server
+│   ├── docker-compose.yml       # Full stack
+│   └── Dockerfile.*             # Per-service builds
 ├── scripts/
-│   ├── install.sh               # Unified installer — global skill + MCP + hooks + IDE setup
-│   ├── install.ps1              # Windows PowerShell equivalent
-│   ├── bootstrap.sh             # Admin/member mode selector
-│   ├── install-hub.sh           # Full server setup (Docker, Cloudflare, services)
-│   ├── onboard.sh               # Legacy interactive onboarding — macOS/Linux
-│   ├── onboard.ps1              # Legacy interactive onboarding — Windows
-│   ├── uninstall.sh             # Clean uninstall for fresh re-testing
-│   └── bump-version.sh          # Version management (patch/minor/major)
+│   ├── install.sh / .ps1        # Unified installer
+│   ├── run-agent.sh / .ps1      # Agent daemon launcher
+│   └── bootstrap.sh             # Admin setup
+├── docs/
+│   ├── architecture/            # Design docs (recipe, conductor, gateway)
+│   ├── conductor.md             # ⚠️ Multi-agent orchestration (experimental)
+│   └── guides/                  # Onboarding, installation, use cases
 ├── templates/
-│   ├── skills/install/          # /install slash command template (global skill)
-│   └── workflows/               # Portable workflow templates for any project
-├── docs/                        # Architecture, API reference, guides, use-cases
-├── .cortex/                     # Project profile + code conventions
-└── .agents/workflows/           # Active workflow definitions (/code, /continue, /phase)
+│   ├── skills/install/          # /install slash command
+│   └── workflows/               # Workflow templates (/code, /continue)
+└── .cortex/                     # Project profile + agent identity
 ```
 
 ---
@@ -465,146 +385,15 @@ cortex-hub/
 
 | Document | Description |
 |---|---|
-| [`docs/architecture/overview.md`](docs/architecture/overview.md) | System architecture with Mermaid diagrams |
-| [`docs/architecture/llm-gateway.md`](docs/architecture/llm-gateway.md) | LLM Gateway: fallback chains, budget, usage |
-| [`docs/architecture/monorepo-structure.md`](docs/architecture/monorepo-structure.md) | Package graph and dependency flow |
-| [`docs/architecture/agent-quality-strategy.md`](docs/architecture/agent-quality-strategy.md) | Quality gates, scoring, and enforcement |
+| [`docs/architecture/overview.md`](docs/architecture/overview.md) | System architecture with diagrams |
+| [`docs/architecture/recipe-system.md`](docs/architecture/recipe-system.md) | Recipe System (auto-learning from execution) |
+| [`docs/architecture/llm-gateway.md`](docs/architecture/llm-gateway.md) | LLM Gateway design |
+| [`docs/architecture/agent-quality-strategy.md`](docs/architecture/agent-quality-strategy.md) | Quality gates + scoring |
+| [`docs/conductor.md`](docs/conductor.md) | Multi-agent conductor (experimental) |
 | [`docs/api/hub-mcp-reference.md`](docs/api/hub-mcp-reference.md) | Full MCP tool API reference |
-| [`docs/api/database-schema.md`](docs/api/database-schema.md) | Database schema reference |
-| [`docs/database/erd.md`](docs/database/erd.md) | Entity-relationship diagram |
+| [`benchmarks/README.md`](benchmarks/README.md) | Benchmark methodology + results |
 | [`docs/guides/installation.md`](docs/guides/installation.md) | Full installation guide |
-| [`docs/guides/onboarding.md`](docs/guides/onboarding.md) | Agent onboarding walkthrough |
-| [`docs/guides/use-cases.md`](docs/guides/use-cases.md) | Use cases, comparison, system requirements |
-| [`.cortex/code-conventions.md`](.cortex/code-conventions.md) | Code conventions and standards |
-
----
-
-## Roadmap
-
-| Phase | What Was Built | Status |
-|---|---|---|
-| **Phase 1** | Ubuntu server provisioning, Docker 24+, Cloudflare Tunnel (`cloudflared`) | ✅ |
-| **Phase 2** | pnpm + Turborepo monorepo, `shared-types`, `shared-utils`, `shared-mem9` packages | ✅ |
-| **Phase 3** | Docker Compose stack: Qdrant, GitNexus eval-server, LLM Proxy, Watchtower | ✅ |
-| **Phase 4** | Hub MCP Server: 17 tools, Streamable HTTP, API key auth, telemetry, compliance | ✅ |
-| **Phase 5** | Dashboard: 12 pages, LLM Gateway, quality reports, sessions, usage analytics | ✅ |
-| **Phase 6** | Polish, documentation, testing, GA release | 🔄 |
-
-### What's Built (Highlights)
-
-**Infrastructure**
-- ✅ 2-service Docker architecture: `cortex-api` (:4000) + `cortex-mcp` (:8317)
-- ✅ Pre-built Docker images on GHCR (`ghcr.io/lktiep/cortex-*:latest`)
-- ✅ Cloudflare Tunnel: 4 subdomains, zero open ports
-- ✅ Watchtower auto-updates for Docker images
-- ✅ Docker build optimization: cache mounts, shared base, `.dockerignore`
-
-**MCP Server (17 tools)**
-- ✅ Streamable HTTP transport (JSON-RPC over POST, SSE for streaming)
-- ✅ API key auth with `X-API-Key-Owner` identity resolution
-- ✅ Global telemetry: every tool call logged with agent, latency, project
-- ✅ Code intelligence: `code_search`, `code_context`, `code_impact`, `code_reindex`, `list_repos`, `cypher`, `detect_changes` (GitNexus)
-- ✅ Agent memory: `memory_search`, `memory_store` (mem9 → Qdrant)
-- ✅ Knowledge base: `knowledge_search`, `knowledge_store` (Qdrant)
-- ✅ Sessions: `session_start`, `session_end`, `changes`, `health`
-- ✅ Quality: `quality_report` with 4D scoring + `plan_quality` assessment
-- ✅ Compliance enforcement: session compliance grading (A/B/C/D) + context-aware hints
-
-**Dashboard (13 pages)**
-- ✅ Hero stats bar + per-project overview cards with GitNexus/mem9 status
-- ✅ LLM provider management: add/test/configure, smart model discovery
-- ✅ Usage analytics: token consumption by model, agent, time period
-- ✅ Budget controls: daily/monthly limits with alert thresholds
-- ✅ Quality reports with grade trending (A→F) + trends chart
-- ✅ Session list with API key tracking + detail panel
-- ✅ Project management with Git integration + branch-aware indexing
-- ✅ Knowledge base browser + search
-- ✅ API key management with per-key permissions
-- ✅ Organization/multi-tenant management
-- ✅ Auto-docs knowledge: scans repo docs after indexing → builds knowledge items
-- ✅ Mobile-responsive: hamburger sidebar, 3-tier CSS breakpoints
-
-**LLM API Gateway (CLIProxy)**
-- ✅ Multi-provider: Gemini, OpenAI, Anthropic, any OpenAI-compatible
-- ✅ Ordered fallback chains with auto-retry (429/502/503/504)
-- ✅ Gemini ↔ OpenAI format translation
-- ✅ Complexity-based model routing (`model: "auto"`)
-- ✅ Budget enforcement with daily/monthly token limits
-- ✅ Usage logging per agent, model, day
-
-**Developer Experience**
-- ✅ **Unified installer**: `install.sh` / `install.ps1` — one script for everything (global + project + multi-IDE)
-- ✅ **`/install` slash command**: type `/install` in Claude Code to set up any project
-- ✅ **Smart stack detection**: auto-detects Node, Go, Rust, Python, .NET, Godot (including mixed projects)
-- ✅ **Glob-filtered pipelines**: each check only runs when relevant files change (e.g., `.py` → Python, `.cs` → .NET)
-- ✅ **Multi-IDE support**: Claude Code, Gemini, Cursor, Windsurf, VS Code, OpenAI Codex
-- ✅ **Cross-platform**: macOS, Linux, Windows (PowerShell + Git Bash)
-- ✅ **Version-tracked hooks**: `.cortex/.hooks-version` — auto-update on `/install`
-- ✅ **Idempotent**: safe to run repeatedly, skips what's up to date
-- ✅ Lefthook git hooks auto-generated from `project-profile.json`
-- ✅ Workflow templates deployed to any project (code, continue, phase)
-- ✅ Auto-docs knowledge pipeline: index repo → mem9 embed → scan docs → build knowledge
-
-**CI/CD & Operations**
-- ✅ GitHub Actions: CI (lint + typecheck + test) on every push/PR
-- ✅ GitHub Actions: Docker build → GHCR publish with auto version bump
-- ✅ Watchtower auto-update: server pulls new images automatically
-
-### Planned — Cortex Conductor (Multi-Agent Orchestration)
-
-**Agent-to-agent task collaboration across machines and IDEs.**
-
-```
-Agent A (macOS)                   Agent B (Win VPS)              Agent C (Antigravity)
-═══════════════                   ═══════════════                ═══════════════
-Build Godot scene ████░░          idle                           idle
-
-STUCK: need textures
- ↓ create task → Agent B          Accept: extract textures       Accept: design UI
- ↓ create task → Agent C           ████████░░ extracting...       ████░░ wireframe
-
-Switch to physics code ←          Upload R2 ✓                    UI mockup done
-(not blocked)                      → notify Agent A               → notify Agent A
-
-Physics done ██████████           idle                           idle
-
-← Receive textures from B
-← Receive UI design from C
-
-Apply textures + build UI
-████████████ Scene complete ✓
- → Send to Codex for review
-```
-
-| Feature | Status | Description |
-|---------|--------|-------------|
-| **Agent Identity** | ✅ Shipped | Auto-detect OS, tools, hostname. `.cortex/agent-identity.json` for role/capabilities |
-| **Conductor Design** | ✅ Spec'd | Full architecture doc at `docs/architecture/conductor-design.md` |
-| Agent-to-agent tasks | 🔄 Next | `cortex_task_create` — agents delegate work to other agents |
-| Task pickup & notify | 🔄 Next | Hint injection pushes tasks into MCP responses |
-| Dashboard /conductor | 🔄 Planned | Timeline view, Kanban board, agent cards with capabilities |
-| Dependency chains | 🔄 Planned | Task B waits for Task A. Auto-unblock on completion |
-| Multi-IDE support | 🔄 Planned | Claude CLI, VS Code, Cursor, Antigravity, Codex — all participate |
-| Smart assignment | 📋 Future | Auto-suggest agent based on capabilities match |
-
-**Key innovation:** Agents don't just receive tasks from humans — they **create tasks for each other**. An agent building a Godot game can ask a Windows VPS agent to extract resources, ask Antigravity to design UI, and ask Codex to review code — all without human intervention.
-
-**Supported IDEs in Conductor:**
-
-| IDE | Task receive | Task create | Role examples |
-|-----|:---:|:---:|---|
-| Claude Code CLI | via MCP hints | via MCP tool | Backend, build, DevOps |
-| Claude Code VS Code | via MCP hints | via MCP tool | Full-stack, debug |
-| Cursor | via MCP hints | via MCP tool | Frontend, UI |
-| Antigravity (Gemini) | via MCP hints | via MCP tool | Design, prototyping |
-| OpenAI Codex | via polling | via exec | Code review, QA |
-
-> Design doc: [`docs/architecture/conductor-design.md`](docs/architecture/conductor-design.md)
-
-### Other Planned
-
-- [ ] Agent performance leaderboard
-- [ ] Plugin system for custom MCP tools
+| [`docs/guides/use-cases.md`](docs/guides/use-cases.md) | Use cases + system requirements |
 
 ---
 
@@ -612,67 +401,31 @@ Apply textures + build UI
 
 | Resource | Minimum | Recommended | Notes |
 |----------|---------|-------------|-------|
-| **CPU** | 2 vCPU | 4 vCPU | Qdrant vector search is CPU-intensive |
-| **RAM** | 4 GB | 8 GB | Qdrant + GitNexus + Node.js services |
-| **Disk** | 20 GB | 50 GB | Vector indices grow with knowledge base |
+| **CPU** | 2 vCPU | 4 vCPU | Qdrant vector search is CPU-bound |
+| **RAM** | 4 GB | 8 GB | Qdrant + GitNexus + Node services |
+| **Disk** | 20 GB | 50 GB | Vector indices grow with knowledge |
 | **OS** | Ubuntu 22.04+ | Ubuntu 24.04 LTS | Any Linux with Docker 24+ |
 
-**Best value hosting:** Hetzner CX22 (~$4.50/mo) handles 3-5 agents comfortably.
-
-> 📖 Full requirements, cloud cost comparison, and capacity planning: [`docs/guides/use-cases.md`](docs/guides/use-cases.md#system-requirements)
+**Best value:** Hetzner CX22 (~$4.50/mo) handles 3-5 agents.
 
 ---
 
 ## Cost
 
-Cortex runs on **near-zero** infrastructure cost — everything is self-hosted:
-
 | Component | Cost | Notes |
 |---|---|---|
-| Linux server | Your existing hardware or VPS | Any machine with Docker (from $4.50/mo) |
-| Cloudflare Tunnel | Free | Secure exposure, no open ports |
-| Qdrant | Free | Self-hosted in Docker |
-| GitNexus | Free | Self-hosted code intelligence |
-| mem9 | Free | Self-hosted embedding pipeline |
-| Dashboard | Free | Next.js static export, served by API |
+| Linux server | $4.50/mo+ | Hetzner CX22 minimum |
+| Cloudflare Tunnel | Free | No open ports |
+| All services | Free | Self-hosted in Docker |
 | LLM API calls | Pay-per-use | Your own keys, budget-controlled |
-| **Total** | **~$5/mo + LLM token usage** | |
-
----
-
-## Why Cortex? (Use Cases)
-
-| Scenario | Without Cortex | With Cortex | Savings |
-|----------|---------------|-------------|----------|
-| **Context switching** | Re-explain everything each session | `memory_search` → instant recall | ~1 hour/day |
-| **Known bug hits** | Debug from scratch (30 min) | `knowledge_search` → 2 seconds | 30 min/bug |
-| **Code navigation** | `grep` → 50 results, ~50K tokens | `code_search` → 3 flows, ~5K tokens | ~90% tokens |
-| **Multi-agent conflicts** | Manual merge resolution | Change detection prevents conflicts | 20+ min/incident |
-| **Quality assurance** | Hope agent ran linter | 4D scoring + compliance grading | Catches issues pre-commit |
-
-> 📖 Detailed use cases with examples: [`docs/guides/use-cases.md`](docs/guides/use-cases.md)
-
-### Cortex Hub vs Standalone Tools (GitNexus + mem0)
-
-| Aspect | Standalone | Cortex Hub |
-|--------|-----------|------------|
-| **Setup** | Install each tool per machine | One `docker compose up` |
-| **Memory** | Per-machine, lost on reset | Persistent, server-side |
-| **Knowledge sharing** | None | All agents share one base |
-| **Multi-repo search** | One repo per instance | Cross-project graph |
-| **Agent coordination** | Blind | Session tracking + change detection |
-| **Quality tracking** | None | 4D scoring + compliance grades |
-| **Team scaling** | Re-setup per member | One-command onboard |
-
-> 📖 Full comparison with tradeoffs: [`docs/guides/use-cases.md#cortex-hub-vs-standalone-tools`](docs/guides/use-cases.md#cortex-hub-vs-standalone-tools)
+| **Total** | **~$5/mo + LLM usage** | |
 
 ---
 
 ## Contributing
 
-See the [Contributing Guide](docs/CONTRIBUTING.md) for development setup, commit conventions, and code standards.
+See [Contributing Guide](docs/CONTRIBUTING.md) for development setup, commit conventions, and code standards.
 
 ## License
 
 MIT © Cortex Hub Contributors
-
