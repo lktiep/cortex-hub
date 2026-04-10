@@ -127,7 +127,7 @@ services:
       DASHBOARD_URL: ${DASHBOARD_URL:-https://hub.jackle.dev}
       # mem9 Configuration
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-gpt-5.4-mini}
+      MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-gemini-3.1-flash-lite-preview}
       MEM9_EMBEDDING_MODEL: ${MEM9_EMBEDDING_MODEL:-gemini-embedding-2-preview}
       # Local embedding (set EMBEDDING_PROVIDER=local to use @xenova/transformers)
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-gemini}
