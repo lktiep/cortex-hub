@@ -7,5 +7,6 @@ touch "$STATE_DIR/session-started"
 rm -f "$STATE_DIR/quality-gates-passed" \
       "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" \
       "$STATE_DIR/session-ended" "$STATE_DIR/discovery-used" \
-      "$STATE_DIR/knowledge-recalled" "$STATE_DIR/memory-recalled" 2>/dev/null
+      "$STATE_DIR/knowledge-recalled" "$STATE_DIR/memory-recalled" \
+      "$STATE_DIR/session-id" 2>/dev/null
 echo "Run /cs to initialize Cortex session. Grep/Edit BLOCKED until cortex discovery tools used."

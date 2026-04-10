@@ -41,7 +41,24 @@ if (-not [string]::IsNullOrWhiteSpace($InputData)) {
         }
 
         # Track MCP tool calls
-        if ($ToolName -match "cortex_session_start")  { New-Item -ItemType File -Path (Join-Path $StateDir "session-started") -Force | Out-Null }
+        if ($ToolName -match "cortex_session_start") {
+            New-Item -ItemType File -Path (Join-Path $StateDir "session-started") -Force | Out-Null
+            # Extract session_id from tool output and save for auto-close on Stop hook
+            try {
+                $ToolOutput = $json.tool_output
+                if ($ToolOutput) {
+                    $OutputObj = $null
+                    if ($ToolOutput -is [string]) {
+                        $OutputObj = $ToolOutput | ConvertFrom-Json
+                    } else {
+                        $OutputObj = $ToolOutput
+                    }
+                    if ($OutputObj.session_id) {
+                        Set-Content -Path (Join-Path $StateDir "session-id") -Value $OutputObj.session_id -NoNewline
+                    }
+                }
+            } catch {}
+        }
         if ($ToolName -match "cortex_session_end")    { New-Item -ItemType File -Path (Join-Path $StateDir "session-ended") -Force | Out-Null }
         if ($ToolName -match "cortex_quality_report") { New-Item -ItemType File -Path (Join-Path $StateDir "quality-gates-passed") -Force | Out-Null }
 
