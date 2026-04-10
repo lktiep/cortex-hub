@@ -85,7 +85,7 @@ function getMem9Config(): Mem9Config {
 
   return {
     llm: {
-      baseUrl: `${process.env['LLM_PROXY_URL'] || 'http://llm-proxy:8317'}/v1`,
+      baseUrl: `http://localhost:${process.env['PORT'] || 4000}/api/llm/v1`,
       model: resolveLlmModel(),
     },
     embedder: embeddingProvider === 'local'
