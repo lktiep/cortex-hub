@@ -1,7 +1,7 @@
 ---
-description: Resume work from STATE.md context, auto-triggered by "continue", "tiếp", "go", or when no specific command given
+description: Resume work using cortex memory recall, auto-triggered by "continue", "tiếp", "go", or when no specific command given
 ---
-<!-- cortex-workflows-version: 2 -->
+<!-- cortex-workflows-version: 3 -->
 # /continue — Resume Current Work
 
 // turbo-all
@@ -16,43 +16,31 @@ description: Resume work from STATE.md context, auto-triggered by "continue", "t
 ```
 cortex_session_start({ repo: "<current repo URL>", mode: "development", agentId: "<your agent id>" })
 ```
-Save the returned `sessionId` — needed for session close at end.
-If it fails or hangs, note the error and continue.
+Save `sessionId` for session close at end.
 
-### 2. Recall Context (Cortex-First)
+### 2. Recall Context
+Call both in parallel:
+- `cortex_memory_search(query: "session summary progress decisions")` — what was done last time
+- `cortex_knowledge_search(query: "current progress next steps")` — any stored project notes
 
-> ⚠️ **Use Cortex tools FIRST. Only fall back to reading files if Cortex tools return no results.**
+From the results, identify:
+- What was being worked on
+- Key decisions made
+- What should be done next
 
-1. **`cortex_memory_search`** → "What was I working on last time?"
-2. **`cortex_knowledge_search`** → "Any known issues or patterns related to the current task?"
-3. Read `STATE.md` → Identify:
-   - Current active phase
-   - First `[/]` (in-progress) task, or first `[ ]` uncompleted task
-   - Recent decisions that affect current work
+### 3. Resume Task
+Continue the identified task. Use cortex tools naturally during work:
 
-### 3. Load Project Profile
-Read `.cortex/project-profile.json` → note `verify.pre_commit` commands.
+| Situation | Tool |
+|-----------|------|
+| Find code | `cortex_code_search` first, grep as fallback |
+| Before editing shared code | `cortex_code_impact` on target symbol |
+| Before committing | `cortex_detect_changes` to assess risk |
+| Hit a compilation error | `cortex_knowledge_search` the error first |
+| Fixed a non-obvious bug | `cortex_knowledge_store` the solution (MANDATORY) |
+| Learned something useful | `cortex_memory_store` for next session |
 
-### 4. Resume Task
-Continue the identified task. Follow the appropriate workflow:
-- Code implementation → follow `/code` workflow (Steps 2-3)
-- Infrastructure → follow direct execution
-- Documentation → write directly
-
-**During work — Cortex inline rules:**
-
-| Situation | Action |
-|-----------|--------|
-| Need to find code | `cortex_code_search` FIRST, then `grep_search` as fallback |
-| Before editing core file | `cortex_code_impact` on target symbol/file |
-| Before committing | `cortex_detect_changes` to assess risk level of changes |
-| Complex dependency question | `cortex_cypher` with Cypher queries on the knowledge graph |
-| Hit a compilation error | `cortex_knowledge_search("error message")` FIRST |
-| Fixed a non-obvious bug | `cortex_knowledge_store(title, problem, solution)` MANDATORY |
-| Learned something new | `cortex_memory_store(content)` to persist for next session |
-
-### 5. Post-Work Verification (MANDATORY)
-Run ALL commands from `project-profile.json` → `verify.pre_commit`:
+### 4. Verify (MANDATORY)
 // turbo
 ```bash
 pnpm build
@@ -66,28 +54,20 @@ pnpm typecheck
 pnpm lint
 ```
 
-### 6. Fix Issues
-If any verify step fails:
-- **`cortex_knowledge_search`** the error first — maybe it's a known issue
-- Fix the issue
-- Re-run ALL verify commands
-- If fix was non-obvious → **`cortex_knowledge_store`**
+### 5. Fix Issues
+If verify fails:
+- `cortex_knowledge_search` the error — maybe it's known
+- Fix and re-run ALL verify commands
+- If fix was non-obvious → `cortex_knowledge_store`
 
-### 7. Update STATE.md
-- Mark completed tasks `[x]`
-- Mark in-progress tasks `[/]`
-- Add new decisions if any
-- Update blockers
-
-### 8. Report & Learn (MANDATORY — never skip)
-- **`cortex_quality_report`** → report build/typecheck/lint results
-- **`cortex_memory_store`** → persist session learnings
-- **`cortex_session_end`** → close the session with summary
+### 6. Report & Close (MANDATORY)
+- `cortex_quality_report` — report build/typecheck/lint results
+- `cortex_memory_store` — persist what was done, decisions, next steps
+- `cortex_session_end` — close session with summary (auto-saves to memory)
 
 ```
 ## Session Summary
 - Task: [what was done]
-- Build: ✅/❌ | Typecheck: ✅/❌ | Lint: ✅/❌
-- STATE.md updated: ✅
-- Cortex tools used: code_search ✅/❌ | memory ✅/❌ | knowledge ✅/❌ | impact ✅/❌ | detect_changes ✅/❌ | quality_report ✅/❌
+- Build: pass/fail | Typecheck: pass/fail | Lint: pass/fail
+- Cortex tools used: code_search | memory | knowledge | impact | detect_changes | quality_report
 ```

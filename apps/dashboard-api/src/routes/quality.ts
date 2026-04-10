@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
+import { getMem9 } from './mem9-proxy.js'
 import {
   calculateFromVerificationResults,
   scoreToGrade,
@@ -570,6 +571,35 @@ sessionsRouter.post('/:id/end', async (c) => {
           ).run(id, `Module load: ${(e as Error).message}`.slice(0, 500))
         } catch { /* ignore */ }
       })
+    }
+
+    // Auto-store session summary as searchable memory (safety net)
+    // This ensures session context is ALWAYS recoverable even if
+    // the agent skips cortex_memory_store or user doesn't run /ce fully
+    if (summary && summary.length > 20 && session) {
+      const agentId = session.from_agent || 'unknown'
+      const projectScope = session.project_id
+        ? `project-${session.project_id}`
+        : agentId
+      try {
+        const mem9 = getMem9()
+        mem9.add({
+          messages: [{ role: 'user', content: `[Session Summary] ${summary}` }],
+          userId: projectScope,
+          agentId,
+          metadata: {
+            type: 'session-summary',
+            session_id: id,
+            project_id: session.project_id ?? undefined,
+            project: session.project ?? undefined,
+            auto_captured: true,
+          },
+        }).catch(e => {
+          console.warn('[session-end] Auto memory store failed:', (e as Error).message)
+        })
+      } catch (e) {
+        console.warn('[session-end] Memory init failed:', (e as Error).message)
+      }
     }
 
     return c.json({

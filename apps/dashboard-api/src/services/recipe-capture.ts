@@ -100,7 +100,7 @@ async function analyzeForCapture(context: string): Promise<CaptureAnalysis | nul
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: process.env.RECIPE_LLM_MODEL || 'gemini-3.1-flash-lite-preview',
+        model: process.env.RECIPE_LLM_MODEL || 'gemini-2.5-flash',
         messages: [
           {
             role: 'system',

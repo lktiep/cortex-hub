@@ -11,7 +11,7 @@ Cortex Hub uses a **hybrid approach** to quality enforcement:
 
 | Layer | Tool | Cost | Purpose |
 |-------|------|------|---------|
-| **Client-side** | AGENTS.md + workflows + STATE.md | Zero latency, zero tokens | Enforce process, conventions, verify commands |
+| **Client-side** | AGENTS.md + workflows + cortex memory | Zero latency, zero tokens | Enforce process, conventions, verify commands |
 | **Server-side** | Cortex Hub MCP tools | ~200-500ms, ~500-2000 tokens | Shared knowledge, memory, code intelligence |
 | **Automated** | Lefthook pre-commit/pre-push hooks | Zero manual effort | Prevent bad code from reaching remote |
 
@@ -340,11 +340,10 @@ Agents **never hardcode** verify commands. They read from the profile, ensuring:
 ```
 Agent receives task
 │
-├─ [ALWAYS] Read STATE.md + project-profile.json (0ms, 0 tokens)
-├─ [ALWAYS] Read code-conventions.md (0ms, 0 tokens)
+├─ [ALWAYS] Read project-profile.json + code-conventions.md (0ms, 0 tokens)
 │
-├─ [IF NEEDED] cortex.memory.search — past context (~500ms, ~1000 tokens)
-├─ [IF NEEDED] cortex.code.search — code intelligence (~1000ms, ~2000 tokens)
+├─ [ALWAYS] cortex_memory_search — recall past context (~500ms, ~1000 tokens)
+├─ [IF NEEDED] cortex_code_search — code intelligence (~1000ms, ~2000 tokens)
 │
 ├─ [EXECUTE] Write code following conventions
 │
@@ -359,7 +358,7 @@ Agent receives task
 │   ├─ Trend data appended
 │   └─ Dashboard updated in real-time
 │
-├─ [ALWAYS] Update STATE.md
+├─ [ALWAYS] cortex_memory_store — persist session context
 │
 └─ Done
 ```

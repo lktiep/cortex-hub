@@ -1,96 +1,65 @@
-# /ce — Cortex End v2.0
+# /ce — Cortex End v3.0
 
-> Version: 2.0 | Updated: 2026-04-06
-> Changelog: v2.0 — added detect_changes, tool stats, task completion, recipe capture check, code reindex, versioning
+> Version: 3.0 | Updated: 2026-04-10
+> Changelog: v3.0 — session_end now auto-saves memory; removed STATE.md; streamlined steps
+> Changelog: v2.0 — added detect_changes, tool stats, task completion, recipe capture check
 
 Run ALL steps IN ORDER before ending the session.
 
-## Step 1: Pre-commit Risk Analysis
-If there are uncommitted changes:
-- Call `cortex_detect_changes(scope: "all")` — verify blast radius
-- Report affected symbols and risk level
+## Step 1: Pre-commit Check
+If uncommitted changes exist:
+- `cortex_detect_changes(scope: "all")` — verify blast radius
 - If HIGH risk → warn user before proceeding
 
 ## Step 2: Quality Gates
-Run verification:
 ```bash
 pnpm build && pnpm typecheck && pnpm lint
 ```
 Record pass/fail for each.
 
 ## Step 3: Quality Report
-Call `cortex_quality_report`:
 ```
-gate_name: "Session Quality"
-passed: <true if all gates pass>
-score: <0-100 based on results>
-details: "<build/typecheck/lint results summary>"
+cortex_quality_report(
+  gate_name: "Session Quality",
+  passed: <true if all gates pass>,
+  score: <0-100>,
+  details: "<build/typecheck/lint results>"
+)
 ```
-This auto-tracks knowledge feedback (completion/fallback counters).
 
-## Step 4: Complete Conductor Tasks (auto-detect)
-Call `cortex_task_list(status: "in_progress")` to find any tasks assigned to this agent.
-For EACH task that was worked on this session:
-```
-cortex_task_update(taskId: "<id>", status: "completed", result: { summary: "<what was done>" })
-```
-This triggers recipe auto-capture — the completed task's execution log is analyzed
-by LLM and stored as a reusable recipe if non-trivial.
+## Step 4: Complete Conductor Tasks
+`cortex_task_list(status: "in_progress")` — find tasks worked on this session.
+For each: `cortex_task_update(taskId, status: "completed", result: { summary: "..." })`
 
 ## Step 5: Store Knowledge (if applicable)
-If this session involved ANY of these, call `cortex_knowledge_store`:
+If this session involved any of these, call `cortex_knowledge_store`:
 - Bug fix with non-obvious root cause
 - Architecture decision or tradeoff
 - Workflow pattern that worked well
 - Error + solution that others might encounter
-- Cross-project discovery worth remembering
-
-Include tags: `["session-summary", "<relevant-tags>"]`
 
 ## Step 6: Store Memory
-Call `cortex_memory_store` with:
-- Key decisions made this session
-- Lessons learned
-- Context that would help resume next session
+`cortex_memory_store` with:
+- What was done this session
+- Key decisions made
+- Context for resuming next session
 - Any user preferences discovered
 
-## Step 7: Tool Usage Compliance
-Call `cortex_tool_stats(days: 1, agentId: "claude-code")` to check this session's tool usage.
-Flag if any critical tools were underused:
-- `code_search` — should be used before editing
-- `code_impact` — should be used before editing shared code
-- `knowledge_search` — should be used when hitting errors
-- `detect_changes` — should be used before commits
-
-## Step 8: Code Reindex (if code was pushed)
-If code was pushed to remote this session:
+## Step 7: End Session
 ```
-cortex_code_reindex(repo: "https://github.com/lktiep/cortex-hub.git", branch: "<current branch>")
+cortex_session_end(
+  sessionId: "<from session_start>",
+  summary: "<concise: what was done, what's next>"
+)
 ```
+> The backend automatically saves this summary as searchable memory — a safety net even if Step 6 was skipped.
 
-## Step 9: Recipe Capture Check
-Check if recipe capture fired this session. If you can, note whether:
-- Session summary is substantial enough (>50 chars) for auto-capture
-- Any tasks completed should trigger recipe capture
-This is informational — capture happens automatically, but good to verify.
-
-## Step 10: End Session
-Call `cortex_session_end`:
-```
-sessionId: "<from session_start>"
-summary: "<concise summary: what was done, what's next>"
-```
-
-## Step 11: Final Report
-Print session summary:
-
+## Step 8: Final Report
 ```
 ## Session Complete
 - **Work done**: <brief summary>
-- **Quality gates**: build ✓/✗ | typecheck ✓/✗ | lint ✓/✗
-- **Compliance**: <grade from session_end>
+- **Quality gates**: build pass/fail | typecheck pass/fail | lint pass/fail
 - **Knowledge stored**: <N docs> or none
-- **Recipe captures**: <triggered/not triggered>
 - **Tasks completed**: <list> or none
 - **Next steps**: <what should be done next session>
 ```

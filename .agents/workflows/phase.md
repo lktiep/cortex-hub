@@ -1,5 +1,5 @@
 ---
-description: Start a new phase with automated gate checks and project-specific verification
+description: Start a new phase with automated gate checks and verification
 ---
 # /phase — Phase Management with Quality Gates
 
@@ -17,21 +17,15 @@ Also triggered by: "start phase N", "bắt đầu phase N", "phase N"
 ## Steps
 
 ### 1. Load Context
-- Read `STATE.md` → verify current phase status
-- Read `.forgewright/project-profile.json` → `verify` commands
+- `cortex_memory_search` → recall current phase progress and decisions
+- Read `.cortex/project-profile.json` → verify commands
+- Check `AGENTS.md` → current phase status
 
-### 2. Read Gate Definitions
-Read the gate criteria for the requested phase transition:
-- File: `Antigravity-Production-Grade-Suite/.protocols/gate-definitions.md`
-- Find the relevant gate (Gate N-1 → N)
-
-### 3. Run Gate Checks
-Execute each check command from the gate definition table.
-
-For local checks (from project-profile.json → verify.full):
+### 2. Run Gate Checks
+Execute verification commands:
 // turbo
 ```bash
-pnpm build --filter='@cortex/shared-*'
+pnpm build
 ```
 // turbo
 ```bash
@@ -46,62 +40,40 @@ pnpm lint
 pnpm test
 ```
 
-For server checks (remote):
-- SSH to `jackle@192.168.10.119` and run each health check command
-- Example: `curl http://localhost:6333/healthz` (Qdrant)
-- Example: `curl http://localhost:8317/` (CLIProxy)
+For server checks (if applicable):
+- `curl http://localhost:6333/healthz` (Qdrant)
+- `curl http://localhost:8317/` (CLIProxy)
 
-### 4. Report Gate Results
-Present gate results to user:
+### 3. Report Gate Results
 ```
 ## Gate N-1→N Check Results
 
 | Check | Status | Output |
 |-------|--------|--------|
-| Build shared | ✅ | OK |
-| Typecheck | ✅ | 0 errors |
-| Lint | ✅ | Clean |
-| Test | ✅ | All pass |
-| Qdrant healthy | ✅ | OK |
-| ...
+| Build | pass/fail | ... |
+| Typecheck | pass/fail | ... |
+| Lint | pass/fail | ... |
+| Test | pass/fail | ... |
 
-**Gate: PASSED ✅** — Ready to start Phase N.
+**Gate: PASSED** — Ready to start Phase N.
 ```
 
-If ANY check fails:
-```
-**Gate: FAILED ❌** — Cannot start Phase N.
+If any check fails → fix before proceeding.
 
-Failed checks:
-- [ ] Lint — 3 errors found
-  → Fix: Review and fix lint errors
-```
-
-### 5. Enter DEFINE Step (if gate passed)
-Follow the Phase Workflow Protocol:
-- Read: `Antigravity-Production-Grade-Suite/.protocols/phase-workflow.md`
-- Start DEFINE step:
-  1. Read BRD (`product-manager/BRD/brd.md`) — find relevant epics
-  2. Read Requirements Register — find R-codes for this phase
-  3. Read Architecture Decisions — understand constraints
-  4. Summarize what needs to be built
-
-### 6. Proceed to PLAN Step
-- Create implementation plan
-- List files to create/modify/delete
+### 4. Plan (if gate passed)
+- Identify what needs to be built for this phase
+- List files to create/modify
 - Define acceptance criteria
-- **Request user approval** before proceeding to EXECUTE
+- **Request user approval** before executing
 
-### 7. After User Approves → EXECUTE → VERIFY → COMMIT
-- EXECUTE: Write code following `.forgewright/code-conventions.md`
-- VERIFY: Run all commands from `project-profile.json` → `verify.full`
-- COMMIT: Conventional commit, update `STATE.md` and `AGENTS.md` phase status
+### 5. Execute → Verify → Commit
+- Write code following `.cortex/code-conventions.md`
+- Run all verify commands from `project-profile.json`
+- Commit with conventional prefix, update `AGENTS.md` phase status
 
-## Important Rules
-
-- ❌ NEVER skip gate checks
-- ❌ NEVER skip the PLAN step
-- ❌ NEVER start EXECUTE before user approves the plan
-- ❌ NEVER hardcode verify commands — always read from project-profile.json
-- ✅ ALWAYS update `AGENTS.md` "Current Phase" after completing a phase
-- ✅ ALWAYS update `STATE.md` as work progresses
+## Rules
+- Never skip gate checks
+- Never skip the PLAN step
+- Never execute before user approves
+- Never hardcode verify commands — read from project-profile.json
+- Always update `AGENTS.md` "Current Phase" after completing a phase

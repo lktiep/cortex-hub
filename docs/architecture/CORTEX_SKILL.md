@@ -1,34 +1,30 @@
-# The Cortex Golden Standard (Skill Set)
+# The Cortex Skill Set
 
-This document defines the **Cortex Skill**, incorporating the highest standards from [Forgewright](https://github.com/buiphucminhtam/forgewright-agents) and [GSD/GSD2](https://github.com/eceasy/get-shit-done).
+Standards for agents working in the Cortex Hub ecosystem.
 
-## 1. High-Autonomy Execution (GSD Protocol)
+## 1. High-Autonomy Execution
 
-Agents in the Cortex Hub ecosystem don't just "try" — they **deliver**.
-- **PLAN FIRST**: Before any major code change, create an `implementation_plan.md` in the brain artifact directory.
-- **SPEC-DRIVEN**: Use `task.md` as the source of truth for all current and future work.
-- **ZERO PLACEHOLDERS**: Every implementation must be production-ready and aesthetically premium.
+Agents don't just "try" — they **deliver**.
+- **PLAN FIRST**: Before major code changes, create a plan and get user approval.
+- **ZERO PLACEHOLDERS**: Every implementation must be production-ready.
 
-## 2. Strict Quality Enforcement (Forgewright Protocol)
+## 2. Quality Enforcement
 
 Every session is a commitment to quality.
-- **SESSION_START**: Call `cortex.session.start` immediately to receive the Mission Brief.
-- **DYNAMIC VERIFICATION**: Read `.forgewright/project-profile.json` at every start to get the latest `verify` commands.
-- **MANDATORY GATES**: `build`, `typecheck`, and `lint` MUST pass before any commit. No exceptions.
-- **QUARTERLY SCORE**: Agents aim for 100/100 quality score (Build + Regression + Standards + Traceability).
+- **SESSION_START**: Call `cortex_session_start` immediately.
+- **DYNAMIC VERIFICATION**: Read `.cortex/project-profile.json` for verify commands.
+- **MANDATORY GATES**: `build`, `typecheck`, and `lint` MUST pass before any commit.
 
-## 3. Cognitive Alignment (Cortex Unique)
+## 3. Cortex Tool Integration
 
-Agents must maintain a perfectly calibrated mental model.
-- **ONBOARD**: Run `./scripts/onboard.sh` on the first encounter with a project.
-- **AUDIT**: After major refactors or context shifts, run `gitnexus audit --local` to re-sync with the repository's ground truth.
-- **MEMORY SYNC**: Use `cortex.memory.search` to recall past decisions and avoid repeating mistakes.
+Agents use cortex tools as their primary workflow:
+- **DISCOVERY**: `cortex_code_search` before grep. `cortex_memory_search` before re-investigating.
+- **SAFETY**: `cortex_code_impact` before editing shared code. `cortex_detect_changes` before committing.
+- **LEARNING**: `cortex_knowledge_search` before debugging. `cortex_knowledge_store` after fixing non-obvious bugs.
+- **MEMORY**: `cortex_memory_store` at session end — ensures the next session has full context.
 
-## 4. Reporting & Walkthroughs
+## 4. Session Continuity
 
-- **EVIDENCE-BASED**: Document all work with a `walkthrough.md` that includes screenshots and recordings.
-- **RECAP**: End every session with a clear recap in `STATE.md` to ensure the next agent can pick up instantly.
-
----
-
-**Cortex Hub — Making agents smarter, focused, and standard-compliant.**
+- **START**: Recall context via `cortex_memory_search` + `cortex_knowledge_search`
+- **END**: Store progress via `cortex_memory_store` + `cortex_session_end` (which auto-saves summary as searchable memory)
+- No file-based state tracking — all state lives in cortex memory and knowledge systems.
