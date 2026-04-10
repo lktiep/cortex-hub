@@ -28,11 +28,14 @@ details: "<build/typecheck/lint results summary>"
 ```
 This auto-tracks knowledge feedback (completion/fallback counters).
 
-## Step 4: Complete Conductor Tasks
-If you were working on Conductor tasks this session:
+## Step 4: Complete Conductor Tasks (auto-detect)
+Call `cortex_task_list(status: "in_progress")` to find any tasks assigned to this agent.
+For EACH task that was worked on this session:
 ```
 cortex_task_update(taskId: "<id>", status: "completed", result: { summary: "<what was done>" })
 ```
+This triggers recipe auto-capture — the completed task's execution log is analyzed
+by LLM and stored as a reusable recipe if non-trivial.
 
 ## Step 5: Store Knowledge (if applicable)
 If this session involved ANY of these, call `cortex_knowledge_store`:
