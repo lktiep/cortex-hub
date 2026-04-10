@@ -425,9 +425,10 @@ statsRouter.post('/admin/restart/:service', async (c) => {
 statsRouter.post('/query-log', async (c) => {
   try {
     const { agentId, tool, params, status, latencyMs, error, projectId, inputSize, outputSize, computeTokens, computeModel } = await c.req.json()
+    const resolvedAgent = agentId || 'unknown'
     const stmt = db.prepare('INSERT INTO query_logs (agent_id, tool, params, latency_ms, status, error, project_id, input_size, output_size, compute_tokens, compute_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     stmt.run(
-      agentId || 'unknown', 
+      resolvedAgent,
       tool || 'unknown',
       params ? JSON.stringify(params) : null,
       latencyMs || 0,
@@ -439,6 +440,15 @@ statsRouter.post('/query-log', async (c) => {
       computeTokens || 0,
       computeModel || null
     )
+
+    // Keep session alive: update last_activity for this agent's active session.
+    // This prevents premature session expiry and enables overnight resume.
+    try {
+      db.prepare(
+        `UPDATE session_handoffs SET last_activity = datetime('now')
+         WHERE from_agent = ? AND status = 'active'`
+      ).run(resolvedAgent)
+    } catch { /* non-critical */ }
 
     // Bridge backend LLM cost to the unified billing table
     if (computeTokens && computeTokens > 0 && computeModel) {

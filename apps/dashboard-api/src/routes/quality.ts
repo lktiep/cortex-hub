@@ -469,14 +469,12 @@ sessionsRouter.post('/start', async (c) => {
 
 sessionsRouter.get('/all', (c) => {
   try {
-    // Auto-close stale sessions: mark "active" sessions older than 2 hours as "completed"
-    db.prepare(
-      `UPDATE session_handoffs
-       SET status = 'completed',
-           task_summary = task_summary || ' [auto-closed: stale >2h]'
-       WHERE status = 'active'
-         AND created_at <= datetime('now', '-2 hours')`
-    ).run()
+    // Sessions stay active until explicitly closed by /ce, Stop hook, or new /cs.
+    // Previously auto-closed sessions >2h on every page load — this killed
+    // overnight sessions and lost context. Removed in favor of:
+    //   1. Stop hook auto-close (session-end-check.sh)
+    //   2. /cs reuses existing active session for same agent+project
+    //   3. last_activity updated on each tool call for staleness detection
 
     const limit = Number(c.req.query('limit') || '50')
     const status = c.req.query('status')
