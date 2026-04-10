@@ -33,9 +33,9 @@
 
 ## Why Cortex?
 
-Every AI coding agent works in **isolation** — no shared memory, no knowledge transfer, no cross-project search. When you switch from Claude Code to Cursor to Antigravity, each starts from zero.
+Every AI coding agent works in **isolation**. Switch IDE, switch machine, switch project — the agent starts from zero. Your team's hard-won decisions, bug fixes, and architectural patterns live and die inside individual chat sessions.
 
-**Cortex Hub** is a single self-hosted backend that **all your agents connect to** via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/):
+**Cortex Hub** is a self-hosted backend that gives **every agent on your team persistent memory, shared knowledge, and cross-project intelligence** via a single [MCP](https://modelcontextprotocol.io/) endpoint:
 
 ```
         Claude Code    Cursor    Antigravity    Codex    Gemini
@@ -43,17 +43,59 @@ Every AI coding agent works in **isolation** — no shared memory, no knowledge 
               └──────────┴────────────┴───────────┴─────────┘
                                   │
                           ┌───────▼────────┐
-                          │  Cortex Hub    │  ← single MCP endpoint
+                          │  Cortex Hub    │  ← one MCP endpoint for everything
                           │                │
-                          │  Memory        │  Hierarchical, temporal-aware
-                          │  Knowledge     │  Recipe-driven auto-learning
-                          │  Code Intel    │  AST graph + multi-project search
-                          │  LLM Gateway   │  Multi-provider with budget
-                          │  Quality Gates │  Build/typecheck/lint enforcement
+                          │  Memory        │  Agents remember across sessions
+                          │  Knowledge     │  Team shares bug fixes, patterns
+                          │  Code Intel    │  Search any project's code by name
+                          │  Quality Gates │  Enforce build/lint before commit
                           └────────────────┘
 ```
 
-> **Zero data leaves your infrastructure.** Runs on your own server behind a Cloudflare Tunnel. ~$5/month VPS handles 5+ concurrent agents.
+### What this means in practice
+
+**New machine, instant context:**
+```
+You: (fresh laptop, just cloned your project)
+> /install           ← one command, MCP configured
+> /cs                ← session starts
+
+Cortex: "Resuming from last session. You were working on JWT rotation
+         for the auth service. The team decided RS256 with 90-day expiry
+         (stored by Dev B on March 15). Related: payment service uses
+         the same pattern — see knowledge doc kdoc-4a2b."
+
+You didn't bring any notes. You didn't clone the other repos.
+Cortex remembered everything.
+```
+
+**Cross-project code search without cloning:**
+```
+You: "How does YulgangProject handle NPC spawning?"
+Agent: cortex_code_search(query: "npc spawn", repo: "YulgangProject")
+  → SpawnMonster (Method) — GameServer/VoLamHuyetChien/LMSFightBlock.cs
+  → NpcDieHandler (Delegate) — GameServer/AIEngine/NpcAi.cs
+
+You never cloned YulgangProject. Cortex indexed it server-side
+and searched the AST graph across 15 repos in 20ms.
+```
+
+**Team knowledge that compounds:**
+```
+Session 1 (Dev A, Claude Code):
+  Fixed auth bug → stored knowledge: "JWT needs audience claim for mobile"
+
+Session 2 (Dev B, Cursor, different project):
+  Hit same auth issue → cortex_knowledge_search("JWT mobile") → instant fix
+
+Session 3 (New hire, day 1):
+  /cs → sees all team decisions, patterns, bug fixes
+  Productive from hour one, not week three.
+```
+
+**Retrieval quality: 96.0% R@5** on [LongMemEval](benchmarks/README.md) (500 questions, 6 categories) — matching [MemPalace](https://github.com/milla-jovovich/mempalace) (96.6%) while providing code intelligence, multi-agent orchestration, and a full dashboard that MemPalace doesn't have.
+
+> **Zero data leaves your infrastructure.** Self-hosted on a $5/month VPS behind Cloudflare Tunnel. Handles 5+ concurrent agents. Local embedding (free, no API calls) or Gemini API — your choice.
 
 ---
 
@@ -418,6 +460,68 @@ cortex-hub/
 | [`benchmarks/README.md`](benchmarks/README.md) | Benchmark methodology + results |
 | [`docs/guides/installation.md`](docs/guides/installation.md) | Full installation guide |
 | [`docs/guides/use-cases.md`](docs/guides/use-cases.md) | Use cases + system requirements |
+
+---
+
+## Real-World Scenarios
+
+### Solo dev, multiple projects
+You maintain 5 repos across 3 languages. You fix a deployment bug in project A. Next week, project B has the same issue. Without Cortex, you debug from scratch. With Cortex:
+
+```
+cortex_knowledge_search("docker nginx 502 after restart")
+→ "Nginx caches DNS at startup. Fix: resolver 127.0.0.11 valid=5s"
+  (stored 6 days ago by you, in project A)
+```
+
+**Time saved: 30 min per known bug. Across 5 projects, that's hours/week.**
+
+### Team of 3, shared codebase
+Dev A refactors the auth middleware on Monday. Dev B starts a feature on Wednesday using the old auth pattern. Without Cortex, B's code breaks and nobody knows why. With Cortex:
+
+```
+/cs → "Dev A refactored auth middleware on Monday. New pattern uses
+       middleware.authenticate() instead of req.checkAuth(). See
+       knowledge doc kdoc-8f2a for migration steps."
+```
+
+**Zero "who changed this?" conversations. Zero broken PRs from stale patterns.**
+
+### Onboarding a new team member
+Day 1. New hire clones the repo. Runs `/install`. Opens Claude Code.
+
+```
+/cs → Cortex loads:
+  - 47 team knowledge docs (deployment patterns, API conventions, known gotchas)
+  - Recent session summaries (what's being worked on NOW)
+  - Code intelligence across all indexed repos
+
+New hire: "How does the payment flow work?"
+cortex_code_search(query: "payment flow checkout")
+→ 3 projects with relevant code, ranked by relevance, with file paths
+```
+
+**Productive on day 1, not week 3. No "ask Dave, he knows how it works."**
+
+### Switching machines mid-task
+Working on your Mac at the office. Continue on Windows VPS at home.
+
+```
+Same API key → same memory → same knowledge → same session context.
+/cs resumes exactly where you left off.
+No git stash, no notes, no "what was I doing?"
+```
+
+### Multi-IDE workflow
+Debug in Claude Code (deep reasoning). UI work in Cursor (fast iteration). Code review in Antigravity (visual). All three share the same Cortex backend:
+
+```
+Claude Code: stores finding → "Race condition in WebSocket reconnect"
+Cursor:      picks up finding → applies fix in the UI component
+Antigravity: reviews the fix → stores quality feedback
+```
+
+**Every agent builds on what the others learned. No repeated explanations.**
 
 ---
 
