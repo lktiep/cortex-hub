@@ -127,7 +127,7 @@ bash scripts/install.sh --force
 For repos with multiple stacks (e.g., a C# server + Python tools + Godot client), `install.sh` detects **all** stacks and generates a combined `lefthook.yml`:
 
 ```yaml
-# Example: yulgang-re-tools (Python + .NET + Godot)
+# Example: multi-lang project (Python + .NET + Godot)
 pre-commit:
   parallel: true
   commands:
@@ -135,8 +135,8 @@ pre-commit:
       glob: "**/*.py"                                    # only when .py changes
       run: python3 -m py_compile {staged_files}
     dotnet_build:
-      glob: "yulgang-server/**/*.{cs,csproj,sln}"       # only when .cs changes
-      run: dotnet build ./yulgang-server/Yulgang.sln
+      glob: "server/**/*.{cs,csproj,sln}"                # only when .cs changes
+      run: dotnet build ./server/MyProject.sln
     godot_check:
       glob: "godot-client/**/*.{gd,tscn,tres}"          # only when .gd changes
       run: echo 'Godot files changed — verify in editor'

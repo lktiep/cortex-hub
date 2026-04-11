@@ -67,9 +67,9 @@ For the REST of this session, use cortex tools naturally:
 
 ### Cross-project lookup:
 ```
-cortex_code_search(query: "...", repo: "YulgangProject")
-cortex_code_context(name: "...", repo: "YulgangProject")
-cortex_code_read(file: "...", repo: "YulgangProject")
+cortex_code_search(query: "...", repo: "my-backend")
+cortex_code_context(name: "...", repo: "my-backend")
+cortex_code_read(file: "...", repo: "my-backend")
 ```
 
 ### When hitting an error:

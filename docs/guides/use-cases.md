@@ -208,13 +208,13 @@ You manage multiple projects (e.g., an e-commerce platform, a game server, an in
 
 ### Without Cortex
 ```
-Agent works on GameServer project:
-  User: "Implement damage formula: base_atk × skill_multiplier × (1 - defense_rate)"
+Agent works on backend project:
+  User: "Implement pricing formula: base_price × discount_rate × (1 - tax_modifier)"
   Agent: Writes from scratch, guesses at patterns, no context from other projects.
   → 2 hours implementing, testing, and refining.
 
-Later: "We need the same pattern for the pricing engine"
-  → Agent starts from zero again in the e-commerce project.
+Later: "We need the same pattern for the billing engine"
+  → Agent starts from zero again in the billing project.
 ```
 
 ### With Cortex

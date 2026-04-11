@@ -11,18 +11,18 @@
 ## Scope Model
 
 ```
-API Key "Jack All 01" (User: Tiep)
+API Key "team-alpha" (User: Alice)
 ├── Agent: claude-mac (macOS, Claude Code CLI, cortex-hub, master)
-├── Agent: claude-vps-1 (Windows, Claude Code CLI, yulgang-re-tools, feat/extract)
+├── Agent: claude-vps-1 (Windows, Claude Code CLI, my-backend, feat/auth)
 ├── Agent: antigravity-mac (macOS, Antigravity, cortex-hub, master)
-└── Agent: cursor-win (Windows, Cursor, yulgang-re-tools, feat/ui)
+└── Agent: cursor-win (Windows, Cursor, my-backend, feat/ui)
 
-API Key "thaingo" (User: Thai)
-├── Agent: claude-thai-1 (macOS, Claude Code, project-x, main)
+API Key "team-beta" (User: Bob)
+├── Agent: claude-bob-1 (macOS, Claude Code, project-x, main)
 └── Agent: codex-thai (Linux, Codex, project-x, main)
 ```
 
-**Rule:** User Tiep can only create/assign tasks to agents under their own API key.
+**Rule:** Each user can only create/assign tasks to agents under their own API key.
 Dashboard Conductor page filters by authenticated user's API key.
 
 ## Agent Identity (Enhanced)
@@ -193,13 +193,13 @@ Active Agents (3 online)
    macOS · Claude CLI · cortex-hub@master
 
 🟢 claude-vps-1               15s ago
-   Windows · Claude CLI · yulgang-re-tools@feat/extract
+   Windows · Claude CLI · my-backend@feat/extract
 
 🟢 antigravity-mac            1m ago
    macOS · Antigravity · cortex-hub@master
 
 🔴 cursor-win                 offline (2h ago)
-   Windows · Cursor · yulgang-re-tools@feat/ui
+   Windows · Cursor · my-backend@feat/ui
 ```
 
 ### Task creation scoped to user's agents

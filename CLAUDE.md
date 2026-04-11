@@ -52,8 +52,8 @@ Call `cortex_changes(agentId: "claude-code", projectId: "<from session>")` to ch
 ### Cross-project lookup
 Use `repo:` parameter directly:
 ```
-cortex_code_search(query: "attack handler", repo: "YulgangProject")
-cortex_code_context(name: "HandleAttack", repo: "YulgangProject")
+cortex_code_search(query: "user auth", repo: "my-backend")
+cortex_code_context(name: "validateToken", repo: "my-backend")
 ```
 
 ## Ending a Session

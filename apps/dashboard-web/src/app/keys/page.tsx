@@ -117,7 +117,7 @@ export default function KeysPage() {
               onChange={(e) => setKeyScope(e.target.value)}
             >
               <option value="all">All Projects</option>
-              <option value="org:yulgang">Organization: Yulgang/*</option>
+              <option value="org:default">Organization: Default/*</option>
               <option value="org:personal">Organization: Personal/*</option>
             </select>
 

@@ -64,12 +64,12 @@ async function callGitNexus(
 /**
  * Resolve a projectId, slug, or human-readable name to GitNexus-compatible repo name candidates.
  * Returns ordered list of names to try — GitNexus may register repos by:
- *   1. slug (e.g., 'yulgangproject')
- *   2. git URL basename (e.g., 'YulgangProject')
+ *   1. slug (e.g., 'my-backend')
+ *   2. git URL basename (e.g., 'MyBackend')
  *   3. projectId folder name (e.g., 'proj-abc123')
  *
  * Supports case-insensitive matching and search by name column,
- * so agents can just say repo: "YulgangProject" without needing a projectId.
+ * so agents can just say repo: "MyBackend" without needing a projectId.
  */
 function resolveRepoNames(projectId: string): string[] {
   const candidates: string[] = []
@@ -661,7 +661,7 @@ intelRouter.post('/context', async (c) => {
     if (file && results?.raw?.includes('Disambiguate with file path')) {
       const lines = results.raw.split('\n')
       // Find the line matching the provided file path
-      // Pattern: "  undefined HandleAttack → GameServer/Logic/NpcAttackLogic.cs:885  (uid: Method:...)"
+      // Pattern: "  undefined MyFunction → src/services/auth.ts:42  (uid: Method:...)"
       const normalizedFile = file.replace(/\\/g, '/')
       const matchingLine = lines.find((line) => {
         // Match against full path or basename
@@ -674,7 +674,7 @@ intelRouter.post('/context', async (c) => {
       })
 
       if (matchingLine) {
-        // Extract UID: (uid: Method:GameServer/Logic/NpcAttackLogic.cs:HandleAttack)
+        // Extract UID: (uid: Method:src/services/auth.ts:validateToken)
         const uidMatch = matchingLine.match(/\(uid:\s+(\S+)\)/)
         if (uidMatch?.[1]) {
           logger.info(`Context auto-disambiguate: resolved "${name}" + file "${file}" → uid "${uidMatch[1]}"`)

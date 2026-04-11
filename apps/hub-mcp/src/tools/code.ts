@@ -73,7 +73,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
         let formatted = data?.data?.formatted ?? ''
 
         // ── P0 Fix: Suggest alternatives when no flows found ──
-        // Repos with 0 execution flows (e.g., YulgangProject) always return empty.
+        // Repos with 0 execution flows always return empty.
         // Guide agents to code_context and cypher which work on symbols directly.
         const isEmpty = formatted && (
           formatted.includes('No matching execution flows') ||
@@ -434,7 +434,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
         lines.push('')
         lines.push('💡 **Usage**: Pass the Name or Slug directly to the `repo` parameter:')
         lines.push('  `cortex_code_search(query: "...", repo: "cortex-hub")`')
-        lines.push('  `cortex_code_context(name: "MyClass", repo: "YulgangProject")`')
+        lines.push('  `cortex_code_context(name: "MyClass", repo: "my-backend")`')
         lines.push('  No need to use `projectId` — just use the repo name.')
 
         return {

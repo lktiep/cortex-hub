@@ -1,7 +1,7 @@
 #!/bin/bash
 # Cortex Hub — Universal Onboarding Script
 # Supports multiple AI IDE tools: Claude Code, Cursor, Windsurf, VS Code Copilot,
-# Antigravity (Gemini), and headless bots (OpenClaw, custom agents).
+# Antigravity (Gemini), and headless bots (Codex, custom agents).
 #
 # Usage:
 #   bash onboard.sh                         # Interactive (auto-detect tools)
@@ -53,7 +53,7 @@ TOOL_REGISTRY=(
     "vscode|VS Code (Copilot)|__vscode_mcp__|servers"
     "antigravity|Antigravity (Gemini)|$HOME/.gemini/antigravity/mcp_config.json|mcpServers"
     "codex|OpenAI Codex|__codex_toml__|mcp_servers"
-    "bot|Headless Bot (OpenClaw, API)|__bot__|__none__"
+    "bot|Headless Bot (Codex, API)|__bot__|__none__"
 )
 
 # Resolve dynamic config paths
@@ -221,7 +221,7 @@ else
     echo "  5) VS Code (Copilot)"
     echo "  6) Antigravity (Gemini)"
     echo "  7) OpenAI Codex"
-    echo "  8) Headless Bot (OpenClaw, Telegram, API)"
+    echo "  8) Headless Bot (Codex, Telegram, API)"
     echo "  9) All tools"
     echo ""
 

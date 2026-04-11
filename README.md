@@ -71,12 +71,12 @@ Cortex remembered everything.
 
 **Cross-project code search without cloning:**
 ```
-You: "How does YulgangProject handle NPC spawning?"
-Agent: cortex_code_search(query: "npc spawn", repo: "YulgangProject")
-  → SpawnMonster (Method) — GameServer/VoLamHuyetChien/LMSFightBlock.cs
-  → NpcDieHandler (Delegate) — GameServer/AIEngine/NpcAi.cs
+You: "How does the backend handle user auth?"
+Agent: cortex_code_search(query: "user auth", repo: "my-backend")
+  → validateToken (Function) — src/middleware/auth.ts
+  → refreshSession (Function) — src/services/session.ts
 
-You never cloned YulgangProject. Cortex indexed it server-side
+You never cloned my-backend. Cortex indexed it server-side
 and searched the AST graph across 15 repos in 20ms.
 ```
 

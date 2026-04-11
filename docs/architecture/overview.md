@@ -13,7 +13,7 @@ graph TB
         CC["🐙 Claude Code"]
         CU["⚡ Cursor"]
         WS["🌊 Windsurf"]
-        BOT["🤖 Headless Bots<br/>(OpenClaw, custom)"]
+        BOT["🤖 Headless Bots<br/>(Codex, custom)"]
     end
 
     subgraph MCP["Hub MCP Server (Hono + Streamable HTTP)"]
