@@ -81,7 +81,7 @@ setupRouter.post('/configure-mem9', async (c) => {
     }
 
     // Test the Gemini embedding endpoint
-    const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent?key=${geminiApiKey}`
+    const testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${geminiApiKey}`
     const testRes = await fetch(testUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -102,7 +102,7 @@ setupRouter.post('/configure-mem9', async (c) => {
       success: true,
       message: 'Gemini embedding API key configured successfully',
       provider: 'gemini',
-      model: 'gemini-embedding-2-preview',
+      model: 'gemini-embedding-001',
     })
   } catch (err) {
     console.error('[Setup] Gemini API key configuration failed:', err)

@@ -73,7 +73,7 @@ function resolveLlmModel(): string {
  * and singleton needs to be recreated.
  */
 function configFingerprint(): string {
-  const provider = process.env['EMBEDDING_PROVIDER'] || 'gemini'
+  const provider = process.env['EMBEDDING_PROVIDER'] || 'local'
   const localModel = process.env['LOCAL_EMBEDDING_MODEL'] || ''
   return `${resolveGeminiApiKey()}|${resolveLlmModel()}|${provider}|${localModel}`
 }
@@ -81,7 +81,7 @@ function configFingerprint(): string {
 let lastFingerprint = ''
 
 function getMem9Config(): Mem9Config {
-  const embeddingProvider = (process.env['EMBEDDING_PROVIDER'] || 'gemini') as 'gemini' | 'local'
+  const embeddingProvider = (process.env['EMBEDDING_PROVIDER'] || 'local') as 'gemini' | 'local'
 
   return {
     llm: {

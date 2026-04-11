@@ -167,7 +167,7 @@ function buildEmbeddingChain(): { config: EmbedderConfig; chain: ModelSlot[] } {
   }
 
   // Default fallback config — respect EMBEDDING_PROVIDER env var
-  const embeddingProvider = (process.env.EMBEDDING_PROVIDER || 'gemini') as 'gemini' | 'local'
+  const embeddingProvider = (process.env.EMBEDDING_PROVIDER || 'local') as 'gemini' | 'local'
   const defaultConfig: EmbedderConfig = embeddingProvider === 'local'
     ? {
         provider: 'local' as const,

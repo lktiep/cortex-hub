@@ -6,7 +6,7 @@
  * - 'local'             — @xenova/transformers in-process, free, ~10-50ms, 384-dim
  *
  * Optional env vars:
- *   MEM9_EMBEDDING_MODEL   — Gemini model (default: gemini-embedding-exp-03-07)
+ *   MEM9_EMBEDDING_MODEL   — Gemini model (default: gemini-embedding-001)
  *   LOCAL_EMBEDDING_MODEL  — HuggingFace model id (default: Xenova/all-MiniLM-L6-v2)
  *
  * NOTE: switching providers AFTER documents are embedded breaks similarity search
@@ -35,7 +35,7 @@ function resolveGeminiApiKey(): string {
  * Build an Embedder honoring EMBEDDING_PROVIDER env var.
  */
 export function createEmbedder(): Embedder {
-  const provider = (process.env['EMBEDDING_PROVIDER'] || 'gemini') as 'gemini' | 'local'
+  const provider = (process.env['EMBEDDING_PROVIDER'] || 'local') as 'gemini' | 'local'
   const config: EmbedderConfig = provider === 'local'
     ? {
         provider: 'local' as const,
@@ -45,7 +45,7 @@ export function createEmbedder(): Embedder {
     : {
         provider: 'gemini' as const,
         apiKey: resolveGeminiApiKey(),
-        model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-exp-03-07',
+        model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-001',
       }
   return new Embedder(config)
 }
@@ -55,7 +55,7 @@ export function createEmbedder(): Embedder {
  * Used to ensure Qdrant collections are created with the right size.
  */
 export function getActiveEmbeddingDim(): number {
-  const provider = (process.env['EMBEDDING_PROVIDER'] || 'gemini') as 'gemini' | 'local'
+  const provider = (process.env['EMBEDDING_PROVIDER'] || 'local') as 'gemini' | 'local'
   if (provider === 'local') {
     const model = process.env['LOCAL_EMBEDDING_MODEL'] || 'Xenova/all-MiniLM-L6-v2'
     const dimMap: Record<string, number> = {
@@ -74,5 +74,5 @@ export function getActiveEmbeddingDim(): number {
  * Returns the active provider name (for logging/diagnostics).
  */
 export function getActiveProvider(): 'gemini' | 'local' {
-  return (process.env['EMBEDDING_PROVIDER'] || 'gemini') as 'gemini' | 'local'
+  return (process.env['EMBEDDING_PROVIDER'] || 'local') as 'gemini' | 'local'
 }

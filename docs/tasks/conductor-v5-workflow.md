@@ -136,12 +136,10 @@ if (Array.isArray(parsed.findings)) {
 }
 ```
 
-### 2B. MCP Tool: `cortex_task_submit_findings`
+### 2B. MCP Tool: `cortex_task_submit_findings` (PLANNED — not yet implemented)
 
-**File: `apps/hub-mcp/src/tools/tasks.ts`**
-```
-cortex_task_submit_findings(taskId, summary, findings[])
-```
+> **Current workaround:** Use `cortex_task_update(taskId, status: "completed", result: { summary, findings })` instead.
+
 Calls PUT `/api/conductor/:id` with `{ status: 'completed', result: { summary, findings } }`
 
 ### 2C. Lead Agent Synthesis (replace auto-complete)
@@ -181,7 +179,7 @@ CREATE TABLE IF NOT EXISTS conductor_comments (
 - `GET /api/conductor/:id/comments` — list comments for a task
 
 **File: `apps/hub-mcp/src/tools/tasks.ts`**
-- `cortex_task_comment(taskId, comment, findingId?, commentType?)`
+- `cortex_task_comment(taskId, comment, findingId?, commentType?)` **(PLANNED — not yet implemented)**
 
 ### 3B. Decision Matrix UI
 

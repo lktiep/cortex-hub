@@ -1030,7 +1030,7 @@ intelRouter.post('/code-search', async (c) => {
     const collectionName = `cortex-project-${projectId}`
 
     // Embed the query — respects EMBEDDING_PROVIDER env var
-    const provider = (process.env['EMBEDDING_PROVIDER'] || 'gemini') as 'gemini' | 'local'
+    const provider = (process.env['EMBEDDING_PROVIDER'] || 'local') as 'gemini' | 'local'
     const config: EmbedderConfig = provider === 'local'
       ? {
           provider: 'local' as const,
@@ -1040,7 +1040,7 @@ intelRouter.post('/code-search', async (c) => {
       : {
           provider: 'gemini' as const,
           apiKey: resolveGeminiApiKey(),
-          model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-exp-03-07',
+          model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-001',
         }
     const embedder = new Embedder(config)
     const vector = await embedder.embed(query)

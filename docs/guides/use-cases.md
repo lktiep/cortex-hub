@@ -244,7 +244,7 @@ Agent: cortex_knowledge_store(
 
 ## Cortex Hub vs Standalone Tools
 
-| Aspect | **Standalone Tools** (GitNexus + mem0 local) | **Cortex Hub** |
+| Aspect | **Standalone Tools** (GitNexus + mem9 local) | **Cortex Hub** |
 |--------|----------------------------------------------|----------------|
 | **Setup** | Install each tool separately on each dev machine | One `docker compose up`, all agents connect |
 | **Memory** | Per-machine only, lost when VM resets | Persistent server-side, survives reboots |

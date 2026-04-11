@@ -46,7 +46,7 @@ function getEmbedder(): Embedder {
   return new Embedder({
     provider: 'gemini' as const,
     apiKey: resolveGeminiApiKey(),
-    model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-exp-03-07',
+    model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-001',
   } satisfies EmbedderConfig)
 }
 

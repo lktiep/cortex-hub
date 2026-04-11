@@ -60,7 +60,7 @@ function resolveGeminiApiKey(): string {
 function getEmbedder(): Embedder {
   // EMBEDDING_PROVIDER=local switches to in-process @xenova/transformers
   // (no network, ~200MB RAM, ~10-50ms/text). Default: gemini.
-  const provider = (process.env['EMBEDDING_PROVIDER'] || 'gemini') as 'gemini' | 'local'
+  const provider = (process.env['EMBEDDING_PROVIDER'] || 'local') as 'gemini' | 'local'
   const config: EmbedderConfig = provider === 'local'
     ? {
         provider: 'local' as const,
@@ -70,7 +70,7 @@ function getEmbedder(): Embedder {
     : {
         provider: 'gemini' as const,
         apiKey: resolveGeminiApiKey(),
-        model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-exp-03-07',
+        model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-001',
       }
   return new Embedder(config)
 }

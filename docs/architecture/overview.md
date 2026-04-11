@@ -18,7 +18,7 @@ graph TB
 
     subgraph MCP["Hub MCP Server (Hono + Streamable HTTP)"]
         AUTH["🔐 API Key Auth<br/>+ Owner Resolution"]
-        ROUTER["🔀 Tool Router<br/>12 MCP tools"]
+        ROUTER["🔀 Tool Router<br/>25 MCP tools"]
         TEL["📊 Telemetry<br/>Query logging"]
     end
 

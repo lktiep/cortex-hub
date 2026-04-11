@@ -237,10 +237,10 @@ Cortex supports two interchangeable embedding backends:
 
 | Provider | Model | Dim | Speed | Cost | Quality |
 |---|---|---|---|---|---|
-| `gemini` (default) | `gemini-embedding-exp-03-07` | 768 | ~600ms/text via API | $$ | 96.7% R@5 |
-| `local` | `Xenova/all-MiniLM-L6-v2` | 384 | **~10-50ms in-process** | **Free** | **96.7% R@5** |
+| `local` **(default)** | `Xenova/all-MiniLM-L6-v2` | 384 | **~10-50ms in-process** | **Free** | **96.7% R@5** |
+| `gemini` | `gemini-embedding-001` | 768 | ~600ms/text via API | $$ | 96.7% R@5 |
 
-Switch via `EMBEDDING_PROVIDER=local` env var. Local mode runs the model in-process via [`@huggingface/transformers`](https://huggingface.co/docs/transformers.js) — no network, no API key, no rate limits, fully offline. ⚠️ Switching providers requires re-embedding existing knowledge (vector dimensions differ).
+Local mode (default) runs the model in-process via [`@huggingface/transformers`](https://huggingface.co/docs/transformers.js) — no network, no API key, no rate limits, fully offline. Switch to Gemini via `EMBEDDING_PROVIDER=gemini` env var if needed.
 
 ---
 
@@ -258,7 +258,7 @@ graph TB
 
     subgraph Gateway["Hub MCP Server"]
         AUTH["API Key Auth"]
-        ROUTER["Tool Router (18+ tools)"]
+        ROUTER["Tool Router (25 tools)"]
         TEL["Telemetry + Hints Engine"]
     end
 
@@ -305,7 +305,7 @@ Internet
 
 ## MCP Tools
 
-Cortex exposes **18+ tools** via a single MCP endpoint:
+Cortex exposes **25 tools** via a single MCP endpoint:
 
 | # | Tool | Purpose |
 |---|------|---------|
@@ -401,7 +401,7 @@ Cortex includes an **experimental** multi-agent orchestration layer for cross-ID
 
 | Layer | Technology | Role |
 |---|---|---|
-| **MCP Server** | Hono on Node.js | Streamable HTTP + JSON-RPC, 18+ tools |
+| **MCP Server** | Hono on Node.js | Streamable HTTP + JSON-RPC, 25 tools |
 | **Code Intel** | GitNexus | AST parsing, execution flow, Cypher graph |
 | **Embeddings** | mem9 + Qdrant | Vector search with semantic recall |
 | **LLM Proxy** | CLIProxy | Multi-provider with fallback chains |
@@ -420,7 +420,7 @@ Cortex includes an **experimental** multi-agent orchestration layer for cross-ID
 ```
 cortex-hub/
 ├── apps/
-│   ├── hub-mcp/                 # MCP Server — 18+ tools
+│   ├── hub-mcp/                 # MCP Server — 25 tools
 │   ├── dashboard-api/           # Hono API + mem9 + recipe pipeline
 │   └── dashboard-web/           # Next.js dashboard (13 pages)
 ├── packages/

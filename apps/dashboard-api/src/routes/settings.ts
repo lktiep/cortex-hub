@@ -49,7 +49,7 @@ settingsRouter.put('/hub-config', async (c) => {
 // ── Embedding Provider ──
 
 settingsRouter.get('/embedding-provider', (c) => {
-  const provider = process.env['EMBEDDING_PROVIDER'] || 'gemini'
+  const provider = process.env['EMBEDDING_PROVIDER'] || 'local'
   const model = provider === 'local'
     ? (process.env['LOCAL_EMBEDDING_MODEL'] || 'Xenova/all-MiniLM-L6-v2')
     : (process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-001')

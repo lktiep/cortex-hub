@@ -1,414 +1,428 @@
-# Hub MCP API Reference
+# Hub MCP Tool Reference
 
-> Complete reference for all tools exposed by the Cortex Hub MCP Server.
-
----
+Complete reference for all 25 tools exposed by the Cortex Hub MCP Server.
 
 ## Authentication
 
-All requests require a valid API key in the `Authorization` header:
+All MCP requests require a Bearer token in the `Authorization` header:
 
 ```
 Authorization: Bearer <API_KEY>
 ```
 
-Keys are issued per-agent and configured as Cloudflare Worker secrets. Invalid or missing keys return `401 Unauthorized`.
+API keys are created in the Cortex Hub Dashboard under **Settings > API Keys**. Each key is scoped to an agent identity. Invalid or missing keys return a JSON-RPC error with code `-32001`.
 
 ---
 
-## Tool Groups
+## Session
 
-### `code.*` — Code Intelligence (via GitNexus)
+Tools for managing agent session lifecycle.
 
-#### `code.query`
+### `cortex_session_start`
 
-Search the code knowledge graph for execution flows related to a concept.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `repo` | string | ✓ | Repository name |
-| `query` | string | ✓ | Natural language or keyword search |
-| `goal` | string | — | What you want to find (improves ranking) |
-| `limit` | number | — | Max processes to return (default: 5) |
-
-```json
-{
-  "tool": "code.query",
-  "params": {
-    "repo": "keothom",
-    "query": "auction bidding logic",
-    "goal": "understand how bids are placed"
-  }
-}
-```
-
-#### `code.context`
-
-360-degree view of a single code symbol — callers, callees, imports, process participation.
+Start a new execution session with optional agent identity metadata. Returns a session ID, dynamic mission brief assembled from the knowledge base, and relevant knowledge hits.
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
-| `repo` | string | ✓ | Repository name |
-| `name` | string | ✓ | Symbol name (function, class, method) |
-| `include_content` | boolean | — | Include full source code (default: false) |
+|-----------|------|----------|-------------|
+| `repo` | string | yes | Repository URL being worked on |
+| `mode` | string | no | Session mode: `development`, `onboarding`, `review` |
+| `agentId` | string | no | Agent identifier (e.g. `claude-code`) |
+| `hostname` | string | no | Machine hostname |
+| `os` | string | no | Operating system (`macOS`/`Windows`/`Linux`) |
+| `ide` | string | no | IDE type (`claude-code-cli`/`claude-code-vscode`/`cursor`/`windsurf`/`codex`) |
+| `branch` | string | no | Current git branch |
+| `capabilities` | string[] | no | Agent capabilities list |
+| `role` | string | no | Agent role from `agent-identity.json` |
 
-#### `code.impact`
-
-Analyze the blast radius of changing a code symbol.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `repo` | string | ✓ | Repository name |
-| `target` | string | ✓ | Symbol name to analyze |
-| `direction` | string | ✓ | `upstream` (what depends on this) or `downstream` |
-| `maxDepth` | number | — | Max traversal depth (default: 3) |
-
-**Response includes:**
-- Risk level: `LOW` / `MEDIUM` / `HIGH` / `CRITICAL`
-- Affected symbols grouped by depth
-- Affected execution flows
-- Affected modules
-
-#### `code.detect_changes`
-
-Analyze uncommitted git changes and find affected execution flows.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `repo` | string | ✓ | Repository name |
-| `scope` | string | — | `unstaged`, `staged`, `all`, or `compare` |
-
-#### `code.cypher`
-
-Execute raw Cypher queries against the code knowledge graph.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `repo` | string | ✓ | Repository name |
-| `query` | string | ✓ | Cypher query string |
+**Returns:** `session_id`, `mission_brief`, `status`, `identity` object, `relevant_knowledge` array.
 
 ---
 
-### `memory.*` — Agent Memory (via mem9)
+### `cortex_session_end`
 
-#### `memory.add`
-
-Store a memory for the calling agent.
+Close a session with a summary of work done. Reports session duration and compliance score.
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
-| `content` | string | ✓ | Memory content |
-| `metadata` | object | — | Additional metadata tags |
+|-----------|------|----------|-------------|
+| `sessionId` | string | yes | Session ID from `cortex_session_start` |
+| `summary` | string | yes | Brief summary of work done in this session |
 
-#### `memory.search`
-
-Search agent memories by semantic similarity.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `query` | string | ✓ | Search query |
-| `limit` | number | — | Max results (default: 10) |
-| `agent_id` | string | — | Filter by agent (default: calling agent) |
-
-#### `memory.list`
-
-List recent memories for the calling agent.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `limit` | number | — | Max results (default: 20) |
+**Returns:** `status` (`closed`), `sessionId`, `summary`, optional `session` object with duration.
 
 ---
 
-### `knowledge.*` — Knowledge Base (via Qdrant)
+## Code Intelligence
 
-#### `knowledge.search`
+Tools for searching, reading, and analyzing code via the GitNexus AST graph and vector search.
 
-Semantic search across the shared knowledge base.
+### `cortex_code_search`
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `query` | string | ✓ | Search query |
-| `project` | string | — | Filter by project |
-| `domain` | string | — | Filter by domain (e.g., `cloudflare`, `supabase`) |
-| `limit` | number | — | Max results (default: 10) |
-
-#### `knowledge.get`
-
-Retrieve a specific knowledge item by ID.
+Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. Omit `repo` to search across all indexed projects.
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
-| `id` | string | ✓ | Knowledge item UUID |
+|-----------|------|----------|-------------|
+| `query` | string | yes | Natural language or code query |
+| `repo` | string | no | Repository name (e.g. `cortex-hub`) or git URL |
+| `projectId` | string | no | Project ID (use `repo` instead if possible) |
+| `branch` | string | no | Git branch to search |
+| `limit` | number | no | Max results (default: 5) |
 
-#### `knowledge.contribute`
-
-Submit a new knowledge item (requires approval by default).
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `title` | string | ✓ | Item title |
-| `content` | string | ✓ | Item content (markdown) |
-| `project` | string | — | Associated project |
-| `domain` | string | ✓ | Knowledge domain |
-| `confidence` | number | — | Self-assessed confidence (0-1, default: 0.8) |
+**Returns:** Formatted execution flows, source code matches from semantic search, and follow-up suggestions.
 
 ---
 
-### `quality.*` — Quality Gates (4-Dimension Scoring)
+### `cortex_code_read`
 
-#### `cortex_quality_report`
-
-Submit a quality gate report with automatic 4-dimension scoring.
-
-**New format** (recommended — auto-calculates scores):
+Read raw source code from an indexed repository. Returns full file content or a line range. Use after `cortex_code_search` to view complete files.
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
-| `gate_name` | string | ✓ | Gate identifier (e.g., "pre-push", "CI") |
-| `agent_id` | string | — | Agent identifier (default: "unknown") |
-| `session_id` | string | — | Current session ID |
-| `project_id` | string | — | Project ID |
-| `results` | object | — | Raw verification results (see below) |
-| `details` | string | — | Markdown log of evaluation |
+|-----------|------|----------|-------------|
+| `file` | string | yes | Relative file path within the repo (e.g. `src/utils/auth.ts`) |
+| `repo` | string | no | Repository name or git URL |
+| `projectId` | string | no | Project ID |
+| `startLine` | number | no | Start line (1-indexed, inclusive) |
+| `endLine` | number | no | End line (1-indexed, inclusive) |
 
-**`results` object (triggers auto-scoring):**
-
-| Field | Type | Description |
-|---|---|---|
-| `buildPassed` | boolean | Build compiled successfully |
-| `typecheckPassed` | boolean | TypeScript type check passed |
-| `lintPassed` | boolean | Linter passed |
-| `testsPassed` | boolean | Test suite passed |
-| `testsBaseline` | number | Baseline test count |
-| `testsCurrent` | number | Current test count |
-| `isGreenfield` | boolean | New project (auto-grants regression) |
-| `stubsFound` | number | TODO/FIXME/HACK count |
-| `secretsFound` | number | Hardcoded secrets detected |
-| `lintErrorCount` | number | Lint error count |
-| `requirementsMapped` | number | Requirements covered |
-| `requirementsTotal` | number | Total requirements |
-| `hasTests` | boolean | Has tests for new code |
-| `hasDocs` | boolean | Has documentation |
-
-**Legacy format** (backward compatible):
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `gate_name` | string | ✓ | Gate name |
-| `passed` | boolean | — | Whether gate passed |
-| `score` | number | — | Pre-computed score (0-100) |
-
-**Scoring model:** Build (25) + Regression (25) + Standards (25) + Traceability (25) = 100
-
-**Grade thresholds:**
-
-| Grade | Score | Action |
-|---|---|---|
-| A | 90-100 | Proceed immediately |
-| B | 80-89 | Proceed with minor warnings |
-| C | 70-79 | Proceed but flag at next gate |
-| D | 60-69 | Pause — show report, ask user |
-| F | 0-59 | Stop — must remediate |
-
-**REST API endpoints:**
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/quality/report` | POST | Submit quality gate report |
-| `/api/quality/reports` | GET | List reports (filter: `project_id`, `agent_id`, `grade`) |
-| `/api/quality/reports/latest` | GET | Most recent report |
-| `/api/quality/trends` | GET | Daily trends (`days`, `project_id`) |
-| `/api/quality/summary` | GET | Aggregate stats + grade distribution |
-| `/api/quality/logs` | GET | Legacy execution logs |
-
-#### `cortex_plan_quality`
-
-Assess plan quality against 8 criteria before execution. Use BEFORE implementing complex plans.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `plan` | string | Yes | The implementation plan text |
-| `request` | string | Yes | Original user request |
-| `iteration` | number | — | Iteration number (1-3, default 1) |
-| `threshold` | number | — | Minimum score to pass (default 8.0) |
-| `plan_type` | string | — | One of: feature, bugfix, refactor, architecture, migration, general |
-
-**Scoring criteria:** Completeness, Specificity, Feasibility, Risk Awareness, Scope Boundary, Ordering, Testability, Impact Clarity
-
-**Threshold:** Score >= 8.0/10 → APPROVED. Max 3 iterations.
+**Returns:** Syntax-highlighted file content with line count and file size.
 
 ---
 
-### `routing.*` — Complexity-Based Model Routing
+### `cortex_code_context`
 
-#### `POST /api/llm/analyze-complexity`
-
-Analyze task complexity using pure heuristics (zero LLM cost). Returns recommended model tier.
+Get a 360-degree view of a code symbol: methods, callers, callees, and related execution flows.
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
-| `prompt` | string | Yes | Task description |
-| `fileCount` | number | — | Estimated files to touch |
-| `stepCount` | number | — | Number of plan steps |
-| `taskType` | string | — | completion, planning, research, review, generation, debug, refactor |
-| `isRetry` | boolean | — | Previous attempt failed |
-| `codebaseSize` | string | — | small, medium, large |
+|-----------|------|----------|-------------|
+| `name` | string | yes | Function, class, or symbol name to explore |
+| `repo` | string | no | Repository name or git URL |
+| `projectId` | string | no | Project ID |
+| `file` | string | no | File path to disambiguate when multiple symbols share the same name |
 
-**Response:**
-```json
-{
-  "analysis": {
-    "tier": "standard",
-    "score": 5.2,
-    "signals": [...],
-    "reasoning": "Complexity 5.2/10 → standard tier [keywords(6), promptLength(4), taskType(6)]"
-  }
-}
-```
-
-**Auto-routing in chat:** Set `model: "auto"` in `/api/llm/v1/chat/completions` to auto-select model tier.
+**Returns:** Raw context output showing the symbol's relationships in the code graph.
 
 ---
 
-### `session.*` — Session Handoff
+### `cortex_code_impact`
 
-#### `session.handoff`
-
-Create a session handoff for another agent to pick up.
+Analyze the blast radius of changing a specific symbol to verify downstream impact before making edits. Auto-retries with class method lookup when a class-level target appears isolated.
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project` | string | ✓ | Project name |
-| `task_summary` | string | ✓ | What was being worked on |
-| `context` | object | ✓ | Files changed, decisions made, blockers |
-| `to_agent` | string | — | Target agent (null = any) |
-| `priority` | number | — | 1-10, default: 5 |
+|-----------|------|----------|-------------|
+| `target` | string | yes | Function, class, or file name to analyze |
+| `repo` | string | no | Repository name or git URL |
+| `projectId` | string | no | Project ID |
+| `branch` | string | no | Git branch to analyze |
+| `direction` | string | no | `upstream` or `downstream` (default: `downstream`) |
 
-#### `session.pickup`
-
-Claim the oldest pending handoff.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `project` | string | — | Filter by project |
-
-#### `session.complete`
-
-Mark a handoff as completed.
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `id` | string | ✓ | Handoff UUID |
+**Returns:** Affected symbols, risk level, and impacted execution flows. For classes, lists methods with individual impact.
 
 ---
 
-### `analytics.*` — Tool Usage Analytics & Compliance
+### `cortex_code_reindex`
 
-#### `cortex_tool_stats`
-
-View Cortex MCP tool usage analytics. Available to all team members (not admin-only).
+Trigger re-indexing of a project after code changes. Looks up the project by repo URL and starts a GitNexus re-index job.
 
 | Parameter | Type | Required | Description |
-|---|---|---|---|
-| `days` | number | — | Time window in days (default: 7) |
-| `agentId` | string | — | Filter by agent ID |
-| `projectId` | string | — | Filter by project ID |
+|-----------|------|----------|-------------|
+| `repo` | string | yes | Git repository URL (e.g. `https://github.com/org/repo`) |
+| `branch` | string | no | Branch to index (default: `main`) |
 
-**Response includes:**
-- Per-tool breakdown: success rate, latency, error count, token estimates
-- Per-agent breakdown: calls, success rate
-- Daily trend with call volume and error count
-- Overall summary: total calls, success rate, estimated tokens saved
-
-#### Session Compliance Check
-
-**`GET /api/metrics/session-compliance/:sessionId`**
-
-Evaluates tool usage across 5 categories for a completed session.
-
-**Categories scored:**
-| Category | Required Tools |
-|----------|---------------|
-| Discovery | `cortex_code_search`, `cortex_code_context`, `cortex_cypher` |
-| Safety | `cortex_code_impact`, `cortex_detect_changes` |
-| Learning | `cortex_knowledge_search`, `cortex_memory_search` |
-| Contribution | `cortex_knowledge_store`, `cortex_memory_store` |
-| Lifecycle | `cortex_session_start`, `cortex_session_end`, `cortex_quality_report` |
-
-**Response:** Overall score (0-100%), grade (A/B/C/D), per-category breakdown, improvement hints.
-
-#### Cortex Hints Engine
-
-**`GET /api/metrics/hints/:agentId?currentTool=<toolName>`**
-
-Returns context-aware hints based on which tools the agent has/hasn't used in the current session window.
-
-**Hint triggers:**
-- After `code_search` → remind about `code_impact`
-- After `quality_report` → remind about `knowledge_store`
-- Before `session_end` → remind about `quality_report` + `memory_store`
-- Low discovery coverage → remind about `code_search`
-
-> 💡 Hints are automatically injected into MCP tool responses by the interceptor. Agents don't need to call this endpoint directly.
-
-#### Tool Analytics Dashboard
-
-**`GET /api/metrics/tool-analytics?days=7&agentId=x&projectId=y`**
-
-Aggregate analytics for tool usage across all sessions.
-
-**Response:**
-```json
-{
-  "period": { "days": 7, "since": "..." },
-  "summary": {
-    "totalCalls": 142,
-    "overallSuccessRate": 94.2,
-    "estimatedTokensSaved": 35000,
-    "activeAgents": 3
-  },
-  "tools": [
-    {
-      "tool": "cortex_code_search",
-      "totalCalls": 45,
-      "successRate": 97.8,
-      "avgLatencyMs": 320,
-      "estimatedTokensSaved": 12500
-    }
-  ],
-  "agents": [...],
-  "trend": [...]
-}
-```
+**Returns:** `status` (`started`), `projectId`, `jobId`, `branch`.
 
 ---
 
-## Rate Limits
+### `cortex_list_repos`
 
-| Tier | Requests/min | Burst |
-|---|---|---|
-| Default | 60 | 10 |
-| Premium | 300 | 50 |
+List all indexed repositories with project ID mapping. Use to find which `projectId` or repo name to pass to other code tools.
 
-Rate limit headers are included in every response:
+*No parameters.*
 
-```
-X-RateLimit-Limit: 60
-X-RateLimit-Remaining: 45
-X-RateLimit-Reset: 1710700000
-```
+**Returns:** Table of indexed repositories with name, slug, symbol count, and flow count.
 
 ---
 
-## Error Codes
+### `cortex_cypher`
 
-| Code | Meaning |
-|---|---|
-| `400` | Invalid request parameters |
-| `401` | Missing or invalid API key |
-| `403` | Policy violation (e.g., quality gate block) |
-| `404` | Resource not found |
-| `429` | Rate limit exceeded |
-| `500` | Internal server error |
-| `502` | Backend service unavailable |
+Run Cypher queries directly against the GitNexus knowledge graph for exploring code relationships.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | yes | Cypher query (e.g. `MATCH (n:Function) RETURN n.name LIMIT 10`) |
+| `repo` | string | no | Repository name or git URL |
+| `projectId` | string | no | Project ID |
+
+**Available node properties:** `name`, `filePath`. Use `labels(n)` for node type.
+
+**Returns:** Query results as JSON.
+
+---
+
+## Knowledge
+
+Shared knowledge base with semantic search, chunking, and embedding.
+
+### `cortex_knowledge_store`
+
+Store a knowledge document. Auto-chunks and embeds content for semantic search. Use to contribute discovered patterns, resolved issues, architecture decisions, and reusable solutions.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `title` | string | yes | Document title (concise, descriptive) |
+| `content` | string | yes | Full document content to store |
+| `tags` | string[] | no | Tags for categorization (e.g. `["typescript", "patterns"]`) |
+| `projectId` | string | no | Project ID to scope this knowledge to |
+| `agentId` | string | no | Contributing agent identifier |
+| `hallType` | string | no | MemPalace hall type: `fact`, `event`, `discovery`, `preference`, `advice`, `general` |
+| `validFrom` | string | no | ISO date when this fact became valid (temporal validity) |
+
+**Returns:** The stored document object with ID.
+
+---
+
+### `cortex_knowledge_search`
+
+Search the knowledge base by semantic similarity. Supports filtering by tags, project, hall type, and temporal validity.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | yes | Text query (auto-embedded) |
+| `tags` | string[] | no | Filter by tags |
+| `projectId` | string | no | Filter by project ID |
+| `limit` | number | no | Max results (default: 5) |
+| `hallType` | string | no | Filter by hall type: `fact`, `event`, `discovery`, `preference`, `advice`, `general` |
+| `asOf` | string | no | ISO date -- return only facts valid at this point in time |
+
+**Returns:** Matching documents with metadata, tags, and relevance scores.
+
+---
+
+## Memory
+
+Per-agent memory with branch-scoped namespacing and semantic recall.
+
+### `cortex_memory_store`
+
+Store a memory for an AI agent. Memories persist across sessions and can be recalled by semantic search. Supports branch-scoped namespacing via `projectId` + `branch`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `content` | string | yes | The memory content to store |
+| `agentId` | string | no | Agent identifier (default: `default`) |
+| `projectId` | string | no | Project ID to scope this memory to |
+| `branch` | string | no | Git branch to scope this memory to (requires `projectId`) |
+| `metadata` | object | no | Optional metadata tags |
+
+**Returns:** Confirmation with `stored: true`, resolved `userId`, `projectId`, `branch`.
+
+---
+
+### `cortex_memory_search`
+
+Search agent memories by semantic similarity. Uses a branch-aware fallback chain: branch-specific -> project-level -> agent-level.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | yes | Search query for memory recall |
+| `agentId` | string | no | Filter by agent (default: all agents) |
+| `projectId` | string | no | Project ID to search within |
+| `branch` | string | no | Git branch to search (with fallback to project-level) |
+| `limit` | number | no | Max results (default: 5) |
+
+**Returns:** `query`, `scopes` searched, `count`, and `memories` array with `_scope` annotation.
+
+---
+
+## Quality
+
+Quality gate reporting and change detection.
+
+### `cortex_quality_report`
+
+Report the results of a quality gate check (e.g. build, typecheck, lint, test outputs).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `gate_name` | string | yes | Name of the gate evaluated (e.g. `Gate 4`, `pre-push`) |
+| `passed` | boolean | yes | Whether the gate passed or failed |
+| `score` | number | no | Numerical score out of 100 |
+| `details` | string | no | Markdown or technical log of the evaluation criteria |
+
+**Returns:** Confirmation message with gate name and pass/fail status.
+
+---
+
+### `cortex_detect_changes`
+
+Detect uncommitted changes and analyze their risk level across the indexed codebase. Shows changed symbols, affected processes, and risk assessment.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `scope` | string | no | Scope: `all` (default), `staged`, or `unstaged` |
+| `projectId` | string | no | Project ID to scope analysis to |
+
+**Returns:** JSON with changed symbols, affected execution flows, and risk assessment.
+
+---
+
+### `cortex_changes`
+
+Check for recent code changes pushed by other agents or team members. Returns unseen commits and affected files.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agentId` | string | yes | Your agent identifier |
+| `projectId` | string | yes | Project ID to check changes for |
+| `acknowledge` | boolean | no | Mark changes as seen (default: `true`) |
+
+**Returns:** `hasChanges`, `count`, human-readable `summary`, and `events` array with commit details and affected files.
+
+---
+
+## Conductor Tasks
+
+Multi-agent task orchestration: create, assign, track, and coordinate work across agents.
+
+### `cortex_task_create`
+
+Create a task and optionally assign it to another agent. Supports dependencies, capabilities, and parent-child relationships.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `title` | string | yes | Short title describing the task |
+| `description` | string | no | Detailed description of what needs to be done |
+| `assignTo` | string | no | Agent ID to assign the task to |
+| `priority` | string | no | Priority: `low`, `medium`, `high`, `critical` |
+| `requiredCapabilities` | string[] | no | Capabilities required to complete this task |
+| `dependsOn` | string[] | no | Task IDs that must complete before this task can start |
+| `notifyOnComplete` | string[] | no | Agent IDs to notify when this task completes |
+| `context` | object | no | Arbitrary context object to pass to the assigned agent |
+| `parentTaskId` | string | no | Parent task ID if this is a sub-task |
+
+**Returns:** Created task with `id`, `title`, `status`, `assigned_to_agent`, `priority`.
+
+---
+
+### `cortex_task_pickup`
+
+Retrieve tasks assigned to the calling agent. Automatically checks both `agentId` and API key name.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agentId` | string | no | Agent ID (auto-detected if not provided) |
+
+**Returns:** Next pending task with `id`, `title`, `status`, `priority`, `description`, or a message if no tasks are pending.
+
+---
+
+### `cortex_task_accept`
+
+Accept an assigned task, signaling that work will begin. Updates task status to `accepted`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | string | yes | The ID of the task to accept |
+
+**Returns:** Task `id`, `title`, `status` (`accepted`).
+
+---
+
+### `cortex_task_update`
+
+Update the status of a task. Transitions tasks through their lifecycle. Can also re-parent orphan tasks.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | string | yes | The ID of the task to update |
+| `status` | string | yes | New status: `in_progress`, `review`, `completed`, `failed` |
+| `message` | string | no | Progress message or note about the status change |
+| `result` | object | no | Result data when completing or failing a task |
+| `parentTaskId` | string | no | Set or change the parent task ID |
+
+**Returns:** Updated task `id`, `title`, `status`.
+
+---
+
+### `cortex_task_list`
+
+List tasks with optional filters for project, status, and assignee.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `projectId` | string | no | Filter by project ID |
+| `status` | string | no | Filter by status (e.g. `assigned`, `in_progress`, `completed`) |
+| `assignedTo` | string | no | Filter by assigned agent ID |
+| `limit` | number | no | Max tasks to return (default: 20) |
+
+**Returns:** List of tasks with `id`, `title`, `status`, `assigned_to_agent`, `priority`.
+
+---
+
+### `cortex_task_status`
+
+Get detailed status of a specific task including subtasks, logs, and full history.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | string | yes | The ID of the task to inspect |
+
+**Returns:** Full task detail with `description`, `assigned_to_agent`, `priority`, `parent_task_id`, timestamps, `result`, subtask list, and activity log.
+
+---
+
+### `cortex_task_submit_strategy`
+
+Submit a task execution strategy for user review. The Lead Agent calls this after analyzing a task to propose team roles, subtasks, and execution plan.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `taskId` | string | yes | Task ID to submit strategy for |
+| `summary` | string | yes | Brief summary of analysis and proposed approach |
+| `roles` | object[] | yes | Team roles (each: `role`, `label`, `agent`, `rationale`) |
+| `subtasks` | object[] | yes | Work items (each: `title`, `description?`, `role`, `dependsOn?`) |
+| `estimatedEffort` | string | no | Estimated effort (e.g. `Small (~1 session)`) |
+
+**Returns:** Confirmation with roles, subtask count, and status (`Awaiting user approval on dashboard`).
+
+---
+
+## Analytics
+
+Tool usage statistics and self-evaluation metrics.
+
+### `cortex_health`
+
+Check health status of all Cortex Hub backend services (Qdrant, Dashboard API, mem9, GitNexus, CLIProxy).
+
+*No parameters.*
+
+**Returns:** `overall` status (`healthy` or `degraded`), per-service `status`, `statusCode`, `latencyMs`, and `checkedAt` timestamp.
+
+---
+
+### `cortex_tool_stats`
+
+View Cortex MCP tool usage analytics: success rates, latency, token estimates, and trends.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `days` | number | no | Time window in days (default: 7) |
+| `agentId` | string | no | Filter by agent ID |
+| `projectId` | string | no | Filter by project ID |
+
+**Returns:** Per-tool breakdown (success rate, latency, errors), per-agent breakdown, daily trend, and summary (total calls, success rate, estimated tokens saved, active agents).
+
+---
+
+## Error Handling
+
+All tools return MCP-standard responses. On failure, the response includes `isError: true` and a descriptive error message. Common error patterns:
+
+| Scenario | Behavior |
+|----------|----------|
+| Invalid API key | JSON-RPC error `-32001`, HTTP 401 |
+| Backend service down | Tool returns error text with service name |
+| Request timeout | 10-15 second timeout per tool call |
+| Project not found | Error with suggestion to register in Dashboard |
+| Symbol not found | Auto-retry with context lookup; returns suggestions |
+
+Adaptive hints are automatically appended to tool responses based on the agent's usage patterns in the current session.
