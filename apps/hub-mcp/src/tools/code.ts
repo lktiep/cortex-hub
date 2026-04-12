@@ -79,10 +79,10 @@ export function registerCodeTools(server: McpServer, env: Env) {
         )
 
         if (isEmpty && resolvedProject) {
-          // Extract meaningful search terms from query
+          // Extract meaningful search terms from query (split on spaces, underscores, hyphens)
           const searchTerms = query
-            .split(/\s+/)
-            .filter(w => w.length > 2 && !/^(the|and|for|with|from|that|this|how|does|what|where)$/i.test(w))
+            .split(/[\s_\-]+/)
+            .filter(w => w.length > 2 && !/^(the|and|for|with|from|that|this|how|does|what|where|create|get|set|use)$/i.test(w))
             .slice(0, 4)
 
           // Search each symbol type separately (Kuzu doesn't support multi-label WHERE)
@@ -98,15 +98,33 @@ export function registerCodeTools(server: McpServer, env: Env) {
                 query: `MATCH (n:${symbolType}) WHERE ${conditions} RETURN DISTINCT n.name AS name LIMIT 10`,
                 projectId: resolvedProject,
               })
-              const cypherData = cypherRes as { data?: { formatted?: string; row_count?: number; rows?: Array<{ name: string }> } }
-              const rows = cypherData?.data?.row_count ?? 0
-              if (rows > 0) {
-                // Parse markdown table to extract names
-                const md = cypherData?.data?.formatted ?? ''
-                const lines = md.split('\n').filter(l => l.startsWith('| ') && !l.includes('---') && !l.includes('n.name'))
+              // Response shape: { success, data: { raw: "{ \"markdown\": \"...\", \"row_count\": N }\n---\n..." } }
+              const wrapper = cypherRes as { data?: { raw?: string; formatted?: string; row_count?: number } }
+              let md = ''
+              let rows = 0
+
+              if (wrapper?.data?.raw) {
+                // Parse the JSON portion from raw (before "---" separator)
+                const jsonPart = wrapper.data.raw.split('\n---')[0] ?? ''
+                try {
+                  const parsed = JSON.parse(jsonPart) as { markdown?: string; row_count?: number }
+                  md = parsed.markdown ?? ''
+                  rows = parsed.row_count ?? 0
+                } catch {
+                  // raw might be plain text, try extracting table directly
+                  md = wrapper.data.raw
+                  rows = (md.match(/\| /g) ?? []).length - 2 // rough count minus headers
+                }
+              } else if (wrapper?.data?.formatted) {
+                md = wrapper.data.formatted
+                rows = wrapper.data.row_count ?? 0
+              }
+
+              if (rows > 0 && md) {
+                const lines = md.split('\n').filter(l => l.startsWith('| ') && !l.includes('---') && !l.includes('n.name') && !l.includes('name |'))
                 for (const line of lines) {
                   const name = line.replace(/\|/g, '').trim()
-                  if (name) allSymbols.push({ name, type: symbolType })
+                  if (name && name !== 'name') allSymbols.push({ name, type: symbolType })
                 }
               }
             } catch { /* best-effort per type */ }
