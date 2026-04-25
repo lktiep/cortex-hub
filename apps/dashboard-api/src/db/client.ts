@@ -64,6 +64,39 @@ for (const sql of knowledgeEvolutionCols) {
   try { db.exec(sql) } catch (e) { /* ignore if column exists */ }
 }
 
+// Index jobs: extended status + git metadata + mem9 + docs-knowledge progress
+const indexJobsCols = [
+  'ALTER TABLE index_jobs ADD COLUMN triggered_by TEXT',
+  'ALTER TABLE index_jobs ADD COLUMN commit_hash TEXT',
+  'ALTER TABLE index_jobs ADD COLUMN commit_message TEXT',
+  'ALTER TABLE index_jobs ADD COLUMN mem9_status TEXT',
+  'ALTER TABLE index_jobs ADD COLUMN mem9_chunks INTEGER DEFAULT 0',
+  'ALTER TABLE index_jobs ADD COLUMN mem9_progress INTEGER DEFAULT 0',
+  'ALTER TABLE index_jobs ADD COLUMN mem9_total_chunks INTEGER DEFAULT 0',
+  'ALTER TABLE index_jobs ADD COLUMN docs_knowledge_status TEXT',
+  'ALTER TABLE index_jobs ADD COLUMN docs_knowledge_count INTEGER DEFAULT 0',
+]
+for (const sql of indexJobsCols) {
+  try { db.exec(sql) } catch { /* ignore if exists */ }
+}
+
+// Query logs: cost tracking columns
+const queryLogsCols = [
+  'ALTER TABLE query_logs ADD COLUMN input_size INTEGER DEFAULT 0',
+  'ALTER TABLE query_logs ADD COLUMN output_size INTEGER DEFAULT 0',
+  'ALTER TABLE query_logs ADD COLUMN compute_tokens INTEGER DEFAULT 0',
+  'ALTER TABLE query_logs ADD COLUMN compute_model TEXT',
+]
+for (const sql of queryLogsCols) {
+  try { db.exec(sql) } catch { /* ignore if exists */ }
+}
+
+// Session handoffs: api key audit trail
+try { db.exec('ALTER TABLE session_handoffs ADD COLUMN api_key_name TEXT') } catch { /* ignore if exists */ }
+
+// Conductor tasks: api key ownership
+try { db.exec('ALTER TABLE conductor_tasks ADD COLUMN api_key_owner TEXT') } catch { /* ignore if exists */ }
+
 // MemPalace-inspired memory hierarchy + temporal validity
 const memoryHierarchyCols = [
   "ALTER TABLE knowledge_documents ADD COLUMN hall_type TEXT DEFAULT 'general' CHECK(hall_type IN ('fact','event','discovery','preference','advice','general'))",
