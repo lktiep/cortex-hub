@@ -341,7 +341,7 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
 
     // ── Step 4: Update Project ──
     db.prepare(
-      `UPDATE projects SET indexed_at = datetime('now', 'localtime'), indexed_symbols = ?, updated_at = datetime('now', 'localtime') WHERE id = ?`
+      `UPDATE projects SET indexed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), indexed_symbols = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
     ).run(symbolsFound, projectId)
 
     updateJob(jobId, {

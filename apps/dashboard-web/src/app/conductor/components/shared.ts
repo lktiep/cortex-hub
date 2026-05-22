@@ -68,15 +68,11 @@ export interface ImageAttachment {
   name: string
 }
 
+import { parseDateSafe, formatTimeAgo as baseFormatTimeAgo } from '@/lib/date'
+
 // ── Helpers ──
 export function formatTimeAgo(dateStr: string): string {
-  const now = new Date()
-  const past = new Date(dateStr)
-  const diff = Math.floor((now.getTime() - past.getTime()) / 1000)
-  if (diff < 60) return `${diff}s ago`
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return `${Math.floor(diff / 86400)}d ago`
+  return baseFormatTimeAgo(dateStr)
 }
 
 export function formatJson(value: string | null): string {
@@ -182,7 +178,7 @@ export function getTaskDuration(task: { created_at: string; accepted_at?: string
   const start = task.accepted_at ?? task.created_at
   const end = task.completed_at
   if (!end) return ''
-  const diffMs = new Date(end).getTime() - new Date(start).getTime()
+  const diffMs = parseDateSafe(end).getTime() - parseDateSafe(start).getTime()
   if (diffMs < 0) return ''
   const seconds = Math.floor(diffMs / 1000)
   if (seconds < 60) return `${seconds}s`

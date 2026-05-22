@@ -182,7 +182,7 @@ async function applyFix(oldDoc: { id: string; title: string; project_id: string 
   ).run(oldDoc.id, newDocId, fix.change_summary)
 
   // Archive old doc
-  db.prepare("UPDATE knowledge_documents SET status = 'archived', updated_at = datetime('now', 'localtime') WHERE id = ?").run(oldDoc.id)
+  db.prepare("UPDATE knowledge_documents SET status = 'archived', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(oldDoc.id)
 
   // Embed and store chunks for new doc
   const embedder = getEmbedder()

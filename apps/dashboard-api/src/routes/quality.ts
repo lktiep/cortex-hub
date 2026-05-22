@@ -232,7 +232,7 @@ qualityRouter.get('/trends', (c) => {
         MIN(grade) as worst_grade,
         MAX(grade) as best_grade
       FROM quality_reports
-      WHERE created_at >= datetime('now', '-' || ? || ' days')
+      WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-' || ? || ' days')
     `
     const params: unknown[] = [days]
 
@@ -389,7 +389,7 @@ sessionsRouter.post('/start', async (c) => {
     if (existingSession) {
       sessionId = existingSession.id
       db.prepare(
-        `UPDATE session_handoffs SET created_at = datetime('now', 'localtime') WHERE id = ?`
+        `UPDATE session_handoffs SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
       ).run(sessionId)
     } else {
       sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
@@ -421,7 +421,7 @@ sessionsRouter.post('/start', async (c) => {
 
     if (!existingSession) {
       const insertStmt = db.prepare(
-        'INSERT INTO session_handoffs (id, from_agent, project, task_summary, context, status, api_key_name, hostname, os, ide, branch, capabilities, role, last_activity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))'
+        'INSERT INTO session_handoffs (id, from_agent, project, task_summary, context, status, api_key_name, hostname, os, ide, branch, capabilities, role, last_activity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'))'
       )
       insertStmt.run(
         sessionId,
@@ -496,7 +496,7 @@ sessionsRouter.get('/all', (c) => {
                  COALESCE(SUM(output_size), 0) as output_bytes,
                  COALESCE(SUM(input_size), 0) + COALESCE(SUM(output_size), 0) as data_bytes
           FROM query_logs
-          WHERE agent_id = ? AND created_at >= ? AND created_at <= datetime(?, '+4 hours')
+          WHERE agent_id = ? AND created_at >= ? AND created_at <= strftime('%Y-%m-%dT%H:%M:%SZ', ?, '+4 hours')
             AND status = 'ok'
         `).get(agentId, sessionCreatedAt, sessionCreatedAt) as {
           tool_calls: number; output_bytes: number; data_bytes: number

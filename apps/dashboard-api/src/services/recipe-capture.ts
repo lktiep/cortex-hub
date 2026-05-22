@@ -404,7 +404,7 @@ export async function captureFromSession(opts: {
   // Get tool usage from query_logs for this session's agent (last hour)
   const toolUsage = db.prepare(`
     SELECT tool, COUNT(*) as cnt FROM query_logs
-    WHERE agent_id = ? AND created_at > datetime('now', '-1 hour')
+    WHERE agent_id = ? AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 hour')
     GROUP BY tool ORDER BY cnt DESC LIMIT 10
   `).all(opts.agentId ?? '') as Array<{ tool: string; cnt: number }>
 

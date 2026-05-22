@@ -199,7 +199,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
   switch (type) {
     case 'task.accept':
       db.prepare(
-        'UPDATE conductor_tasks SET status = ?, accepted_at = datetime(?) WHERE id = ?',
+        'UPDATE conductor_tasks SET status = ?, accepted_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', ?) WHERE id = ?',
       ).run('accepted', new Date().toISOString(), msg['taskId'] as string)
       broadcastToOwner(agent.apiKeyOwner, {
         type: 'task.accepted',
@@ -261,7 +261,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       }
 
       db.prepare(
-        'UPDATE conductor_tasks SET status = ?, result = ?, completed_at = datetime(?), completed_by = ? WHERE id = ? AND status NOT IN (?, ?, ?)',
+        'UPDATE conductor_tasks SET status = ?, result = ?, completed_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', ?), completed_by = ? WHERE id = ? AND status NOT IN (?, ?, ?)',
       ).run(
         'completed',
         JSON.stringify(msg['result'] ?? {}),
@@ -309,7 +309,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
 
       if (nextTask) {
         // Update status to accepted before pushing
-        db.prepare("UPDATE conductor_tasks SET status = 'accepted', accepted_at = datetime('now', 'localtime') WHERE id = ? AND status IN ('pending', 'assigned', 'review')").run(nextTask.id)
+        db.prepare("UPDATE conductor_tasks SET status = 'accepted', accepted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ? AND status IN ('pending', 'assigned', 'review')").run(nextTask.id)
 
         agent.ws.send(
           JSON.stringify({
@@ -375,7 +375,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       ).all() as Record<string, unknown>[]
 
       const qualitySummary = db.prepare(
-        "SELECT COUNT(*) as total, AVG(score_total) as avgScore FROM quality_reports WHERE created_at > datetime('now', '-7 days')"
+        "SELECT COUNT(*) as total, AVG(score_total) as avgScore FROM quality_reports WHERE created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')"
       ).get() as { total: number; avgScore: number | null } | undefined
 
       const taskStats = {
@@ -438,7 +438,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
 
       // Global rate limiter: max 5 tasks per agent per 60 seconds
       const recentCount = db.prepare(
-        "SELECT COUNT(*) as c FROM conductor_tasks WHERE created_by_agent = ? AND created_at > datetime('now', '-60 seconds')"
+        "SELECT COUNT(*) as c FROM conductor_tasks WHERE created_by_agent = ? AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-60 seconds')"
       ).get(agent.agentId) as { c: number }
       if (recentCount.c >= 5) {
         console.warn(`[ws] task.create: RATE LIMITED ${agent.agentId} (${recentCount.c} tasks in last 60s)`)
@@ -472,7 +472,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       const titleLower = title.toLowerCase()
       if (titleLower.startsWith('[review]') || titleLower.includes('plan review')) {
         const recentReview = db.prepare(
-          "SELECT id FROM conductor_tasks WHERE title LIKE '[Review]%' AND parent_task_id IS ? AND created_by_agent = ? AND created_at > datetime('now', '-300 seconds')"
+          "SELECT id FROM conductor_tasks WHERE title LIKE '[Review]%' AND parent_task_id IS ? AND created_by_agent = ? AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-300 seconds')"
         ).get(parentTaskId ?? null, agent.agentId) as { id: string } | undefined
 
         if (recentReview) {
@@ -493,7 +493,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
 
       // Dedup: prevent creating duplicate tasks with same title+parent+agent within 30 seconds
       const recentDupe = db.prepare(
-        "SELECT id FROM conductor_tasks WHERE title = ? AND parent_task_id IS ? AND created_by_agent = ? AND created_at > datetime('now', '-30 seconds')"
+        "SELECT id FROM conductor_tasks WHERE title = ? AND parent_task_id IS ? AND created_by_agent = ? AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-30 seconds')"
       ).get(title, parentTaskId ?? null, agent.agentId) as { id: string } | undefined
 
       if (recentDupe) {
@@ -560,7 +560,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       // Complete the parent task with synthesized result
       db.prepare(`
         UPDATE conductor_tasks
-        SET status = 'completed', completed_at = datetime('now', 'localtime'),
+        SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             result = ?, completed_by = ?
         WHERE id = ?
       `).run(JSON.stringify(result), agent.agentId, taskId)

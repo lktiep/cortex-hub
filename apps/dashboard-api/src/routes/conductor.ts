@@ -237,7 +237,7 @@ function checkParentCompletion(parentId: string): void {
       // No Lead Agent — fallback to auto-complete
       db.prepare(`
         UPDATE conductor_tasks
-        SET status = 'completed', completed_at = datetime('now', 'localtime'),
+        SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             result = ?
         WHERE id = ?
       `).run(JSON.stringify({ subtaskResults, autoCompleted: true }), parentId)
@@ -350,7 +350,7 @@ conductorRouter.post('/auto-assign', async (c) => {
       // Assign the task
       db.prepare(`
         UPDATE conductor_tasks
-        SET assigned_to_agent = ?, assigned_at = datetime('now', 'localtime'), status = CASE WHEN status = 'blocked' THEN 'blocked' ELSE 'pending' END
+        SET assigned_to_agent = ?, assigned_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), status = CASE WHEN status = 'blocked' THEN 'blocked' ELSE 'pending' END
         WHERE id = ?
       `).run(bestAgent.agentId, taskId)
 
@@ -418,7 +418,7 @@ conductorRouter.post('/auto-assign', async (c) => {
         INSERT INTO conductor_tasks
           (id, title, description, priority, assigned_to_agent, created_by_agent,
            project_id, parent_task_id, required_capabilities, status, assigned_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now', 'localtime'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
       `).run(
         subId,
         `[Delegated] ${task.title} — ${del.caps.join(', ')}`,
@@ -667,7 +667,7 @@ conductorRouter.post('/pickup', async (c) => {
     const pickedUpBy = agentId ?? apiKeyOwner ?? sessionAgent
     db.prepare(`
       UPDATE conductor_tasks
-      SET status = 'accepted', assigned_to_agent = COALESCE(assigned_to_agent, ?), accepted_at = datetime('now', 'localtime')
+      SET status = 'accepted', assigned_to_agent = COALESCE(assigned_to_agent, ?), accepted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ? AND status = 'pending'
     `).run(pickedUpBy, matchedTask.id)
 
@@ -708,10 +708,10 @@ conductorRouter.put('/:id', async (c) => {
       updates.push('status = ?')
       params.push(status)
       if (status === 'completed' || status === 'failed') {
-        updates.push("completed_at = datetime('now', 'localtime')")
+        updates.push("completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
       }
       if (status === 'in_progress' && !existing.accepted_at) {
-        updates.push("accepted_at = datetime('now', 'localtime')")
+        updates.push("accepted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
       }
     }
     if (result !== undefined) {
@@ -860,7 +860,7 @@ conductorRouter.put('/:id', async (c) => {
       if (currentStatus && currentStatus.status !== 'completed') {
         db.prepare(`
           UPDATE conductor_tasks
-          SET status = 'completed', completed_at = datetime('now', 'localtime'), completed_by = COALESCE(completed_by, ?)
+          SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), completed_by = COALESCE(completed_by, ?)
           WHERE id = ? AND status != 'completed'
         `).run(completedBy ?? existing.assigned_to_agent, id)
 
@@ -983,7 +983,7 @@ conductorRouter.post('/:id/cancel', (c) => {
 
     db.prepare(`
       UPDATE conductor_tasks
-      SET status = 'cancelled', completed_at = datetime('now', 'localtime')
+      SET status = 'cancelled', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
     `).run(id)
 
@@ -1117,7 +1117,7 @@ conductorRouter.post('/:id/finalize', async (c) => {
 
     db.prepare(`
       UPDATE conductor_tasks
-      SET result = ?, status = 'completed', completed_at = datetime('now', 'localtime')
+      SET result = ?, status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
     `).run(JSON.stringify(finalResult), taskId)
 

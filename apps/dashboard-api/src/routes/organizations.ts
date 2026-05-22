@@ -72,11 +72,11 @@ orgsRouter.put('/:id', async (c) => {
     if (name) {
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
       db.prepare(
-        'UPDATE organizations SET name = ?, slug = ?, description = ?, updated_at = datetime("now") WHERE id = ?'
+        'UPDATE organizations SET name = ?, slug = ?, description = ?, updated_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\') WHERE id = ?'
       ).run(name.trim(), slug, description ?? null, id)
     } else {
       db.prepare(
-        'UPDATE organizations SET description = ?, updated_at = datetime("now") WHERE id = ?'
+        'UPDATE organizations SET description = ?, updated_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\') WHERE id = ?'
       ).run(description ?? null, id)
     }
 
@@ -287,7 +287,7 @@ projectsRouter.put('/:id', async (c) => {
         git_provider = COALESCE(?, git_provider),
         git_username = COALESCE(?, git_username),
         git_token = COALESCE(?, git_token),
-        updated_at = datetime('now', 'localtime')
+        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
        WHERE id = ?`
     ).run(
       name ?? null,

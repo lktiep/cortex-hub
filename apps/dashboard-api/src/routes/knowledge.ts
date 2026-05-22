@@ -354,7 +354,7 @@ knowledgeRouter.post('/', async (c) => {
 
       // If fixed, archive the parent
       if (origin === 'fixed') {
-        db.prepare("UPDATE knowledge_documents SET status = 'archived', updated_at = datetime('now', 'localtime') WHERE id = ?").run(parentDocId)
+        db.prepare("UPDATE knowledge_documents SET status = 'archived', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(parentDocId)
       }
     }
 
@@ -414,7 +414,7 @@ knowledgeRouter.get('/recipe-stats', (c) => {
       title TEXT,
       doc_id TEXT,
       error_message TEXT,
-      created_at TEXT DEFAULT (datetime('now', 'localtime'))
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     )`)
   } catch { /* already exists */ }
 
@@ -426,7 +426,7 @@ knowledgeRouter.get('/recipe-stats', (c) => {
 
     const recentCaptures = db.prepare(`
       SELECT * FROM recipe_capture_log
-      WHERE created_at > datetime('now', '-7 days')
+      WHERE created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')
       ORDER BY created_at DESC
       LIMIT 20
     `).all()
@@ -455,7 +455,7 @@ knowledgeRouter.get('/recipe-stats', (c) => {
 
     const usageActivity = db.prepare(`
       SELECT action, COUNT(*) as count FROM knowledge_usage_log
-      WHERE created_at > datetime('now', '-7 days')
+      WHERE created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')
       GROUP BY action
     `).all() as Array<{ action: string; count: number }>
 
@@ -515,7 +515,7 @@ knowledgeRouter.post('/:id/invalidate', async (c) => {
   try {
     const result = db.prepare(
       `UPDATE knowledge_documents
-       SET invalidated_at = datetime('now', 'localtime'), superseded_by = COALESCE(?, superseded_by)
+       SET invalidated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), superseded_by = COALESCE(?, superseded_by)
        WHERE id = ? AND status = 'active'`
     ).run(supersededBy ?? null, id)
 
@@ -552,13 +552,13 @@ knowledgeRouter.put('/:id', async (c) => {
   if (!existing) return c.json({ error: 'Document not found' }, 404)
 
   if (title) {
-    db.prepare("UPDATE knowledge_documents SET title = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(title, id)
+    db.prepare("UPDATE knowledge_documents SET title = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(title, id)
   }
   if (tags) {
-    db.prepare("UPDATE knowledge_documents SET tags = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(JSON.stringify(tags), id)
+    db.prepare("UPDATE knowledge_documents SET tags = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(JSON.stringify(tags), id)
   }
   if (status) {
-    db.prepare("UPDATE knowledge_documents SET status = ?, updated_at = datetime('now', 'localtime') WHERE id = ?").run(status, id)
+    db.prepare("UPDATE knowledge_documents SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(status, id)
   }
 
   const doc = db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(id)
@@ -700,7 +700,7 @@ knowledgeRouter.post('/search', async (c) => {
     if (docIds.size > 0) {
       const placeholders = [...docIds].map(() => '?').join(',')
       db.prepare(
-        `UPDATE knowledge_documents SET hit_count = hit_count + 1, selection_count = selection_count + 1, updated_at = datetime('now', 'localtime') WHERE id IN (${placeholders})`
+        `UPDATE knowledge_documents SET hit_count = hit_count + 1, selection_count = selection_count + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id IN (${placeholders})`
       ).run(...docIds)
     }
 
@@ -1015,7 +1015,7 @@ knowledgeRouter.post('/track-feedback', async (c) => {
       SELECT DISTINCT kd.id FROM knowledge_documents kd
       WHERE kd.status = 'active'
         AND kd.selection_count > 0
-        AND kd.updated_at > datetime('now', '-1 hour')
+        AND kd.updated_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 hour')
       ORDER BY kd.updated_at DESC
       LIMIT 10
     `).all() as Array<{ id: string }>
@@ -1029,7 +1029,7 @@ knowledgeRouter.post('/track-feedback', async (c) => {
 
     for (const doc of recentSearched) {
       db.prepare(
-        `UPDATE knowledge_documents SET ${column} = ${column} + 1, updated_at = datetime('now', 'localtime') WHERE id = ?`
+        `UPDATE knowledge_documents SET ${column} = ${column} + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
       ).run(doc.id)
 
       // Log usage

@@ -7,6 +7,7 @@ import { getSessions, type SessionHandoff } from '@/lib/api'
 import { SkeletonText, SkeletonCircle } from '@/components/ui/Skeleton'
 import { NumberTransition } from '@/components/ui/NumberTransition'
 import { Clock, RefreshCw, CheckCircle, ClipboardList, AlertTriangle, KeyRound, Gem, Zap, ICON_INLINE } from '@/lib/icons'
+import { parseDateSafe, formatTimeAgo } from '@/lib/date'
 import styles from './page.module.css'
 
 // ── Types ──
@@ -38,13 +39,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function TimeAgo({ date }: { date: string }) {
-  const now = new Date()
-  const past = new Date(date)
-  const diff = Math.floor((now.getTime() - past.getTime()) / 1000)
-  if (diff < 60) return <span>{diff}s ago</span>
-  if (diff < 3600) return <span>{Math.floor(diff / 60)}m ago</span>
-  if (diff < 86400) return <span>{Math.floor(diff / 3600)}h ago</span>
-  return <span>{Math.floor(diff / 86400)}d ago</span>
+  return <span>{formatTimeAgo(date)}</span>
 }
 
 function SessionCard({
@@ -169,14 +164,14 @@ function SessionDetail({
           <div className={styles.detailRow}>
             <span className={styles.detailLabel}>Created</span>
             <span className={styles.detailValue}>
-              {session.created_at ? new Date(session.created_at).toLocaleString() : '—'}
+              {session.created_at ? parseDateSafe(session.created_at).toLocaleString() : '—'}
             </span>
           </div>
           {session.expires_at && (
             <div className={styles.detailRow}>
               <span className={styles.detailLabel}>Expires</span>
               <span className={styles.detailValue}>
-                {new Date(session.expires_at).toLocaleString()}
+                {parseDateSafe(session.expires_at).toLocaleString()}
               </span>
             </div>
           )}
@@ -203,7 +198,7 @@ function SessionDetail({
                 <div className={styles.timelineDot} />
                 <span>Created</span>
                 <span className={styles.timelineTime}>
-                  {session.created_at ? new Date(session.created_at).toLocaleTimeString() : '—'}
+                  {session.created_at ? parseDateSafe(session.created_at).toLocaleTimeString() : '—'}
                 </span>
               </div>
               <div

@@ -48,6 +48,8 @@ services:
     volumes:
       - cliproxy-auth:/CLIProxyAPI/auth
       - ./cliproxy-config.yaml:/CLIProxyAPI/config.yaml
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       TZ: Asia/Ho_Chi_Minh
       MANAGEMENT_PASSWORD: ${MANAGEMENT_PASSWORD:?Set MANAGEMENT_PASSWORD in .env}
@@ -79,6 +81,8 @@ services:
     volumes:
       - api-data:/app/data
       - gitnexus-data:/root/.gitnexus
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       PORT: 4848
     deploy:
@@ -112,6 +116,8 @@ services:
       - api-data:/app/data
       - gitnexus-data:/root/.gitnexus
       - cliproxy-auth:/app/cliproxy-auth
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
       # Docker socket removed — security risk (root access if API compromised)
     environment:
       TZ: Asia/Ho_Chi_Minh
@@ -162,6 +168,9 @@ services:
     restart: unless-stopped
     ports:
       - "8318:8317"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       TZ: Asia/Ho_Chi_Minh
       PORT: 8317

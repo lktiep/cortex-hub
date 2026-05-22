@@ -349,7 +349,7 @@ statsRouter.get('/budget', (c) => {
       daily_limit INTEGER DEFAULT 0,
       monthly_limit INTEGER DEFAULT 0,
       alert_threshold REAL DEFAULT 0.8,
-      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+      updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     )`)
     db.exec(`INSERT OR IGNORE INTO budget_settings (id) VALUES (1)`)
 
@@ -385,12 +385,12 @@ statsRouter.post('/budget', async (c) => {
       daily_limit INTEGER DEFAULT 0,
       monthly_limit INTEGER DEFAULT 0,
       alert_threshold REAL DEFAULT 0.8,
-      updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+      updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     )`)
     db.exec(`INSERT OR IGNORE INTO budget_settings (id) VALUES (1)`)
 
     db.prepare(`UPDATE budget_settings SET 
-      daily_limit = ?, monthly_limit = ?, alert_threshold = ?, updated_at = datetime('now', 'localtime')
+      daily_limit = ?, monthly_limit = ?, alert_threshold = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = 1
     `).run(dailyLimit ?? 0, monthlyLimit ?? 0, alertThreshold ?? 0.8)
 
@@ -445,7 +445,7 @@ statsRouter.post('/query-log', async (c) => {
     // This prevents premature session expiry and enables overnight resume.
     try {
       db.prepare(
-        `UPDATE session_handoffs SET last_activity = datetime('now', 'localtime')
+        `UPDATE session_handoffs SET last_activity = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
          WHERE from_agent = ? AND status = 'active'`
       ).run(resolvedAgent)
     } catch { /* non-critical */ }

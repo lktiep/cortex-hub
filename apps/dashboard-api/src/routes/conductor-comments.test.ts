@@ -95,10 +95,10 @@ describe('Conductor Comments API', () => {
     it('returns comments ordered by created_at ASC', async () => {
       // Insert two comments with slightly different timestamps
       db.prepare(
-        "INSERT INTO conductor_comments (task_id, agent_id, comment, comment_type, created_at) VALUES (?, ?, ?, ?, datetime('now', '-2 seconds'))"
+        "INSERT INTO conductor_comments (task_id, agent_id, comment, comment_type, created_at) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-2 seconds'))"
       ).run(TASK_ID, 'agent-1', 'First comment', 'comment')
       db.prepare(
-        "INSERT INTO conductor_comments (task_id, agent_id, comment, comment_type, created_at) VALUES (?, ?, ?, ?, datetime('now', '-1 seconds'))"
+        "INSERT INTO conductor_comments (task_id, agent_id, comment, comment_type, created_at) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 seconds'))"
       ).run(TASK_ID, 'agent-2', 'Second comment', 'agree')
 
       const res = await getComments(TASK_ID)

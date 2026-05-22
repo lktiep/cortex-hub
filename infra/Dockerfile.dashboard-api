@@ -79,8 +79,8 @@ ARG BUILD_DATE=unknown
 ENV COMMIT_SHA=${COMMIT_SHA}
 ENV BUILD_DATE=${BUILD_DATE}
 
-# Install git + SSL certs (required for HTTPS git operations)
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install git + SSL certs (required for HTTPS git operations) and tzdata for timezone config
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 
 # Copy production node_modules (hoisted, prod only)
 COPY --from=prod-deps /app/node_modules ./node_modules

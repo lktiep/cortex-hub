@@ -110,7 +110,7 @@ usageRouter.get('/history', (c) => {
           COUNT(*) as requests,
           SUM(total_tokens) as tokens
          FROM usage_logs
-         WHERE created_at >= datetime('now', ? || ' days')
+         WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ? || ' days')
          GROUP BY date(created_at)
          ORDER BY day ASC`
       )
