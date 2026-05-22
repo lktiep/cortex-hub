@@ -78,9 +78,127 @@ for (const sql of memoryHierarchyCols) {
   try { db.exec(sql) } catch { /* ignore if exists */ }
 }
 
+// Missing incremental migrations from the installer script
+const dynamicInstallerPatches = [
+  "ALTER TABLE provider_accounts ADD COLUMN auth_type TEXT",
+  "ALTER TABLE provider_accounts ADD COLUMN api_base TEXT",
+  "ALTER TABLE provider_accounts ADD COLUMN capabilities TEXT DEFAULT '[]'",
+  "ALTER TABLE provider_accounts ADD COLUMN models TEXT DEFAULT '[]'",
+  "ALTER TABLE provider_accounts ADD COLUMN created_at TEXT",
+  "ALTER TABLE provider_accounts ADD COLUMN updated_at TEXT",
+  "ALTER TABLE index_jobs ADD COLUMN triggered_by TEXT",
+  "ALTER TABLE index_jobs ADD COLUMN commit_hash TEXT",
+  "ALTER TABLE index_jobs ADD COLUMN commit_message TEXT",
+  "ALTER TABLE index_jobs ADD COLUMN mem9_status TEXT",
+  "ALTER TABLE index_jobs ADD COLUMN mem9_chunks INTEGER DEFAULT 0",
+  "ALTER TABLE index_jobs ADD COLUMN mem9_progress INTEGER DEFAULT 0",
+  "ALTER TABLE index_jobs ADD COLUMN mem9_total_chunks INTEGER DEFAULT 0",
+  "ALTER TABLE index_jobs ADD COLUMN docs_knowledge_status TEXT",
+  "ALTER TABLE index_jobs ADD COLUMN docs_knowledge_count INTEGER DEFAULT 0",
+  "ALTER TABLE query_logs ADD COLUMN input_size INTEGER DEFAULT 0",
+  "ALTER TABLE query_logs ADD COLUMN output_size INTEGER DEFAULT 0",
+  "ALTER TABLE query_logs ADD COLUMN compute_tokens INTEGER DEFAULT 0",
+  "ALTER TABLE query_logs ADD COLUMN compute_model TEXT",
+  "ALTER TABLE session_handoffs ADD COLUMN api_key_name TEXT",
+  "ALTER TABLE conductor_tasks ADD COLUMN api_key_owner TEXT",
+]
+for (const sql of dynamicInstallerPatches) {
+  try { db.exec(sql) } catch (e) { /* ignore if column exists */ }
+}
+
 if (existsSync(schemaPath)) {
   const schema = readFileSync(schemaPath, 'utf8')
   db.exec(schema)
+}
+
+// ── Self-Healing Date-Time Migration ──
+// Automatically converts any legacy timezone-less local timestamps in the SQLite database to strict ISO-8601 UTC strings YYYY-MM-DDTHH:MM:SSZ.
+try {
+  const tablesAndCols = [
+    { table: 'setup_status', cols: ['completed_at'] },
+    { table: 'api_keys', cols: ['created_at', 'expires_at', 'last_used_at'] },
+    { table: 'query_logs', cols: ['created_at'] },
+    { table: 'session_handoffs', cols: ['created_at', 'expires_at', 'last_activity'] },
+    { table: 'organizations', cols: ['created_at', 'updated_at'] },
+    { table: 'projects', cols: ['created_at', 'updated_at', 'indexed_at'] },
+    { table: 'index_jobs', cols: ['created_at', 'started_at', 'completed_at'] },
+    { table: 'usage_logs', cols: ['created_at'] },
+    { table: 'conductor_tasks', cols: ['created_at', 'assigned_at', 'accepted_at', 'completed_at'] },
+    { table: 'conductor_task_logs', cols: ['created_at'] },
+    { table: 'conductor_comments', cols: ['created_at'] },
+    { table: 'hub_config', cols: ['updated_at'] },
+    { table: 'notification_preferences', cols: ['updated_at'] },
+    { table: 'knowledge_lineage', cols: ['created_at'] },
+    { table: 'knowledge_usage_log', cols: ['created_at'] },
+    { table: 'recipe_capture_log', cols: ['created_at'] },
+    { table: 'knowledge_documents', cols: ['created_at', 'updated_at', 'valid_from', 'invalidated_at'] },
+    { table: 'knowledge_chunks', cols: ['created_at'] },
+    { table: 'provider_accounts', cols: ['created_at', 'updated_at'] },
+    { table: 'model_routing', cols: ['updated_at'] },
+    { table: 'agent_ack', cols: ['updated_at'] },
+    { table: 'budget_settings', cols: ['updated_at'] },
+    { table: 'change_events', cols: ['created_at'] },
+    { table: 'quality_reports', cols: ['created_at'] },
+  ]
+
+  const toUtcIso = (localStr: string | null | undefined): string | null => {
+    if (!localStr) return null
+    const trimmed = localStr.trim()
+    if (!trimmed) return null
+    if (trimmed.includes('T') && trimmed.includes('Z')) return trimmed
+    let formatted = trimmed
+    if (!formatted.includes('T') && formatted.includes(' ')) {
+      formatted = formatted.replace(' ', 'T')
+    }
+    const parsed = new Date(formatted)
+    if (isNaN(parsed.getTime())) return trimmed
+    return parsed.toISOString().split('.')[0] + 'Z'
+  }
+
+  const migrateTx = db.transaction(() => {
+    for (const { table, cols } of tablesAndCols) {
+      try {
+        const tableCheck = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table)
+        if (!tableCheck) continue
+        const rows = db.prepare(`SELECT * FROM ${table}`).all() as Record<string, any>[]
+        for (const row of rows) {
+          let needsUpdate = false
+          const updates: string[] = []
+          const params: any[] = []
+          for (const col of cols) {
+            if (row[col] !== undefined && row[col] !== null) {
+              const originalVal = String(row[col])
+              if (!originalVal.includes('Z') && !originalVal.match(/[+-]\d{2}:?\d{2}$/)) {
+                const utcIso = toUtcIso(originalVal)
+                if (utcIso && utcIso !== originalVal) {
+                  needsUpdate = true
+                  updates.push(`${col} = ?`)
+                  params.push(utcIso)
+                }
+              }
+            }
+          }
+          if (needsUpdate) {
+            let pkCol = 'id'
+            if (row.id === undefined) {
+              if (row.key !== undefined) pkCol = 'key'
+              else if (row.purpose !== undefined) pkCol = 'purpose'
+              else if (row.agent_id !== undefined && row.project_id !== undefined) {
+                db.prepare(`UPDATE ${table} SET ${updates.join(', ')} WHERE agent_id = ? AND project_id = ?`).run(...params, row.agent_id, row.project_id)
+                continue
+              }
+            }
+            db.prepare(`UPDATE ${table} SET ${updates.join(', ')} WHERE ${pkCol} = ?`).run(...params, row[pkCol])
+          }
+        }
+      } catch (err) {
+        console.warn(`[Migration] Failed migrating table ${table}:`, err)
+      }
+    }
+  })
+  migrateTx()
+} catch (migrationErr) {
+  console.warn('[Migration] Date-time migration failed:', migrationErr)
 }
 
 export { db }
