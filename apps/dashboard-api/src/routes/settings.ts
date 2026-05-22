@@ -32,7 +32,7 @@ settingsRouter.put('/hub-config', async (c) => {
   const allowedKeys = ['hub_name', 'hub_description']
 
   const update = db.prepare(
-    "UPDATE hub_config SET value = ?, updated_at = datetime('now') WHERE key = ?"
+    "UPDATE hub_config SET value = ?, updated_at = datetime('now', 'localtime') WHERE key = ?"
   )
 
   const results: Record<string, string> = {}
@@ -70,11 +70,11 @@ settingsRouter.put('/embedding-provider', async (c) => {
 
   // Persist to hub_config so it survives restarts
   db.prepare(
-    "INSERT INTO hub_config (key, value, updated_at) VALUES ('embedding_provider', ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+    "INSERT INTO hub_config (key, value, updated_at) VALUES ('embedding_provider', ?, datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
   ).run(body.provider)
   if (body.model) {
     db.prepare(
-      "INSERT INTO hub_config (key, value, updated_at) VALUES ('local_embedding_model', ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+      "INSERT INTO hub_config (key, value, updated_at) VALUES ('local_embedding_model', ?, datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
     ).run(body.model)
   }
 
@@ -104,7 +104,7 @@ settingsRouter.put('/notifications', async (c) => {
   const allowedKeys = ['agent_disconnect', 'quality_gate_failure', 'task_assignment', 'session_handoff']
 
   const upsert = db.prepare(
-    "INSERT INTO notification_preferences (key, enabled, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at"
+    "INSERT INTO notification_preferences (key, enabled, updated_at) VALUES (?, ?, datetime('now', 'localtime')) ON CONFLICT(key) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at"
   )
 
   const results: Record<string, boolean> = {}

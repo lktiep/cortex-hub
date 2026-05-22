@@ -287,7 +287,7 @@ projectsRouter.put('/:id', async (c) => {
         git_provider = COALESCE(?, git_provider),
         git_username = COALESCE(?, git_username),
         git_token = COALESCE(?, git_token),
-        updated_at = datetime('now')
+        updated_at = datetime('now', 'localtime')
        WHERE id = ?`
     ).run(
       name ?? null,

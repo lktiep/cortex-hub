@@ -144,9 +144,9 @@ webhooksRouter.post('/changes/ack', async (c) => {
 
     db.prepare(
       `INSERT INTO agent_ack (agent_id, project_id, last_seen_event_id, updated_at)
-       VALUES (?, ?, ?, datetime('now'))
+       VALUES (?, ?, ?, datetime('now', 'localtime'))
        ON CONFLICT(agent_id, project_id)
-       DO UPDATE SET last_seen_event_id = excluded.last_seen_event_id, updated_at = datetime('now')`
+       DO UPDATE SET last_seen_event_id = excluded.last_seen_event_id, updated_at = datetime('now', 'localtime')`
     ).run(agentId, projectId, lastSeenEventId)
 
     return c.json({ acknowledged: true })

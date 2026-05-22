@@ -392,7 +392,7 @@ tasksRouter.delete('/:id', (c) => {
 tasksRouter.patch('/:id/cancel', (c) => {
   const id = c.req.param('id')
   try {
-    db.prepare("UPDATE conductor_tasks SET status = 'cancelled', completed_at = datetime('now') WHERE id = ?").run(id)
+    db.prepare("UPDATE conductor_tasks SET status = 'cancelled', completed_at = datetime('now', 'localtime') WHERE id = ?").run(id)
     return c.json({ success: true, id, status: 'cancelled' })
   } catch (error) {
     return c.json({ error: String(error) }, 500)

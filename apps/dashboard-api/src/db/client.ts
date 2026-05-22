@@ -43,7 +43,7 @@ const sessionIdentityCols = [
   'ALTER TABLE session_handoffs ADD COLUMN branch TEXT',
   'ALTER TABLE session_handoffs ADD COLUMN capabilities TEXT DEFAULT \'[]\'',
   'ALTER TABLE session_handoffs ADD COLUMN role TEXT',
-  "ALTER TABLE session_handoffs ADD COLUMN last_activity TEXT DEFAULT (datetime('now'))",
+  "ALTER TABLE session_handoffs ADD COLUMN last_activity TEXT DEFAULT (datetime('now', 'localtime'))",
 ]
 for (const sql of sessionIdentityCols) {
   try { db.exec(sql) } catch (e) { /* ignore if column exists */ }

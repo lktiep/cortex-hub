@@ -389,7 +389,7 @@ sessionsRouter.post('/start', async (c) => {
     if (existingSession) {
       sessionId = existingSession.id
       db.prepare(
-        `UPDATE session_handoffs SET created_at = datetime('now') WHERE id = ?`
+        `UPDATE session_handoffs SET created_at = datetime('now', 'localtime') WHERE id = ?`
       ).run(sessionId)
     } else {
       sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`

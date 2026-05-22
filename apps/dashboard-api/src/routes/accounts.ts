@@ -167,7 +167,7 @@ accountsRouter.post('/', async (c) => {
     if (embedModel) {
       const existingRouting = db.prepare("SELECT purpose FROM model_routing WHERE purpose = 'embedding'").get()
       if (!existingRouting) {
-        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('embedding', ?, datetime('now'))")
+        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('embedding', ?, datetime('now', 'localtime'))")
           .run(JSON.stringify([{ accountId: id, model: embedModel }]))
       }
     }
@@ -204,7 +204,7 @@ accountsRouter.put('/:id', async (c) => {
       return c.json({ error: 'No fields to update' }, 400)
     }
 
-    updates.push("updated_at = datetime('now')")
+    updates.push("updated_at = datetime('now', 'localtime')")
     params.push(id)
 
     db.prepare(`UPDATE provider_accounts SET ${updates.join(', ')} WHERE id = ?`).run(...params)
@@ -242,7 +242,7 @@ accountsRouter.post('/:id/test', async (c) => {
       return await testOpenAICompatProvider(row, id, startTime, c)
     }
   } catch (error) {
-    db.prepare("UPDATE provider_accounts SET status = 'error', updated_at = datetime('now') WHERE id = ?").run(id)
+    db.prepare("UPDATE provider_accounts SET status = 'error', updated_at = datetime('now', 'localtime') WHERE id = ?").run(id)
     return c.json({ success: false, error: String(error) }, 500)
   }
 })
@@ -418,8 +418,8 @@ accountsRouter.put('/routing/chains', async (c) => {
 
     db.prepare(
       `INSERT INTO model_routing (purpose, chain, updated_at) 
-       VALUES (?, ?, datetime('now'))
-       ON CONFLICT(purpose) DO UPDATE SET chain = ?, updated_at = datetime('now')`
+       VALUES (?, ?, datetime('now', 'localtime'))
+       ON CONFLICT(purpose) DO UPDATE SET chain = ?, updated_at = datetime('now', 'localtime')`
     ).run(purpose, JSON.stringify(chain), JSON.stringify(chain))
 
     return c.json({ success: true })
@@ -475,7 +475,7 @@ async function testGeminiProvider(row: ProviderAccountRow, id: string, startTime
     .map((m) => m.name.replace('models/', ''))
 
   const models = [...new Set([...chatModels, ...embedModels])]
-  db.prepare("UPDATE provider_accounts SET models = ?, status = 'enabled', updated_at = datetime('now') WHERE id = ?")
+  db.prepare("UPDATE provider_accounts SET models = ?, status = 'enabled', updated_at = datetime('now', 'localtime') WHERE id = ?")
     .run(JSON.stringify(models), id)
 
   return c.json({ success: true, latency, chatModels, embedModels, totalModels: models.length })
@@ -501,7 +501,7 @@ async function testOpenAICompatProvider(row: ProviderAccountRow, id: string, sta
   const chatModels = allModels.filter((m) => !embedKeywords.some((k) => m.includes(k)))
   const embedModels = allModels.filter((m) => embedKeywords.some((k) => m.includes(k)))
 
-  db.prepare("UPDATE provider_accounts SET models = ?, status = 'enabled', updated_at = datetime('now') WHERE id = ?")
+  db.prepare("UPDATE provider_accounts SET models = ?, status = 'enabled', updated_at = datetime('now', 'localtime') WHERE id = ?")
     .run(JSON.stringify(allModels), id)
 
   return c.json({ success: true, latency, chatModels, embedModels, totalModels: allModels.length })

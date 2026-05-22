@@ -309,7 +309,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
 
       if (nextTask) {
         // Update status to accepted before pushing
-        db.prepare("UPDATE conductor_tasks SET status = 'accepted', accepted_at = datetime('now') WHERE id = ? AND status IN ('pending', 'assigned', 'review')").run(nextTask.id)
+        db.prepare("UPDATE conductor_tasks SET status = 'accepted', accepted_at = datetime('now', 'localtime') WHERE id = ? AND status IN ('pending', 'assigned', 'review')").run(nextTask.id)
 
         agent.ws.send(
           JSON.stringify({
@@ -560,7 +560,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       // Complete the parent task with synthesized result
       db.prepare(`
         UPDATE conductor_tasks
-        SET status = 'completed', completed_at = datetime('now'),
+        SET status = 'completed', completed_at = datetime('now', 'localtime'),
             result = ?, completed_by = ?
         WHERE id = ?
       `).run(JSON.stringify(result), agent.agentId, taskId)

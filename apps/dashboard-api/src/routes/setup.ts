@@ -31,7 +31,7 @@ setupRouter.post('/complete', async (c) => {
   try {
     // Mark setup as complete in DB
     const stmt = db.prepare(
-      "UPDATE setup_status SET completed = 1, completed_at = datetime('now') WHERE id = 1"
+      "UPDATE setup_status SET completed = 1, completed_at = datetime('now', 'localtime') WHERE id = 1"
     )
     stmt.run()
 
@@ -492,7 +492,7 @@ setupRouter.post('/configure-provider', async (c) => {
     if (embedModel) {
       const existing = db.prepare("SELECT purpose FROM model_routing WHERE purpose = 'embedding'").get()
       if (!existing) {
-        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('embedding', ?, datetime('now'))")
+        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('embedding', ?, datetime('now', 'localtime'))")
           .run(JSON.stringify([{ accountId: id, model: embedModel }]))
       }
     }
@@ -502,7 +502,7 @@ setupRouter.post('/configure-provider', async (c) => {
     if (chatModel) {
       const existing = db.prepare("SELECT purpose FROM model_routing WHERE purpose = 'chat'").get()
       if (!existing) {
-        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('chat', ?, datetime('now'))")
+        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('chat', ?, datetime('now', 'localtime'))")
           .run(JSON.stringify([{ accountId: id, model: chatModel }]))
       }
     }

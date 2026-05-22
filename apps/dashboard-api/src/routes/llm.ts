@@ -5,6 +5,7 @@ import {
   reorderChainByTier,
   type TaskInput,
 } from '@cortex/shared-types'
+import { Embedder } from '@cortex/shared-mem9'
 
 export const llmRouter = new Hono()
 
@@ -48,18 +49,28 @@ function resolveChain(purpose: 'embedding' | 'chat'): ProviderSlot[] {
   const slots: ProviderSlot[] = []
 
   for (const slot of chain) {
-    const acct = db
-      .prepare("SELECT id, api_base, api_key, type FROM provider_accounts WHERE id = ? AND status = 'enabled'")
-      .get(slot.accountId) as { id: string; api_base: string; api_key: string | null; type: string } | undefined
-
-    if (acct) {
+    if (slot.accountId === 'local') {
       slots.push({
-        accountId: acct.id,
-        model: slot.model,
-        apiBase: acct.api_base,
-        apiKey: acct.api_key ?? '',
-        type: acct.type ?? 'openai',
+        accountId: 'local',
+        model: slot.model || 'Xenova/all-MiniLM-L6-v2',
+        apiBase: '',
+        apiKey: '',
+        type: 'local',
       })
+    } else {
+      const acct = db
+        .prepare("SELECT id, api_base, api_key, type FROM provider_accounts WHERE id = ? AND status = 'enabled'")
+        .get(slot.accountId) as { id: string; api_base: string; api_key: string | null; type: string } | undefined
+
+      if (acct) {
+        slots.push({
+          accountId: acct.id,
+          model: slot.model,
+          apiBase: acct.api_base,
+          apiKey: acct.api_key ?? '',
+          type: acct.type ?? 'openai',
+        })
+      }
     }
   }
   return slots
@@ -316,9 +327,23 @@ llmRouter.post('/v1/embeddings', async (c) => {
   for (const slot of orderedChain) {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
-        const result = isGeminiProvider(slot)
-          ? await embedViaGemini(input, slot.apiKey, slot.model, slot.apiBase)
-          : await embedViaOpenAI(input, slot.apiKey, slot.model, slot.apiBase)
+        let result: { vector: number[]; tokens: number }
+        if (slot.type === 'local') {
+          const embedder = new Embedder({
+            provider: 'local',
+            apiKey: '',
+            model: slot.model,
+          })
+          const vector = await embedder.embed(input)
+          result = {
+            vector,
+            tokens: Math.ceil(input.length / 4),
+          }
+        } else {
+          result = isGeminiProvider(slot)
+            ? await embedViaGemini(input, slot.apiKey, slot.model, slot.apiBase)
+            : await embedViaOpenAI(input, slot.apiKey, slot.model, slot.apiBase)
+        }
 
         logUsage({
           agentId,

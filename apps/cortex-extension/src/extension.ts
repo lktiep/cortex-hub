@@ -333,7 +333,10 @@ async function executeTaskInChat(prompt: string, taskId: string, logFn: (msg: st
     if (forceNewConversation) {
       try {
         const cascadeId = await antigravitySdk.ls.createCascade({ text: prompt })
-        await antigravitySdk.ls.focusCascade(cascadeId)
+        const focusOnAssign = vscode.workspace.getConfiguration('cortexHub').get<boolean>('focusOnAssign', false)
+        if (focusOnAssign) {
+          await antigravitySdk.ls.focusCascade(cascadeId)
+        }
         logFn(`New conversation created via createCascade — cascade ${cascadeId}`)
         // Only monitor plans for top-level tasks — subtasks execute directly
         if (!isSubtask) startPlanMonitor(taskId, logFn)
@@ -355,7 +358,10 @@ async function executeTaskInChat(prompt: string, taskId: string, logFn: (msg: st
       logFn(`Antigravity SDK sendPrompt failed: ${e instanceof Error ? e.message : String(e)}`)
       try {
         const cascadeId = await antigravitySdk.ls.createCascade({ text: prompt })
-        await antigravitySdk.ls.focusCascade(cascadeId)
+        const focusOnAssign = vscode.workspace.getConfiguration('cortexHub').get<boolean>('focusOnAssign', false)
+        if (focusOnAssign) {
+          await antigravitySdk.ls.focusCascade(cascadeId)
+        }
         logFn(`Task prompt sent via Antigravity SDK (ls.createCascade) — cascade ${cascadeId}`)
         if (!isSubtask) startPlanMonitor(taskId, logFn)
         completionMonitorStop = startCompletionMonitor(taskId, logFn)

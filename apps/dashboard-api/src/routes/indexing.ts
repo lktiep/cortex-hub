@@ -151,7 +151,7 @@ indexingRouter.post('/:id/index/cancel', (c) => {
     if (!cancelled) {
       // Process already exited, just mark as error
       db.prepare(
-        `UPDATE index_jobs SET status = 'error', error = 'Cancelled by user', completed_at = datetime('now') WHERE id = ?`
+        `UPDATE index_jobs SET status = 'error', error = 'Cancelled by user', completed_at = datetime('now', 'localtime') WHERE id = ?`
       ).run(activeJob.id)
     }
 
