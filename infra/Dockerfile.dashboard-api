@@ -41,8 +41,9 @@ ARG BUILD_DATE=unknown
 # Copy source code (deps already in node_modules)
 COPY . .
 
-# Build all apps
-RUN npx turbo build --force --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web --filter=!@cortex/hub-mcp
+# Build all apps (cleaning pre-existing host builds first to force clean compilation)
+RUN rm -rf apps/dashboard-api/dist apps/dashboard-web/out packages/*/dist && \
+    npx turbo build --force --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web --filter=!@cortex/hub-mcp
 
 
 
