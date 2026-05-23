@@ -29,7 +29,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN npx turbo build --filter=@cortex/hub-mcp
+RUN npx turbo build --force --filter=@cortex/hub-mcp
 
 # Stage 4: Production deps only
 FROM base AS prod-deps

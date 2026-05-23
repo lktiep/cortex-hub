@@ -42,7 +42,7 @@ ARG BUILD_DATE=unknown
 COPY . .
 
 # Build all apps
-RUN npx turbo build --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web --filter=!@cortex/hub-mcp
+RUN npx turbo build --force --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web --filter=!@cortex/hub-mcp
 
 
 
