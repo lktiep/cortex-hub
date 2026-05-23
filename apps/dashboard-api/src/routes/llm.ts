@@ -206,7 +206,8 @@ async function embedViaOpenAI(
 async function chatViaGemini(
   messages: Array<{ role: string; content: string }>,
   apiKey: string, model: string, baseUrl: string,
-  maxTokens?: number
+  maxTokens?: number,
+  responseFormat?: { type: string }
 ): Promise<{ content: string; promptTokens: number; completionTokens: number }> {
   const base = baseUrl.includes('generativelanguage.googleapis.com')
     ? baseUrl.replace(/\/$/, '')
@@ -221,12 +222,20 @@ async function chatViaGemini(
     }))
 
   const systemInstruction = messages.find((m) => m.role === 'system')
+  const generationConfig: Record<string, unknown> = {}
+  if (maxTokens) {
+    generationConfig.maxOutputTokens = maxTokens
+  }
+  if (responseFormat?.type === 'json_object') {
+    generationConfig.responseMimeType = 'application/json'
+  }
+
   const body: Record<string, unknown> = { contents }
   if (systemInstruction) {
     body.systemInstruction = { parts: [{ text: systemInstruction.content }] }
   }
-  if (maxTokens) {
-    body.generationConfig = { maxOutputTokens: maxTokens }
+  if (Object.keys(generationConfig).length > 0) {
+    body.generationConfig = generationConfig
   }
 
   const res = await fetch(url, {
@@ -387,6 +396,7 @@ llmRouter.post('/v1/chat/completions', async (c) => {
     max_tokens?: number
     agent_id?: string
     project_id?: string
+    response_format?: { type: string }
     /** Complexity hints for auto-routing */
     complexity?: Partial<TaskInput>
   }
@@ -433,7 +443,7 @@ llmRouter.post('/v1/chat/completions', async (c) => {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
         const result = isGeminiProvider(slot)
-          ? await chatViaGemini(body.messages, slot.apiKey, slot.model, slot.apiBase, body.max_tokens)
+          ? await chatViaGemini(body.messages, slot.apiKey, slot.model, slot.apiBase, body.max_tokens, body.response_format)
           : await chatViaOpenAI(body.messages, slot.apiKey, slot.model, slot.apiBase, body.max_tokens)
 
         const totalTokens = result.promptTokens + result.completionTokens
@@ -577,6 +587,19 @@ llmRouter.get('/providers', async (c) => {
 })
 
 llmRouter.get('/models', async (c) => {
+  try {
+    const res = await fetch(`${CLIPROXY_URL()}/v1/models`, {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!res.ok) throw new Error(`CLIProxy returned ${res.status}`)
+    const data = await res.json()
+    return c.json(data)
+  } catch (err) {
+    return c.json({ error: 'Failed to fetch models', details: String(err) }, 502)
+  }
+})
+
+llmRouter.get('/v1/models', async (c) => {
   try {
     const res = await fetch(`${CLIPROXY_URL()}/v1/models`, {
       signal: AbortSignal.timeout(5000),
