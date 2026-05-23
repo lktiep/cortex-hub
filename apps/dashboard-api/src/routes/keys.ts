@@ -43,7 +43,7 @@ keysRouter.post('/', async (c) => {
       expiresAt = date.toISOString()
     }
 
-    const stmt = db.prepare('INSERT INTO api_keys (id, name, key_hash, scope, permissions, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+    const stmt = db.prepare('INSERT INTO api_keys (id, name, key_hash, scope, permissions, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'))')
     stmt.run(id, name, hash, scope, JSON.stringify(permissions), expiresAt)
 
     return c.json({ 
@@ -81,17 +81,17 @@ keysRouter.post('/verify', async (c) => {
     if (!token) {
       return c.json({ valid: false, error: 'Token is required' }, 400)
     }
-
+ 
     const hash = createHash('sha256').update(token).digest('hex')
     const stmt = db.prepare('SELECT id, name, scope, permissions, key_hash FROM api_keys WHERE key_hash = ?')
     const keyRecord = stmt.get(hash) as { id: string; name: string; scope: string; permissions: string; key_hash: string } | undefined
-
+ 
     if (!keyRecord) {
       return c.json({ valid: false, error: 'Invalid API key' }, 401)
     }
-
+ 
     // Update last_used_at
-    const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?')
+    const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\') WHERE id = ?')
     updateStmt.run(keyRecord.id)
 
     return c.json({

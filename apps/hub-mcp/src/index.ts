@@ -195,11 +195,14 @@ app.all('/mcp', async (c) => {
     bodyText = await c.req.text()
   } catch (e) {}
 
-  const newReq = new Request(c.req.raw.url, {
+  const reqInit: RequestInit = {
     method: c.req.raw.method,
     headers: c.req.raw.headers,
-    body: bodyText,
-  })
+  }
+  if (c.req.raw.method !== 'GET' && c.req.raw.method !== 'HEAD') {
+    reqInit.body = bodyText
+  }
+  const newReq = new Request(c.req.raw.url, reqInit)
 
   let toolName = 'unknown'
   let projectId = null
