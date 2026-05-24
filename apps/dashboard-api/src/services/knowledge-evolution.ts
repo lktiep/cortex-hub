@@ -25,7 +25,7 @@ const CHUNK_SIZE = 1500
 const CHUNK_OVERLAP = 300
 
 const CLIPROXY_URL = () =>
-  process.env.LLM_PROXY_URL || process.env.CLIPROXY_URL || 'http://localhost:8317'
+  process.env.LLM_ROUTED_URL || `http://localhost:${process.env.PORT || 4000}/api/llm`
 
 // Anti-loop: track docs addressed in current health check cycle
 const addressedInCycle = new Set<string>()
