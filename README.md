@@ -455,6 +455,7 @@ cortex-hub/
 | [`benchmarks/README.md`](benchmarks/README.md) | Benchmark methodology + results |
 | [`docs/guides/installation.md`](docs/guides/installation.md) | Full installation guide |
 | [`docs/guides/use-cases.md`](docs/guides/use-cases.md) | Use cases + system requirements |
+| [`docs/guides/free-llm-routing.md`](docs/guides/free-llm-routing.md) | Free LLM Provider Setup & Dynamic Routing Guide |
 
 ---
 
