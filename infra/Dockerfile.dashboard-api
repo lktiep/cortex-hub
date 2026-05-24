@@ -42,7 +42,7 @@ ARG BUILD_DATE=unknown
 COPY . .
 
 # Build all apps (cleaning pre-existing host builds first to force clean compilation)
-RUN rm -rf apps/dashboard-api/dist apps/dashboard-web/out packages/*/dist && \
+RUN rm -rf apps/dashboard-api/dist apps/dashboard-web/out apps/dashboard-web/.next packages/*/dist && \
     npx turbo build --force --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web --filter=!@cortex/hub-mcp
 
 
