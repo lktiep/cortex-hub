@@ -12,6 +12,7 @@ import {
   type IndexStatus, type IndexJobSummary, type BranchIndexStatus,
   getProjectState, type ProjectStateResponse,
 } from '@/lib/api'
+import { parseDateSafe } from '@/lib/date'
 import { Link, Cloud, Monitor, Clock, Search, Brain, CheckCircle, XCircle, AlertTriangle, RefreshCw, Rocket, Puzzle, Plug, BookMarked, ClipboardList, BarChart3, Bot, Repeat, Timer, Play, type LucideIcon, ICON_INLINE } from '@/lib/icons'
 import styles from './page.module.css'
 
@@ -37,7 +38,7 @@ function Ico({ icon: Icon }: { icon: LucideIcon }) { return <Icon {...ICON_INLIN
 
 function formatRelativeTime(dateStr: string): string {
   const now = Date.now()
-  const then = new Date(dateStr).getTime()
+  const then = parseDateSafe(dateStr).getTime()
   const diff = now - then
   const mins = Math.floor(diff / 60000)
   if (mins < 1) return 'just now'
@@ -46,7 +47,7 @@ function formatRelativeTime(dateStr: string): string {
   if (hours < 24) return `${hours}h ago`
   const days = Math.floor(hours / 24)
   if (days < 7) return `${days}d ago`
-  const d = new Date(dateStr)
+  const d = parseDateSafe(dateStr)
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
@@ -697,7 +698,7 @@ function ProjectContent() {
                 <div className={styles.gitRow}>
                   <span className={styles.gitLabel}>Last Indexed</span>
                   <span className={styles.gitValue}>
-                    {new Date(project.indexed_at).toLocaleString()}
+                    {parseDateSafe(project.indexed_at).toLocaleString()}
                   </span>
                 </div>
               )}
@@ -759,13 +760,13 @@ function ProjectContent() {
             <div className={styles.detailRow}>
               <span className={styles.detailLabel}>Created</span>
               <span className={styles.detailValue}>
-                {new Date(project.created_at).toLocaleString()}
+                {parseDateSafe(project.created_at).toLocaleString()}
               </span>
             </div>
             <div className={styles.detailRow}>
               <span className={styles.detailLabel}>Updated</span>
               <span className={styles.detailValue}>
-                {new Date(project.updated_at).toLocaleString()}
+                {parseDateSafe(project.updated_at).toLocaleString()}
               </span>
             </div>
           </div>

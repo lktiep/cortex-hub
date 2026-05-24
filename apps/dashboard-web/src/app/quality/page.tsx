@@ -12,6 +12,7 @@ import {
   type QualityTrendData,
   type QueryLog,
 } from '@/lib/api'
+import { parseDateSafe } from '@/lib/date'
 import { SkeletonText, SkeletonCircle } from '@/components/ui/Skeleton'
 import { NumberTransition } from '@/components/ui/NumberTransition'
 import styles from './page.module.css'
@@ -240,7 +241,7 @@ export default function QualityPage() {
                   <span className={styles.heroScore}>{latestScore}/100</span>
                   <span className={styles.heroAction}>{gradeAction(latestGrade)}</span>
                   <span className={styles.heroTime}>
-                    Last: {latest.created_at ? new Date(latest.created_at).toLocaleString() : '—'}
+                    Last: {latest.created_at ? parseDateSafe(latest.created_at).toLocaleString() : '—'}
                   </span>
                 </div>
               </>
@@ -536,7 +537,7 @@ function ReportRow({ report }: { report: QualityReportRow }) {
         <GradeBadge grade={report.grade} size="sm" />
       </td>
       <td className={styles.cellMuted}>
-        {report.created_at ? new Date(report.created_at).toLocaleString() : '—'}
+        {report.created_at ? parseDateSafe(report.created_at).toLocaleString() : '—'}
       </td>
     </tr>
   )
@@ -568,7 +569,7 @@ function LegacyLogRow({ log }: { log: QueryLog }) {
         <span className={`badge badge-${log.status === 'ok' ? 'healthy' : 'error'}`}>{log.status}</span>
       </td>
       <td className={styles.cellMuted}>
-        {log.created_at ? new Date(log.created_at).toLocaleString() : '—'}
+        {log.created_at ? parseDateSafe(log.created_at).toLocaleString() : '—'}
       </td>
     </tr>
   )
