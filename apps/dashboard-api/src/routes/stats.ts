@@ -834,7 +834,7 @@ statsRouter.get('/conductor/agents', (c) => {
 
     const now = Date.now()
     const enriched = agents.map(a => {
-      const lastMs = new Date(a.lastActivity + 'Z').getTime()
+      const lastMs = new Date(a.lastActivity.endsWith('Z') || a.lastActivity.includes('+') ? a.lastActivity : a.lastActivity + 'Z').getTime()
       const diffMin = (now - lastMs) / 60000
 
       // Get tools
