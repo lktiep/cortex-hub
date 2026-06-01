@@ -213,8 +213,10 @@ app.all('/mcp', async (c) => {
       toolName = p.params?.name
       argsObj = p.params?.arguments
       projectId = argsObj?.projectId || argsObj?.project_id || null
-      if (toolName === 'cortex_session_start' && argsObj?.repo) {
-        projectId = argsObj.repo.split('/').pop()?.replace('.git', '') || null
+      
+      const rawRepo = argsObj?.repo || null
+      if (rawRepo) {
+        projectId = rawRepo.replace(/\.git$/, '').replace(/^https?:\/\/.*\//, '').split(/[/\\]/).pop() || rawRepo
       }
     }
   } catch (e) {}
