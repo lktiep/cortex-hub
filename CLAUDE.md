@@ -5,7 +5,7 @@
 Run `/cs` at the start of every conversation. This initializes the session, recalls context from previous sessions, and checks for conflicts. **Editing is blocked until this completes.**
 
 If `/cs` is unavailable, run manually:
-1. `cortex_session_start(repo: "https://github.com/lktiep/cortex-hub.git", mode: "development", agentId: "claude-code")`
+1. `cortex_session_start(repo: "cortex-hub", mode: "development", agentId: "claude-code")`
 2. `cortex_knowledge_search(query: "session summary progress next session")`
 3. `cortex_memory_search(query: "session context decisions lessons")`
 4. `cortex_task_pickup()` — check for assigned tasks
@@ -47,7 +47,7 @@ Call `cortex_changes(agentId: "claude-code", projectId: "<from session>")` to ch
 `cortex_detect_changes(scope: "staged")` — shows affected symbols and risk level.
 
 ### After pushing
-`cortex_code_reindex(repo: "https://github.com/lktiep/cortex-hub.git", branch: "<branch>")` — keeps code intelligence fresh.
+`cortex_code_reindex(repo: "cortex-hub", branch: "<branch>")` — keeps code intelligence fresh.
 
 ### Cross-project lookup
 Use `repo:` parameter directly:
