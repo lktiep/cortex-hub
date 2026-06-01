@@ -16,7 +16,7 @@
 
 .envGrid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: var(--space-6);
 }
 
@@ -46,7 +46,7 @@
 
 .tunnelGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
 }
 
@@ -500,7 +500,7 @@
 
 .systemGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-5);
 }
 
@@ -552,8 +552,6 @@
 
 /* Responsive */
 @media (max-width: 768px) {
-  .envGrid { grid-template-columns: 1fr; }
-  .tunnelGrid { grid-template-columns: repeat(2, 1fr); }
-  .systemGrid { grid-template-columns: repeat(2, 1fr); }
+  /* Dynamic auto-fit handles columns wrapping automatically */
   .dangerRow { flex-direction: column; align-items: flex-start; }
 }

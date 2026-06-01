@@ -5,7 +5,7 @@
 /* ── Hero Stats Bar ── */
 .heroBar {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-6);
 }
@@ -233,7 +233,7 @@
 /* ── System Resources ── */
 .gaugesGrid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-4);
 }
@@ -347,7 +347,7 @@
 
 .intelGrid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
   gap: var(--space-3);
   text-align: center;
 }
@@ -564,22 +564,16 @@
 
 /* ── Responsive ── */
 @media (max-width: 1200px) {
-  .heroBar { grid-template-columns: repeat(3, 1fr); }
   .twoColumn { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 768px) {
-  .heroBar { grid-template-columns: repeat(2, 1fr); }
   .projectsGrid { grid-template-columns: 1fr; }
-  .gaugesGrid { grid-template-columns: repeat(3, 1fr); }
   .servicesStrip { flex-direction: column; gap: var(--space-3); }
   .servicesInline { flex-wrap: wrap; }
 }
 
 @media (max-width: 480px) {
-  .heroBar { grid-template-columns: 1fr; }
-  .gaugesGrid { grid-template-columns: 1fr; }
-  .intelGrid { grid-template-columns: 1fr; }
   .containersHeader,
   .containerRow { grid-template-columns: 2fr 1fr 2fr; }
   .containerUptime { display: none; }

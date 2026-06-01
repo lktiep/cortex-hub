@@ -121,7 +121,7 @@
 /* 4-Dimension Cards */
 .dimensionCards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-3);
 }
 

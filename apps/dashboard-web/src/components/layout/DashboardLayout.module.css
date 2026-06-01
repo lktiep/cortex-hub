@@ -10,8 +10,9 @@
 .main {
   flex: 1;
   margin-left: var(--sidebar-width);
+  margin-right: auto;
   padding: var(--space-8);
-  max-width: 1200px;
+  max-width: 1600px;
   transition: margin-left var(--transition-normal);
 }
 

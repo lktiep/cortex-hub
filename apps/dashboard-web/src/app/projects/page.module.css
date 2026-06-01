@@ -17,7 +17,7 @@
 /* Stats */
 .statsGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
@@ -58,7 +58,7 @@
 /* Info Grid */
 .infoGrid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
@@ -330,7 +330,7 @@
 /* Provider Grid */
 .providerGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: var(--space-2);
 }
 
@@ -1124,9 +1124,7 @@
 }
 
 @media (max-width: 1024px) {
-  .statsGrid { grid-template-columns: repeat(2, 1fr); }
-  .infoGrid { grid-template-columns: 1fr; }
-  .providerGrid { grid-template-columns: repeat(2, 1fr); }
+  /* Dynamic auto-fit handles columns wrapping automatically */
   .historyHeaderRow,
   .historyRow { grid-template-columns: 0.8fr 1fr 0.6fr 0.5fr; }
   .historyHeaderRow > :nth-child(3),

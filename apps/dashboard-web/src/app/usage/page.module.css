@@ -1,6 +1,6 @@
 .statsGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
@@ -219,7 +219,7 @@
 /* Details Grid */
 .detailsGrid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
@@ -440,8 +440,7 @@
 
 /* Responsive */
 @media (max-width: 1024px) {
-  .statsGrid { grid-template-columns: repeat(2, 1fr); }
-  .detailsGrid { grid-template-columns: 1fr; }
+  /* Dynamic auto-fit handles columns wrapping automatically */
 }
 
 /* Budget Alert */
