@@ -426,6 +426,18 @@ statsRouter.post('/query-log', async (c) => {
   try {
     const { agentId, tool, params, status, latencyMs, error, projectId, inputSize, outputSize, computeTokens, computeModel } = await c.req.json()
     const resolvedAgent = agentId || 'unknown'
+    
+    // Resolve project slug/name to actual internal UUID (e.g. "Do_An" -> "proj-12224eee")
+    let resolvedProjectId = projectId || null
+    if (resolvedProjectId && !resolvedProjectId.startsWith('proj-')) {
+      const projRecord = db.prepare(
+        "SELECT id FROM projects WHERE slug = ? COLLATE NOCASE OR name = ? COLLATE NOCASE OR slug LIKE ? COLLATE NOCASE"
+      ).get(resolvedProjectId, resolvedProjectId, `%${resolvedProjectId}%`) as { id: string } | undefined
+      if (projRecord) {
+        resolvedProjectId = projRecord.id
+      }
+    }
+
     const stmt = db.prepare('INSERT INTO query_logs (agent_id, tool, params, latency_ms, status, error, project_id, input_size, output_size, compute_tokens, compute_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     stmt.run(
       resolvedAgent,
@@ -434,7 +446,7 @@ statsRouter.post('/query-log', async (c) => {
       latencyMs || 0,
       status || 'ok',
       error || null,
-      projectId || null,
+      resolvedProjectId,
       inputSize || 0,
       outputSize || 0,
       computeTokens || 0,
@@ -453,7 +465,7 @@ statsRouter.post('/query-log', async (c) => {
     // Bridge backend LLM cost to the unified billing table
     if (computeTokens && computeTokens > 0 && computeModel) {
       const usageStmt = db.prepare('INSERT INTO usage_logs (agent_id, model, total_tokens, request_type, project_id) VALUES (?, ?, ?, ?, ?)')
-      usageStmt.run(agentId || 'unknown', computeModel, computeTokens, 'tool', projectId || null)
+      usageStmt.run(agentId || 'unknown', computeModel, computeTokens, 'tool', resolvedProjectId)
     }
 
     return c.json({ success: true })
