@@ -827,6 +827,7 @@ knowledgeRouter.post('/search', async (c) => {
 knowledgeRouter.post('/migrate-clusters', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}))
+    const { projectId } = body as { projectId?: string }
     const normalizedProjectId = normalizeProjectId(projectId)
 
     // Scroll through ALL points in knowledge collection
