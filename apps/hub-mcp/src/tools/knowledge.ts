@@ -117,12 +117,53 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
           }
         }
 
-        const data = await res.json()
+        interface SearchResult {
+          score?: number
+          chunkId?: string
+          content?: string
+          documentId?: string
+          title?: string
+          chunkIndex?: number
+          deprecated?: boolean
+          document?: {
+            tags?: string
+            hall_type?: string
+          }
+        }
+
+        interface SearchResponse {
+          query: string
+          results: SearchResult[]
+        }
+
+        const data = (await res.json()) as SearchResponse
+        if (!data.results || data.results.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `No relevant knowledge found for query: "${query}"`,
+              },
+            ],
+          }
+        }
+
+        const formattedResults = data.results.map((r, index) => {
+          const tagsList = r.document?.tags ? JSON.parse(r.document.tags) : []
+          const tagsStr = tagsList.length > 0 ? ` [Tags: ${tagsList.join(', ')}]` : ''
+          const hallTypeStr = r.document?.hall_type ? ` [Type: ${r.document.hall_type}]` : ''
+          const deprecationWarning = r.deprecated
+            ? `\n⚠️ WARNING: This entry has high fallback rates and might be obsolete/deprecated.`
+            : ''
+          
+          return `### Result ${index + 1}: ${r.title || 'Untitled'} (ID: ${r.documentId ?? 'unknown'}, Chunk: ${r.chunkIndex ?? 0}, Score: ${r.score?.toFixed(3) ?? 'N/A'})${tagsStr}${hallTypeStr}${deprecationWarning}\n\n${r.content || ''}`
+        }).join('\n\n---\n\n')
+
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify(data, null, 2),
+              text: `Search results for query: "${query}"\n\n${formattedResults}`,
             },
           ],
         }
