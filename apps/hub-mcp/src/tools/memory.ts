@@ -150,20 +150,35 @@ export function registerMemoryTools(server: McpServer, env: Env) {
           }
         }
 
+        interface MemoryItem {
+          id: string
+          text: string
+          metadata?: Record<string, unknown>
+          _scope?: string
+        }
+
+        const dataMemories = allMemories as MemoryItem[]
+        if (dataMemories.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `No relevant memories found for query: "${query}"`,
+              },
+            ],
+          }
+        }
+
+        const formattedMemories = dataMemories.map((m, index) => {
+          const scopeStr = m._scope ? ` [Scope: ${m._scope}]` : ''
+          return `### Memory ${index + 1} (ID: ${m.id})${scopeStr}\n\n${m.text || ''}`
+        }).join('\n\n---\n\n')
+
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify(
-                {
-                  query,
-                  scopes: searchScopes,
-                  count: allMemories.length,
-                  memories: allMemories,
-                },
-                null,
-                2
-              ),
+              text: `Memories retrieved for query: "${query}"\n\n${formattedMemories}`,
             },
           ],
         }
