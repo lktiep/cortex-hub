@@ -185,6 +185,21 @@ mem9ProxyRouter.post('/search', async (c) => {
 })
 
 /**
+ * DELETE /:id — Delete a single memory by ID
+ */
+mem9ProxyRouter.delete('/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const mem9 = getMem9()
+    await mem9.delete(id)
+    return c.json({ success: true, id })
+  } catch (error) {
+    console.error('[mem9-proxy] delete error:', error)
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+/**
  * POST /embed — Embed text to vector (for knowledge search)
  * Body: { text }
  */

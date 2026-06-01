@@ -86,6 +86,27 @@ function getVectorStore(): VectorStore {
   return new VectorStore(config)
 }
 
+function normalizeProjectId(projectId: string | null | undefined): string | null {
+  if (!projectId) return null
+  try {
+    // Resolve project UUID, slug, name, or git URL to the canonical lowercase slug
+    const project = db.prepare(
+      `SELECT slug FROM projects
+       WHERE id = ?
+          OR slug = ? COLLATE NOCASE
+          OR name = ? COLLATE NOCASE`
+    ).get(projectId, projectId, projectId) as { slug: string } | undefined
+
+    if (project?.slug) {
+      return project.slug.toLowerCase()
+    }
+  } catch (error) {
+    logger.warn(`normalizeProjectId failed: ${error}`)
+  }
+  return projectId.toLowerCase()
+}
+
+
 // ── Hierarchical clustering helpers (zero LLM, pure vector math) ──
 
 async function ensureClusterCollection(vectorSize: number): Promise<void> {
@@ -231,7 +252,7 @@ async function hierarchicalSearch(
 // ── GET / — List documents ──
 knowledgeRouter.get('/', (c) => {
   const tag = c.req.query('tag')
-  const projectId = c.req.query('projectId')
+  const projectId = normalizeProjectId(c.req.query('projectId'))
   const status = c.req.query('status') ?? 'active'
   const limit = Number(c.req.query('limit') ?? 500)
   const offset = Number(c.req.query('offset') ?? 0)
@@ -296,16 +317,8 @@ knowledgeRouter.post('/', async (c) => {
     const tagList = tags ?? []
     const contentPreview = content.slice(0, 500)
 
-    // Normalize project_id: resolve proj-* to slug, and lowercase
-    let normalizedProjectId = projectId ?? null
-    if (normalizedProjectId) {
-      if (normalizedProjectId.startsWith('proj-')) {
-        // Resolve project ID to slug for consistent grouping
-        const proj = db.prepare('SELECT slug FROM projects WHERE id = ?').get(normalizedProjectId) as { slug: string } | undefined
-        if (proj?.slug) normalizedProjectId = proj.slug
-      }
-      normalizedProjectId = normalizedProjectId.toLowerCase()
-    }
+    // Normalize project_id: resolve to canonical lowercase slug
+    const normalizedProjectId = normalizeProjectId(projectId)
 
     // Chunk content
     const chunks = chunkText(content)
@@ -485,7 +498,7 @@ knowledgeRouter.get('/recipe-stats', (c) => {
 // MemPalace-inspired: browse facts ordered by valid_from
 // MUST be before /:id to avoid being caught by the parameterized route
 knowledgeRouter.get('/timeline', (c) => {
-  const projectId = c.req.query('projectId')
+  const projectId = normalizeProjectId(c.req.query('projectId'))
   const hallType = c.req.query('hallType')
 
   let sql = `SELECT id, title, hall_type, valid_from, invalidated_at, superseded_by, content_preview
@@ -635,9 +648,10 @@ knowledgeRouter.post('/search', async (c) => {
     const vector = await embedder.embed(query)
 
     // Build Qdrant filter
+    const normalizedProjectId = normalizeProjectId(projectId)
     const must: Array<Record<string, unknown>> = []
-    if (projectId) {
-      must.push({ key: 'project_id', match: { value: projectId } })
+    if (normalizedProjectId) {
+      must.push({ key: 'project_id', match: { value: normalizedProjectId } })
     }
     if (tags && tags.length > 0) {
       for (const tag of tags) {
@@ -814,6 +828,7 @@ knowledgeRouter.post('/migrate-clusters', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}))
     const { projectId } = body as { projectId?: string }
+    const normalizedProjectId = normalizeProjectId(projectId)
 
     // Scroll through ALL points in knowledge collection
     let offset: string | null = null
@@ -821,8 +836,8 @@ knowledgeRouter.post('/migrate-clusters', async (c) => {
     let clustersCreated = 0
     let totalPoints = 0
 
-    const scrollFilter = projectId
-      ? { must: [{ key: 'project_id', match: { value: projectId } }] }
+    const scrollFilter = normalizedProjectId
+      ? { must: [{ key: 'project_id', match: { value: normalizedProjectId } }] }
       : undefined
 
     // Get vector size from first point
