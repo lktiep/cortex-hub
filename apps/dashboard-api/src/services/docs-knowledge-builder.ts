@@ -166,18 +166,18 @@ export async function buildKnowledgeFromDocs(
     return { docsFound: 0, docsProcessed: 0, chunksCreated: 0, errors: [] }
   }
 
-  // 2. Resolve project slug for consistent knowledge grouping
-  let normalizedProjectId = projectId
+  // 2. Resolve project slug for tagging
+  let projectSlug = projectId
   if (projectId.startsWith('proj-')) {
     const proj = db.prepare('SELECT slug FROM projects WHERE id = ?').get(projectId) as { slug: string } | undefined
-    if (proj?.slug) normalizedProjectId = proj.slug
+    if (proj?.slug) projectSlug = proj.slug
   }
-  normalizedProjectId = normalizedProjectId.toLowerCase()
+  projectSlug = projectSlug.toLowerCase()
 
   // 3. Delete existing auto-docs knowledge for this project (upsert strategy)
   const existingDocs = db.prepare(
-    "SELECT id FROM knowledge_documents WHERE project_id = ? AND source = 'auto-docs'"
-  ).all(normalizedProjectId) as Array<{ id: string }>
+    "SELECT id FROM knowledge_documents WHERE (project_id = ? OR project_id = ?) AND source = 'auto-docs'"
+  ).all(projectId, projectSlug) as Array<{ id: string }>
 
   if (existingDocs.length > 0) {
     logger.info(`[${jobId}] Removing ${existingDocs.length} existing auto-docs knowledge items`)
@@ -231,7 +231,7 @@ export async function buildKnowledgeFromDocs(
     try {
       const content = readFileSync(file.path, 'utf-8')
       const title = extractTitle(content, file.relativePath)
-      const tagList = ['auto-docs', `project:${normalizedProjectId}`]
+      const tagList = ['auto-docs', `project:${projectSlug}`]
 
       // Create knowledge document
       const docId = `kdoc-${randomUUID().slice(0, 8)}`
@@ -241,7 +241,7 @@ export async function buildKnowledgeFromDocs(
       db.prepare(
         `INSERT INTO knowledge_documents (id, title, source, source_agent_id, project_id, tags, content_preview, chunk_count)
          VALUES (?, ?, 'auto-docs', 'system', ?, ?, ?, ?)`
-      ).run(docId, `[${file.relativePath}] ${title}`, normalizedProjectId, JSON.stringify(tagList), contentPreview, chunks.length)
+      ).run(docId, `[${file.relativePath}] ${title}`, projectId, JSON.stringify(tagList), contentPreview, chunks.length)
 
       // Embed and store each chunk
       for (let i = 0; i < chunks.length; i++) {
@@ -254,7 +254,7 @@ export async function buildKnowledgeFromDocs(
             document_id: docId,
             chunk_index: i,
             tags: tagList,
-            project_id: normalizedProjectId,
+            project_id: projectId,
             content: chunkContent.slice(0, 2000),
             title: `[${file.relativePath}] ${title}`,
             source: 'auto-docs',
