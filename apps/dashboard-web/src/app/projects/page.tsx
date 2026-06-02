@@ -495,7 +495,7 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
                   </span>
                   <span>{job.symbols_found}</span>
                   <span>{job.total_files}</span>
-                  <span className={styles.historyDate} title={new Date(ts).toLocaleString()}>
+                  <span className={styles.historyDate} title={parseDateSafe(ts).toLocaleString()}>
                     <span className={styles.triggerIcon}><TriggerIcon {...ICON_INLINE} /></span>
                     {formatRelativeTime(ts)}
                   </span>
@@ -805,7 +805,7 @@ function ProjectContent() {
                     </span>
                   </div>
                   <span className={styles.activityTime}>
-                    {item.created_at ? new Date(item.created_at as string).toLocaleString() : ''}
+                    {item.created_at ? parseDateSafe(item.created_at as string).toLocaleString() : ''}
                   </span>
                 </div>
               )
