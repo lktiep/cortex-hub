@@ -1,7 +1,9 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import DashboardLayout from '@/components/layout/DashboardLayout'
+import { getExternalUrl } from '@/lib/config'
 import useSWR from 'swr'
 import {
   checkHealth,
@@ -166,6 +168,13 @@ export default function DashboardPage() {
   const onlineAgents = agentsData?.agents?.length ?? 0
 
   const svcMap = healthData?.services as Record<string, string> | undefined
+
+  // Dynamic MCP URL state to resolve Tailscale/localhost
+  const [mcpUrl, setMcpUrl] = useState('https://cortex-mcp.jackle.dev')
+
+  useEffect(() => {
+    setMcpUrl(getExternalUrl('mcp'))
+  }, [])
 
   return (
     <DashboardLayout title="Dashboard" subtitle="System overview and project health">
@@ -471,7 +480,7 @@ export default function DashboardPage() {
 {`{
   "mcpServers": {
     "cortex-hub": {
-      "url": "https://cortex-mcp.jackle.dev/mcp",
+      "url": "${mcpUrl.endsWith('/mcp') ? mcpUrl : `${mcpUrl}/mcp`}",
       "headers": {
         "Authorization": "Bearer <your-api-key>"
       }

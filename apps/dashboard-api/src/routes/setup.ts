@@ -169,6 +169,12 @@ setupRouter.get('/settings', (c) => {
     geminiApiKey: process.env.GEMINI_API_KEY ? 'configured' : 'not set',
     database: process.env.DATABASE_PATH || 'data/cortex.db',
     version: '0.1.0',
+    externalUrls: {
+      dashboard: process.env.DASHBOARD_URL || null,
+      api: process.env.EXTERNAL_API_URL || null,
+      mcp: process.env.EXTERNAL_MCP_URL || null,
+      llmProxy: process.env.EXTERNAL_LLM_PROXY_URL || null,
+    },
   })
 })
 

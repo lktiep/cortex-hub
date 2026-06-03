@@ -263,6 +263,12 @@ export interface SettingsData {
   services: Record<string, string>
   database: string
   version: string
+  externalUrls?: {
+    dashboard: string | null
+    api: string | null
+    mcp: string | null
+    llmProxy: string | null
+  }
 }
 
 export async function getSettings() {

@@ -12,7 +12,7 @@ import {
   getSystemInfo,
   restartService,
 } from '@/lib/api'
-import { config } from '@/lib/config'
+import { config, getExternalUrl } from '@/lib/config'
 import { Bot, Radio, Package, CheckCircle, XCircle, AlertTriangle, RefreshCw, Hourglass, Dna, type LucideIcon, ICON_INLINE } from '@/lib/icons'
 import styles from './page.module.css'
 
@@ -152,6 +152,31 @@ export default function SettingsPage() {
   const { data: hubConfig, mutate: mutateHubConfig } = useSWR('hub-config', getHubConfig)
   const { data: notifPrefs, mutate: mutateNotifPrefs } = useSWR('notif-prefs', getNotificationPreferences)
   const { data: systemInfo } = useSWR('system-info', getSystemInfo, { refreshInterval: 30000 })
+
+  // Dynamic endpoints state to resolve Tailscale/localhost/custom domains
+  const [endpoints, setEndpoints] = useState({
+    dashboard: 'https://hub.jackle.dev',
+    api: 'https://cortex-api.jackle.dev',
+    mcp: 'https://cortex-mcp.jackle.dev',
+    llmProxy: 'https://cortex-llm.jackle.dev',
+  })
+
+  useEffect(() => {
+    const dashboard = data?.externalUrls?.dashboard || getExternalUrl('dashboard')
+    const api = data?.externalUrls?.api || getExternalUrl('api')
+    const mcp = data?.externalUrls?.mcp || getExternalUrl('mcp')
+    const llmProxy = data?.externalUrls?.llmProxy || getExternalUrl('cliproxy')
+    setEndpoints({ dashboard, api, mcp, llmProxy })
+  }, [data])
+
+  const formatLinkText = (url: string) => {
+    try {
+      const u = new URL(url)
+      return u.host
+    } catch {
+      return url.replace(/^https?:\/\//, '')
+    }
+  }
 
   const [showResetDialog, setShowResetDialog] = useState(false)
   const [showClearDialog, setShowClearDialog] = useState(false)
@@ -410,51 +435,51 @@ export default function SettingsPage() {
 
       {/* Tunnel & Endpoints */}
       <div className={styles.section}>
-        <h2 className={styles.sectionTitle}>Cloudflare Tunnel</h2>
+        <h2 className={styles.sectionTitle}>Endpoints & Remote Access</h2>
         <div className={`card ${styles.tunnelCard}`}>
           <div className={styles.tunnelGrid}>
             <div className={styles.tunnelItem}>
               <span className={styles.tunnelLabel}>Dashboard</span>
               <a
-                href="https://hub.jackle.dev"
+                href={endpoints.dashboard}
                 target="_blank"
                 rel="noreferrer"
                 className={styles.tunnelLink}
               >
-                hub.jackle.dev
+                {formatLinkText(endpoints.dashboard)}
               </a>
             </div>
             <div className={styles.tunnelItem}>
               <span className={styles.tunnelLabel}>API</span>
               <a
-                href="https://cortex-api.jackle.dev"
+                href={endpoints.api}
                 target="_blank"
                 rel="noreferrer"
                 className={styles.tunnelLink}
               >
-                cortex-api.jackle.dev
+                {formatLinkText(endpoints.api)}
               </a>
             </div>
             <div className={styles.tunnelItem}>
               <span className={styles.tunnelLabel}>MCP</span>
               <a
-                href="https://cortex-mcp.jackle.dev"
+                href={endpoints.mcp}
                 target="_blank"
                 rel="noreferrer"
                 className={styles.tunnelLink}
               >
-                cortex-mcp.jackle.dev
+                {formatLinkText(endpoints.mcp)}
               </a>
             </div>
             <div className={styles.tunnelItem}>
               <span className={styles.tunnelLabel}>LLM Proxy</span>
               <a
-                href="https://cortex-llm.jackle.dev"
+                href={endpoints.llmProxy}
                 target="_blank"
                 rel="noreferrer"
                 className={styles.tunnelLink}
               >
-                cortex-llm.jackle.dev
+                {formatLinkText(endpoints.llmProxy)}
               </a>
             </div>
           </div>
@@ -522,7 +547,7 @@ export default function SettingsPage() {
 {`{
   "mcpServers": {
     "cortex-hub": {
-      "url": "https://cortex-mcp.jackle.dev/mcp",
+      "url": "${endpoints.mcp.endsWith('/mcp') ? endpoints.mcp : `${endpoints.mcp}/mcp`}",
       "headers": {
         "Authorization": "Bearer <your-api-key>"
       }
@@ -594,7 +619,7 @@ export default function SettingsPage() {
             <a href="/docs" className={styles.aboutLink}>
               Documentation
             </a>
-            <a href="https://hub.jackle.dev" className={styles.aboutLink}>
+            <a href={endpoints.dashboard} className={styles.aboutLink}>
               Dashboard
             </a>
           </div>

@@ -566,7 +566,7 @@
 }
 
 /* ── Responsive ── */
-@media (max-width: 1500px) {
+@media (max-width: 1024px) {
   .twoColumn { grid-template-columns: 1fr; }
 }
 
