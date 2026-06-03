@@ -33,6 +33,8 @@ export function registerSessionTools(server: McpServer, env: Env) {
 
       // Register session with the dashboard API
       let sessionId = `sess_${Math.random().toString(36).substr(2, 9)}`
+      let resolvedProjectId: string | undefined
+      let recentSessions: unknown[] = []
       try {
         const response = await apiCall(env, '/api/sessions/start', {
           method: 'POST',
@@ -52,8 +54,10 @@ export function registerSessionTools(server: McpServer, env: Env) {
         })
 
         if (response.ok) {
-          const data = await response.json() as { sessionId?: string }
+          const data = await response.json() as { sessionId?: string; project?: { id: string }; recentSessions?: unknown[] }
           if (data.sessionId) sessionId = data.sessionId
+          if (data.project?.id) resolvedProjectId = data.project.id
+          if (data.recentSessions) recentSessions = data.recentSessions
         }
       } catch {
         // Dashboard API unavailable — continue with local session ID
@@ -68,7 +72,11 @@ export function registerSessionTools(server: McpServer, env: Env) {
         const knowledgeRes = await apiCall(env, '/api/knowledge/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: searchQuery, limit: 5 }),
+          body: JSON.stringify({
+            query: searchQuery,
+            projectId: resolvedProjectId,
+            limit: 5
+          }),
           signal: AbortSignal.timeout(5000),
         })
         if (knowledgeRes.ok) {
@@ -121,6 +129,8 @@ export function registerSessionTools(server: McpServer, env: Env) {
                 capabilities: capabilities ?? [],
                 role: role ?? null,
               },
+              project: resolvedProjectId ? { id: resolvedProjectId } : undefined,
+              recent_sessions: recentSessions.length > 0 ? recentSessions : undefined,
               relevant_knowledge: relevantKnowledge.length > 0 ? relevantKnowledge : undefined,
             }, null, 2)
           }
