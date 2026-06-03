@@ -528,6 +528,7 @@ conductorRouter.get('/:id', (c) => {
 conductorRouter.post('/', async (c) => {
   try {
     const body = await c.req.json()
+    const headerApiKeyOwner = c.req.header('X-API-Key-Owner')
     let {
       title,
       description,
@@ -541,7 +542,7 @@ conductorRouter.post('/', async (c) => {
       requiredCapabilities,
       // Identity fields for auto-setting created_by_agent
       agentId,
-      apiKeyOwner,
+      apiKeyOwner = headerApiKeyOwner,
       sessionAgent,
     } = body as {
       title?: string
@@ -638,8 +639,13 @@ conductorRouter.post('/', async (c) => {
 // ── Pickup task (flexible identity matching) ──
 conductorRouter.post('/pickup', async (c) => {
   try {
-    const body = await c.req.json()
-    const { agentId, apiKeyOwner, sessionAgent } = body as {
+    let body: any = {}
+    try {
+      body = await c.req.json()
+    } catch {}
+
+    const headerApiKeyOwner = c.req.header('X-API-Key-Owner')
+    const { agentId, apiKeyOwner = headerApiKeyOwner, sessionAgent } = body as {
       agentId?: string
       apiKeyOwner?: string
       sessionAgent?: string
