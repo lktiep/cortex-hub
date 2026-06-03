@@ -73,6 +73,7 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.gitnexus
+      network: host
     image: ghcr.io/lktiep/cortex-gitnexus:latest
     container_name: cortex-gitnexus
     restart: unless-stopped
@@ -105,6 +106,7 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.dashboard-api
+      network: host
       args:
         COMMIT_SHA: ${COMMIT_SHA:-dev}
         BUILD_DATE: ${BUILD_DATE:-}
@@ -167,6 +169,7 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.hub-mcp
+      network: host
     image: ghcr.io/lktiep/cortex-mcp:latest
     container_name: cortex-mcp
     restart: unless-stopped
