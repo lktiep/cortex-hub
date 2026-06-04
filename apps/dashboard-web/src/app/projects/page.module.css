@@ -63,7 +63,11 @@
   margin-bottom: var(--space-6);
 }
 
-.infoCard { padding: var(--space-5); }
+.infoCard {
+  padding: var(--space-5);
+  min-width: 0;
+  overflow: hidden;
+}
 
 .infoHeader {
   display: flex;
@@ -210,7 +214,11 @@
 }
 
 /* Activity */
-.activityCard { padding: var(--space-5); }
+.activityCard {
+  padding: var(--space-5);
+  min-width: 0;
+  overflow: hidden;
+}
 
 .activityList {
   display: flex;
@@ -224,6 +232,7 @@
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border-subtle);
   transition: background 0.15s;
+  min-width: 0;
 }
 
 .activityRow:last-child { border-bottom: none; }
@@ -380,6 +389,8 @@
 .indexingCard {
   padding: var(--space-5);
   margin-bottom: var(--space-6);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .indexingHeader {
@@ -1111,6 +1122,8 @@
 .stateCard {
   padding: var(--space-5);
   margin-bottom: var(--space-6);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .stateList {
@@ -1129,6 +1142,7 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: var(--space-4);
+  min-width: 0;
 }
 
 .stateContent {
@@ -1136,6 +1150,10 @@
   color: var(--text-primary);
   line-height: 1.5;
   white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  flex: 1;
 }
 
 .stateMeta {
