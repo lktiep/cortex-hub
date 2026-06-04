@@ -32,6 +32,20 @@ export default function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false)
   const { data: health } = useSWR('health', checkHealth, { refreshInterval: 30000 })
 
+  const [showConductor, setShowConductor] = useState(true)
+
+  useEffect(() => {
+    const checkConductor = () => {
+      const val = localStorage.getItem('cortex-show-conductor')
+      if (val !== null) {
+        setShowConductor(val === 'true')
+      }
+    }
+    checkConductor()
+    window.addEventListener('cortex-config-changed', checkConductor)
+    return () => window.removeEventListener('cortex-config-changed', checkConductor)
+  }, [])
+
   const commitShort = health?.commit && health.commit !== 'dev'
     ? health.commit.slice(0, 7)
     : 'dev'
@@ -53,6 +67,13 @@ export default function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
     }
     return () => { document.body.style.overflow = '' }
   }, [isOpen])
+
+  const filteredNavItems = navItems.filter((item) => {
+    if (!showConductor && (item.href === '/conductor' || item.href === '/sessions')) {
+      return false
+    }
+    return true
+  })
 
   return (
     <>
@@ -97,7 +118,7 @@ export default function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
 
         {/* Navigation */}
         <nav className={styles.nav}>
-          {navItems.map((item) => {
+          {filteredNavItems.map((item) => {
             const isActive = pathname === item.href ||
               (item.href !== '/' && pathname.startsWith(item.href))
             const IconComponent = NAV_ICONS[item.href]

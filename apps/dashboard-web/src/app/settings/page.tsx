@@ -186,6 +186,22 @@ export default function SettingsPage() {
     message: string
   } | null>(null)
 
+  // Interface settings state
+  const [showConductor, setShowConductor] = useState(true)
+
+  useEffect(() => {
+    const val = localStorage.getItem('cortex-show-conductor')
+    if (val !== null) {
+      setShowConductor(val === 'true')
+    }
+  }, [])
+
+  const handleToggleConductor = (enabled: boolean) => {
+    setShowConductor(enabled)
+    localStorage.setItem('cortex-show-conductor', String(enabled))
+    window.dispatchEvent(new Event('cortex-config-changed'))
+  }
+
   // Hub config form state
   const [hubName, setHubName] = useState('')
   const [hubDescription, setHubDescription] = useState('')
@@ -362,6 +378,27 @@ export default function SettingsPage() {
               </label>
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Interface Settings */}
+      <div className={styles.section}>
+        <h2 className={styles.sectionTitle}>Interface Settings</h2>
+        <div className={`card ${styles.notificationsCard}`}>
+          <div className={styles.notifRow}>
+            <div className={styles.notifInfo}>
+              <span className={styles.notifLabel}>Conductor &amp; Sessions</span>
+              <span className={styles.notifDesc}>Show Conductor task wizard and multi-agent Session handoffs in the sidebar</span>
+            </div>
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={showConductor}
+                onChange={(e) => handleToggleConductor(e.target.checked)}
+              />
+              <span className={styles.toggleSlider} />
+            </label>
+          </div>
         </div>
       </div>
 
