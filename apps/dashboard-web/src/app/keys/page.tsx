@@ -88,26 +88,30 @@ export default function KeysPage() {
 
   return (
     <DashboardLayout title="API Keys" subtitle="Manage authentication keys for MCP access">
-      {/* New Key Result */}
+      {/* New Key Result Modal */}
       {newKeyResult && (
-        <div className={styles.newKeyBanner}>
-          <div className={styles.newKeyHeader}>
-            <span><KeyRound {...ICON_INLINE} /></span>
-            <strong>API Key Created</strong>
-            <span style={{ color: 'var(--status-warning)', fontSize: '0.8125rem' }}>
-              Copy now — won't be shown again
-            </span>
+        <div className={styles.modal}>
+          <div className={styles.modalContent} style={{ maxWidth: '500px', textAlign: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 'var(--space-4)', color: 'var(--status-healthy)' }}>
+              <KeyRound size={40} strokeWidth={1.5} />
+            </div>
+            <h2 style={{ marginBottom: 'var(--space-2)' }}>API Key Created</h2>
+            <p style={{ color: 'var(--status-warning)', fontSize: '0.875rem', marginBottom: 'var(--space-6)' }}>
+              Copy this key now. For security reasons, you won't be able to see it again!
+            </p>
+            <code className={styles.newKeyValue} style={{ textAlign: 'left', background: 'var(--bg-primary)' }}>{newKeyResult}</code>
+            <div className={styles.modalActions} style={{ justifyContent: 'center', marginTop: 'var(--space-6)' }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  navigator.clipboard.writeText(newKeyResult)
+                  setNewKeyResult(null)
+                }}
+              >
+                <ClipboardList {...ICON_INLINE} /> Copy &amp; Close
+              </button>
+            </div>
           </div>
-          <code className={styles.newKeyValue}>{newKeyResult}</code>
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => {
-              navigator.clipboard.writeText(newKeyResult)
-              setNewKeyResult(null)
-            }}
-          >
-            <ClipboardList {...ICON_INLINE} /> Copy &amp; Close
-          </button>
         </div>
       )}
 
