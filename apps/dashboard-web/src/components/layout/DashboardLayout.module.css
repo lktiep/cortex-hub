@@ -13,6 +13,7 @@
   margin-right: auto;
   padding: var(--space-8);
   max-width: 100%;
+  min-width: 0;
   transition: margin-left var(--transition-normal);
 }
 
@@ -43,6 +44,8 @@
     opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1),
     transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
   will-change: opacity, transform;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .contentVisible {

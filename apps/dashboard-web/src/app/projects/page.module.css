@@ -904,6 +904,16 @@
   color: var(--text-primary);
   margin-bottom: var(--space-1);
   font-family: var(--font-mono);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.branchNameText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .branchDot {
@@ -1149,11 +1159,13 @@
   font-size: 0.875rem;
   color: var(--text-primary);
   line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
   min-width: 0;
   flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stateMeta {

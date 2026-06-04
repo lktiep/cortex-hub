@@ -215,7 +215,7 @@ function ActiveConfigPanel({ accounts }: { accounts: ProviderAccount[] }) {
 
   const purposes = [
     { key: 'chat', label: 'Chat Model (with Fallbacks)', icon: MessageSquare, desc: 'Primary & fallback model chain for conversations, extraction, and memory' },
-    { key: 'embedding', label: 'Embedding Model (with Fallbacks)', icon: Brain, desc: 'Primary & fallback model chain for vector search and similarity' },
+    { key: 'embedding', label: 'Embedding Model', icon: Brain, desc: 'Active embedding model for vector search and similarity. Fallbacks are disabled to prevent dimension mismatch.' },
   ]
 
   const getChain = (purpose: string): ChainSlot[] => {
@@ -344,32 +344,34 @@ function ActiveConfigPanel({ accounts }: { accounts: ProviderAccount[] }) {
                           })}
                         </select>
                       </div>
-                      <div className={styles.slotActions}>
-                        <button
-                          className={styles.slotBtn}
-                          onClick={() => handleMoveSlot(key, index, -1)}
-                          disabled={index === 0}
-                          title="Move Up"
-                        >
-                          ▲
-                        </button>
-                        <button
-                          className={styles.slotBtn}
-                          onClick={() => handleMoveSlot(key, index, 1)}
-                          disabled={index === chain.length - 1}
-                          title="Move Down"
-                        >
-                          ▼
-                        </button>
-                        <button
-                          className={`${styles.slotBtn} ${styles.slotBtnDelete}`}
-                          onClick={() => handleDeleteSlot(key, index)}
-                          disabled={chain.length === 1}
-                          title="Remove fallback"
-                        >
-                          &times;
-                        </button>
-                      </div>
+                      {key !== 'embedding' && (
+                        <div className={styles.slotActions}>
+                          <button
+                            className={styles.slotBtn}
+                            onClick={() => handleMoveSlot(key, index, -1)}
+                            disabled={index === 0}
+                            title="Move Up"
+                          >
+                            ▲
+                          </button>
+                          <button
+                            className={styles.slotBtn}
+                            onClick={() => handleMoveSlot(key, index, 1)}
+                            disabled={index === chain.length - 1}
+                            title="Move Down"
+                          >
+                            ▼
+                          </button>
+                          <button
+                            className={`${styles.slotBtn} ${styles.slotBtnDelete}`}
+                            onClick={() => handleDeleteSlot(key, index)}
+                            disabled={chain.length === 1}
+                            title="Remove fallback"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )
                 })}
@@ -378,13 +380,15 @@ function ActiveConfigPanel({ accounts }: { accounts: ProviderAccount[] }) {
               <div className={styles.activeEmpty}>No model assigned</div>
             )}
             
-            <button
-              className="btn btn-secondary btn-sm"
-              style={{ marginTop: 'var(--space-4)', width: '100%' }}
-              onClick={() => handleAddSlot(key)}
-            >
-              + Add Fallback Model
-            </button>
+            {key !== 'embedding' && (
+              <button
+                className="btn btn-secondary btn-sm"
+                style={{ marginTop: 'var(--space-4)', width: '100%' }}
+                onClick={() => handleAddSlot(key)}
+              >
+                + Add Fallback Model
+              </button>
+            )}
           </div>
         )
       })}

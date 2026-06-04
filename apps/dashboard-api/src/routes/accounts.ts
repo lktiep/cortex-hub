@@ -416,11 +416,16 @@ accountsRouter.put('/routing/chains', async (c) => {
       return c.json({ error: 'purpose and chain[] are required' }, 400)
     }
 
+    let finalChain = chain
+    if (purpose === 'embedding' && chain.length > 1) {
+      finalChain = [chain[0]]
+    }
+
     db.prepare(
       `INSERT INTO model_routing (purpose, chain, updated_at) 
        VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
        ON CONFLICT(purpose) DO UPDATE SET chain = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')`
-    ).run(purpose, JSON.stringify(chain), JSON.stringify(chain))
+    ).run(purpose, JSON.stringify(finalChain), JSON.stringify(finalChain))
 
     return c.json({ success: true })
   } catch (error) {

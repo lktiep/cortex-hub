@@ -357,7 +357,7 @@ function IndexingPanel({ projectId, hasGitUrl }: { projectId: string; hasGitUrl:
                 <div key={b.branch} className={styles.branchStatusCard}>
                   <div className={styles.branchStatusName}>
                     <span className={styles.branchDot} style={{ background: bStatus.color }} />
-                    {b.branch}
+                    <span className={styles.branchNameText} title={b.branch}>{b.branch}</span>
                   </div>
                   {/* GitNexus row */}
                   <div className={styles.branchStatusMeta}>
