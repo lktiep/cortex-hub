@@ -27,9 +27,11 @@ cortex_quality_report(
 )
 ```
 
-## Step 4: Complete Conductor Tasks
+## Step 4: Complete Conductor Tasks (Optional)
+If `cortex_task_list` and `cortex_task_update` tools are available:
 `cortex_task_list(status: "in_progress")` — find tasks worked on this session.
 For each: `cortex_task_update(taskId, status: "completed", result: { summary: "..." })`
+If the tools are not available, skip this step.
 
 ## Step 5: Store Knowledge (if applicable)
 If this session involved any of these, call `cortex_knowledge_store`:
