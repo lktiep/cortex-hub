@@ -10,6 +10,38 @@ import useSWR from 'swr'
 import { listApiKeys, createApiKey, revokeApiKey } from '@/lib/api'
 import { KeyRound, ClipboardList, AlertTriangle, XCircle, ICON_INLINE } from '@/lib/icons'
 
+function copyTextFallback(text: string): boolean {
+  const textArea = document.createElement('textarea')
+  textArea.value = text
+  textArea.style.top = '0'
+  textArea.style.left = '0'
+  textArea.style.position = 'fixed'
+  textArea.style.opacity = '0'
+  document.body.appendChild(textArea)
+  textArea.focus()
+  textArea.select()
+  let success = false
+  try {
+    success = document.execCommand('copy')
+  } catch (err) {
+    console.error('Fallback copy failed:', err)
+  }
+  document.body.removeChild(textArea)
+  return success
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch (e) {
+    console.warn('Modern clipboard API failed, trying fallback:', e)
+  }
+  return copyTextFallback(text)
+}
+
 const allPermissions = [
   { id: 'cortex.session.start', label: 'Start Session (session_start)', group: 'Session' },
   { id: 'cortex.session.end', label: 'End Session (session_end)', group: 'Session' },
@@ -171,13 +203,7 @@ export default function KeysPage() {
               <button
                 className="btn btn-primary"
                 onClick={async () => {
-                  try {
-                    if (navigator.clipboard) {
-                      await navigator.clipboard.writeText(newKeyResult)
-                    }
-                  } catch (e) {
-                    console.warn('Clipboard write failed:', e)
-                  }
+                  await copyToClipboard(newKeyResult)
                   setNewKeyResult(null)
                 }}
               >
