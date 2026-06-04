@@ -1,13 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import DashboardLayout from '@/components/layout/DashboardLayout'
 import styles from './page.module.css'
 import { parseDateSafe } from '@/lib/date'
 
 import useSWR from 'swr'
 import { listApiKeys, createApiKey, revokeApiKey } from '@/lib/api'
-import { KeyRound, ClipboardList, ICON_INLINE } from '@/lib/icons'
+import { KeyRound, ClipboardList, AlertTriangle, XCircle, ICON_INLINE } from '@/lib/icons'
 
 const allPermissions = [
   { id: 'cortex.session.start', label: 'Start Session (session_start)', group: 'Session' },
@@ -50,6 +51,15 @@ export default function KeysPage() {
   const [keyPerms, setKeyPerms] = useState<string[]>(allPermissions.map((p) => p.id))
   const [keyExpiry, setKeyExpiry] = useState('never')
 
+  // Portaling and premium modals state
+  const [mounted, setMounted] = useState(false)
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
   function togglePerm(id: string) {
     setKeyPerms((prev) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id])
   }
@@ -69,27 +79,84 @@ export default function KeysPage() {
       setKeyName('')
       mutate() // Refresh list
     } catch (err) {
-      alert(`Failed to create key: ${err instanceof Error ? err.message : String(err)}`)
+      setErrorMessage(`Failed to create key: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setIsCreating(false)
     }
   }
 
-  async function handleRevoke(id: string) {
-    if (!confirm('Are you sure you want to revoke this key? This action cannot be undone.')) return
+  function handleRevokeClick(id: string) {
+    setRevokeTarget(id)
+  }
 
+  async function performRevoke(id: string) {
+    setRevokeTarget(null)
     try {
       await revokeApiKey(id)
       mutate() // Refresh list
     } catch (err) {
-      alert(`Failed to revoke key: ${err instanceof Error ? err.message : String(err)}`)
+      setErrorMessage(`Failed to revoke key: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
   return (
     <DashboardLayout title="API Keys" subtitle="Manage authentication keys for MCP access">
-      {/* New Key Result Modal */}
-      {newKeyResult && (
+      {/* Actions */}
+      <div className={styles.actions}>
+        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
+          + Create API Key
+        </button>
+      </div>
+
+      {/* Keys Table */}
+      <div className={styles.tableCard}>
+        <table className={styles.table}>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Key</th>
+              <th>Scope</th>
+              <th>Created</th>
+              <th>Expires</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {keys.map((key) => (
+              <tr key={key.id}>
+                <td className={styles.keyName}>{key.name}</td>
+                <td><code className={styles.keyPrefix}>{key.prefix}</code></td>
+                <td>{key.scope}</td>
+                <td className={styles.cellMuted}>
+                  {key.createdAt ? parseDateSafe(key.createdAt).toLocaleString() : '—'}
+                </td>
+                <td className={styles.cellMuted}>
+                  {key.expiresAt ? parseDateSafe(key.expiresAt).toLocaleString() : 'Never'}
+                </td>
+                <td>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => handleRevokeClick(key.id)}
+                    style={{ color: 'var(--status-error)' }}
+                  >
+                    Revoke
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {keys.length === 0 && (
+              <tr>
+                <td colSpan={6} className={styles.emptyState}>
+                  No API keys. Create one to connect your AI agent.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Portals for Modals (to avoid CSS transform stacking context bugs) */}
+      {mounted && newKeyResult && createPortal(
         <div className={styles.modal}>
           <div className={styles.modalContent} style={{ maxWidth: '500px', textAlign: 'center' }}>
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 'var(--space-4)', color: 'var(--status-healthy)' }}>
@@ -103,8 +170,14 @@ export default function KeysPage() {
             <div className={styles.modalActions} style={{ justifyContent: 'center', marginTop: 'var(--space-6)' }}>
               <button
                 className="btn btn-primary"
-                onClick={() => {
-                  navigator.clipboard.writeText(newKeyResult)
+                onClick={async () => {
+                  try {
+                    if (navigator.clipboard) {
+                      await navigator.clipboard.writeText(newKeyResult)
+                    }
+                  } catch (e) {
+                    console.warn('Clipboard write failed:', e)
+                  }
                   setNewKeyResult(null)
                 }}
               >
@@ -112,18 +185,11 @@ export default function KeysPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Actions */}
-      <div className={styles.actions}>
-        <button className="btn btn-primary" onClick={() => setShowCreate(true)}>
-          + Create API Key
-        </button>
-      </div>
-
-      {/* Create Modal */}
-      {showCreate && (
+      {mounted && showCreate && createPortal(
         <div className={styles.modal}>
           <div className={styles.modalContent}>
             <h2 style={{ marginBottom: 'var(--space-6)' }}>New API Key</h2>
@@ -188,55 +254,59 @@ export default function KeysPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Keys Table */}
-      <div className={styles.tableCard}>
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Key</th>
-              <th>Scope</th>
-              <th>Created</th>
-              <th>Expires</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {keys.map((key) => (
-              <tr key={key.id}>
-                <td className={styles.keyName}>{key.name}</td>
-                <td><code className={styles.keyPrefix}>{key.prefix}</code></td>
-                <td>{key.scope}</td>
-                <td className={styles.cellMuted}>
-                  {key.createdAt ? parseDateSafe(key.createdAt).toLocaleString() : '—'}
-                </td>
-                <td className={styles.cellMuted}>
-                  {key.expiresAt ? parseDateSafe(key.expiresAt).toLocaleString() : 'Never'}
-                </td>
-                <td>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => handleRevoke(key.id)}
-                    style={{ color: 'var(--status-error)' }}
-                  >
-                    Revoke
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {keys.length === 0 && (
-              <tr>
-                <td colSpan={6} className={styles.emptyState}>
-                  No API keys. Create one to connect your AI agent.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      {mounted && revokeTarget && createPortal(
+        <div className={styles.modal}>
+          <div className={styles.modalContent} style={{ maxWidth: '400px', textAlign: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 'var(--space-4)', color: 'var(--status-error)' }}>
+              <AlertTriangle size={40} />
+            </div>
+            <h2 style={{ marginBottom: 'var(--space-2)' }}>Revoke API Key</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: 'var(--space-6)' }}>
+              Are you sure you want to revoke this key? This action is permanent and cannot be undone.
+            </p>
+            <div className={styles.modalActions} style={{ justifyContent: 'center' }}>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setRevokeTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                style={{ backgroundColor: 'var(--status-error)', borderColor: 'var(--status-error)' }}
+                onClick={() => performRevoke(revokeTarget)}
+              >
+                Revoke Key
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {mounted && errorMessage && createPortal(
+        <div className={styles.modal}>
+          <div className={styles.modalContent} style={{ maxWidth: '400px', textAlign: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 'var(--space-4)', color: 'var(--status-error)' }}>
+              <XCircle size={40} />
+            </div>
+            <h2 style={{ marginBottom: 'var(--space-2)' }}>Error</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginBottom: 'var(--space-6)' }}>
+              {errorMessage}
+            </p>
+            <div className={styles.modalActions} style={{ justifyContent: 'center' }}>
+              <button className="btn btn-primary" onClick={() => setErrorMessage(null)}>
+                OK
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </DashboardLayout>
   )
 }
