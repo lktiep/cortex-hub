@@ -304,6 +304,7 @@ export type Project = {
   org_slug?: string
   created_at: string
   updated_at: string
+  enabled?: number
   stats?: { apiKeys: number; queryLogs: number; sessions: number }
 }
 
@@ -360,6 +361,7 @@ export async function updateProject(id: string, data: {
   gitProvider?: string
   gitUsername?: string
   gitToken?: string
+  enabled?: number
 }) {
   return apiFetch<{ success: boolean }>(`/api/projects/${id}`, { method: 'PUT', body: data })
 }

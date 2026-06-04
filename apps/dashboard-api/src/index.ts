@@ -51,6 +51,67 @@ app.use('*', cors({
 }))
 app.use('*', honoLogger())
 
+// ── Project Enabled Guard Middleware ──
+app.use('/api/*', async (c, next) => {
+  // Bypasses: GET requests, PUT requests (used to toggle/enable project)
+  if (c.req.method === 'GET' || c.req.method === 'PUT') {
+    return next()
+  }
+
+  // Also bypass setup, keys, settings, and webhook management
+  const path = c.req.path
+  if (
+    path.startsWith('/api/setup') ||
+    path.startsWith('/api/keys') ||
+    path.startsWith('/api/settings') ||
+    path.startsWith('/api/system') ||
+    path.startsWith('/api/accounts') ||
+    path.startsWith('/api/webhooks')
+  ) {
+    return next()
+  }
+
+  let projectId: string | null = null
+
+  // 1. Try to read from query params
+  projectId = c.req.query('projectId') || c.req.query('project_id') || null
+
+  // 2. Try to read from JSON body by cloning the request
+  if (!projectId && c.req.header('Content-Type')?.includes('application/json')) {
+    try {
+      const cloned = c.req.raw.clone()
+      const body = (await cloned.json()) as Record<string, any>
+      projectId = body?.projectId || body?.project_id || null
+
+      const repo = body?.repo || null
+      if (!projectId && repo && typeof repo === 'string') {
+        // Resolve project slug/name from repo URL
+        projectId = repo.replace(/\.git$/, '').replace(/^https?:\/\/.*\//, '').split(/[/\\]/).pop() || repo
+      }
+    } catch (e) {
+      // ignore JSON parse/read errors
+    }
+  }
+
+  if (projectId) {
+    // Look up project in database by id or slug
+    const project = db.prepare(`
+      SELECT id, enabled FROM projects 
+      WHERE id = ? OR slug = ? COLLATE NOCASE
+    `).get(projectId, projectId) as { id: string; enabled: number } | undefined
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project not registered in Cortex Hub. Please register it in the dashboard first.' }, 403)
+    }
+
+    if (project.enabled === 0) {
+      return c.json({ success: false, error: 'Cortex Hub is disabled for this project.' }, 403)
+    }
+  }
+
+  await next()
+})
+
 app.get('/health', async (c) => {
   const startTime = Date.now()
 

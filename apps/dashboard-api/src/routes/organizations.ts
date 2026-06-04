@@ -257,18 +257,20 @@ projectsRouter.get('/:id', (c) => {
   }
 })
 
+
 // ── Update Project ──
 projectsRouter.put('/:id', async (c) => {
   const { id } = c.req.param()
   try {
     const body = await c.req.json()
-    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken } = body as {
+    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken, enabled } = body as {
       name?: string
       description?: string
       gitRepoUrl?: string
       gitProvider?: string
       gitUsername?: string
       gitToken?: string
+      enabled?: boolean | number
     }
 
     const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(id)
@@ -287,6 +289,7 @@ projectsRouter.put('/:id', async (c) => {
         git_provider = COALESCE(?, git_provider),
         git_username = COALESCE(?, git_username),
         git_token = COALESCE(?, git_token),
+        enabled = COALESCE(?, enabled),
         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
        WHERE id = ?`
     ).run(
@@ -297,6 +300,7 @@ projectsRouter.put('/:id', async (c) => {
       gitProvider ?? null,
       gitUsername ?? null,
       gitToken ?? null,
+      enabled !== undefined ? (enabled ? 1 : 0) : null,
       id
     )
 
@@ -305,6 +309,7 @@ projectsRouter.put('/:id', async (c) => {
     return c.json({ error: String(error) }, 500)
   }
 })
+
 
 // ── Delete Project ──
 projectsRouter.delete('/:id', (c) => {

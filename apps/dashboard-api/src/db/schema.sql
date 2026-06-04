@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS projects (
     git_token TEXT,
     indexed_at TEXT,
     indexed_symbols INTEGER DEFAULT 0,
+    enabled BOOLEAN DEFAULT 1,
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     UNIQUE(org_id, slug)

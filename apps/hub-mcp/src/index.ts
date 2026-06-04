@@ -124,11 +124,36 @@ app.get('/', (c) => {
 })
 
 // Helper: create MCP server with tools registered
-function createMcpServer(env: Env) {
+function createMcpServer(env: Env, permissions?: string[]) {
   const server = new McpServer({
     name: env.MCP_SERVER_NAME ?? 'cortex-hub',
     version: env.MCP_SERVER_VERSION ?? '0.1.0',
   })
+
+  // Normalize permissions list if present (dots to underscores)
+  const allowedTools = permissions
+    ? new Set(permissions.map((p) => p.replace(/\./g, '_')))
+    : null
+
+  // Wrap server.tool to filter out unauthorized tools
+  const originalTool = server.tool.bind(server)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const serverAny = server as any
+  serverAny.tool = (name: string, description: string, schema: any, handler: any) => {
+    if (allowedTools && !allowedTools.has(name)) {
+      return {
+        name,
+        description,
+        inputSchema: schema,
+        handler,
+        enabled: false,
+        enable: () => {},
+        disable: () => {},
+      }
+    }
+    return originalTool(name, description, schema, handler)
+  }
+
   registerHealthTools(server, env)
   registerMemoryTools(server, env)
   registerKnowledgeTools(server, env)
@@ -154,6 +179,7 @@ app.all('/mcp', async (c) => {
   // Inter-service calls (dashboard-api → hub-mcp) use in-memory
   // setInternalFetch() and never hit this HTTP endpoint.
   const envWithOwner = { ...c.env } as Env & { API_KEY_OWNER?: string }
+  let permissions: string[] | undefined = undefined
 
   try {
     const authResult = await validateApiKey(c.req.raw, c.env)
@@ -170,6 +196,9 @@ app.all('/mcp', async (c) => {
     if (authResult.agentId) {
       envWithOwner.API_KEY_OWNER = authResult.agentId
     }
+    if (authResult.permissions) {
+      permissions = authResult.permissions
+    }
   } catch (err) {
     return c.json({
       jsonrpc: '2.0',
@@ -181,7 +210,7 @@ app.all('/mcp', async (c) => {
     }, 503)
   }
 
-  const mcpServer = createMcpServer(envWithOwner)
+  const mcpServer = createMcpServer(envWithOwner, permissions)
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless mode
     enableJsonResponse: true,

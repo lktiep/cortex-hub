@@ -220,9 +220,7 @@ statsRouter.get('/overview-v2', async (c) => {
     //   code_search: grep would scan ~20 files × ~500 tokens = 10,000 tokens baseline
     //   code_context: manual trace would read ~10 files × ~800 tokens = 8,000 tokens
     //   code_impact: manual impact analysis ~15 files × ~600 tokens = 9,000 tokens
-    //   knowledge_search: agent would re-debug from scratch ~5,000 tokens wasted
     //   memory_search: agent would re-discover context ~3,000 tokens
-    //   code_read: targeted read vs full file scan, ~3x savings
     //   Other tools: conservative 2x savings
     const GREP_BASELINE: Record<string, number> = {
       code_search: 10000,
@@ -230,7 +228,6 @@ statsRouter.get('/overview-v2', async (c) => {
       code_impact: 9000,
       knowledge_search: 5000,
       memory_search: 3000,
-      code_read: 0, // calculated as 3x output
       detect_changes: 6000,
       cypher: 7000,
     }
@@ -563,10 +560,9 @@ statsRouter.get('/tool-analytics', (c) => {
       avgLatencyMs: t.avg_latency_ms,
       avgInputSize: t.avg_input_size,
       avgOutputSize: t.avg_output_size,
-      // Token savings: (grep baseline cost × calls) - (cortex response tokens)
       estimatedTokensSaved: (() => {
         const toolKey = t.tool.replace('cortex_', '')
-        const baseline: Record<string, number> = { code_search: 10000, code_context: 8000, code_impact: 9000, knowledge_search: 5000, memory_search: 3000, code_read: 0, detect_changes: 6000, cypher: 7000 }
+        const baseline: Record<string, number> = { code_search: 10000, code_context: 8000, code_impact: 9000, knowledge_search: 5000, memory_search: 3000, detect_changes: 6000, cypher: 7000 }
         const cortexTokens = Math.round(t.total_output_bytes / 4)
         const b = baseline[toolKey]
         if (b !== undefined) return Math.max(0, (b > 0 ? b * t.total_calls : cortexTokens * 3) - cortexTokens)
@@ -650,9 +646,8 @@ statsRouter.get('/session-compliance/:sessionId', (c) => {
 
     const usedTools = new Set(toolCalls.map(t => t.tool))
 
-    // Define recommended tool categories
     const recommendedTools = {
-      discovery: ['cortex_code_search', 'cortex_code_context', 'cortex_cypher', 'cortex_code_read'],
+      discovery: ['cortex_code_search', 'cortex_code_context', 'cortex_cypher'],
       safety: ['cortex_code_impact', 'cortex_detect_changes'],
       learning: ['cortex_knowledge_search', 'cortex_memory_search'],
       contribution: ['cortex_knowledge_store', 'cortex_memory_store'],
@@ -743,9 +738,7 @@ statsRouter.get('/hints/:agentId', (c) => {
       if (currentTool === 'cortex_code_search' && !used.has('cortex_code_context')) {
         hints.push('🔍 If code_search returns empty (repo has 0 flows), try cortex_code_context or cortex_cypher for symbol-level queries.')
       }
-      if (currentTool === 'cortex_code_search' && !used.has('cortex_code_read')) {
-        hints.push('📄 Use cortex_code_read to view full source files found by code_search. Requires projectId + file path.')
-      }
+
       if (currentTool === 'cortex_code_context' && !used.has('cortex_list_repos')) {
         hints.push('📦 If you get "symbol not found", use cortex_list_repos to find the correct projectId for your repository.')
       }
@@ -780,7 +773,7 @@ statsRouter.get('/hints/:agentId', (c) => {
     }
 
     // General hints based on low tool coverage
-    const discoveryTools = ['cortex_code_search', 'cortex_code_context', 'cortex_cypher', 'cortex_code_read']
+    const discoveryTools = ['cortex_code_search', 'cortex_code_context', 'cortex_cypher']
     const usedDiscovery = discoveryTools.filter(t => used.has(t)).length
     if (usedDiscovery === 0 && used.size > 2) {
       hints.push('🔍 You haven\'t used any code discovery tools yet. Try cortex_code_search before grep for better results.')

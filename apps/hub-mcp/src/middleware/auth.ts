@@ -8,7 +8,7 @@ import type { Env } from '../types.js'
 export async function validateApiKey(
   request: Request,
   env: Env
-): Promise<{ valid: boolean; error?: string; agentId?: string; scope?: string }> {
+): Promise<{ valid: boolean; error?: string; agentId?: string; scope?: string; permissions?: string[] }> {
   // Allow health checks without auth
   const url = new URL(request.url)
   if (url.pathname === '/health') {
@@ -44,10 +44,10 @@ export async function validateApiKey(
       return { valid: false, error: `Authentication service returned ${res.status}` }
     }
 
-    const data = await res.json() as { valid: boolean; agentId?: string; scope?: string; error?: string }
+    const data = await res.json() as { valid: boolean; agentId?: string; scope?: string; permissions?: string[]; error?: string }
 
     if (data.valid) {
-      return { valid: true, agentId: data.agentId, scope: data.scope }
+      return { valid: true, agentId: data.agentId, scope: data.scope, permissions: data.permissions }
     } else {
       return { valid: false, error: data.error || 'Authentication failed' }
     }

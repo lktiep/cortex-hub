@@ -112,7 +112,6 @@ Session 3 (New hire, day 1):
 | **Direct graph queries** | `cortex_cypher` | Cypher against the AST knowledge graph |
 | **Multi-repo registry** | `cortex_list_repos` | All indexed repos discoverable by name or slug |
 | **Auto-reindex** | `cortex_code_reindex` | Trigger after pushes |
-| **Read source** | `cortex_code_read` | Fetch raw file content from any indexed repo |
 
 **Smart cross-project search** (added Apr 2026): call `cortex_code_search(query: "...")` without specifying `repo` and Cortex fans out across every indexed repo, runs both flow + symbol search, and returns a ranked list with refine hints. No more `list_repos → guess → retry` loops.
 
@@ -300,7 +299,7 @@ Internet
 
 ## MCP Tools
 
-Cortex exposes **25 tools** via a single MCP endpoint:
+Cortex exposes **24 tools** via a single MCP endpoint:
 
 | # | Tool | Purpose |
 |---|------|---------|
@@ -310,19 +309,18 @@ Cortex exposes **25 tools** via a single MCP endpoint:
 | 4 | `cortex_code_search` | Multi-project AST/symbol search with smart fan-out |
 | 5 | `cortex_code_context` | 360° symbol view |
 | 6 | `cortex_code_impact` | Blast radius analysis |
-| 7 | `cortex_code_read` | Read raw source from any indexed repo |
-| 8 | `cortex_code_reindex` | Trigger re-indexing |
-| 9 | `cortex_list_repos` | List indexed repos with names + slugs |
-| 10 | `cortex_cypher` | Direct graph queries |
-| 11 | `cortex_detect_changes` | Pre-commit risk analysis |
-| 12 | `cortex_memory_search` | Recall agent memories |
-| 13 | `cortex_memory_store` | Store findings |
-| 14 | `cortex_knowledge_search` | Search knowledge base (with hall_type + asOf filters) |
-| 15 | `cortex_knowledge_store` | Store knowledge with hall type + validity |
-| 16 | `cortex_quality_report` | Report build/test/lint results |
-| 17 | `cortex_plan_quality` | 8-criterion plan assessment |
-| 18 | `cortex_tool_stats` | Token savings + tool usage analytics |
-| 19 | `cortex_health` | Backend service health check |
+| 7 | `cortex_code_reindex` | Trigger re-indexing |
+| 8 | `cortex_list_repos` | List indexed repos with names + slugs |
+| 9 | `cortex_cypher` | Direct graph queries |
+| 10 | `cortex_detect_changes` | Pre-commit risk analysis |
+| 11 | `cortex_memory_search` | Recall agent memories |
+| 12 | `cortex_memory_store` | Store findings |
+| 13 | `cortex_knowledge_search` | Search knowledge base (with hall_type + asOf filters) |
+| 14 | `cortex_knowledge_store` | Store knowledge with hall type + validity |
+| 15 | `cortex_quality_report` | Report build/test/lint results |
+| 16 | `cortex_plan_quality` | 8-criterion plan assessment |
+| 17 | `cortex_tool_stats` | Token savings + tool usage analytics |
+| 18 | `cortex_health` | Backend service health check |
 
 **Cross-project search just works** — no repo lookup needed:
 ```typescript

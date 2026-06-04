@@ -35,6 +35,10 @@ try {
   db.exec('ALTER TABLE projects ADD COLUMN git_token TEXT')
 } catch (e) { /* ignore if exists */ }
 
+try {
+  db.exec('ALTER TABLE projects ADD COLUMN enabled BOOLEAN DEFAULT 1')
+} catch (e) { /* ignore if exists */ }
+
 // Conductor Phase 1v2: session identity columns
 const sessionIdentityCols = [
   'ALTER TABLE session_handoffs ADD COLUMN hostname TEXT',

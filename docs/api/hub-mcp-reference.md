@@ -71,22 +71,6 @@ Query the codebase for architecture concepts, execution flows, and file matches 
 
 ---
 
-### `cortex_code_read`
-
-Read raw source code from an indexed repository. Returns full file content or a line range. Use after `cortex_code_search` to view complete files.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `file` | string | yes | Relative file path within the repo (e.g. `src/utils/auth.ts`) |
-| `repo` | string | no | Repository name or git URL |
-| `projectId` | string | no | Project ID |
-| `startLine` | number | no | Start line (1-indexed, inclusive) |
-| `endLine` | number | no | End line (1-indexed, inclusive) |
-
-**Returns:** Syntax-highlighted file content with line count and file size.
-
----
-
 ### `cortex_code_context`
 
 Get a 360-degree view of a code symbol: methods, callers, callees, and related execution flows.

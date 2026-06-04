@@ -769,6 +769,32 @@ function ProjectContent() {
                 {parseDateSafe(project.updated_at).toLocaleString()}
               </span>
             </div>
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>Cortex Hub</span>
+              <span className={styles.detailValue} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className={project.enabled !== 0 ? styles.statusEnabled : styles.statusDisabled}>
+                  {project.enabled !== 0 ? 'Active' : 'Inactive'}
+                </span>
+                <button
+                  className={`${styles.toggleBtn} ${project.enabled !== 0 ? styles.toggleBtnActive : ''}`}
+                  disabled={saving}
+                  onClick={async () => {
+                    setSaving(true)
+                    try {
+                      await updateProject(project.id, { enabled: project.enabled === 0 ? 1 : 0 })
+                      mutate()
+                    } catch {
+                      alert('Failed to toggle project status')
+                    } finally {
+                      setSaving(false)
+                    }
+                  }}
+                  title={project.enabled !== 0 ? 'Deactivate Cortex Hub for this project' : 'Activate Cortex Hub for this project'}
+                >
+                  {project.enabled !== 0 ? 'Deactivate' : 'Activate'}
+                </button>
+              </span>
+            </div>
           </div>
           {project.description && (
             <div className={styles.description}>

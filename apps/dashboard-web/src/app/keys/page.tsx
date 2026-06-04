@@ -10,10 +10,31 @@ import { listApiKeys, createApiKey, revokeApiKey } from '@/lib/api'
 import { KeyRound, ClipboardList, ICON_INLINE } from '@/lib/icons'
 
 const allPermissions = [
-  { id: 'cortex.health', label: 'Health Check', group: 'System' },
-  { id: 'cortex.memory.store', label: 'Store Memory', group: 'Memory' },
-  { id: 'cortex.memory.search', label: 'Search Memory', group: 'Memory' },
-  { id: 'cortex.code.search', label: 'Code Search', group: 'Code' },
+  { id: 'cortex.session.start', label: 'Start Session (session_start)', group: 'Session' },
+  { id: 'cortex.session.end', label: 'End Session (session_end)', group: 'Session' },
+  { id: 'cortex.changes', label: 'Check Remote Changes (changes)', group: 'Changes' },
+  { id: 'cortex.code.search', label: 'Code Search (code_search)', group: 'Code' },
+  { id: 'cortex.code.context', label: 'Symbol Context (code_context)', group: 'Code' },
+  { id: 'cortex.code.impact', label: 'Blast Radius (code_impact)', group: 'Code' },
+  { id: 'cortex.code.reindex', label: 'Trigger Reindex (code_reindex)', group: 'Code' },
+  { id: 'cortex.list.repos', label: 'List Repositories (list_repos)', group: 'Code' },
+  { id: 'cortex.cypher', label: 'Cypher Graph Queries (cypher)', group: 'Code' },
+  { id: 'cortex.detect.changes', label: 'Pre-commit Change Risk (detect_changes)', group: 'Code' },
+  { id: 'cortex.memory.store', label: 'Store Memory (memory_store)', group: 'Memory' },
+  { id: 'cortex.memory.search', label: 'Search Memory (memory_search)', group: 'Memory' },
+  { id: 'cortex.knowledge.store', label: 'Store Team Knowledge (knowledge_store)', group: 'Knowledge' },
+  { id: 'cortex.knowledge.search', label: 'Search Team Knowledge (knowledge_search)', group: 'Knowledge' },
+  { id: 'cortex.quality.report', label: 'Report Quality Gates (quality_report)', group: 'Quality' },
+  { id: 'cortex.plan.quality', label: 'Assess Plan Quality (plan_quality)', group: 'Quality' },
+  { id: 'cortex.task.create', label: 'Create Task (task_create)', group: 'Tasks' },
+  { id: 'cortex.task.pickup', label: 'Pickup Task (task_pickup)', group: 'Tasks' },
+  { id: 'cortex.task.accept', label: 'Accept Task (task_accept)', group: 'Tasks' },
+  { id: 'cortex.task.update', label: 'Update Task (task_update)', group: 'Tasks' },
+  { id: 'cortex.task.list', label: 'List Tasks (task_list)', group: 'Tasks' },
+  { id: 'cortex.task.status', label: 'Task Status (task_status)', group: 'Tasks' },
+  { id: 'cortex.task.submit.strategy', label: 'Submit Strategy (task_submit_strategy)', group: 'Tasks' },
+  { id: 'cortex.health', label: 'Health Diagnostics (health)', group: 'System' },
+  { id: 'cortex.tool.stats', label: 'Tool Usage Stats (tool_stats)', group: 'System' },
 ]
 
 export default function KeysPage() {
