@@ -632,12 +632,23 @@ llmRouter.post('/providers/:id/test', async (c) => {
   }
 
   if (!model) {
-    const fallback: Record<string, string> = {
-      openai: 'gpt-5.4-mini',
-      gemini: 'gemini-2.5-flash',
-      anthropic: 'claude-sonnet-4-20250514',
+    try {
+      const row = db
+        .prepare("SELECT models FROM provider_accounts WHERE type = ? AND status = 'enabled' LIMIT 1")
+        .get(providerId) as { models: string } | undefined
+      if (row?.models) {
+        const modelsList = JSON.parse(row.models) as string[]
+        if (modelsList.length > 0) {
+          model = modelsList[0]!
+        }
+      }
+    } catch {
+      // Ignore DB error
     }
-    model = fallback[providerId] ?? 'gpt-5.4-mini'
+  }
+
+  if (!model) {
+    return c.json({ success: false, error: `No active models configured for provider "${providerId}". Please configure models under Providers Settings first.` }, 400)
   }
   const startTime = Date.now()
 

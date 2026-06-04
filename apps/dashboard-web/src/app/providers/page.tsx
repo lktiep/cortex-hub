@@ -214,66 +214,88 @@ function ActiveConfigPanel({ accounts }: { accounts: ProviderAccount[] }) {
   const [saving, setSaving] = useState<string | null>(null)
 
   const purposes = [
-    { key: 'chat', label: 'Chat Model', icon: MessageSquare, desc: 'Used for conversations, fact extraction, memory dedup' },
-    { key: 'embedding', label: 'Embedding Model', icon: Brain, desc: 'Used for vector search, semantic similarity' },
+    { key: 'chat', label: 'Chat Model (with Fallbacks)', icon: MessageSquare, desc: 'Primary & fallback model chain for conversations, extraction, and memory' },
+    { key: 'embedding', label: 'Embedding Model (with Fallbacks)', icon: Brain, desc: 'Primary & fallback model chain for vector search and similarity' },
   ]
 
-  // Get current model for a purpose
-  const getActive = (purpose: string): ChainSlot | null => {
+  const getChain = (purpose: string): ChainSlot[] => {
     const entry = data?.config?.find((c) => c.purpose === purpose)
-    return entry?.chain?.[0] ?? null
+    return entry?.chain ?? []
   }
 
-  // Build options: all enabled accounts + their cached models
   const enabledAccounts = accounts.filter((a) => a.status === 'enabled')
 
-  const handleChange = async (purpose: string, accountId: string, model: string) => {
+  const saveChain = async (purpose: string, newChain: ChainSlot[]) => {
     setSaving(purpose)
     try {
-      // Special handling: switching embedding to/from local provider
-      if (purpose === 'embedding' && accountId === 'local') {
-        await fetch(`${config.api.base}/api/settings/embedding-provider`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: 'local', model }),
-          signal: AbortSignal.timeout(5000),
-        })
-        // Also update routing table so dropdown stays in sync after SWR refetch
-        await fetch(`${config.api.base}/api/accounts/routing/chains`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ purpose, chain: [{ accountId: 'local', model }] }),
-          signal: AbortSignal.timeout(5000),
-        }).catch(() => { /* non-critical */ })
-      } else {
-        // Cloud provider — ensure embedding provider is set back to gemini/openai
-        if (purpose === 'embedding') {
+      if (purpose === 'embedding') {
+        const first = newChain[0]
+        if (first) {
+          const provider = first.accountId === 'local' ? 'local' : 'gemini'
           await fetch(`${config.api.base}/api/settings/embedding-provider`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider: 'gemini' }),
+            body: JSON.stringify({ provider, model: first.model }),
             signal: AbortSignal.timeout(5000),
-          }).catch(() => { /* non-critical */ })
+          }).catch(() => {})
         }
-        await fetch(`${config.api.base}/api/accounts/routing/chains`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            purpose,
-            chain: [{ accountId, model }],
-          }),
-          signal: AbortSignal.timeout(5000),
-        })
       }
+
+      await fetch(`${config.api.base}/api/accounts/routing/chains`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          purpose,
+          chain: newChain.map(slot => ({ accountId: slot.accountId, model: slot.model })),
+        }),
+        signal: AbortSignal.timeout(5000),
+      })
       mutateRouting()
     } catch { /* ignore */ }
     setSaving(null)
   }
 
+  const handleUpdateSlot = async (purpose: string, index: number, accountId: string, model: string) => {
+    const chain = getChain(purpose)
+    const newChain = [...chain]
+    newChain[index] = { accountId, model }
+    await saveChain(purpose, newChain)
+  }
+
+  const handleMoveSlot = async (purpose: string, index: number, direction: number) => {
+    const chain = getChain(purpose)
+    const newChain = [...chain]
+    const targetIndex = index + direction
+    if (targetIndex < 0 || targetIndex >= newChain.length) return
+    const temp = newChain[index]!
+    newChain[index] = newChain[targetIndex]!
+    newChain[targetIndex] = temp
+    await saveChain(purpose, newChain)
+  }
+
+  const handleDeleteSlot = async (purpose: string, index: number) => {
+    const chain = getChain(purpose)
+    if (chain.length <= 1) return
+    const newChain = chain.filter((_, i) => i !== index)
+    await saveChain(purpose, newChain)
+  }
+
+  const handleAddSlot = async (purpose: string) => {
+    const chain = getChain(purpose)
+    let defaultSlot: ChainSlot = { accountId: 'local', model: 'Xenova/all-MiniLM-L6-v2' }
+    if (enabledAccounts.length > 0) {
+      const firstAcc = enabledAccounts[0]!
+      const models = Array.isArray(firstAcc.models) ? firstAcc.models : []
+      defaultSlot = { accountId: firstAcc.id, model: models[0] || '' }
+    }
+    const newChain = [...chain, defaultSlot]
+    await saveChain(purpose, newChain)
+  }
+
   return (
     <div className={styles.activeConfigGrid}>
       {purposes.map(({ key, label, icon: PurposeIcon, desc }) => {
-        const active = getActive(key)
+        const chain = getChain(key)
         return (
           <div key={key} className={styles.activeCard}>
             <div className={styles.activeCardHeader}>
@@ -281,56 +303,88 @@ function ActiveConfigPanel({ accounts }: { accounts: ProviderAccount[] }) {
               {saving === key && <span style={{ fontSize: '0.7rem', color: 'var(--text-tertiary)' }}>saving...</span>}
             </div>
             <p className={styles.activeCardDesc}>{desc}</p>
-            {active ? (
-              <div className={styles.activeModel}>
-                <span className={styles.activeModelIcon}><Ico icon={TYPE_ICONS[enabledAccounts.find(a => a.id === active.accountId)?.type ?? ''] ?? Package} /></span>
-                <div>
-                  <div className={styles.activeModelName}>{active.model}</div>
-                  <div className={styles.activeModelProvider}>{active.accountName ?? 'Unknown'}</div>
-                </div>
+            
+            {chain.length > 0 ? (
+              <div className={styles.chainList}>
+                {chain.map((slot, index) => {
+                  return (
+                    <div key={index} className={styles.chainSlotRow}>
+                      <span className={styles.slotNumber}>#{index + 1}</span>
+                      <div className={styles.slotSelectWrapper}>
+                        <select
+                          className={styles.activeSelect}
+                          value={`${slot.accountId}|${slot.model}`}
+                          onChange={(e) => {
+                            const [accId, mod] = e.target.value.split('|')
+                            if (accId && mod) handleUpdateSlot(key, index, accId, mod)
+                          }}
+                        >
+                          <option value="">— Select model —</option>
+                          {key === 'embedding' && (
+                            <>
+                              <option value="local|Xenova/all-MiniLM-L6-v2">
+                                Local (in-process) &rarr; all-MiniLM-L6-v2 (384d, free, ~1ms)
+                              </option>
+                              <option value="local|Xenova/bge-small-en-v1.5">
+                                Local (in-process) &rarr; bge-small-en-v1.5 (384d, free, ~1ms)
+                              </option>
+                            </>
+                          )}
+                          {enabledAccounts.map((acc) => {
+                            const models: string[] = Array.isArray(acc.models) ? acc.models : []
+                            const relevantModels = key === 'embedding'
+                              ? models.filter((m) => m.includes('embed'))
+                              : models.filter((m) => !m.includes('embed'))
+                            const items = relevantModels.length > 0 ? relevantModels : models
+                            return items.map((m) => (
+                              <option key={`${acc.id}|${m}`} value={`${acc.id}|${m}`}>
+                                {acc.name} &rarr; {m}
+                              </option>
+                            ))
+                          })}
+                        </select>
+                      </div>
+                      <div className={styles.slotActions}>
+                        <button
+                          className={styles.slotBtn}
+                          onClick={() => handleMoveSlot(key, index, -1)}
+                          disabled={index === 0}
+                          title="Move Up"
+                        >
+                          ▲
+                        </button>
+                        <button
+                          className={styles.slotBtn}
+                          onClick={() => handleMoveSlot(key, index, 1)}
+                          disabled={index === chain.length - 1}
+                          title="Move Down"
+                        >
+                          ▼
+                        </button>
+                        <button
+                          className={`${styles.slotBtn} ${styles.slotBtnDelete}`}
+                          onClick={() => handleDeleteSlot(key, index)}
+                          disabled={chain.length === 1}
+                          title="Remove fallback"
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             ) : (
               <div className={styles.activeEmpty}>No model assigned</div>
             )}
-            <select
-              className={styles.activeSelect}
-              value={active ? `${active.accountId}|${active.model}` : ''}
-              onChange={(e) => {
-                const [accId, mod] = e.target.value.split('|')
-                if (accId && mod) handleChange(key, accId, mod)
-              }}
+            
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginTop: 'var(--space-4)', width: '100%' }}
+              onClick={() => handleAddSlot(key)}
             >
-              <option value="">— Select model —</option>
-              {key === 'embedding' && (
-                <>
-                  <option value="local|Xenova/all-MiniLM-L6-v2">
-                    Local (in-process) &rarr; all-MiniLM-L6-v2 (384d, free, ~1ms)
-                  </option>
-                  <option value="local|Xenova/bge-small-en-v1.5">
-                    Local (in-process) &rarr; bge-small-en-v1.5 (384d, free, ~1ms)
-                  </option>
-                </>
-              )}
-              {enabledAccounts.map((acc) => {
-                const models: string[] = Array.isArray(acc.models) ? acc.models : []
-                const relevantModels = key === 'embedding'
-                  ? models.filter((m) => m.includes('embed'))
-                  : models.filter((m) => !m.includes('embed'))
-                if (relevantModels.length === 0 && models.length > 0) {
-                  // Show all models if no match — user can pick whatever
-                  return models.map((m) => (
-                    <option key={`${acc.id}|${m}`} value={`${acc.id}|${m}`}>
-                      {acc.name} &rarr; {m}
-                    </option>
-                  ))
-                }
-                return (relevantModels.length > 0 ? relevantModels : models).map((m) => (
-                  <option key={`${acc.id}|${m}`} value={`${acc.id}|${m}`}>
-                    {acc.name} &rarr; {m}
-                  </option>
-                ))
-              })}
-            </select>
+              + Add Fallback Model
+            </button>
           </div>
         )
       })}

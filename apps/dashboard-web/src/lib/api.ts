@@ -45,7 +45,7 @@ async function apiFetch<T = unknown>(path: string, options: ApiOptions = {}): Pr
 
 // ── Health ──
 export async function checkHealth() {
-  return apiFetch<{ status: string; services?: Record<string, unknown>; uptime?: number; commit?: string; version?: string; buildDate?: string; image?: string }>('/health')
+  return apiFetch<{ status: string; services?: Record<string, unknown>; uptime?: number; commit?: string; version?: string; buildDate?: string; image?: string; ollamaError?: string; chatModelError?: string }>('/health')
 }
 
 // ── API Keys ──

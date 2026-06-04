@@ -134,10 +134,11 @@ function ServiceMini({ name, status }: { name: string; status: string }) {
     )
   }
   const cls = status === 'ok' ? 'healthy' : status === 'error' ? 'error' : 'warning'
+  const displayName = name === 'chatModel' ? 'chat model' : name
   return (
     <div className={styles.serviceMini}>
       <StatusDot variant={cls} />
-      <span className={styles.serviceMiniName}>{name}</span>
+      <span className={styles.serviceMiniName}>{displayName}</span>
     </div>
   )
 }
@@ -195,7 +196,7 @@ export default function DashboardPage() {
         <div className={styles.servicesStripLeft}>
           <h3 className={styles.stripTitle}>Services</h3>
           <div className={styles.servicesInline}>
-            {['qdrant', 'cliproxy', 'gitnexus', 'mem9', 'mcp'].map((svc) => (
+            {['qdrant', 'cliproxy', 'gitnexus', 'mem9', 'mcp', 'ollama', 'chatModel'].map((svc) => (
               <ServiceMini key={svc} name={svc} status={svcMap?.[svc] ?? (isLoading ? 'loading' : healthError ? 'error' : 'unknown')} />
             ))}
           </div>

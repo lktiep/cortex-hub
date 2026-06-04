@@ -139,7 +139,7 @@ services:
       DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:4000}
       # mem9 Configuration
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-gemini-2.5-flash}
+      MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-}
       MEM9_EMBEDDING_MODEL: ${MEM9_EMBEDDING_MODEL:-gemini-embedding-001}
       # Embedding provider: local (default, free, fast) or gemini (API, $$)
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}

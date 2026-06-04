@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { readFileSync } from 'node:fs'
+import { db } from './db/client.js'
 
 // Read version from version.json (copied at build time)
 let appVersion = process.env['APP_VERSION'] || '0.0.0-dev'
@@ -70,8 +71,134 @@ app.get('/health', async (c) => {
     checkService('mcp', `${process.env['MCP_HEALTH_URL'] || 'http://cortex-mcp:8317/health'}`),
   ])
 
-  const services = { qdrant, cliproxy, gitnexus, mem9, mcp }
-  const allOk = Object.values(services).every(s => s === 'ok')
+  // Query enabled Ollama accounts
+  let ollamaStatus: 'ok' | 'error' | 'not_configured' = 'not_configured'
+  let ollamaError: string | undefined = undefined
+
+  try {
+    const ollamaAccounts = db
+      .prepare("SELECT name, api_base, api_key FROM provider_accounts WHERE type = 'ollama' AND status = 'enabled'")
+      .all() as Array<{ name: string; api_base: string; api_key: string | null }>
+
+    if (ollamaAccounts.length > 0) {
+      ollamaStatus = 'ok'
+      for (const acct of ollamaAccounts) {
+        try {
+          const url = `${acct.api_base.replace(/\/$/, '')}/models`
+          const headers: Record<string, string> = {}
+          if (acct.api_key && acct.api_key !== 'noon' && acct.api_key !== 'none') {
+            headers['Authorization'] = `Bearer ${acct.api_key}`
+          }
+          const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) })
+          if (!res.ok) {
+            ollamaStatus = 'error'
+            ollamaError = `Ollama server "${acct.name}" returned ${res.status}: ${res.statusText}`
+            break
+          }
+        } catch (err) {
+          ollamaStatus = 'error'
+          ollamaError = `Ollama server "${acct.name}" is unreachable: ${String(err)}`
+          break
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('Failed to check Ollama health:', { error: err })
+  }
+
+  // Check active Chat Model health
+  let chatModelStatus: 'ok' | 'error' | 'not_configured' = 'not_configured'
+  let chatModelError: string | undefined = undefined
+
+  try {
+    const row = db.prepare("SELECT chain FROM model_routing WHERE purpose = 'chat'").get() as { chain: string } | undefined
+    if (row?.chain) {
+      const chain = JSON.parse(row.chain) as Array<{ accountId: string; model: string }>
+      if (chain.length > 0 && chain[0]) {
+        const slot = chain[0]
+        if (slot.accountId === 'local') {
+          chatModelStatus = 'ok'
+        } else {
+          const acct = db
+            .prepare("SELECT name, api_base, api_key, type FROM provider_accounts WHERE id = ? AND status = 'enabled'")
+            .get(slot.accountId) as { name: string; api_base: string; api_key: string | null; type: string } | undefined
+
+          if (!acct) {
+            chatModelStatus = 'error'
+            chatModelError = `Configured chat account "${slot.accountId}" not found or disabled.`
+          } else {
+            try {
+              if (acct.type === 'gemini') {
+                const base = acct.api_base.replace(/\/$/, '')
+                const apiKey = acct.api_key ?? ''
+                const url = `${base}/models/${slot.model}?key=${apiKey}`
+                const res = await fetch(url, { signal: AbortSignal.timeout(3000) })
+                if (!res.ok) {
+                  chatModelStatus = 'error'
+                  chatModelError = `Gemini API check failed: ${res.status} ${res.statusText}`
+                } else {
+                  chatModelStatus = 'ok'
+                }
+              } else if (acct.type === 'ollama') {
+                const url = `${acct.api_base.replace(/\/$/, '')}/models`
+                const headers: Record<string, string> = {}
+                if (acct.api_key && acct.api_key !== 'noon' && acct.api_key !== 'none') {
+                  headers['Authorization'] = `Bearer ${acct.api_key}`
+                }
+                const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) })
+                if (!res.ok) {
+                  chatModelStatus = 'error'
+                  chatModelError = `Ollama check failed: ${res.status}`
+                } else {
+                  const data = (await res.json()) as { data?: Array<{ id: string }> }
+                  const models = data.data ?? []
+                  const exists = models.some((m) => m.id === slot.model || m.id.split(':')[0] === slot.model.split(':')[0])
+                  if (!exists) {
+                    chatModelStatus = 'error'
+                    chatModelError = `Model "${slot.model}" is not downloaded on Ollama.`
+                  } else {
+                    chatModelStatus = 'ok'
+                  }
+                }
+              } else {
+                const url = `${acct.api_base.replace(/\/$/, '')}/models`
+                const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+                if (acct.api_key) headers['Authorization'] = `Bearer ${acct.api_key}`
+                const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) })
+                if (!res.ok) {
+                  chatModelStatus = 'error'
+                  chatModelError = `API key/endpoint check failed: ${res.status} ${res.statusText}`
+                } else {
+                  chatModelStatus = 'ok'
+                }
+              }
+            } catch (err) {
+              chatModelStatus = 'error'
+              chatModelError = `Connection failed: ${String(err)}`
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('Failed to check chat model health:', { error: err })
+  }
+
+  const services = {
+    qdrant,
+    cliproxy,
+    gitnexus,
+    mem9,
+    mcp,
+    ollama: ollamaStatus,
+    chatModel: chatModelStatus,
+  }
+  const allOk = Object.entries(services).every(([name, status]) => {
+    if (name === 'ollama' || name === 'chatModel') {
+      return status !== 'error'
+    }
+    return status === 'ok'
+  })
 
   return c.json({
     status: allOk ? 'ok' : 'degraded',
@@ -84,6 +211,8 @@ app.get('/health', async (c) => {
     uptime: Math.floor(process.uptime()),
     responseTime: Date.now() - startTime,
     services,
+    ollamaError,
+    chatModelError,
   })
 })
 
