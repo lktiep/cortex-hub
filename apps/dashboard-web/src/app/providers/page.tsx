@@ -282,7 +282,7 @@ function ActiveConfigPanel({ accounts }: { accounts: ProviderAccount[] }) {
 
   const handleAddSlot = async (purpose: string) => {
     const chain = getChain(purpose)
-    let defaultSlot: ChainSlot = { accountId: 'local', model: 'Xenova/all-MiniLM-L6-v2' }
+    let defaultSlot: ChainSlot = { accountId: '', model: '' }
     if (enabledAccounts.length > 0) {
       const firstAcc = enabledAccounts[0]!
       const models = Array.isArray(firstAcc.models) ? firstAcc.models : []
@@ -320,16 +320,6 @@ function ActiveConfigPanel({ accounts }: { accounts: ProviderAccount[] }) {
                           }}
                         >
                           <option value="">— Select model —</option>
-                          {key === 'embedding' && (
-                            <>
-                              <option value="local|Xenova/all-MiniLM-L6-v2">
-                                Local (in-process) &rarr; all-MiniLM-L6-v2 (384d, free, ~1ms)
-                              </option>
-                              <option value="local|Xenova/bge-small-en-v1.5">
-                                Local (in-process) &rarr; bge-small-en-v1.5 (384d, free, ~1ms)
-                              </option>
-                            </>
-                          )}
                           {enabledAccounts.map((acc) => {
                             const models: string[] = Array.isArray(acc.models) ? acc.models : []
                             const relevantModels = key === 'embedding'
