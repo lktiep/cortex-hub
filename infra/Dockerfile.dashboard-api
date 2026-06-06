@@ -118,18 +118,6 @@ COPY --from=builder /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
 # Create data directories
 RUN mkdir -p /app/data /app/data/repos
 
-# Pre-download local embedding model into the image so the API process
-# never has to fetch it at runtime (which fails for unknown reasons in
-# the long-running Hono process — see local-embedder.ts notes).
-RUN node -e "(async () => { \
-  const t = await import('@huggingface/transformers'); \
-  t.env.allowLocalModels = false; \
-  t.env.useFSCache = true; \
-  const pipe = await t.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2'); \
-  const out = await pipe('warmup', { pooling: 'mean', normalize: true }); \
-  console.log('[build] Pre-downloaded local embedding model, dim=' + out.dims[1]); \
-})()" || echo "[build] Local embedding pre-download skipped (network error during build)"
-
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD node -e "fetch('http://localhost:4000/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
