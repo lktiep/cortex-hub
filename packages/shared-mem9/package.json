@@ -21,8 +21,7 @@
   },
   "dependencies": {
     "@cortex/shared-types": "workspace:*",
-    "@cortex/shared-utils": "workspace:*",
-    "@huggingface/transformers": "^4.0.1"
+    "@cortex/shared-utils": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
