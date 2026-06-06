@@ -228,19 +228,6 @@ function ActiveConfigPanel({ accounts }: { accounts: ProviderAccount[] }) {
   const saveChain = async (purpose: string, newChain: ChainSlot[]) => {
     setSaving(purpose)
     try {
-      if (purpose === 'embedding') {
-        const first = newChain[0]
-        if (first) {
-          const provider = first.accountId === 'local' ? 'local' : 'gemini'
-          await fetch(`${config.api.base}/api/settings/embedding-provider`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, model: first.model }),
-            signal: AbortSignal.timeout(5000),
-          }).catch(() => {})
-        }
-      }
-
       await fetch(`${config.api.base}/api/accounts/routing/chains`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
