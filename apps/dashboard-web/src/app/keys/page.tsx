@@ -56,6 +56,7 @@ const allPermissions = [
   { id: 'cortex.detect.changes', label: 'Pre-commit Change Risk (detect_changes)', group: 'Code' },
   { id: 'cortex.memory.store', label: 'Store Memory (memory_store)', group: 'Memory' },
   { id: 'cortex.memory.search', label: 'Search Memory (memory_search)', group: 'Memory' },
+  { id: 'cortex.memory.delete', label: 'Delete Memory (memory_delete)', group: 'Memory' },
   { id: 'cortex.knowledge.store', label: 'Store Team Knowledge (knowledge_store)', group: 'Knowledge' },
   { id: 'cortex.knowledge.search', label: 'Search Team Knowledge (knowledge_search)', group: 'Knowledge' },
   { id: 'cortex.quality.report', label: 'Report Quality Gates (quality_report)', group: 'Quality' },
