@@ -80,6 +80,17 @@ export async function revokeApiKey(id: string) {
   return apiFetch<{ success: boolean }>(`/api/keys/${id}`, { method: 'DELETE' })
 }
 
+export async function updateApiKey(id: string, data: {
+  name: string
+  scope: string
+  permissions: string[]
+}) {
+  return apiFetch<{ success: boolean; id: string; name: string; scope: string; permissions: string[] }>(`/api/keys/${id}`, {
+    method: 'PUT',
+    body: data,
+  })
+}
+
 // ── MCP Health ──
 export async function checkMcpHealth() {
   const res = await fetch(config.mcp.health, { signal: AbortSignal.timeout(5000) })

@@ -73,6 +73,29 @@ keysRouter.delete('/:id', (c) => {
   }
 })
 
+keysRouter.put('/:id', async (c) => {
+  const id = c.req.param('id')
+  try {
+    const body = await c.req.json()
+    const { name, scope, permissions = [] } = body
+    
+    if (!name || !scope) {
+      return c.json({ error: 'Name and scope are required' }, 400)
+    }
+
+    const stmt = db.prepare('UPDATE api_keys SET name = ?, scope = ?, permissions = ? WHERE id = ?')
+    const result = stmt.run(name, scope, JSON.stringify(permissions), id)
+
+    if (result.changes === 0) {
+      return c.json({ error: 'Key not found' }, 404)
+    }
+
+    return c.json({ success: true, id, name, scope, permissions })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
 keysRouter.post('/verify', async (c) => {
   try {
     const body = await c.req.json()

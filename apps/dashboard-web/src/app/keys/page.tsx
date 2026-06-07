@@ -7,7 +7,8 @@ import styles from './page.module.css'
 import { parseDateSafe } from '@/lib/date'
 
 import useSWR from 'swr'
-import { listApiKeys, createApiKey, revokeApiKey } from '@/lib/api'
+import { listApiKeys, createApiKey, revokeApiKey, updateApiKey } from '@/lib/api'
+import type { ApiKey } from '@/lib/api'
 import { KeyRound, ClipboardList, AlertTriangle, XCircle, ICON_INLINE } from '@/lib/icons'
 
 function copyTextFallback(text: string): boolean {
@@ -83,6 +84,14 @@ export default function KeysPage() {
   const [keyPerms, setKeyPerms] = useState<string[]>(allPermissions.map((p) => p.id))
   const [keyExpiry, setKeyExpiry] = useState('never')
 
+  // Edit key form state
+  const [showEdit, setShowEdit] = useState(false)
+  const [editTarget, setEditTarget] = useState<ApiKey | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editScope, setEditScope] = useState('all')
+  const [editPerms, setEditPerms] = useState<string[]>([])
+  const [isUpdating, setIsUpdating] = useState(false)
+
   // Portaling and premium modals state
   const [mounted, setMounted] = useState(false)
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null)
@@ -94,6 +103,37 @@ export default function KeysPage() {
 
   function togglePerm(id: string) {
     setKeyPerms((prev) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id])
+  }
+
+  function handleEditClick(key: ApiKey) {
+    setEditTarget(key)
+    setEditName(key.name)
+    setEditScope(key.scope)
+    setEditPerms(key.permissions ?? [])
+    setShowEdit(true)
+  }
+
+  function toggleEditPerm(id: string) {
+    setEditPerms((prev) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id])
+  }
+
+  async function handleUpdate() {
+    if (!editTarget) return
+    setIsUpdating(true)
+    try {
+      await updateApiKey(editTarget.id, {
+        name: editName,
+        scope: editScope,
+        permissions: editPerms,
+      })
+      setShowEdit(false)
+      setEditTarget(null)
+      mutate() // Refresh list
+    } catch (err) {
+      setErrorMessage(`Failed to update key: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setIsUpdating(false)
+    }
   }
 
   async function handleCreate() {
@@ -166,6 +206,13 @@ export default function KeysPage() {
                   {key.expiresAt ? parseDateSafe(key.expiresAt).toLocaleString() : 'Never'}
                 </td>
                 <td>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => handleEditClick(key)}
+                    style={{ marginRight: 'var(--space-2)' }}
+                  >
+                    Edit
+                  </button>
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() => handleRevokeClick(key.id)}
@@ -283,6 +330,63 @@ export default function KeysPage() {
                 onClick={handleCreate}
               >
                 {isCreating ? 'Generating...' : 'Generate Key'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {mounted && showEdit && createPortal(
+        <div className={styles.modal}>
+          <div className={styles.modalContent}>
+            <h2 style={{ marginBottom: 'var(--space-6)' }}>Edit API Key</h2>
+
+            <label className={styles.fieldLabel}>Name</label>
+            <input
+              className="input"
+              placeholder="e.g. my-agent-prod"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+            />
+
+            <label className={styles.fieldLabel} style={{ marginTop: 'var(--space-5)' }}>Scope</label>
+            <select
+              className="input"
+              value={editScope}
+              onChange={(e) => setEditScope(e.target.value)}
+            >
+              <option value="all">All Projects</option>
+              <option value="org:default">Organization: Default/*</option>
+              <option value="org:personal">Organization: Personal/*</option>
+            </select>
+
+            <label className={styles.fieldLabel} style={{ marginTop: 'var(--space-5)' }}>Permissions</label>
+            <div className={styles.permGrid}>
+              {allPermissions.map((p) => (
+                <label key={p.id} className={styles.permItem}>
+                  <input
+                    type="checkbox"
+                    checked={editPerms.includes(p.id)}
+                    onChange={() => toggleEditPerm(p.id)}
+                    style={{ accentColor: 'var(--accent-primary)' }}
+                  />
+                  <span>{p.label}</span>
+                  <span className={styles.permGroup}>{p.group}</span>
+                </label>
+              ))}
+            </div>
+
+            <div className={styles.modalActions} style={{ marginTop: 'var(--space-6)' }}>
+              <button className="btn btn-ghost" onClick={() => { setShowEdit(false); setEditTarget(null); }}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                disabled={!editName || isUpdating}
+                onClick={handleUpdate}
+              >
+                {isUpdating ? 'Saving...' : 'Save Changes'}
               </button>
             </div>
           </div>
