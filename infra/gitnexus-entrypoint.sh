@@ -94,6 +94,12 @@ if [ -d "$REPOS_DIR" ]; then
             continue
         fi
 
+        # Check if cloning is currently in progress
+        if [ -f "${REPOS_DIR}/${repo_name}.cloning" ]; then
+            echo "  → ${repo_name} — cloning in progress (skipping)"
+            continue
+        fi
+
         echo "  → Analyzing ${repo_name}..."
         # Note: --embeddings omitted for auto-discovery to avoid LadybugDB WAL
         # corruption on large repos (observed with C# repos >10K symbols).
@@ -125,6 +131,12 @@ EVAL_PID=$!
             for repo_dir in "$REPOS_DIR"/*/; do
                 [ -d "$repo_dir/.git" ] || continue
                 repo_name=$(basename "$repo_dir")
+                
+                # Check if cloning is currently in progress
+                if [ -f "${REPOS_DIR}/${repo_name}.cloning" ]; then
+                    echo "GitNexus watchdog: Repo ${repo_name} is currently cloning. Skipping."
+                    continue
+                fi
                 
                 if [ ! -d "$repo_dir/.gitnexus" ]; then
                     echo "GitNexus watchdog: New or re-indexed repo detected: ${repo_name}."

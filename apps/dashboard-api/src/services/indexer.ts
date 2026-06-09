@@ -1,5 +1,5 @@
 import { spawn, ChildProcess } from 'child_process'
-import { existsSync, mkdirSync, rmSync, readdirSync, readFileSync, statSync } from 'fs'
+import { existsSync, mkdirSync, rmSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { join, extname } from 'path'
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
@@ -246,26 +246,36 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
   }
 
   const repoDir = join(REPOS_DIR, projectId)
+  const cloningSentinel = join(REPOS_DIR, `${projectId}.cloning`)
 
   try {
     // ── Step 1: Clone ──
     updateJob(jobId, { status: 'cloning', progress: 5, started_at: new Date().toISOString() })
     logger.info(`[${jobId}] Cloning ${project.git_repo_url} branch=${branch}`)
 
-    // Clean previous clone
-    if (existsSync(repoDir)) {
-      rmSync(repoDir, { recursive: true, force: true })
-    }
-    mkdirSync(repoDir, { recursive: true })
+    try {
+      // Clean previous clone
+      if (existsSync(repoDir)) {
+        rmSync(repoDir, { recursive: true, force: true })
+      }
+      mkdirSync(repoDir, { recursive: true })
 
-    const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
-    const cloneResult = await runCommand('git', [
-      'clone', '--branch', branch, '--depth', '1', '--single-branch', authUrl, '.'
-    ], repoDir, jobId)
+      // Create a sentinel file to signal to the GitNexus watchdog daemon that clone is in progress
+      writeFileSync(cloningSentinel, '')
 
-    if (cloneResult.code !== 0) {
-      updateJob(jobId, { status: 'error', error: `git clone failed (exit ${cloneResult.code})`, progress: 5, completed_at: new Date().toISOString() })
-      return
+      const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
+      const cloneResult = await runCommand('git', [
+        'clone', '--branch', branch, '--depth', '1', '--single-branch', authUrl, '.'
+      ], repoDir, jobId)
+
+      if (cloneResult.code !== 0) {
+        updateJob(jobId, { status: 'error', error: `git clone failed (exit ${cloneResult.code})`, progress: 5, completed_at: new Date().toISOString() })
+        return
+      }
+    } finally {
+      if (existsSync(cloningSentinel)) {
+        rmSync(cloningSentinel, { force: true })
+      }
     }
 
     updateJob(jobId, { progress: 25 })
