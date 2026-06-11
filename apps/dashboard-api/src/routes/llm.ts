@@ -240,12 +240,17 @@ async function chatViaGemini(
   }
 
   const data = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>
     usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }
   }
 
+  const parts = data.candidates?.[0]?.content?.parts ?? []
+  // Filter out thinking/thought blocks and join the actual text response parts
+  const textParts = parts.filter((p) => !p.thought).map((p) => p.text ?? '')
+  const content = textParts.length > 0 ? textParts.join('') : (parts[0]?.text ?? '')
+
   return {
-    content: data.candidates?.[0]?.content?.parts?.[0]?.text ?? '',
+    content,
     promptTokens: data.usageMetadata?.promptTokenCount ?? 0,
     completionTokens: data.usageMetadata?.candidatesTokenCount ?? 0,
   }
