@@ -70,6 +70,15 @@ Future coding agents **MUST** follow these rules to maintain compatibility:
 ### 6. Flexbox Scrollbar Prevention
 - Always ensure `.main` and `.content` flex containers in layout styling (e.g., `DashboardLayout.module.css`) include `min-width: 0`. Without `min-width: 0`, standard browser flexbox calculation defaults to `min-width: auto`, allowing long continuous strings or tables to stretch the main area and create page-level horizontal scrollbars.
 
+### 7. In-Memory Auth Caching
+- `hub-mcp` implements an in-memory validation cache (TTL: 2 minutes) for Bearer tokens in [auth.ts](file:///E:/Code/cortex-hub/apps/hub-mcp/src/middleware/auth.ts) to eliminate database roundtrips on consecutive tool calls. Keep this in mind when developing or editing MCP authorization flows.
+
+### 8. Database Performance & Table Indexes
+- Always ensure database tables that accumulate high volume (like `query_logs` and `usage_logs`) have proper indexes on filtering columns (`agent_id`, `created_at`, `project_id`, `key_hash`). Unindexed lookups inside request filters will block SQLite and trigger connection timeouts.
+
+### 9. Docker Build DNS / IPv6 Enforcement
+- Docker builds on the remote host fail to resolve package registries over IPv6. In `Dockerfile` stages, set `ENV NODE_OPTIONS="--dns-result-order=ipv4first"` to force IPv4 DNS queries during dependency installations.
+
 ---
 
 ## 🩺 Diagnostic Commands
