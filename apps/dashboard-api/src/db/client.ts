@@ -315,4 +315,17 @@ try {
   console.warn('[Migration] Date-time migration failed:', migrationErr)
 }
 
+// Create indexes on critical tables to prevent full table scans and timeouts
+try {
+  db.exec('CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_query_logs_agent_created ON query_logs(agent_id, created_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_query_logs_project ON query_logs(project_id)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_usage_logs_project ON usage_logs(project_id)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_session_handoffs_agent_status ON session_handoffs(from_agent, status)')
+} catch (e) {
+  console.warn('[Migration] Failed to create indexing indexes:', e)
+}
+
 export { db }
+

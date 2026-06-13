@@ -472,3 +472,12 @@ CREATE INDEX IF NOT EXISTS idx_qr_project ON quality_reports(project_id);
 CREATE INDEX IF NOT EXISTS idx_qr_agent   ON quality_reports(agent_id);
 CREATE INDEX IF NOT EXISTS idx_qr_grade   ON quality_reports(grade);
 
+-- Create indexes to optimize key verification, hints, and analytics
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_query_logs_agent_created ON query_logs(agent_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_logs_project ON query_logs(project_id);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_project ON usage_logs(project_id);
+CREATE INDEX IF NOT EXISTS idx_session_handoffs_agent_status ON session_handoffs(from_agent, status);
+
+
