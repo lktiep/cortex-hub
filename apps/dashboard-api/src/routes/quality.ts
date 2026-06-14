@@ -428,7 +428,7 @@ sessionsRouter.post('/start', async (c) => {
 
     if (!existingSession) {
       const insertStmt = db.prepare(
-        'INSERT INTO session_handoffs (id, from_agent, project, project_id, task_summary, context, status, api_key_name, hostname, os, ide, branch, capabilities, role, last_activity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'))'
+        'INSERT INTO session_handoffs (id, from_agent, project, project_id, task_summary, context, status, api_key_name, hostname, os, ide, branch, capabilities, role, last_activity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'), strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'))'
       )
       insertStmt.run(
         sessionId,
@@ -447,6 +447,7 @@ sessionsRouter.post('/start', async (c) => {
         role ?? null
       )
     }
+
 
     return c.json({
       sessionId,
