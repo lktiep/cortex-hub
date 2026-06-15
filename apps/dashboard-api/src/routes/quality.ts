@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
+import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
 import { getMem9 } from './mem9-proxy.js'
 import {
   calculateFromVerificationResults,
@@ -582,42 +583,6 @@ sessionsRouter.post('/:id/end', async (c) => {
       })
     }
 
-function normalizeProjectId(projectId: string | null | undefined): string | null {
-  if (!projectId) return null
-  try {
-    const project = db.prepare(
-      `SELECT id FROM projects
-       WHERE id = ?
-          OR slug = ? COLLATE NOCASE
-          OR name = ? COLLATE NOCASE`
-    ).get(projectId, projectId, projectId) as { id: string } | undefined
-
-    if (project?.id) {
-      return project.id
-    }
-  } catch (error) {
-    console.warn(`normalizeProjectId failed: ${error}`)
-  }
-  return projectId
-}
-
-function normalizeMemoryUserId(userId: string): string {
-  if (!userId) return userId
-  if (userId.startsWith('project-')) {
-    const branchIndex = userId.indexOf(':branch-')
-    if (branchIndex !== -1) {
-      const projectIdRaw = userId.slice('project-'.length, branchIndex)
-      const branchPart = userId.slice(branchIndex)
-      const normalizedId = normalizeProjectId(projectIdRaw)
-      return `project-${normalizedId}${branchPart}`
-    } else {
-      const projectIdRaw = userId.slice('project-'.length)
-      const normalizedId = normalizeProjectId(projectIdRaw)
-      return `project-${normalizedId}`
-    }
-  }
-  return userId
-}
 
     // Auto-store session summary as searchable memory (safety net)
     // This ensures session context is ALWAYS recoverable even if

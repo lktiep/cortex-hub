@@ -650,7 +650,7 @@ export default function SettingsPage() {
             </div>
           </div>
           <div className={styles.aboutLinks}>
-            <a href="https://github.com/DuyPrX/cortex-hub" target="_blank" rel="noreferrer" className={styles.aboutLink}>
+            <a href="https://github.com/lktiep/cortex-hub" target="_blank" rel="noreferrer" className={styles.aboutLink}>
               GitHub
             </a>
             <a href="/docs" className={styles.aboutLink}>

@@ -74,7 +74,7 @@ services:
       context: ..
       dockerfile: infra/Dockerfile.gitnexus
       network: host
-    image: ghcr.io/duyprx/cortex-gitnexus:latest
+    image: ${CORTEX_IMAGE_NAMESPACE:-ghcr.io/lktiep}/cortex-gitnexus:latest
     container_name: cortex-gitnexus
     restart: unless-stopped
     labels:
@@ -110,7 +110,7 @@ services:
       args:
         COMMIT_SHA: ${COMMIT_SHA:-dev}
         BUILD_DATE: ${BUILD_DATE:-}
-    image: ghcr.io/duyprx/cortex-api:latest
+    image: ${CORTEX_IMAGE_NAMESPACE:-ghcr.io/lktiep}/cortex-api:latest
     container_name: cortex-api
     restart: unless-stopped
     labels:
@@ -170,7 +170,7 @@ services:
       context: ..
       dockerfile: infra/Dockerfile.hub-mcp
       network: host
-    image: ghcr.io/duyprx/cortex-mcp:latest
+    image: ${CORTEX_IMAGE_NAMESPACE:-ghcr.io/lktiep}/cortex-mcp:latest
     container_name: cortex-mcp
     restart: unless-stopped
     labels:

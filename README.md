@@ -338,15 +338,15 @@ cortex_code_search(query: "auth middleware jwt", repo: "cortex-hub")  // narrow 
 
 ```bash
 # macOS / Linux — interactive wizard
-curl -fsSL https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/run-agent.sh | bash -s -- launch
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- launch
 
 # Headless daemon with preset
-curl -fsSL https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/run-agent.sh | bash -s -- start --daemon --preset fullstack
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- start --daemon --preset fullstack
 ```
 
 ```powershell
 # Windows
-iwr -useb "https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/run-agent.ps1" -OutFile $env:TEMP\run-agent.ps1
+iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1" -OutFile $env:TEMP\run-agent.ps1
 & $env:TEMP\run-agent.ps1 start
 ```
 
@@ -354,10 +354,10 @@ iwr -useb "https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/ru
 
 ```bash
 # macOS / Linux
-curl -fsSL "https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/install.sh" | bash
+curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh" | bash
 
 # Windows
-iwr -useb "https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/install.ps1" -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
+iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.ps1" -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
 ```
 
 **Or inside Claude Code:** type `/install`

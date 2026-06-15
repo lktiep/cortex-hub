@@ -5,12 +5,17 @@ import { randomBytes, createHash } from 'crypto'
 export const keysRouter = new Hono()
 
 async function invalidateMcpCache() {
+  const secret = process.env.INTERNAL_API_SECRET
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (secret) {
+    headers['X-Internal-Secret'] = secret
+  }
   const urls = ['http://cortex-mcp:8317/auth/cache/invalidate', 'http://localhost:8318/auth/cache/invalidate']
   for (const url of urls) {
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({}),
         signal: AbortSignal.timeout(1000)
       })

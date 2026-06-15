@@ -10,6 +10,7 @@ import { randomUUID } from 'crypto'
 import { Embedder, VectorStore } from '@cortex/shared-mem9'
 import type { EmbedderConfig, VectorStoreConfig } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
+import { normalizeProjectId } from '../db/project-utils.js'
 import { createLogger } from '@cortex/shared-utils'
 import { createEmbedder } from '../lib/embedder-factory.js'
 
@@ -59,26 +60,6 @@ function getVectorStore(): VectorStore {
     collection: COLLECTION,
   }
   return new VectorStore(config)
-}
-
-function normalizeProjectId(projectId: string | null | undefined): string | null {
-  if (!projectId) return null
-  try {
-    // Resolve project ID, slug, name, or git URL to the canonical UUID
-    const project = db.prepare(
-      `SELECT id FROM projects
-       WHERE id = ?
-          OR slug = ? COLLATE NOCASE
-          OR name = ? COLLATE NOCASE`
-    ).get(projectId, projectId, projectId) as { id: string } | undefined
-
-    if (project?.id) {
-      return project.id
-    }
-  } catch (error) {
-    logger.warn(`normalizeProjectId failed: ${error}`)
-  }
-  return projectId
 }
 
 

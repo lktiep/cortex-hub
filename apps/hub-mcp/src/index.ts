@@ -29,6 +29,7 @@ app.use('*', async (c, next) => {
   const envKeys: (keyof Env)[] = [
     'QDRANT_URL', 'CLIPROXY_URL',
     'DASHBOARD_API_URL', 'MCP_SERVER_NAME', 'MCP_SERVER_VERSION', 'API_KEYS',
+    'INTERNAL_API_SECRET',
   ]
   for (const key of envKeys) {
     if (!c.env[key] && process.env[key]) {
@@ -65,6 +66,13 @@ app.get('/health', (c) => {
 
 // Auth cache invalidation endpoint
 app.post('/auth/cache/invalidate', async (c) => {
+  const secret = c.env.INTERNAL_API_SECRET || process.env.INTERNAL_API_SECRET
+  if (secret) {
+    const requestSecret = c.req.header('X-Internal-Secret')
+    if (requestSecret !== secret) {
+      return c.json({ error: 'Unauthorized: Invalid internal secret' }, 401)
+    }
+  }
   let token: string | undefined = undefined
   try {
     const body = await c.req.json()
@@ -86,7 +94,7 @@ app.get('/.well-known/oauth-protected-resource/mcp', (c) => {
   return c.json({
     resource: `${c.req.url.replace('/.well-known/oauth-protected-resource/mcp', '/mcp')}`,
     bearer_methods_supported: ['header'],
-    resource_documentation: 'https://github.com/DuyPrX/cortex-hub',
+    resource_documentation: 'https://github.com/lktiep/cortex-hub',
   })
 })
 
@@ -95,7 +103,7 @@ app.get('/.well-known/oauth-protected-resource', (c) => {
   return c.json({
     resource: c.req.url.replace('/.well-known/oauth-protected-resource', '/'),
     bearer_methods_supported: ['header'],
-    resource_documentation: 'https://github.com/DuyPrX/cortex-hub',
+    resource_documentation: 'https://github.com/lktiep/cortex-hub',
   })
 })
 
