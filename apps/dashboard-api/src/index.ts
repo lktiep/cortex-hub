@@ -149,7 +149,7 @@ app.get('/health', async (c) => {
         try {
           const url = `${acct.api_base.replace(/\/$/, '')}/models`
           const headers: Record<string, string> = {}
-          if (acct.api_key && acct.api_key !== 'noon' && acct.api_key !== 'none') {
+          if (acct.api_key && acct.api_key !== 'none') {
             headers['Authorization'] = `Bearer ${acct.api_key}`
           }
           const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) })
@@ -201,7 +201,7 @@ app.get('/health', async (c) => {
             } else if (acct.type === 'ollama') {
               const url = `${acct.api_base.replace(/\/$/, '')}/models`
               const headers: Record<string, string> = {}
-              if (acct.api_key && acct.api_key !== 'noon' && acct.api_key !== 'none') {
+              if (acct.api_key && acct.api_key !== 'none') {
                 headers['Authorization'] = `Bearer ${acct.api_key}`
               }
               const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) })

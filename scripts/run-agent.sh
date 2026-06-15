@@ -5,7 +5,7 @@
 # No repo clone needed.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/run-agent.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash
 #   curl ... | bash -s -- launch
 #   curl ... | bash -s -- start --daemon --preset fullstack
 #   curl ... | bash -s -- start -d CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=rev-1
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/DuyPrX/cortex-hub/master"
+REPO_RAW="https://raw.githubusercontent.com/lktiep/cortex-hub/master"
 WORK_DIR="${CORTEX_AGENT_HOME:-${TMPDIR:-/tmp}/cortex-agent-remote}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'

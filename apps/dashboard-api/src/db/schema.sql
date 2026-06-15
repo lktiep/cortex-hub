@@ -206,8 +206,8 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     valid_from TEXT,
     invalidated_at TEXT,
     superseded_by TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_docs_project ON knowledge_documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_docs_status ON knowledge_documents(status);
@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
     char_count INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_doc ON knowledge_chunks(document_id);
 
@@ -283,15 +283,15 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
     capabilities TEXT DEFAULT '[]',
     models TEXT DEFAULT '[]',
     status TEXT DEFAULT 'enabled',
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- ── Model Routing (purpose → provider/model chain) ──
 CREATE TABLE IF NOT EXISTS model_routing (
     purpose TEXT PRIMARY KEY,
     chain TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- ── Agent Acknowledgement (last seen change event per agent+project) ──
@@ -299,7 +299,7 @@ CREATE TABLE IF NOT EXISTS agent_ack (
     agent_id TEXT NOT NULL,
     project_id TEXT NOT NULL,
     last_seen_event_id TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (agent_id, project_id)
 );
 
@@ -309,7 +309,7 @@ CREATE TABLE IF NOT EXISTS budget_settings (
     daily_limit INTEGER DEFAULT 0,
     monthly_limit INTEGER DEFAULT 0,
     alert_threshold REAL DEFAULT 0.8,
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- ── Change Events (git push / manual triggers) ──
@@ -321,7 +321,7 @@ CREATE TABLE IF NOT EXISTS change_events (
     commit_sha TEXT,
     commit_message TEXT,
     files_changed TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_change_events_project ON change_events(project_id);
 CREATE INDEX IF NOT EXISTS idx_change_events_created ON change_events(created_at);
@@ -342,7 +342,7 @@ CREATE TABLE IF NOT EXISTS quality_reports (
     passed INTEGER DEFAULT 0,
     details TEXT,
     api_key_name TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_quality_reports_project ON quality_reports(project_id);
 CREATE INDEX IF NOT EXISTS idx_quality_reports_agent ON quality_reports(agent_id);
@@ -355,122 +355,7 @@ INSERT OR IGNORE INTO setup_status (id, completed) VALUES (1, 0);
 INSERT OR IGNORE INTO organizations (id, name, slug, description)
 VALUES ('org-default', 'Personal', 'personal', 'Default personal organization');
 
--- ── PR3 Schema Alignment ──
--- 8 tables missing from original schema causing 500 errors on fresh installs.
 
-CREATE TABLE IF NOT EXISTS knowledge_documents (
-  id               TEXT PRIMARY KEY,
-  title            TEXT NOT NULL,
-  content          TEXT,
-  source           TEXT DEFAULT 'manual',
-  source_agent_id  TEXT,
-  source_task_id   TEXT,
-  project_id       TEXT,
-  tags             TEXT DEFAULT '[]',
-  content_preview  TEXT,
-  status           TEXT DEFAULT 'active' CHECK(status IN ('active','archived')),
-  chunk_count      INTEGER DEFAULT 0,
-  hit_count        INTEGER DEFAULT 0,
-  selection_count  INTEGER DEFAULT 0,
-  applied_count    INTEGER DEFAULT 0,
-  completion_count INTEGER DEFAULT 0,
-  fallback_count   INTEGER DEFAULT 0,
-  origin           TEXT DEFAULT 'manual',
-  generation       INTEGER DEFAULT 0,
-  created_by_agent TEXT,
-  category         TEXT DEFAULT 'general',
-  hall_type        TEXT DEFAULT 'general'
-    CHECK(hall_type IN ('fact','event','discovery','preference','advice','general')),
-  valid_from       TEXT,
-  invalidated_at   TEXT,
-  superseded_by    TEXT,
-  created_at       TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  updated_at       TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-CREATE INDEX IF NOT EXISTS idx_kdocs_project   ON knowledge_documents(project_id);
-CREATE INDEX IF NOT EXISTS idx_kdocs_status    ON knowledge_documents(status);
-CREATE INDEX IF NOT EXISTS idx_kdocs_hall_type ON knowledge_documents(hall_type);
-
-CREATE TABLE IF NOT EXISTS knowledge_chunks (
-  id          TEXT PRIMARY KEY,
-  document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
-  chunk_index INTEGER NOT NULL,
-  content     TEXT NOT NULL,
-  char_count  INTEGER DEFAULT 0,
-  created_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-CREATE INDEX IF NOT EXISTS idx_kchunks_doc ON knowledge_chunks(document_id);
-
-CREATE TABLE IF NOT EXISTS provider_accounts (
-  id           TEXT PRIMARY KEY,
-  name         TEXT NOT NULL,
-  type         TEXT NOT NULL,
-  auth_type    TEXT,
-  api_base     TEXT,
-  api_key      TEXT,
-  capabilities TEXT DEFAULT '[]',
-  models       TEXT DEFAULT '[]',
-  status       TEXT DEFAULT 'enabled',
-  created_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  updated_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
-CREATE TABLE IF NOT EXISTS model_routing (
-  purpose    TEXT PRIMARY KEY,
-  chain      TEXT NOT NULL,
-  updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-
-CREATE TABLE IF NOT EXISTS agent_ack (
-  agent_id           TEXT NOT NULL,
-  project_id         TEXT NOT NULL,
-  last_seen_event_id TEXT NOT NULL,
-  updated_at         TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-  PRIMARY KEY (agent_id, project_id)
-);
-
-CREATE TABLE IF NOT EXISTS budget_settings (
-  id              INTEGER PRIMARY KEY DEFAULT 1,
-  daily_limit     INTEGER DEFAULT 0,
-  monthly_limit   INTEGER DEFAULT 0,
-  alert_threshold REAL    DEFAULT 0.8,
-  updated_at      TEXT    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-INSERT OR IGNORE INTO budget_settings (id) VALUES (1);
-
-CREATE TABLE IF NOT EXISTS change_events (
-  id             TEXT PRIMARY KEY,
-  project_id     TEXT NOT NULL,
-  branch         TEXT NOT NULL,
-  agent_id       TEXT,
-  commit_sha     TEXT,
-  commit_message TEXT,
-  files_changed  TEXT,
-  created_at     TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-CREATE INDEX IF NOT EXISTS idx_change_events_project ON change_events(project_id);
-CREATE INDEX IF NOT EXISTS idx_change_events_created ON change_events(created_at);
-
-CREATE TABLE IF NOT EXISTS quality_reports (
-  id                 TEXT PRIMARY KEY,
-  project_id         TEXT,
-  agent_id           TEXT NOT NULL,
-  session_id         TEXT,
-  gate_name          TEXT NOT NULL,
-  score_build        INTEGER DEFAULT 0,
-  score_regression   INTEGER DEFAULT 0,
-  score_standards    INTEGER DEFAULT 0,
-  score_traceability INTEGER DEFAULT 0,
-  score_total        INTEGER DEFAULT 0,
-  grade              TEXT CHECK(grade IN ('A','B','C','D','F')),
-  passed             INTEGER DEFAULT 0,
-  details            TEXT,
-  api_key_name       TEXT,
-  created_at         TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-);
-CREATE INDEX IF NOT EXISTS idx_qr_project ON quality_reports(project_id);
-CREATE INDEX IF NOT EXISTS idx_qr_agent   ON quality_reports(agent_id);
-CREATE INDEX IF NOT EXISTS idx_qr_grade   ON quality_reports(grade);
 
 -- Create indexes to optimize key verification, hints, and analytics
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);

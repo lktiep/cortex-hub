@@ -1,6 +1,6 @@
 #!/bin/bash
 # Cortex Hub — Bootstrap Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/install-hub.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/install-hub.sh | bash
 #
 # This script downloads and runs the appropriate installer:
 #   1) Administrator — Full Docker stack + infrastructure
@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 YELLOW='\033[0;33m'
 NC='\033[m'
 
-REPO_RAW="https://raw.githubusercontent.com/DuyPrX/cortex-hub/master"
+REPO_RAW="https://raw.githubusercontent.com/lktiep/cortex-hub/master"
 TMP_DIR=$(mktemp -d)
 trap "rm -rf $TMP_DIR" EXIT
 

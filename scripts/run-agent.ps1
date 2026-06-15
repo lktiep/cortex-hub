@@ -4,7 +4,7 @@
 # No repo clone needed.
 #
 # Usage:
-#   iwr -useb "https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/run-agent.ps1" -OutFile $env:TEMP\run-agent.ps1; & $env:TEMP\run-agent.ps1
+#   iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1" -OutFile $env:TEMP\run-agent.ps1; & $env:TEMP\run-agent.ps1
 #   .\run-agent.ps1 start
 #   .\run-agent.ps1 start -Daemon
 # ============================================================
@@ -18,7 +18,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$RepoRaw = "https://raw.githubusercontent.com/DuyPrX/cortex-hub/master"
+$RepoRaw = "https://raw.githubusercontent.com/lktiep/cortex-hub/master"
 $WorkDir = if ($env:CORTEX_AGENT_HOME) { $env:CORTEX_AGENT_HOME } else { Join-Path $env:TEMP "cortex-agent-remote" }
 
 function Write-Info  { param([string]$msg) Write-Host "[cortex] $msg" -ForegroundColor Blue }

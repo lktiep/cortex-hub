@@ -123,21 +123,6 @@ const dynamicInstallerPatches = [
   "ALTER TABLE provider_accounts ADD COLUMN models TEXT DEFAULT '[]'",
   "ALTER TABLE provider_accounts ADD COLUMN created_at TEXT",
   "ALTER TABLE provider_accounts ADD COLUMN updated_at TEXT",
-  "ALTER TABLE index_jobs ADD COLUMN triggered_by TEXT",
-  "ALTER TABLE index_jobs ADD COLUMN commit_hash TEXT",
-  "ALTER TABLE index_jobs ADD COLUMN commit_message TEXT",
-  "ALTER TABLE index_jobs ADD COLUMN mem9_status TEXT",
-  "ALTER TABLE index_jobs ADD COLUMN mem9_chunks INTEGER DEFAULT 0",
-  "ALTER TABLE index_jobs ADD COLUMN mem9_progress INTEGER DEFAULT 0",
-  "ALTER TABLE index_jobs ADD COLUMN mem9_total_chunks INTEGER DEFAULT 0",
-  "ALTER TABLE index_jobs ADD COLUMN docs_knowledge_status TEXT",
-  "ALTER TABLE index_jobs ADD COLUMN docs_knowledge_count INTEGER DEFAULT 0",
-  "ALTER TABLE query_logs ADD COLUMN input_size INTEGER DEFAULT 0",
-  "ALTER TABLE query_logs ADD COLUMN output_size INTEGER DEFAULT 0",
-  "ALTER TABLE query_logs ADD COLUMN compute_tokens INTEGER DEFAULT 0",
-  "ALTER TABLE query_logs ADD COLUMN compute_model TEXT",
-  "ALTER TABLE session_handoffs ADD COLUMN api_key_name TEXT",
-  "ALTER TABLE conductor_tasks ADD COLUMN api_key_owner TEXT",
 ]
 for (const sql of dynamicInstallerPatches) {
   try { db.exec(sql) } catch (e) { /* ignore if column exists */ }
@@ -245,7 +230,10 @@ try {
   try {
     const recoveryV3Key = 'timezone_recovery_v3_revert_double_shift'
     const alreadyReverted = db.prepare("SELECT value FROM hub_config WHERE key = ?").get(recoveryV3Key)
-    if (!alreadyReverted) {
+    const rawOffset = process.env.RECOVERY_TIMEZONE_OFFSET_HOURS;
+    const offsetHours = rawOffset ? parseInt(rawOffset, 10) : NaN;
+    if (!alreadyReverted && !isNaN(offsetHours)) {
+      const offsetModifier = `${offsetHours >= 0 ? '+' : ''}${offsetHours} hours`;
       const tablesAndColsToRevert = [
         { table: 'api_keys', cols: ['created_at', 'last_used_at'] },
         { table: 'query_logs', cols: ['created_at'] },
@@ -283,7 +271,7 @@ try {
                     val.startsWith('2026-05-23T06:')
                   )
                   if (isDoubleShifted) {
-                    const restored = (db.prepare(`SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, '-7 hours') as r`).get(val) as any).r
+                    const restored = (db.prepare(`SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, ?) as r`).get(val, offsetModifier) as any).r
                     needsUpdate = true
                     updates.push(`${col} = ?`)
                     params.push(restored)

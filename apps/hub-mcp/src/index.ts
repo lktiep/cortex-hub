@@ -14,7 +14,7 @@ import { registerSessionTools } from './tools/session.js'
 import { registerChangeTools } from './tools/changes.js'
 import { registerAnalyticsTools } from './tools/analytics.js'
 import { registerTaskTools } from './tools/tasks.js'
-import { validateApiKey } from './middleware/auth.js'
+import { validateApiKey, invalidateTokenCache } from './middleware/auth.js'
 import { telemetryStorage } from './api-call.js'
 import type { Env } from './types.js'
 
@@ -61,6 +61,19 @@ app.get('/health', (c) => {
     version: c.env.MCP_SERVER_VERSION ?? '0.1.0',
     timestamp: new Date().toISOString(),
   })
+})
+
+// Auth cache invalidation endpoint
+app.post('/auth/cache/invalidate', async (c) => {
+  let token: string | undefined = undefined
+  try {
+    const body = await c.req.json()
+    token = body.token
+  } catch (e) {
+    // If JSON parsing fails or is empty, we will clear the entire cache
+  }
+  invalidateTokenCache(token)
+  return c.json({ success: true, message: token ? 'Token invalidated' : 'Cache cleared' })
 })
 
 // ─── OAuth Discovery Stubs ────────────────────────────────────────

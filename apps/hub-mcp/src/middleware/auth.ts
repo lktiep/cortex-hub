@@ -101,3 +101,15 @@ export async function validateApiKey(
   }
 }
 
+/**
+ * Invalidates the token cache.
+ * If token is provided, evicts that specific token; otherwise clears all.
+ */
+export function invalidateTokenCache(token?: string): void {
+  if (token) {
+    tokenCache.delete(token)
+  } else {
+    tokenCache.clear()
+  }
+}
+

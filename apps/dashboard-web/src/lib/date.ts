@@ -1,5 +1,5 @@
 export function parseDateSafe(dateStr: string | null | undefined): Date {
-  if (!dateStr) return new Date()
+  if (!dateStr) return new Date(NaN)
   
   let formatted = dateStr.trim()
   
@@ -24,8 +24,9 @@ export function parseDateSafe(dateStr: string | null | undefined): Date {
 
 export function formatTimeAgo(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
-  const now = new Date()
   const past = parseDateSafe(dateStr)
+  if (isNaN(past.getTime())) return '—'
+  const now = new Date()
   const diff = Math.floor((now.getTime() - past.getTime()) / 1000)
   
   if (diff < 5) return 'just now'

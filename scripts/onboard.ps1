@@ -636,7 +636,7 @@ if (-not (Test-Path $workflowDir)) {
 }
 
 # Download templates from repo if available
-$templatesUrl = "https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/templates/workflows"
+$templatesUrl = "https://raw.githubusercontent.com/lktiep/cortex-hub/master/templates/workflows"
 $workflows = @("code.md", "continue.md", "phase.md")
 
 foreach ($wf in $workflows) {

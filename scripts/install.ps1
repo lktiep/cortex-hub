@@ -104,7 +104,7 @@ if (-not $SkipGlobal -and -not $CheckOnly -and (Test-IDESelected "claude")) {
     } elseif (-not (Test-Path (Join-Path $skillDir "SKILL.md"))) {
         if (-not (Test-Path $skillDir)) { New-Item -ItemType Directory -Path $skillDir -Force | Out-Null }
         try {
-            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/templates/skills/install/SKILL.md" -OutFile (Join-Path $skillDir "SKILL.md")
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/lktiep/cortex-hub/master/templates/skills/install/SKILL.md" -OutFile (Join-Path $skillDir "SKILL.md")
             Write-Ok "Global: /install skill downloaded"
         } catch {
             Write-Warn "Global: could not download /install skill"

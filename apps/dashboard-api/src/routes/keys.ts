@@ -4,6 +4,25 @@ import { randomBytes, createHash } from 'crypto'
 
 export const keysRouter = new Hono()
 
+async function invalidateMcpCache() {
+  const urls = ['http://cortex-mcp:8317/auth/cache/invalidate', 'http://localhost:8318/auth/cache/invalidate']
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(1000)
+      })
+      if (res.ok) {
+        break
+      }
+    } catch (e) {
+      // Ignore error and try fallback URL
+    }
+  }
+}
+
 function generateApiKey(): { key: string; hash: string } {
   const prefix = 'sk_ctx_'
   const buffer = randomBytes(32)
@@ -67,6 +86,7 @@ keysRouter.delete('/:id', (c) => {
     if (result.changes === 0) {
       return c.json({ error: 'Key not found' }, 404)
     }
+    invalidateMcpCache().catch(() => {})
     return c.json({ success: true })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
@@ -90,6 +110,7 @@ keysRouter.put('/:id', async (c) => {
       return c.json({ error: 'Key not found' }, 404)
     }
 
+    invalidateMcpCache().catch(() => {})
     return c.json({ success: true, id, name, scope, permissions })
   } catch (error) {
     return c.json({ error: String(error) }, 500)

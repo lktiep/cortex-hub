@@ -1388,7 +1388,7 @@ if [ "$NEEDS_UPDATE" = true ]; then
         done
     else
         # Source 2: Download from GitHub
-        TEMPLATES_BASE="https://raw.githubusercontent.com/DuyPrX/cortex-hub/main/templates/workflows"
+        TEMPLATES_BASE="https://raw.githubusercontent.com/lktiep/cortex-hub/main/templates/workflows"
         WORKFLOW_FILES=("code.md" "continue.md" "phase.md")
 
         echo -e "${BLUE}    Downloading templates from GitHub...${NC}"
