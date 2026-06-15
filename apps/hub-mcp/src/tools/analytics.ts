@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register analytics tools.
@@ -27,10 +28,10 @@ export function registerAnalyticsTools(server: McpServer, env: Env) {
         if (agentId) params.set('agentId', agentId)
         if (projectId) params.set('projectId', projectId)
 
-        const response = await fetch(
-          `${apiUrl()}/api/metrics/tool-analytics?${params.toString()}`,
-          { signal: AbortSignal.timeout(10000) },
-        )
+        const response = await apiCall(env, `/api/metrics/tool-analytics?${params.toString()}`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(10000),
+        })
 
         if (!response.ok) {
           const errorText = await response.text()

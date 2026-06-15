@@ -6,6 +6,7 @@
 
 # Stage 1: Base with tools
 FROM node:22-slim AS base
+ENV NODE_OPTIONS="--dns-result-order=ipv4first"
 RUN corepack enable
 RUN echo "node-linker=hoisted" > /root/.npmrc && echo "shamefully-hoist=true" >> /root/.npmrc
 
@@ -29,7 +30,8 @@ WORKDIR /app
 
 COPY . .
 
-RUN npx turbo build --filter=@cortex/hub-mcp
+RUN rm -rf apps/hub-mcp/dist packages/*/dist && \
+    npx turbo build --force --filter=@cortex/hub-mcp
 
 # Stage 4: Production deps only
 FROM base AS prod-deps
@@ -53,6 +55,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=8317
+
+# Install tzdata for timezone configuration
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
 
 # Copy production node_modules
 COPY --from=prod-deps /app/node_modules ./node_modules

@@ -29,7 +29,7 @@ export async function apiCall(
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers,
-    signal: init?.signal ?? AbortSignal.timeout(30000),
+    signal: init?.signal ?? AbortSignal.timeout(120000), // Allow up to 2 minutes for slow LLM operations (e.g. gemma-4-31b-it thinking)
   })
   
   // Extract compute telemetry headers if present

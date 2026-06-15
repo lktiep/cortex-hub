@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
+import { parseDateSafe } from '@/lib/date'
 import { formatJson, getTaskDuration, type ConductorTask, type StructuredTaskResult } from './shared'
 import { ClipboardList, Hand, CheckCircle, XCircle, Hourglass, ChevronDown, X, Trash2, ICON_INLINE } from '@/lib/icons'
 import { StatusBadge, PriorityBadge, ResultDisplay } from './StatusBadge'
@@ -195,7 +196,7 @@ export function TaskDetail({
                 <div className={styles.timelineInfo}>
                   <span className={styles.timelineLabel}><ClipboardList {...ICON_INLINE} /> Created</span>
                   <span className={styles.timelineTime}>
-                    {task.created_at ? new Date(task.created_at).toLocaleString() : '--'}
+                    {task.created_at ? parseDateSafe(task.created_at).toLocaleString() : '--'}
                   </span>
                 </div>
               </div>
@@ -204,7 +205,7 @@ export function TaskDetail({
                 <div className={styles.timelineInfo}>
                   <span className={styles.timelineLabel}><Hand {...ICON_INLINE} /> Accepted</span>
                   <span className={styles.timelineTime}>
-                    {task.accepted_at ? new Date(task.accepted_at).toLocaleString() : 'Pending'}
+                    {task.accepted_at ? parseDateSafe(task.accepted_at).toLocaleString() : 'Pending'}
                   </span>
                 </div>
               </div>
@@ -215,7 +216,7 @@ export function TaskDetail({
                     {task.status === 'completed' ? <CheckCircle {...ICON_INLINE} /> : task.status === 'failed' ? <XCircle {...ICON_INLINE} /> : <Hourglass {...ICON_INLINE} />} {task.status === 'failed' ? 'Failed' : 'Completed'}
                   </span>
                   <span className={styles.timelineTime}>
-                    {task.completed_at ? `${new Date(task.completed_at).toLocaleString()} (${getTaskDuration(task)})` : 'In progress...'}
+                    {task.completed_at ? `${parseDateSafe(task.completed_at).toLocaleString()} (${getTaskDuration(task)})` : 'In progress...'}
                   </span>
                 </div>
               </div>

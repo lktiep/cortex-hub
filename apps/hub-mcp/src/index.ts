@@ -14,7 +14,7 @@ import { registerSessionTools } from './tools/session.js'
 import { registerChangeTools } from './tools/changes.js'
 import { registerAnalyticsTools } from './tools/analytics.js'
 import { registerTaskTools } from './tools/tasks.js'
-import { validateApiKey } from './middleware/auth.js'
+import { validateApiKey, invalidateTokenCache } from './middleware/auth.js'
 import { telemetryStorage } from './api-call.js'
 import type { Env } from './types.js'
 
@@ -29,6 +29,7 @@ app.use('*', async (c, next) => {
   const envKeys: (keyof Env)[] = [
     'QDRANT_URL', 'CLIPROXY_URL',
     'DASHBOARD_API_URL', 'MCP_SERVER_NAME', 'MCP_SERVER_VERSION', 'API_KEYS',
+    'INTERNAL_API_SECRET',
   ]
   for (const key of envKeys) {
     if (!c.env[key] && process.env[key]) {
@@ -63,6 +64,27 @@ app.get('/health', (c) => {
   })
 })
 
+// Auth cache invalidation endpoint
+app.post('/auth/cache/invalidate', async (c) => {
+  const secret = c.env.INTERNAL_API_SECRET || process.env.INTERNAL_API_SECRET
+  if (!secret) {
+    return c.json({ error: 'Service unavailable: INTERNAL_API_SECRET not configured' }, 503)
+  }
+  const requestSecret = c.req.header('X-Internal-Secret')
+  if (requestSecret !== secret) {
+    return c.json({ error: 'Unauthorized' }, 401)
+  }
+  let token: string | undefined = undefined
+  try {
+    const body = await c.req.json()
+    token = body.token
+  } catch (e) {
+    // If JSON parsing fails or is empty, we will clear the entire cache
+  }
+  invalidateTokenCache(token)
+  return c.json({ success: true, message: token ? 'Token invalidated' : 'Cache cleared' })
+})
+
 // ─── OAuth Discovery Stubs ────────────────────────────────────────
 // mcp-remote probes these endpoints before using Bearer auth.
 // Without proper responses, it hangs. Return RFC 9728 Protected
@@ -73,7 +95,7 @@ app.get('/.well-known/oauth-protected-resource/mcp', (c) => {
   return c.json({
     resource: `${c.req.url.replace('/.well-known/oauth-protected-resource/mcp', '/mcp')}`,
     bearer_methods_supported: ['header'],
-    resource_documentation: 'https://cortex-mcp.jackle.dev',
+    resource_documentation: 'https://github.com/lktiep/cortex-hub',
   })
 })
 
@@ -82,7 +104,7 @@ app.get('/.well-known/oauth-protected-resource', (c) => {
   return c.json({
     resource: c.req.url.replace('/.well-known/oauth-protected-resource', '/'),
     bearer_methods_supported: ['header'],
-    resource_documentation: 'https://cortex-mcp.jackle.dev',
+    resource_documentation: 'https://github.com/lktiep/cortex-hub',
   })
 })
 
@@ -105,6 +127,7 @@ app.get('/', (c) => {
       'cortex_health',
       'cortex_memory_store',
       'cortex_memory_search',
+      'cortex_memory_delete',
       'cortex_knowledge_store',
       'cortex_knowledge_search',
       'cortex_code_search',
@@ -124,11 +147,36 @@ app.get('/', (c) => {
 })
 
 // Helper: create MCP server with tools registered
-function createMcpServer(env: Env) {
+function createMcpServer(env: Env, permissions?: string[]) {
   const server = new McpServer({
     name: env.MCP_SERVER_NAME ?? 'cortex-hub',
     version: env.MCP_SERVER_VERSION ?? '0.1.0',
   })
+
+  // Normalize permissions list if present (dots to underscores)
+  const allowedTools = permissions
+    ? new Set(permissions.map((p) => p.replace(/\./g, '_')))
+    : null
+
+  // Wrap server.tool to filter out unauthorized tools
+  const originalTool = server.tool.bind(server)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const serverAny = server as any
+  serverAny.tool = (name: string, description: string, schema: any, handler: any) => {
+    if (allowedTools && !allowedTools.has(name)) {
+      return {
+        name,
+        description,
+        inputSchema: schema,
+        handler,
+        enabled: false,
+        enable: () => {},
+        disable: () => {},
+      }
+    }
+    return originalTool(name, description, schema, handler)
+  }
+
   registerHealthTools(server, env)
   registerMemoryTools(server, env)
   registerKnowledgeTools(server, env)
@@ -154,6 +202,7 @@ app.all('/mcp', async (c) => {
   // Inter-service calls (dashboard-api → hub-mcp) use in-memory
   // setInternalFetch() and never hit this HTTP endpoint.
   const envWithOwner = { ...c.env } as Env & { API_KEY_OWNER?: string }
+  let permissions: string[] | undefined = undefined
 
   try {
     const authResult = await validateApiKey(c.req.raw, c.env)
@@ -170,6 +219,9 @@ app.all('/mcp', async (c) => {
     if (authResult.agentId) {
       envWithOwner.API_KEY_OWNER = authResult.agentId
     }
+    if (authResult.permissions) {
+      permissions = authResult.permissions
+    }
   } catch (err) {
     return c.json({
       jsonrpc: '2.0',
@@ -181,7 +233,7 @@ app.all('/mcp', async (c) => {
     }, 503)
   }
 
-  const mcpServer = createMcpServer(envWithOwner)
+  const mcpServer = createMcpServer(envWithOwner, permissions)
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless mode
     enableJsonResponse: true,
@@ -195,11 +247,14 @@ app.all('/mcp', async (c) => {
     bodyText = await c.req.text()
   } catch (e) {}
 
-  const newReq = new Request(c.req.raw.url, {
+  const reqInit: RequestInit = {
     method: c.req.raw.method,
     headers: c.req.raw.headers,
-    body: bodyText,
-  })
+  }
+  if (c.req.raw.method !== 'GET' && c.req.raw.method !== 'HEAD') {
+    reqInit.body = bodyText
+  }
+  const newReq = new Request(c.req.raw.url, reqInit)
 
   let toolName = 'unknown'
   let projectId = null
@@ -210,8 +265,10 @@ app.all('/mcp', async (c) => {
       toolName = p.params?.name
       argsObj = p.params?.arguments
       projectId = argsObj?.projectId || argsObj?.project_id || null
-      if (toolName === 'cortex_session_start' && argsObj?.repo) {
-        projectId = argsObj.repo.split('/').pop()?.replace('.git', '') || null
+      
+      const rawRepo = argsObj?.repo || null
+      if (rawRepo) {
+        projectId = rawRepo.replace(/\.git$/, '').replace(/^https?:\/\/.*\//, '').split(/[/\\]/).pop() || rawRepo
       }
     }
   } catch (e) {}

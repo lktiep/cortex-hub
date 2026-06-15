@@ -31,7 +31,7 @@ Dashboard Conductor page filters by authenticated user's API key.
 
 ```json
 {
-  "repo": "https://github.com/lktiep/cortex-hub.git",
+  "repo": "<your-repo-url>",
   "mode": "development",
   "agentId": "claude-code",
   "identity": {

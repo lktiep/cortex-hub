@@ -121,7 +121,7 @@
 /* 4-Dimension Cards */
 .dimensionCards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-3);
 }
 
@@ -617,7 +617,7 @@
 }
 
 /* ── Responsive ── */
-@media (max-width: 1200px) {
+@media (max-width: 1280px) {
   .heroGrid { grid-template-columns: 1fr 1fr; }
   .heroGrid > :last-child { grid-column: span 2; }
   .overviewGrid { grid-template-columns: 1fr; }

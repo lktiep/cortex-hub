@@ -67,7 +67,7 @@ graph TB
 
 ### 1. Hub MCP Server (`apps/hub-mcp`)
 
-The **central gateway** for all agent interactions. Agents connect to a single endpoint (`cortex-mcp.jackle.dev/mcp`) and access all capabilities through MCP tools.
+The **central gateway** for all agent interactions. Agents connect to a single endpoint (`localhost:8318/mcp`) and access all capabilities through MCP tools.
 
 **Transport:** Streamable HTTP (POST with JSON-RPC payloads, SSE for streaming responses)
 
@@ -172,9 +172,9 @@ Full monitoring and management interface:
 ```
 Internet
   │
-  ├── hub.jackle.dev ─────────── Dashboard UI      (Cloudflare Access protected)
-  ├── cortex-api.jackle.dev ──── Dashboard API      (:4000, Hono REST)
-  └── cortex-mcp.jackle.dev ──── Hub MCP Server     (Streamable HTTP, JSON-RPC)
+  ├── localhost:3000 ─────────── Dashboard UI
+  ├── localhost:4000 ─────────── Dashboard API      (:4000, Hono REST)
+  └── localhost:8318 ─────────── Hub MCP Server     (Streamable HTTP, JSON-RPC)
                                     │
                               Cloudflare Tunnel (cloudflared)
                                     │
@@ -200,7 +200,7 @@ Internet
 ### Agent → Tool Call → Result
 
 ```
-1. Agent sends JSON-RPC POST to cortex-mcp.jackle.dev/mcp
+1. Agent sends JSON-RPC POST to localhost:8318/mcp
 2. Hub MCP authenticates via API key header
 3. Router identifies tool (e.g., cortex_code_search)
 4. Tool handler calls appropriate backend (GitNexus, Qdrant, SQLite)

@@ -3,16 +3,11 @@ import { TimelineEvent } from './TimelineEvent'
 import type { ActivityEvent } from '@/lib/api'
 import { ACTIVITY_ICONS, ICON_DEFAULTS } from '@/lib/icons'
 import { Mailbox } from 'lucide-react'
+import { parseDateSafe, formatTimeAgo } from '@/lib/date'
 import styles from './ActivityFeed.module.css'
 
 function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.floor(hrs / 24)}d ago`
+  return formatTimeAgo(dateStr)
 }
 
 function ActivityRow({ event }: { event: ActivityEvent }) {
@@ -68,7 +63,7 @@ export function ActivityFeed({
   }
 
   events.forEach((event) => {
-    const eDate = new Date(event.created_at).toDateString()
+    const eDate = parseDateSafe(event.created_at).toDateString()
     if (eDate === today) groups.Today.push(event)
     else if (eDate === yesterday) groups.Yesterday.push(event)
     else groups.Earlier.push(event)

@@ -12,13 +12,13 @@
 3. `cortex_task_pickup()` — check for Conductor tasks assigned to you
 4. If `recentChanges.count > 0` → `git pull` before editing
 
+
 ### During Work
 Use cortex tools as your primary workflow — they're faster, more focused, and save tokens compared to grep/find.
 
 | What you need | Tool | Why it's better |
 |---------------|------|-----------------|
 | Find code | `cortex_code_search` | AST-aware, returns focused results (~90% fewer tokens than grep) |
-| Read indexed files | `cortex_code_read` | Read source from any indexed repo without cloning |
 | Understand a symbol | `cortex_code_context` | Shows callers, callees, imports, process participation |
 | Check blast radius | `cortex_code_impact` | Know what breaks before you edit |
 | Pre-commit risk | `cortex_detect_changes` | Affected symbols + risk rating |
@@ -71,9 +71,9 @@ Self-hosted MCP platform: code intelligence, persistent memory, shared knowledge
 ### Endpoints
 | Service | URL |
 |---------|-----|
-| Dashboard | hub.jackle.dev |
-| API | cortex-api.jackle.dev |
-| MCP | cortex-mcp.jackle.dev |
+| Dashboard | http://localhost:3000 |
+| API | http://localhost:4000 |
+| MCP | http://localhost:8318 |
 
 ---
 

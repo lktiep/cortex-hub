@@ -237,7 +237,7 @@ function checkParentCompletion(parentId: string): void {
       // No Lead Agent — fallback to auto-complete
       db.prepare(`
         UPDATE conductor_tasks
-        SET status = 'completed', completed_at = datetime('now'),
+        SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             result = ?
         WHERE id = ?
       `).run(JSON.stringify({ subtaskResults, autoCompleted: true }), parentId)
@@ -350,7 +350,7 @@ conductorRouter.post('/auto-assign', async (c) => {
       // Assign the task
       db.prepare(`
         UPDATE conductor_tasks
-        SET assigned_to_agent = ?, assigned_at = datetime('now'), status = CASE WHEN status = 'blocked' THEN 'blocked' ELSE 'pending' END
+        SET assigned_to_agent = ?, assigned_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), status = CASE WHEN status = 'blocked' THEN 'blocked' ELSE 'pending' END
         WHERE id = ?
       `).run(bestAgent.agentId, taskId)
 
@@ -418,7 +418,7 @@ conductorRouter.post('/auto-assign', async (c) => {
         INSERT INTO conductor_tasks
           (id, title, description, priority, assigned_to_agent, created_by_agent,
            project_id, parent_task_id, required_capabilities, status, assigned_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
       `).run(
         subId,
         `[Delegated] ${task.title} — ${del.caps.join(', ')}`,
@@ -528,6 +528,7 @@ conductorRouter.get('/:id', (c) => {
 conductorRouter.post('/', async (c) => {
   try {
     const body = await c.req.json()
+    const headerApiKeyOwner = c.req.header('X-API-Key-Owner')
     let {
       title,
       description,
@@ -541,7 +542,7 @@ conductorRouter.post('/', async (c) => {
       requiredCapabilities,
       // Identity fields for auto-setting created_by_agent
       agentId,
-      apiKeyOwner,
+      apiKeyOwner = headerApiKeyOwner,
       sessionAgent,
     } = body as {
       title?: string
@@ -638,8 +639,13 @@ conductorRouter.post('/', async (c) => {
 // ── Pickup task (flexible identity matching) ──
 conductorRouter.post('/pickup', async (c) => {
   try {
-    const body = await c.req.json()
-    const { agentId, apiKeyOwner, sessionAgent } = body as {
+    let body: any = {}
+    try {
+      body = await c.req.json()
+    } catch {}
+
+    const headerApiKeyOwner = c.req.header('X-API-Key-Owner')
+    const { agentId, apiKeyOwner = headerApiKeyOwner, sessionAgent } = body as {
       agentId?: string
       apiKeyOwner?: string
       sessionAgent?: string
@@ -667,7 +673,7 @@ conductorRouter.post('/pickup', async (c) => {
     const pickedUpBy = agentId ?? apiKeyOwner ?? sessionAgent
     db.prepare(`
       UPDATE conductor_tasks
-      SET status = 'accepted', assigned_to_agent = COALESCE(assigned_to_agent, ?), accepted_at = datetime('now')
+      SET status = 'accepted', assigned_to_agent = COALESCE(assigned_to_agent, ?), accepted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ? AND status = 'pending'
     `).run(pickedUpBy, matchedTask.id)
 
@@ -708,10 +714,10 @@ conductorRouter.put('/:id', async (c) => {
       updates.push('status = ?')
       params.push(status)
       if (status === 'completed' || status === 'failed') {
-        updates.push("completed_at = datetime('now')")
+        updates.push("completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
       }
       if (status === 'in_progress' && !existing.accepted_at) {
-        updates.push("accepted_at = datetime('now')")
+        updates.push("accepted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
       }
     }
     if (result !== undefined) {
@@ -761,8 +767,8 @@ conductorRouter.put('/:id', async (c) => {
             console.warn('[recipe-capture] Task capture error:', (e as Error).message)
             try {
               db.prepare(
-                `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, error_message)
-                 VALUES ('task', ?, ?, ?, 'error', ?)`
+                `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, error_message, created_at)
+                 VALUES ('task', ?, ?, ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
               ).run(id, existing.assigned_to_agent ?? null, existing.project_id ?? null, (e as Error).message?.slice(0, 500))
             } catch { /* ignore */ }
           })
@@ -770,8 +776,8 @@ conductorRouter.put('/:id', async (c) => {
           console.warn('[recipe-capture] Module load error:', (e as Error).message)
           try {
             db.prepare(
-              `INSERT INTO recipe_capture_log (source, source_id, status, error_message)
-               VALUES ('task', ?, 'error', ?)`
+              `INSERT INTO recipe_capture_log (source, source_id, status, error_message, created_at)
+               VALUES ('task', ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
             ).run(id, `Module load: ${(e as Error).message}`.slice(0, 500))
           } catch { /* ignore */ }
         })
@@ -860,7 +866,7 @@ conductorRouter.put('/:id', async (c) => {
       if (currentStatus && currentStatus.status !== 'completed') {
         db.prepare(`
           UPDATE conductor_tasks
-          SET status = 'completed', completed_at = datetime('now'), completed_by = COALESCE(completed_by, ?)
+          SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), completed_by = COALESCE(completed_by, ?)
           WHERE id = ? AND status != 'completed'
         `).run(completedBy ?? existing.assigned_to_agent, id)
 
@@ -983,7 +989,7 @@ conductorRouter.post('/:id/cancel', (c) => {
 
     db.prepare(`
       UPDATE conductor_tasks
-      SET status = 'cancelled', completed_at = datetime('now')
+      SET status = 'cancelled', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
     `).run(id)
 
@@ -1117,7 +1123,7 @@ conductorRouter.post('/:id/finalize', async (c) => {
 
     db.prepare(`
       UPDATE conductor_tasks
-      SET result = ?, status = 'completed', completed_at = datetime('now')
+      SET result = ?, status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
     `).run(JSON.stringify(finalResult), taskId)
 

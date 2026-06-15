@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { readFileSync } from 'node:fs'
+import { db } from './db/client.js'
 
 // Read version from version.json (copied at build time)
 let appVersion = process.env['APP_VERSION'] || '0.0.0-dev'
@@ -50,6 +51,69 @@ app.use('*', cors({
 }))
 app.use('*', honoLogger())
 
+// ── Project Enabled Guard Middleware ──
+app.use('/api/*', async (c, next) => {
+  // Bypasses: GET requests, PUT requests (used to toggle/enable project)
+  if (c.req.method === 'GET' || c.req.method === 'PUT') {
+    return next()
+  }
+
+  // Also bypass setup, keys, settings, and webhook management
+  const path = c.req.path
+  if (
+    path.startsWith('/api/setup') ||
+    path.startsWith('/api/keys') ||
+    path.startsWith('/api/settings') ||
+    path.startsWith('/api/system') ||
+    path.startsWith('/api/accounts') ||
+    path.startsWith('/api/webhooks')
+  ) {
+    return next()
+  }
+
+  let projectId: string | null = null
+
+  // 1. Try to read from query params
+  projectId = c.req.query('projectId') || c.req.query('project_id') || null
+
+  // 2. Try to read from JSON body by cloning the request
+  if (!projectId && c.req.header('Content-Type')?.includes('application/json')) {
+    try {
+      const cloned = c.req.raw.clone()
+      const body = (await cloned.json()) as Record<string, any>
+      projectId = body?.projectId || body?.project_id || null
+
+      const repo = body?.repo || null
+      if (!projectId && repo && typeof repo === 'string') {
+        // Resolve project slug/name from repo URL
+        projectId = repo.replace(/\.git$/, '').replace(/^https?:\/\/.*\//, '').split(/[/\\]/).pop() || repo
+      }
+    } catch (e) {
+      // ignore JSON parse/read errors
+    }
+  }
+
+  if (projectId) {
+    // Look up project in database by id or slug
+    const project = db.prepare(`
+      SELECT id, enabled FROM projects 
+      WHERE id = ? 
+         OR slug = ? COLLATE NOCASE 
+         OR name = ? COLLATE NOCASE
+    `).get(projectId, projectId, projectId) as { id: string; enabled: number } | undefined
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project not registered in Cortex Hub. Please register it in the dashboard first.' }, 403)
+    }
+
+    if (project.enabled === 0) {
+      return c.json({ success: false, error: 'Cortex Hub is disabled for this project.' }, 403)
+    }
+  }
+
+  await next()
+})
+
 app.get('/health', async (c) => {
   const startTime = Date.now()
 
@@ -67,11 +131,132 @@ app.get('/health', async (c) => {
     checkService('cliproxy', `${process.env['LLM_PROXY_URL'] || 'http://llm-proxy:8317'}/v1/models`),
     checkService('gitnexus', `${process.env['GITNEXUS_URL'] || 'http://gitnexus:4848'}/health`),
     checkService('mem9', `http://localhost:${process.env.PORT || 4000}/api/mem9/health`),
-    checkService('mcp', `${process.env['MCP_HEALTH_URL'] || 'https://cortex-mcp.jackle.dev/health'}`),
+    checkService('mcp', `${process.env['MCP_HEALTH_URL'] || 'http://cortex-mcp:8317/health'}`),
   ])
 
-  const services = { qdrant, cliproxy, gitnexus, mem9, mcp }
-  const allOk = Object.values(services).every(s => s === 'ok')
+  // Query enabled Ollama accounts
+  let ollamaStatus: 'ok' | 'error' | 'not_configured' = 'not_configured'
+  let ollamaError: string | undefined = undefined
+
+  try {
+    const ollamaAccounts = db
+      .prepare("SELECT name, api_base, api_key FROM provider_accounts WHERE type = 'ollama' AND status = 'enabled'")
+      .all() as Array<{ name: string; api_base: string; api_key: string | null }>
+
+    if (ollamaAccounts.length > 0) {
+      ollamaStatus = 'ok'
+      for (const acct of ollamaAccounts) {
+        try {
+          const url = `${acct.api_base.replace(/\/$/, '')}/models`
+          const headers: Record<string, string> = {}
+          if (acct.api_key && acct.api_key !== 'none') {
+            headers['Authorization'] = `Bearer ${acct.api_key}`
+          }
+          const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) })
+          if (!res.ok) {
+            ollamaStatus = 'error'
+            ollamaError = `Ollama server "${acct.name}" returned ${res.status}: ${res.statusText}`
+            break
+          }
+        } catch (err) {
+          ollamaStatus = 'error'
+          ollamaError = `Ollama server "${acct.name}" is unreachable: ${String(err)}`
+          break
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('Failed to check Ollama health:', { error: err })
+  }
+
+  // Check active Chat Model health
+  let chatModelStatus: 'ok' | 'error' | 'not_configured' = 'not_configured'
+  let chatModelError: string | undefined = undefined
+  try {
+    const row = db.prepare("SELECT chain FROM model_routing WHERE purpose = 'chat'").get() as { chain: string } | undefined
+    if (row?.chain) {
+      const chain = JSON.parse(row.chain) as Array<{ accountId: string; model: string }>
+      if (chain.length > 0 && chain[0]) {
+        const slot = chain[0]
+        const acct = db
+          .prepare("SELECT name, api_base, api_key, type FROM provider_accounts WHERE id = ? AND status = 'enabled'")
+          .get(slot.accountId) as { name: string; api_base: string; api_key: string | null; type: string } | undefined
+
+        if (!acct) {
+          chatModelStatus = 'error'
+          chatModelError = `Configured chat account "${slot.accountId}" not found or disabled.`
+        } else {
+          try {
+            if (acct.type === 'gemini') {
+              const base = acct.api_base.replace(/\/$/, '')
+              const apiKey = acct.api_key ?? ''
+              const url = `${base}/models/${slot.model}?key=${apiKey}`
+              const res = await fetch(url, { signal: AbortSignal.timeout(3000) })
+              if (!res.ok) {
+                chatModelStatus = 'error'
+                chatModelError = `Gemini API check failed: ${res.status} ${res.statusText}`
+              } else {
+                chatModelStatus = 'ok'
+              }
+            } else if (acct.type === 'ollama') {
+              const url = `${acct.api_base.replace(/\/$/, '')}/models`
+              const headers: Record<string, string> = {}
+              if (acct.api_key && acct.api_key !== 'none') {
+                headers['Authorization'] = `Bearer ${acct.api_key}`
+              }
+              const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) })
+              if (!res.ok) {
+                chatModelStatus = 'error'
+                chatModelError = `Ollama check failed: ${res.status}`
+              } else {
+                const data = (await res.json()) as { data?: Array<{ id: string }> }
+                const models = data.data ?? []
+                const exists = models.some((m) => m.id === slot.model || m.id.split(':')[0] === slot.model.split(':')[0])
+                if (!exists) {
+                  chatModelStatus = 'error'
+                  chatModelError = `Model "${slot.model}" is not downloaded on Ollama.`
+                } else {
+                  chatModelStatus = 'ok'
+                }
+              }
+            } else {
+              const url = `${acct.api_base.replace(/\/$/, '')}/models`
+              const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+              if (acct.api_key) headers['Authorization'] = `Bearer ${acct.api_key}`
+              const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) })
+              if (!res.ok) {
+                chatModelStatus = 'error'
+                chatModelError = `API key/endpoint check failed: ${res.status} ${res.statusText}`
+              } else {
+                chatModelStatus = 'ok'
+              }
+            }
+          } catch (err) {
+            chatModelStatus = 'error'
+            chatModelError = `Connection failed: ${String(err)}`
+          }
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('Failed to check chat model health:', { error: err })
+  }
+
+  const services = {
+    qdrant,
+    cliproxy,
+    gitnexus,
+    mem9,
+    mcp,
+    ollama: ollamaStatus,
+    chatModel: chatModelStatus,
+  }
+  const allOk = Object.entries(services).every(([name, status]) => {
+    if (name === 'ollama' || name === 'chatModel') {
+      return status !== 'error'
+    }
+    return status === 'ok'
+  })
 
   return c.json({
     status: allOk ? 'ok' : 'degraded',
@@ -79,11 +264,13 @@ app.get('/health', async (c) => {
     version: appVersion,
     commit: process.env['COMMIT_SHA'] || 'dev',
     buildDate: process.env['BUILD_DATE'] || 'unknown',
-    image: `ghcr.io/lktiep/cortex-hub:${(process.env['COMMIT_SHA'] || 'dev').slice(0, 7)}`,
+    image: `${process.env['CORTEX_IMAGE_NAMESPACE'] || 'ghcr.io/lktiep'}/cortex-hub:${(process.env['COMMIT_SHA'] || 'dev').slice(0, 7)}`,
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
     responseTime: Date.now() - startTime,
     services,
+    ollamaError,
+    chatModelError,
   })
 })
 
@@ -143,27 +330,4 @@ try {
   setupConductorWebSocket(server as any)
 } catch (e) {
   console.warn('[ws] Conductor WebSocket not available:', (e as Error).message)
-}
-
-// Pre-warm local embedding model if EMBEDDING_PROVIDER=local.
-// The first cold-load downloads ~25MB and can take 5-10s. Doing it at
-// startup avoids the first API request hanging or timing out.
-if (process.env['EMBEDDING_PROVIDER'] === 'local') {
-  // Defer to next tick so it doesn't block startup logs
-  setTimeout(() => {
-    void (async () => {
-      try {
-        const t0 = Date.now()
-        logger.info('[embed] Importing @cortex/shared-mem9...')
-        const { embedLocal } = await import('@cortex/shared-mem9')
-        const model = process.env['LOCAL_EMBEDDING_MODEL'] || 'Xenova/all-MiniLM-L6-v2'
-        logger.info(`[embed] Pre-warming local model: ${model}`)
-        const v = await embedLocal('warmup', model)
-        logger.info(`[embed] Local model ready in ${Date.now() - t0}ms (dim=${v.length})`)
-      } catch (e) {
-        const err = e as Error
-        logger.error(`[embed] Local pre-warm FAILED: ${err.message}\n${err.stack?.slice(0, 2000)}`)
-      }
-    })()
-  }, 500)
 }

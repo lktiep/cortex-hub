@@ -13,8 +13,14 @@ echo -e "${BLUE}>>> Bootstrapping Cortex Hub...${NC}"
 
 # 1. Clone if not in repo
 if [ ! -d ".git" ]; then
+    REPO_URL="${CORTEX_REPO_URL:-}"
+    if [ -z "$REPO_URL" ]; then
+        echo "Error: Not in a git repo and CORTEX_REPO_URL is not set."
+        echo "Usage: CORTEX_REPO_URL=<your-repo-url> bash install.sh"
+        exit 1
+    fi
     echo -e "${BLUE}>>> Cloning Cortex Hub repository...${NC}"
-    git clone https://github.com/lktiep/cortex-hub.git
+    git clone "$REPO_URL"
     cd cortex-hub
 fi
 

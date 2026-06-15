@@ -10,6 +10,7 @@
   flex-direction: column;
   z-index: 100;
   animation: slide-in-left 0.3s ease-out;
+  transition: width var(--transition-normal);
 }
 
 /* ── Hamburger Button (mobile only) ── */
@@ -125,8 +126,9 @@
 
 .navItem.active {
   background: var(--accent-glow);
-  color: var(--accent-secondary);
-  font-weight: 500;
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 4px 12px -2px rgba(124, 92, 252, 0.15);
 }
 
 /* Animated pill indicator for active state */
@@ -159,6 +161,7 @@
 
 .navItem.active .navIcon {
   color: var(--accent-primary);
+  filter: drop-shadow(0 0 4px rgba(124, 92, 252, 0.5));
 }
 
 .navLabel {
@@ -264,4 +267,71 @@
   .footer {
     padding: var(--space-3) var(--space-4);
   }
+}
+
+/* ── Collapse Button ── */
+.collapseButton {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.collapseButton:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* Hide toggle on mobile */
+@media (max-width: 768px) {
+  .collapseButton {
+    display: none;
+  }
+}
+
+/* ── Collapsed Sidebar Specific Styles ── */
+.sidebar.collapsed {
+  width: var(--sidebar-width);
+}
+
+.sidebar.collapsed .brand {
+  padding: var(--space-6) 0;
+  flex-direction: column;
+  gap: var(--space-4);
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar.collapsed .logo {
+  justify-content: center;
+}
+
+.sidebar.collapsed .navItem {
+  justify-content: center;
+  padding: var(--space-3) 0;
+}
+
+.sidebar.collapsed .navIcon {
+  margin: 0;
+}
+
+.sidebar.collapsed .footer {
+  padding: var(--space-4) 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.statusDotWrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
 }

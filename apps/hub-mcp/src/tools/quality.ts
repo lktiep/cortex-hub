@@ -2,6 +2,7 @@ import type { Env } from '../types.js'
 import { z } from 'zod'
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register quality and session trackers.
@@ -20,7 +21,7 @@ export function registerQualityTools(server: McpServer, env: Env) {
     },
     async ({ gate_name, passed, score, details }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/quality/report`, {
+        const response = await apiCall(env, '/api/quality/report', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ gate_name, passed, score, details }),
@@ -38,7 +39,7 @@ export function registerQualityTools(server: McpServer, env: Env) {
         // If knowledge was searched in this session, update completion/fallback counters
         try {
           const feedbackAction = passed ? 'completed' : 'fallback'
-          await fetch(`${env.DASHBOARD_API_URL}/api/knowledge/track-feedback`, {
+          await apiCall(env, '/api/knowledge/track-feedback', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: feedbackAction, gate_name }),

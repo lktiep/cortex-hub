@@ -72,11 +72,11 @@ orgsRouter.put('/:id', async (c) => {
     if (name) {
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
       db.prepare(
-        'UPDATE organizations SET name = ?, slug = ?, description = ?, updated_at = datetime("now") WHERE id = ?'
+        'UPDATE organizations SET name = ?, slug = ?, description = ?, updated_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\') WHERE id = ?'
       ).run(name.trim(), slug, description ?? null, id)
     } else {
       db.prepare(
-        'UPDATE organizations SET description = ?, updated_at = datetime("now") WHERE id = ?'
+        'UPDATE organizations SET description = ?, updated_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\') WHERE id = ?'
       ).run(description ?? null, id)
     }
 
@@ -173,6 +173,31 @@ orgsRouter.post('/:id/projects', async (c) => {
 // ── Projects Router (flat) ──
 export const projectsRouter = new Hono()
 
+// ── Lookup project by repo URL ──
+projectsRouter.get('/lookup', (c) => {
+  const repo = c.req.query('repo')
+  if (!repo) return c.json({ error: 'repo query param required' }, 400)
+
+  try {
+    // Try exact match first, then without .git suffix
+    const cleanRepo = repo.replace(/\.git$/, '')
+    const project = db
+      .prepare(
+        `SELECT id, name, git_repo_url, indexed_at, indexed_symbols
+         FROM projects
+         WHERE git_repo_url = ? OR REPLACE(git_repo_url, '.git', '') = ?
+         LIMIT 1`
+      )
+      .get(repo, cleanRepo) as Record<string, unknown> | undefined
+
+    if (!project) return c.json({ error: 'Project not found' }, 404)
+    return c.json(project)
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+
 // ── Get Project ──
 projectsRouter.get('/:id', (c) => {
   const { id } = c.req.param()
@@ -232,18 +257,20 @@ projectsRouter.get('/:id', (c) => {
   }
 })
 
+
 // ── Update Project ──
 projectsRouter.put('/:id', async (c) => {
   const { id } = c.req.param()
   try {
     const body = await c.req.json()
-    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken } = body as {
+    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken, enabled } = body as {
       name?: string
       description?: string
       gitRepoUrl?: string
       gitProvider?: string
       gitUsername?: string
       gitToken?: string
+      enabled?: boolean | number
     }
 
     const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(id)
@@ -262,7 +289,8 @@ projectsRouter.put('/:id', async (c) => {
         git_provider = COALESCE(?, git_provider),
         git_username = COALESCE(?, git_username),
         git_token = COALESCE(?, git_token),
-        updated_at = datetime('now')
+        enabled = COALESCE(?, enabled),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
        WHERE id = ?`
     ).run(
       name ?? null,
@@ -272,6 +300,7 @@ projectsRouter.put('/:id', async (c) => {
       gitProvider ?? null,
       gitUsername ?? null,
       gitToken ?? null,
+      enabled !== undefined ? (enabled ? 1 : 0) : null,
       id
     )
 
@@ -280,6 +309,7 @@ projectsRouter.put('/:id', async (c) => {
     return c.json({ error: String(error) }, 500)
   }
 })
+
 
 // ── Delete Project ──
 projectsRouter.delete('/:id', (c) => {
@@ -304,30 +334,6 @@ projectsRouter.get('/', (c) => {
       )
       .all()
     return c.json({ projects })
-  } catch (error) {
-    return c.json({ error: String(error) }, 500)
-  }
-})
-
-// ── Lookup project by repo URL ──
-projectsRouter.get('/lookup', (c) => {
-  const repo = c.req.query('repo')
-  if (!repo) return c.json({ error: 'repo query param required' }, 400)
-
-  try {
-    // Try exact match first, then without .git suffix
-    const cleanRepo = repo.replace(/\.git$/, '')
-    const project = db
-      .prepare(
-        `SELECT id, name, git_repo_url, indexed_at, indexed_symbols
-         FROM projects
-         WHERE git_repo_url = ? OR REPLACE(git_repo_url, '.git', '') = ?
-         LIMIT 1`
-      )
-      .get(repo, cleanRepo) as Record<string, unknown> | undefined
-
-    if (!project) return c.json({ error: 'Project not found' }, 404)
-    return c.json(project)
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }

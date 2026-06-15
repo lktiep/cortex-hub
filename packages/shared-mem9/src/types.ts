@@ -22,6 +22,8 @@ export interface EmbedderConfig {
   model: string
   /** Dimensions override (leave undefined for provider default) */
   dimensions?: number
+  /** Optional gateway URL to route all embedding calls through the LLM Gateway */
+  gatewayUrl?: string
 }
 
 export interface VectorStoreConfig {

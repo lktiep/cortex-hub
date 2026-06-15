@@ -14,6 +14,7 @@ import {
   type Project,
   type RecipeStats,
 } from '@/lib/api'
+import { parseDateSafe } from '@/lib/date'
 import styles from './page.module.css'
 
 // ── Create Dialog ──
@@ -170,7 +171,7 @@ function DocumentCard({
           {doc.generation != null && doc.generation > 0 && (
             <span title="Evolution generation">v{doc.generation}</span>
           )}
-          <span title="Created">{new Date(doc.created_at).toLocaleDateString()}</span>
+          <span title="Created">{parseDateSafe(doc.created_at).toLocaleDateString()}</span>
         </div>
 
         <div className={styles.docActions}>
@@ -355,7 +356,7 @@ function RecipeHealthPanel({ data }: { data: RecipeStats }) {
             </div>
             {data.capture.recent.map((entry) => (
               <div key={entry.id} className={`${styles.captureLogRow} ${styles['captureStatus_' + entry.status]}`}>
-                <span>{new Date(entry.created_at).toLocaleString()}</span>
+                <span>{parseDateSafe(entry.created_at).toLocaleString()}</span>
                 <span>{entry.source}</span>
                 <span className={`badge ${
                   entry.status === 'captured' || entry.status === 'derived' ? 'badge-healthy' :

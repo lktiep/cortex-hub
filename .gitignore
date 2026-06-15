@@ -20,6 +20,7 @@ apps/hub-mcp/src/**/*.d.ts
 .env
 .env.local
 .env.*.local
+GEMINI.local.md
 
 # Data / Database
 data/

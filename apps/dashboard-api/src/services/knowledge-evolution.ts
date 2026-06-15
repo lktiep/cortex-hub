@@ -25,7 +25,7 @@ const CHUNK_SIZE = 1500
 const CHUNK_OVERLAP = 300
 
 const CLIPROXY_URL = () =>
-  process.env.LLM_PROXY_URL || process.env.CLIPROXY_URL || 'http://localhost:8317'
+  process.env.LLM_ROUTED_URL || `http://localhost:${process.env.PORT || 4000}/api/llm`
 
 // Anti-loop: track docs addressed in current health check cycle
 const addressedInCycle = new Set<string>()
@@ -80,6 +80,28 @@ interface FixResult {
   reasoning: string
 }
 
+function resolveLlmModel(): string {
+  // 1. Dashboard chat routing chain (what user selected in Providers UI)
+  try {
+    const row = db.prepare(
+      "SELECT chain FROM model_routing WHERE purpose = 'chat'"
+    ).get() as { chain: string } | undefined
+    if (row?.chain) {
+      const chain = JSON.parse(row.chain) as { model?: string }[]
+      if (chain[0]?.model) return chain[0].model
+    }
+  } catch {
+    // DB might not be ready yet
+  }
+
+  // 2. Explicit env var
+  const envModel = process.env.RECIPE_LLM_MODEL
+  if (envModel) return envModel
+
+  // 3. Fallback
+  return ''
+}
+
 async function generateFix(doc: {
   id: string
   title: string
@@ -105,7 +127,7 @@ async function generateFix(doc: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: process.env.RECIPE_LLM_MODEL || 'gemini-2.5-flash',
+        model: resolveLlmModel(),
         messages: [
           {
             role: 'system',
@@ -182,7 +204,7 @@ async function applyFix(oldDoc: { id: string; title: string; project_id: string 
   ).run(oldDoc.id, newDocId, fix.change_summary)
 
   // Archive old doc
-  db.prepare("UPDATE knowledge_documents SET status = 'archived', updated_at = datetime('now') WHERE id = ?").run(oldDoc.id)
+  db.prepare("UPDATE knowledge_documents SET status = 'archived', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(oldDoc.id)
 
   // Embed and store chunks for new doc
   const embedder = getEmbedder()

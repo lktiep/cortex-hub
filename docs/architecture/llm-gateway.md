@@ -258,8 +258,8 @@ POST http://localhost:4000/api/llm/v1/chat/completions
 
 Or externally via:
 ```
-POST https://cortex-api.jackle.dev/api/llm/v1/embeddings
-POST https://cortex-api.jackle.dev/api/llm/v1/chat/completions
+POST http://localhost:4000/api/llm/v1/embeddings
+POST http://localhost:4000/api/llm/v1/chat/completions
 ```
 
 ---

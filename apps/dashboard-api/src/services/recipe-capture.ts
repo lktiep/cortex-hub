@@ -15,6 +15,7 @@ import { Embedder, VectorStore } from '@cortex/shared-mem9'
 import type { EmbedderConfig, VectorStoreConfig } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
+import { createEmbedder } from '../lib/embedder-factory.js'
 
 const logger = createLogger('recipe-capture')
 
@@ -30,8 +31,8 @@ function logCaptureAttempt(data: {
 }) {
   try {
     db.prepare(
-      `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, title, doc_id, error_message)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, title, doc_id, error_message, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
     ).run(data.source, data.sourceId, data.agentId, data.projectId, data.status, data.title ?? null, data.docId ?? null, data.errorMessage ?? null)
   } catch { /* DB not ready */ }
 }
@@ -42,7 +43,7 @@ const CHUNK_SIZE = 1500
 const CHUNK_OVERLAP = 300
 
 const CLIPROXY_URL = () =>
-  process.env.LLM_PROXY_URL || process.env.CLIPROXY_URL || 'http://localhost:8317'
+  process.env.LLM_ROUTED_URL || `http://localhost:${process.env.PORT || 4000}/api/llm`
 
 // Rate limit: max captures per hour
 const RATE_LIMIT = 5
@@ -75,7 +76,6 @@ function chunkText(text: string): string[] {
 }
 
 function getEmbedder(): Embedder {
-  const { createEmbedder } = require('../lib/embedder-factory.js') as { createEmbedder: () => Embedder }
   return createEmbedder()
 }
 
@@ -94,13 +94,35 @@ interface CaptureAnalysis {
   reasoning: string
 }
 
+function resolveLlmModel(): string {
+  // 1. Dashboard chat routing chain (what user selected in Providers UI)
+  try {
+    const row = db.prepare(
+      "SELECT chain FROM model_routing WHERE purpose = 'chat'"
+    ).get() as { chain: string } | undefined
+    if (row?.chain) {
+      const chain = JSON.parse(row.chain) as { model?: string }[]
+      if (chain[0]?.model) return chain[0].model
+    }
+  } catch {
+    // DB might not be ready yet
+  }
+
+  // 2. Explicit env var
+  const envModel = process.env.RECIPE_LLM_MODEL
+  if (envModel) return envModel
+
+  // 3. Fallback
+  return ''
+}
+
 async function analyzeForCapture(context: string): Promise<CaptureAnalysis | null> {
   try {
     const res = await fetch(`${CLIPROXY_URL()}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: process.env.RECIPE_LLM_MODEL || 'gemini-2.5-flash',
+        model: resolveLlmModel(),
         messages: [
           {
             role: 'system',
@@ -404,7 +426,7 @@ export async function captureFromSession(opts: {
   // Get tool usage from query_logs for this session's agent (last hour)
   const toolUsage = db.prepare(`
     SELECT tool, COUNT(*) as cnt FROM query_logs
-    WHERE agent_id = ? AND created_at > datetime('now', '-1 hour')
+    WHERE agent_id = ? AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 hour')
     GROUP BY tool ORDER BY cnt DESC LIMIT 10
   `).all(opts.agentId ?? '') as Array<{ tool: string; cnt: number }>
 

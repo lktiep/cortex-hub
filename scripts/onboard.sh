@@ -111,10 +111,10 @@ prompt_user_secret() {
 }
 
 # 1. Get MCP URL
-if prompt_user -rp "Enter your Cortex Hub MCP URL [https://cortex-mcp.jackle.dev/mcp]: " INPUT_URL; then
-    MCP_URL=${INPUT_URL:-"https://cortex-mcp.jackle.dev/mcp"}
+if prompt_user -rp "Enter your Cortex Hub MCP URL [http://localhost:8318/mcp]: " INPUT_URL; then
+    MCP_URL=${INPUT_URL:-"http://localhost:8318/mcp"}
 else
-    MCP_URL=${HUB_API_URL:-"https://cortex-mcp.jackle.dev/mcp"}
+    MCP_URL=${HUB_API_URL:-"http://localhost:8318/mcp"}
 fi
 MCP_URL="${MCP_URL%/}"
 
@@ -484,7 +484,7 @@ At the START of every conversation, before doing anything else:
 
 1. Call `cortex_session_start` with:
    ```
-   repo: "https://github.com/lktiep/cortex-hub.git"
+   repo: "$GIT_REPO_URL"
    mode: "development"
    agentId: "antigravity"
    ```
@@ -512,7 +512,7 @@ projectId: "<from session_start response>"
 
 Call `cortex_code_reindex` to update code intelligence:
 ```
-repo: "https://github.com/lktiep/cortex-hub.git"
+repo: "$GIT_REPO_URL"
 branch: "<current branch>"
 ```
 

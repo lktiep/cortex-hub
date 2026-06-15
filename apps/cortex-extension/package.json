@@ -58,7 +58,7 @@
         },
         "cortexHub.hubUrl": {
           "type": "string",
-          "default": "wss://cortex-mcp.jackle.dev",
+          "default": "ws://localhost:8318",
           "markdownDescription": "Cortex Hub WebSocket URL. Falls back to `CORTEX_HUB_WS_URL` env var, then `~/.claude.json` MCP config."
         },
         "cortexHub.agentId": {

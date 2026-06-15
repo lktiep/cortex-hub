@@ -14,7 +14,7 @@ API_KEY="${HUB_API_KEY:-}"
 [ -z "$API_KEY" ] && [ -f ".env" ] && API_KEY=$(grep '^HUB_API_KEY=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' || true)
 [ -z "$API_KEY" ] && API_KEY=$(python3 -c "import json; print(json.load(open('$HOME/.claude.json'))['mcpServers']['cortex-hub']['env'].get('HUB_API_KEY',''))" 2>/dev/null || true)
 
-MCP_URL="${HUB_MCP_URL:-https://cortex-mcp.jackle.dev/mcp}"
+MCP_URL="${HUB_MCP_URL:-http://localhost:8318/mcp}"
 INTERVAL="${1:-10}"
 
 echo "[listen] Cortex task listener started (poll every ${INTERVAL}s)" >&2

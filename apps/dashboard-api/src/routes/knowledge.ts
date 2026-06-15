@@ -10,7 +10,9 @@ import { randomUUID } from 'crypto'
 import { Embedder, VectorStore } from '@cortex/shared-mem9'
 import type { EmbedderConfig, VectorStoreConfig } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
+import { normalizeProjectId } from '../db/project-utils.js'
 import { createLogger } from '@cortex/shared-utils'
+import { createEmbedder } from '../lib/embedder-factory.js'
 
 const logger = createLogger('knowledge')
 
@@ -48,34 +50,8 @@ function chunkText(text: string): string[] {
   return chunks
 }
 
-function resolveGeminiApiKey(): string {
-  const envKey = process.env['GEMINI_API_KEY']
-  if (envKey) return envKey
-  try {
-    const row = db.prepare(
-      "SELECT api_key FROM provider_accounts WHERE type = 'gemini' AND status = 'enabled' AND api_key IS NOT NULL LIMIT 1"
-    ).get() as { api_key: string } | undefined
-    if (row?.api_key) return row.api_key
-  } catch { /* DB might not be ready */ }
-  return ''
-}
-
 function getEmbedder(): Embedder {
-  // EMBEDDING_PROVIDER=local switches to in-process @xenova/transformers
-  // (no network, ~200MB RAM, ~10-50ms/text). Default: gemini.
-  const provider = (process.env['EMBEDDING_PROVIDER'] || 'local') as 'gemini' | 'local'
-  const config: EmbedderConfig = provider === 'local'
-    ? {
-        provider: 'local' as const,
-        apiKey: '',
-        model: process.env['LOCAL_EMBEDDING_MODEL'] || 'Xenova/all-MiniLM-L6-v2',
-      }
-    : {
-        provider: 'gemini' as const,
-        apiKey: resolveGeminiApiKey(),
-        model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-001',
-      }
-  return new Embedder(config)
+  return createEmbedder()
 }
 
 function getVectorStore(): VectorStore {
@@ -85,6 +61,8 @@ function getVectorStore(): VectorStore {
   }
   return new VectorStore(config)
 }
+
+
 
 // ── Hierarchical clustering helpers (zero LLM, pure vector math) ──
 
@@ -231,7 +209,7 @@ async function hierarchicalSearch(
 // ── GET / — List documents ──
 knowledgeRouter.get('/', (c) => {
   const tag = c.req.query('tag')
-  const projectId = c.req.query('projectId')
+  const projectId = normalizeProjectId(c.req.query('projectId'))
   const status = c.req.query('status') ?? 'active'
   const limit = Number(c.req.query('limit') ?? 500)
   const offset = Number(c.req.query('offset') ?? 0)
@@ -296,16 +274,8 @@ knowledgeRouter.post('/', async (c) => {
     const tagList = tags ?? []
     const contentPreview = content.slice(0, 500)
 
-    // Normalize project_id: resolve proj-* to slug, and lowercase
-    let normalizedProjectId = projectId ?? null
-    if (normalizedProjectId) {
-      if (normalizedProjectId.startsWith('proj-')) {
-        // Resolve project ID to slug for consistent grouping
-        const proj = db.prepare('SELECT slug FROM projects WHERE id = ?').get(normalizedProjectId) as { slug: string } | undefined
-        if (proj?.slug) normalizedProjectId = proj.slug
-      }
-      normalizedProjectId = normalizedProjectId.toLowerCase()
-    }
+    // Normalize project_id: resolve to canonical lowercase slug
+    const normalizedProjectId = normalizeProjectId(projectId)
 
     // Chunk content
     const chunks = chunkText(content)
@@ -354,7 +324,7 @@ knowledgeRouter.post('/', async (c) => {
 
       // If fixed, archive the parent
       if (origin === 'fixed') {
-        db.prepare("UPDATE knowledge_documents SET status = 'archived', updated_at = datetime('now') WHERE id = ?").run(parentDocId)
+        db.prepare("UPDATE knowledge_documents SET status = 'archived', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(parentDocId)
       }
     }
 
@@ -414,7 +384,7 @@ knowledgeRouter.get('/recipe-stats', (c) => {
       title TEXT,
       doc_id TEXT,
       error_message TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     )`)
   } catch { /* already exists */ }
 
@@ -426,7 +396,7 @@ knowledgeRouter.get('/recipe-stats', (c) => {
 
     const recentCaptures = db.prepare(`
       SELECT * FROM recipe_capture_log
-      WHERE created_at > datetime('now', '-7 days')
+      WHERE created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')
       ORDER BY created_at DESC
       LIMIT 20
     `).all()
@@ -455,7 +425,7 @@ knowledgeRouter.get('/recipe-stats', (c) => {
 
     const usageActivity = db.prepare(`
       SELECT action, COUNT(*) as count FROM knowledge_usage_log
-      WHERE created_at > datetime('now', '-7 days')
+      WHERE created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')
       GROUP BY action
     `).all() as Array<{ action: string; count: number }>
 
@@ -485,7 +455,7 @@ knowledgeRouter.get('/recipe-stats', (c) => {
 // MemPalace-inspired: browse facts ordered by valid_from
 // MUST be before /:id to avoid being caught by the parameterized route
 knowledgeRouter.get('/timeline', (c) => {
-  const projectId = c.req.query('projectId')
+  const projectId = normalizeProjectId(c.req.query('projectId'))
   const hallType = c.req.query('hallType')
 
   let sql = `SELECT id, title, hall_type, valid_from, invalidated_at, superseded_by, content_preview
@@ -515,7 +485,7 @@ knowledgeRouter.post('/:id/invalidate', async (c) => {
   try {
     const result = db.prepare(
       `UPDATE knowledge_documents
-       SET invalidated_at = datetime('now'), superseded_by = COALESCE(?, superseded_by)
+       SET invalidated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), superseded_by = COALESCE(?, superseded_by)
        WHERE id = ? AND status = 'active'`
     ).run(supersededBy ?? null, id)
 
@@ -552,13 +522,13 @@ knowledgeRouter.put('/:id', async (c) => {
   if (!existing) return c.json({ error: 'Document not found' }, 404)
 
   if (title) {
-    db.prepare("UPDATE knowledge_documents SET title = ?, updated_at = datetime('now') WHERE id = ?").run(title, id)
+    db.prepare("UPDATE knowledge_documents SET title = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(title, id)
   }
   if (tags) {
-    db.prepare("UPDATE knowledge_documents SET tags = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(tags), id)
+    db.prepare("UPDATE knowledge_documents SET tags = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(JSON.stringify(tags), id)
   }
   if (status) {
-    db.prepare("UPDATE knowledge_documents SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, id)
+    db.prepare("UPDATE knowledge_documents SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(status, id)
   }
 
   const doc = db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(id)
@@ -635,9 +605,10 @@ knowledgeRouter.post('/search', async (c) => {
     const vector = await embedder.embed(query)
 
     // Build Qdrant filter
+    const normalizedProjectId = normalizeProjectId(projectId)
     const must: Array<Record<string, unknown>> = []
-    if (projectId) {
-      must.push({ key: 'project_id', match: { value: projectId } })
+    if (normalizedProjectId) {
+      must.push({ key: 'project_id', match: { value: normalizedProjectId } })
     }
     if (tags && tags.length > 0) {
       for (const tag of tags) {
@@ -700,7 +671,7 @@ knowledgeRouter.post('/search', async (c) => {
     if (docIds.size > 0) {
       const placeholders = [...docIds].map(() => '?').join(',')
       db.prepare(
-        `UPDATE knowledge_documents SET hit_count = hit_count + 1, selection_count = selection_count + 1, updated_at = datetime('now') WHERE id IN (${placeholders})`
+        `UPDATE knowledge_documents SET hit_count = hit_count + 1, selection_count = selection_count + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id IN (${placeholders})`
       ).run(...docIds)
     }
 
@@ -814,6 +785,7 @@ knowledgeRouter.post('/migrate-clusters', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}))
     const { projectId } = body as { projectId?: string }
+    const normalizedProjectId = normalizeProjectId(projectId)
 
     // Scroll through ALL points in knowledge collection
     let offset: string | null = null
@@ -821,8 +793,8 @@ knowledgeRouter.post('/migrate-clusters', async (c) => {
     let clustersCreated = 0
     let totalPoints = 0
 
-    const scrollFilter = projectId
-      ? { must: [{ key: 'project_id', match: { value: projectId } }] }
+    const scrollFilter = normalizedProjectId
+      ? { must: [{ key: 'project_id', match: { value: normalizedProjectId } }] }
       : undefined
 
     // Get vector size from first point
@@ -1015,7 +987,7 @@ knowledgeRouter.post('/track-feedback', async (c) => {
       SELECT DISTINCT kd.id FROM knowledge_documents kd
       WHERE kd.status = 'active'
         AND kd.selection_count > 0
-        AND kd.updated_at > datetime('now', '-1 hour')
+        AND kd.updated_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 hour')
       ORDER BY kd.updated_at DESC
       LIMIT 10
     `).all() as Array<{ id: string }>
@@ -1029,7 +1001,7 @@ knowledgeRouter.post('/track-feedback', async (c) => {
 
     for (const doc of recentSearched) {
       db.prepare(
-        `UPDATE knowledge_documents SET ${column} = ${column} + 1, updated_at = datetime('now') WHERE id = ?`
+        `UPDATE knowledge_documents SET ${column} = ${column} + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
       ).run(doc.id)
 
       // Log usage

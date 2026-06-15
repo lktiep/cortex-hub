@@ -24,7 +24,7 @@ set -euo pipefail
 
 HOOKS_VERSION=7
 HOOKS_MINOR=0
-MCP_URL_DEFAULT="https://cortex-mcp.jackle.dev/mcp"
+MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
 RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'
@@ -729,7 +729,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/session-init.sh"
+            "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/session-init.sh\""
           }
         ]
       }
@@ -740,7 +740,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/enforce-session.sh"
+            "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-session.sh\""
           }
         ]
       },
@@ -749,7 +749,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/enforce-commit.sh"
+            "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-commit.sh\""
           }
         ]
       }
@@ -760,7 +760,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/track-quality.sh"
+            "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/track-quality.sh\""
           }
         ]
       }
@@ -771,7 +771,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/session-end-check.sh"
+            "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/session-end-check.sh\""
           }
         ]
       }
@@ -804,7 +804,7 @@ Run these steps IN ORDER. Do NOT skip any step. Do NOT proceed to user work unti
 ## Step 1: Session Start
 Call `cortex_session_start`:
 ```
-repo: "https://github.com/lktiep/cortex-hub.git"
+repo: "$GIT_REPO"
 mode: "development"
 agentId: "claude-code"
 ide: "<your IDE>"

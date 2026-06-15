@@ -29,9 +29,11 @@ These return what was done last session, key decisions, and next steps.
 ## Step 3: Conflict Check
 `cortex_changes(agentId: "claude-code", projectId: "<from step 1>")`
 
-## Step 4: Task Pickup
+## Step 4: Task Pickup (Optional)
+If `cortex_task_pickup` tool is available:
 `cortex_task_pickup()` — check for Conductor tasks assigned to you.
 If tasks exist → list them. Ask user which to work on, or continue with their request.
+If the tool is not available (e.g. in solo dev mode), skip this step.
 
 ## Step 5: Working State Check
 Run `git status`. If uncommitted changes:

@@ -1,6 +1,7 @@
 import type { Env } from '../types.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register Session Tools
@@ -31,17 +32,13 @@ export function registerSessionTools(server: McpServer, env: Env) {
         : 'unknown'
 
       // Register session with the dashboard API
-      // API_KEY_OWNER is injected by MCP auth middleware from the validated Bearer token
-      const apiKeyOwner = (env as unknown as Record<string, string>).API_KEY_OWNER ?? null
       let sessionId = `sess_${Math.random().toString(36).substr(2, 9)}`
+      let resolvedProjectId: string | undefined
+      let recentSessions: unknown[] = []
       try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-        if (apiKeyOwner) {
-          headers['X-API-Key-Owner'] = apiKeyOwner
-        }
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/sessions/start`, {
+        const response = await apiCall(env, '/api/sessions/start', {
           method: 'POST',
-          headers,
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: `session_start:${mode ?? 'development'}`,
             repo,
@@ -57,8 +54,10 @@ export function registerSessionTools(server: McpServer, env: Env) {
         })
 
         if (response.ok) {
-          const data = await response.json() as { sessionId?: string }
+          const data = await response.json() as { sessionId?: string; project?: { id: string }; recentSessions?: unknown[] }
           if (data.sessionId) sessionId = data.sessionId
+          if (data.project?.id) resolvedProjectId = data.project.id
+          if (data.recentSessions) recentSessions = data.recentSessions
         }
       } catch {
         // Dashboard API unavailable — continue with local session ID
@@ -70,10 +69,14 @@ export function registerSessionTools(server: McpServer, env: Env) {
       let relevantKnowledge: Array<{ id: string; title: string; description: string; origin: string; quality: Record<string, number> }> = []
       try {
         const searchQuery = `session summary progress next session ${projectName}`
-        const knowledgeRes = await fetch(`${env.DASHBOARD_API_URL}/api/knowledge/search`, {
+        const knowledgeRes = await apiCall(env, '/api/knowledge/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: searchQuery, limit: 5 }),
+          body: JSON.stringify({
+            query: searchQuery,
+            projectId: resolvedProjectId,
+            limit: 5
+          }),
           signal: AbortSignal.timeout(5000),
         })
         if (knowledgeRes.ok) {
@@ -126,6 +129,8 @@ export function registerSessionTools(server: McpServer, env: Env) {
                 capabilities: capabilities ?? [],
                 role: role ?? null,
               },
+              project: resolvedProjectId ? { id: resolvedProjectId } : undefined,
+              recent_sessions: recentSessions.length > 0 ? recentSessions : undefined,
               relevant_knowledge: relevantKnowledge.length > 0 ? relevantKnowledge : undefined,
             }, null, 2)
           }
@@ -143,7 +148,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
     },
     async ({ sessionId, summary }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/sessions/${encodeURIComponent(sessionId)}/end`, {
+        const response = await apiCall(env, `/api/sessions/${encodeURIComponent(sessionId)}/end`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ summary }),
@@ -167,7 +172,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
 
         // Fallback: mark session completed directly if endpoint doesn't exist
         try {
-          await fetch(`${env.DASHBOARD_API_URL}/api/sessions/handoff`, {
+          await apiCall(env, '/api/sessions/handoff', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

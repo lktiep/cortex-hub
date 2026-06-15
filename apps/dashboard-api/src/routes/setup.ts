@@ -11,7 +11,7 @@ const MANAGEMENT_KEY = () =>
 const QDRANT_URL = () =>
   process.env.QDRANT_URL || 'http://localhost:6333'
 const DASHBOARD_URL = () =>
-  process.env.DASHBOARD_URL || 'https://hub.jackle.dev'
+  process.env.DASHBOARD_URL || 'http://localhost:4000'
 
 function managementHeaders() {
   return {
@@ -31,7 +31,7 @@ setupRouter.post('/complete', async (c) => {
   try {
     // Mark setup as complete in DB
     const stmt = db.prepare(
-      "UPDATE setup_status SET completed = 1, completed_at = datetime('now') WHERE id = 1"
+      "UPDATE setup_status SET completed = 1, completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = 1"
     )
     stmt.run()
 
@@ -169,6 +169,12 @@ setupRouter.get('/settings', (c) => {
     geminiApiKey: process.env.GEMINI_API_KEY ? 'configured' : 'not set',
     database: process.env.DATABASE_PATH || 'data/cortex.db',
     version: '0.1.0',
+    externalUrls: {
+      dashboard: process.env.DASHBOARD_URL || null,
+      api: process.env.EXTERNAL_API_URL || null,
+      mcp: process.env.EXTERNAL_MCP_URL || null,
+      llmProxy: process.env.EXTERNAL_LLM_PROXY_URL || null,
+    },
   })
 })
 
@@ -492,7 +498,7 @@ setupRouter.post('/configure-provider', async (c) => {
     if (embedModel) {
       const existing = db.prepare("SELECT purpose FROM model_routing WHERE purpose = 'embedding'").get()
       if (!existing) {
-        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('embedding', ?, datetime('now'))")
+        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('embedding', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))")
           .run(JSON.stringify([{ accountId: id, model: embedModel }]))
       }
     }
@@ -502,7 +508,7 @@ setupRouter.post('/configure-provider', async (c) => {
     if (chatModel) {
       const existing = db.prepare("SELECT purpose FROM model_routing WHERE purpose = 'chat'").get()
       if (!existing) {
-        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('chat', ?, datetime('now'))")
+        db.prepare("INSERT INTO model_routing (purpose, chain, updated_at) VALUES ('chat', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))")
           .run(JSON.stringify([{ accountId: id, model: chatModel }]))
       }
     }

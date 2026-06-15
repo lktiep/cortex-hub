@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
+import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
 import { getMem9 } from './mem9-proxy.js'
 import {
   calculateFromVerificationResults,
@@ -232,7 +233,7 @@ qualityRouter.get('/trends', (c) => {
         MIN(grade) as worst_grade,
         MAX(grade) as best_grade
       FROM quality_reports
-      WHERE created_at >= datetime('now', '-' || ? || ' days')
+      WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-' || ? || ' days')
     `
     const params: unknown[] = [days]
 
@@ -389,7 +390,7 @@ sessionsRouter.post('/start', async (c) => {
     if (existingSession) {
       sessionId = existingSession.id
       db.prepare(
-        `UPDATE session_handoffs SET created_at = datetime('now') WHERE id = ?`
+        `UPDATE session_handoffs SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
       ).run(sessionId)
     } else {
       sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
@@ -405,8 +406,15 @@ sessionsRouter.post('/start', async (c) => {
       ).all()
     }
 
-    const recentStmt = db.prepare('SELECT id, task_summary, created_at FROM session_handoffs ORDER BY created_at DESC LIMIT 3')
-    const recentSessions = recentStmt.all()
+    // Scope recentSessions to the resolved project when available, so /cs init
+    // doesn't surface session summaries from other projects.
+    const recentSessions = project
+      ? db.prepare(
+          'SELECT id, task_summary, created_at FROM session_handoffs WHERE project_id = ? ORDER BY created_at DESC LIMIT 3'
+        ).all((project as Record<string, unknown>).id)
+      : db.prepare(
+          'SELECT id, task_summary, created_at FROM session_handoffs ORDER BY created_at DESC LIMIT 3'
+        ).all()
 
     const projectName = (project?.name as string) ?? 'Unknown Project'
     const projectDesc = (project?.description as string) ?? ''
@@ -421,12 +429,13 @@ sessionsRouter.post('/start', async (c) => {
 
     if (!existingSession) {
       const insertStmt = db.prepare(
-        'INSERT INTO session_handoffs (id, from_agent, project, task_summary, context, status, api_key_name, hostname, os, ide, branch, capabilities, role, last_activity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))'
+        'INSERT INTO session_handoffs (id, from_agent, project, project_id, task_summary, context, status, api_key_name, hostname, os, ide, branch, capabilities, role, last_activity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'), strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'))'
       )
       insertStmt.run(
         sessionId,
         agentId,
         resolvedProject,
+        (project as Record<string, unknown>)?.id ?? null,  // fix: populate project_id FK so sessions are correctly scoped
         `Session started: mode=${mode ?? 'development'}`,
         JSON.stringify({ repo, mode, agentId, projectId: project?.id }),
         'active',
@@ -439,6 +448,7 @@ sessionsRouter.post('/start', async (c) => {
         role ?? null
       )
     }
+
 
     return c.json({
       sessionId,
@@ -496,7 +506,7 @@ sessionsRouter.get('/all', (c) => {
                  COALESCE(SUM(output_size), 0) as output_bytes,
                  COALESCE(SUM(input_size), 0) + COALESCE(SUM(output_size), 0) as data_bytes
           FROM query_logs
-          WHERE agent_id = ? AND created_at >= ? AND created_at <= datetime(?, '+4 hours')
+          WHERE agent_id = ? AND created_at >= ? AND created_at <= strftime('%Y-%m-%dT%H:%M:%SZ', ?, '+4 hours')
             AND status = 'ok'
         `).get(agentId, sessionCreatedAt, sessionCreatedAt) as {
           tool_calls: number; output_bytes: number; data_bytes: number
@@ -557,8 +567,8 @@ sessionsRouter.post('/:id/end', async (c) => {
           console.warn('[recipe-capture] Session capture error:', (e as Error).message)
           try {
             db.prepare(
-              `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, error_message)
-               VALUES ('session', ?, ?, ?, 'error', ?)`
+              `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, error_message, created_at)
+               VALUES ('session', ?, ?, ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
             ).run(id, session.from_agent ?? null, session.project_id ?? null, (e as Error).message?.slice(0, 500))
           } catch { /* ignore */ }
         })
@@ -566,12 +576,13 @@ sessionsRouter.post('/:id/end', async (c) => {
         console.warn('[recipe-capture] Module load error:', (e as Error).message)
         try {
           db.prepare(
-            `INSERT INTO recipe_capture_log (source, source_id, status, error_message)
-             VALUES ('session', ?, 'error', ?)`
+            `INSERT INTO recipe_capture_log (source, source_id, status, error_message, created_at)
+             VALUES ('session', ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
           ).run(id, `Module load: ${(e as Error).message}`.slice(0, 500))
         } catch { /* ignore */ }
       })
     }
+
 
     // Auto-store session summary as searchable memory (safety net)
     // This ensures session context is ALWAYS recoverable even if
@@ -581,16 +592,19 @@ sessionsRouter.post('/:id/end', async (c) => {
       const projectScope = session.project_id
         ? `project-${session.project_id}`
         : agentId
+      const normalizedScope = normalizeMemoryUserId(projectScope)
+      const normalizedProjectId = session.project_id ? normalizeProjectId(session.project_id) : undefined
+
       try {
         const mem9 = getMem9()
         mem9.add({
           messages: [{ role: 'user', content: `[Session Summary] ${summary}` }],
-          userId: projectScope,
+          userId: normalizedScope,
           agentId,
           metadata: {
             type: 'session-summary',
             session_id: id,
-            project_id: session.project_id ?? undefined,
+            project_id: normalizedProjectId ?? undefined,
             project: session.project ?? undefined,
             auto_captured: true,
           },
@@ -601,6 +615,7 @@ sessionsRouter.post('/:id/end', async (c) => {
         console.warn('[session-end] Memory init failed:', (e as Error).message)
       }
     }
+
 
     return c.json({
       success: true,
@@ -646,8 +661,8 @@ sessionsRouter.patch('/:id/complete', async (c) => {
           console.warn('[recipe-capture] Session capture error:', (e as Error).message)
           try {
             db.prepare(
-              `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, error_message)
-               VALUES ('session', ?, ?, ?, 'error', ?)`
+              `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, error_message, created_at)
+               VALUES ('session', ?, ?, ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
             ).run(id, session.from_agent ?? null, session.project_id ?? null, (e as Error).message?.slice(0, 500))
           } catch { /* ignore */ }
         })
@@ -655,8 +670,8 @@ sessionsRouter.patch('/:id/complete', async (c) => {
         console.warn('[recipe-capture] Module load error:', (e as Error).message)
         try {
           db.prepare(
-            `INSERT INTO recipe_capture_log (source, source_id, status, error_message)
-             VALUES ('session', ?, 'error', ?)`
+            `INSERT INTO recipe_capture_log (source, source_id, status, error_message, created_at)
+             VALUES ('session', ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
           ).run(id, `Module load: ${(e as Error).message}`.slice(0, 500))
         } catch { /* ignore */ }
       })

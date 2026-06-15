@@ -25,7 +25,7 @@ $ErrorActionPreference = "Stop"
 # ── Constants ───────────────────────────────────────────────────────────────
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
-$McpUrl = if ($env:HUB_MCP_URL) { $env:HUB_MCP_URL } else { "https://cortex-mcp.jackle.dev/mcp" }
+$McpUrl = if ($env:HUB_MCP_URL) { $env:HUB_MCP_URL } else { "http://localhost:8318/mcp" }
 
 # ── Logging helpers ─────────────────────────────────────────────────────────
 function Write-Log   { param([string]$Msg) Write-Host "[worker $(Get-Date -Format 'HH:mm:ss')] $Msg" }

@@ -48,6 +48,8 @@ services:
     volumes:
       - cliproxy-auth:/CLIProxyAPI/auth
       - ./cliproxy-config.yaml:/CLIProxyAPI/config.yaml
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       TZ: Asia/Ho_Chi_Minh
       MANAGEMENT_PASSWORD: ${MANAGEMENT_PASSWORD:?Set MANAGEMENT_PASSWORD in .env}
@@ -71,14 +73,19 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.gitnexus
-    image: ghcr.io/lktiep/cortex-gitnexus:latest
+      network: host
+    image: ${CORTEX_IMAGE_NAMESPACE:-ghcr.io/lktiep}/cortex-gitnexus:latest
     container_name: cortex-gitnexus
     restart: unless-stopped
+    labels:
+      - "com.containrrr.watchtower.enable=false"
     ports:
       - "4848:4848"
     volumes:
       - api-data:/app/data
       - gitnexus-data:/root/.gitnexus
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       PORT: 4848
     deploy:
@@ -99,12 +106,15 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.dashboard-api
+      network: host
       args:
         COMMIT_SHA: ${COMMIT_SHA:-dev}
         BUILD_DATE: ${BUILD_DATE:-}
-    image: ghcr.io/lktiep/cortex-api:latest
+    image: ${CORTEX_IMAGE_NAMESPACE:-ghcr.io/lktiep}/cortex-api:latest
     container_name: cortex-api
     restart: unless-stopped
+    labels:
+      - "com.containrrr.watchtower.enable=false"
     ports:
       - "4000:4000"
       - "3000:4000" # Backward compatibility for dashboard port
@@ -112,6 +122,8 @@ services:
       - api-data:/app/data
       - gitnexus-data:/root/.gitnexus
       - cliproxy-auth:/app/cliproxy-auth
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
       # Docker socket removed — security risk (root access if API compromised)
     environment:
       TZ: Asia/Ho_Chi_Minh
@@ -124,10 +136,10 @@ services:
       LLM_PROXY_URL: http://llm-proxy:8317
       CLIPROXY_AUTH_DIR: /app/cliproxy-auth
       CLIPROXY_MANAGEMENT_KEY: ${MANAGEMENT_PASSWORD:?Set MANAGEMENT_PASSWORD in .env}
-      DASHBOARD_URL: ${DASHBOARD_URL:-https://hub.jackle.dev}
+      DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:4000}
       # mem9 Configuration
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-gemini-2.5-flash}
+      MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-}
       MEM9_EMBEDDING_MODEL: ${MEM9_EMBEDDING_MODEL:-gemini-embedding-001}
       # Embedding provider: local (default, free, fast) or gemini (API, $$)
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
@@ -157,11 +169,17 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.hub-mcp
-    image: ghcr.io/lktiep/cortex-mcp:latest
+      network: host
+    image: ${CORTEX_IMAGE_NAMESPACE:-ghcr.io/lktiep}/cortex-mcp:latest
     container_name: cortex-mcp
     restart: unless-stopped
+    labels:
+      - "com.containrrr.watchtower.enable=false"
     ports:
       - "8318:8317"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       TZ: Asia/Ho_Chi_Minh
       PORT: 8317
@@ -203,7 +221,7 @@ services:
     environment:
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_POLL_INTERVAL: 300
-      WATCHTOWER_LABEL_ENABLE: "false"
+      WATCHTOWER_LABEL_ENABLE: "true"
       DOCKER_API_VERSION: "1.43"
     deploy:
       resources:

@@ -220,9 +220,7 @@ statsRouter.get('/overview-v2', async (c) => {
     //   code_search: grep would scan ~20 files × ~500 tokens = 10,000 tokens baseline
     //   code_context: manual trace would read ~10 files × ~800 tokens = 8,000 tokens
     //   code_impact: manual impact analysis ~15 files × ~600 tokens = 9,000 tokens
-    //   knowledge_search: agent would re-debug from scratch ~5,000 tokens wasted
     //   memory_search: agent would re-discover context ~3,000 tokens
-    //   code_read: targeted read vs full file scan, ~3x savings
     //   Other tools: conservative 2x savings
     const GREP_BASELINE: Record<string, number> = {
       code_search: 10000,
@@ -230,7 +228,6 @@ statsRouter.get('/overview-v2', async (c) => {
       code_impact: 9000,
       knowledge_search: 5000,
       memory_search: 3000,
-      code_read: 0, // calculated as 3x output
       detect_changes: 6000,
       cypher: 7000,
     }
@@ -349,7 +346,7 @@ statsRouter.get('/budget', (c) => {
       daily_limit INTEGER DEFAULT 0,
       monthly_limit INTEGER DEFAULT 0,
       alert_threshold REAL DEFAULT 0.8,
-      updated_at TEXT DEFAULT (datetime('now'))
+      updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     )`)
     db.exec(`INSERT OR IGNORE INTO budget_settings (id) VALUES (1)`)
 
@@ -385,12 +382,12 @@ statsRouter.post('/budget', async (c) => {
       daily_limit INTEGER DEFAULT 0,
       monthly_limit INTEGER DEFAULT 0,
       alert_threshold REAL DEFAULT 0.8,
-      updated_at TEXT DEFAULT (datetime('now'))
+      updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     )`)
     db.exec(`INSERT OR IGNORE INTO budget_settings (id) VALUES (1)`)
 
     db.prepare(`UPDATE budget_settings SET 
-      daily_limit = ?, monthly_limit = ?, alert_threshold = ?, updated_at = datetime('now')
+      daily_limit = ?, monthly_limit = ?, alert_threshold = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = 1
     `).run(dailyLimit ?? 0, monthlyLimit ?? 0, alertThreshold ?? 0.8)
 
@@ -426,6 +423,18 @@ statsRouter.post('/query-log', async (c) => {
   try {
     const { agentId, tool, params, status, latencyMs, error, projectId, inputSize, outputSize, computeTokens, computeModel } = await c.req.json()
     const resolvedAgent = agentId || 'unknown'
+    
+    // Resolve project slug/name to actual internal UUID (e.g. "Do_An" -> "proj-12224eee")
+    let resolvedProjectId = projectId || null
+    if (resolvedProjectId && !resolvedProjectId.startsWith('proj-')) {
+      const projRecord = db.prepare(
+        "SELECT id FROM projects WHERE slug = ? COLLATE NOCASE OR name = ? COLLATE NOCASE OR slug LIKE ? COLLATE NOCASE"
+      ).get(resolvedProjectId, resolvedProjectId, `%${resolvedProjectId}%`) as { id: string } | undefined
+      if (projRecord) {
+        resolvedProjectId = projRecord.id
+      }
+    }
+
     const stmt = db.prepare('INSERT INTO query_logs (agent_id, tool, params, latency_ms, status, error, project_id, input_size, output_size, compute_tokens, compute_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     stmt.run(
       resolvedAgent,
@@ -434,7 +443,7 @@ statsRouter.post('/query-log', async (c) => {
       latencyMs || 0,
       status || 'ok',
       error || null,
-      projectId || null,
+      resolvedProjectId,
       inputSize || 0,
       outputSize || 0,
       computeTokens || 0,
@@ -445,7 +454,7 @@ statsRouter.post('/query-log', async (c) => {
     // This prevents premature session expiry and enables overnight resume.
     try {
       db.prepare(
-        `UPDATE session_handoffs SET last_activity = datetime('now')
+        `UPDATE session_handoffs SET last_activity = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
          WHERE from_agent = ? AND status = 'active'`
       ).run(resolvedAgent)
     } catch { /* non-critical */ }
@@ -453,7 +462,7 @@ statsRouter.post('/query-log', async (c) => {
     // Bridge backend LLM cost to the unified billing table
     if (computeTokens && computeTokens > 0 && computeModel) {
       const usageStmt = db.prepare('INSERT INTO usage_logs (agent_id, model, total_tokens, request_type, project_id) VALUES (?, ?, ?, ?, ?)')
-      usageStmt.run(agentId || 'unknown', computeModel, computeTokens, 'tool', projectId || null)
+      usageStmt.run(agentId || 'unknown', computeModel, computeTokens, 'tool', resolvedProjectId)
     }
 
     return c.json({ success: true })
@@ -510,7 +519,7 @@ statsRouter.get('/tool-analytics', (c) => {
   const projectId = c.req.query('projectId')
 
   try {
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
 
     // Build WHERE clause dynamically
     const conditions = ['created_at >= ?']
@@ -551,10 +560,9 @@ statsRouter.get('/tool-analytics', (c) => {
       avgLatencyMs: t.avg_latency_ms,
       avgInputSize: t.avg_input_size,
       avgOutputSize: t.avg_output_size,
-      // Token savings: (grep baseline cost × calls) - (cortex response tokens)
       estimatedTokensSaved: (() => {
         const toolKey = t.tool.replace('cortex_', '')
-        const baseline: Record<string, number> = { code_search: 10000, code_context: 8000, code_impact: 9000, knowledge_search: 5000, memory_search: 3000, code_read: 0, detect_changes: 6000, cypher: 7000 }
+        const baseline: Record<string, number> = { code_search: 10000, code_context: 8000, code_impact: 9000, knowledge_search: 5000, memory_search: 3000, detect_changes: 6000, cypher: 7000 }
         const cortexTokens = Math.round(t.total_output_bytes / 4)
         const b = baseline[toolKey]
         if (b !== undefined) return Math.max(0, (b > 0 ? b * t.total_calls : cortexTokens * 3) - cortexTokens)
@@ -638,9 +646,8 @@ statsRouter.get('/session-compliance/:sessionId', (c) => {
 
     const usedTools = new Set(toolCalls.map(t => t.tool))
 
-    // Define recommended tool categories
     const recommendedTools = {
-      discovery: ['cortex_code_search', 'cortex_code_context', 'cortex_cypher', 'cortex_code_read'],
+      discovery: ['cortex_code_search', 'cortex_code_context', 'cortex_cypher'],
       safety: ['cortex_code_impact', 'cortex_detect_changes'],
       learning: ['cortex_knowledge_search', 'cortex_memory_search'],
       contribution: ['cortex_knowledge_store', 'cortex_memory_store'],
@@ -731,9 +738,7 @@ statsRouter.get('/hints/:agentId', (c) => {
       if (currentTool === 'cortex_code_search' && !used.has('cortex_code_context')) {
         hints.push('🔍 If code_search returns empty (repo has 0 flows), try cortex_code_context or cortex_cypher for symbol-level queries.')
       }
-      if (currentTool === 'cortex_code_search' && !used.has('cortex_code_read')) {
-        hints.push('📄 Use cortex_code_read to view full source files found by code_search. Requires projectId + file path.')
-      }
+
       if (currentTool === 'cortex_code_context' && !used.has('cortex_list_repos')) {
         hints.push('📦 If you get "symbol not found", use cortex_list_repos to find the correct projectId for your repository.')
       }
@@ -768,7 +773,7 @@ statsRouter.get('/hints/:agentId', (c) => {
     }
 
     // General hints based on low tool coverage
-    const discoveryTools = ['cortex_code_search', 'cortex_code_context', 'cortex_cypher', 'cortex_code_read']
+    const discoveryTools = ['cortex_code_search', 'cortex_code_context', 'cortex_cypher']
     const usedDiscovery = discoveryTools.filter(t => used.has(t)).length
     if (usedDiscovery === 0 && used.size > 2) {
       hints.push('🔍 You haven\'t used any code discovery tools yet. Try cortex_code_search before grep for better results.')
@@ -822,7 +827,7 @@ statsRouter.get('/conductor/agents', (c) => {
 
     const now = Date.now()
     const enriched = agents.map(a => {
-      const lastMs = new Date(a.lastActivity + 'Z').getTime()
+      const lastMs = new Date(a.lastActivity.endsWith('Z') || a.lastActivity.includes('+') ? a.lastActivity : a.lastActivity + 'Z').getTime()
       const diffMin = (now - lastMs) / 60000
 
       // Get tools

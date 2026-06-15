@@ -6,6 +6,7 @@
 
 # Stage 1: Base with tools (shared by builder + prod-deps)
 FROM node:22-slim AS base
+ENV NODE_OPTIONS="--dns-result-order=ipv4first"
 RUN corepack enable && \
     apt-get update && apt-get install -y --no-install-recommends python3 make g++ && \
     rm -rf /var/lib/apt/lists/*
@@ -41,8 +42,9 @@ ARG BUILD_DATE=unknown
 # Copy source code (deps already in node_modules)
 COPY . .
 
-# Build all apps
-RUN npx turbo build --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web --filter=!@cortex/hub-mcp
+# Build all apps (cleaning pre-existing host builds first to force clean compilation)
+RUN rm -rf apps/dashboard-api/dist apps/dashboard-web/out apps/dashboard-web/.next packages/*/dist && \
+    npx turbo build --force --filter=@cortex/dashboard-api --filter=@cortex/dashboard-web --filter=!@cortex/hub-mcp
 
 
 
@@ -79,8 +81,8 @@ ARG BUILD_DATE=unknown
 ENV COMMIT_SHA=${COMMIT_SHA}
 ENV BUILD_DATE=${BUILD_DATE}
 
-# Install git + SSL certs (required for HTTPS git operations)
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install git + SSL certs (required for HTTPS git operations) and tzdata for timezone config
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates tzdata && rm -rf /var/lib/apt/lists/*
 
 # Copy production node_modules (hoisted, prod only)
 COPY --from=prod-deps /app/node_modules ./node_modules
@@ -116,18 +118,6 @@ COPY --from=builder /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
 
 # Create data directories
 RUN mkdir -p /app/data /app/data/repos
-
-# Pre-download local embedding model into the image so the API process
-# never has to fetch it at runtime (which fails for unknown reasons in
-# the long-running Hono process — see local-embedder.ts notes).
-RUN node -e "(async () => { \
-  const t = await import('@huggingface/transformers'); \
-  t.env.allowLocalModels = false; \
-  t.env.useFSCache = true; \
-  const pipe = await t.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2'); \
-  const out = await pipe('warmup', { pooling: 'mean', normalize: true }); \
-  console.log('[build] Pre-downloaded local embedding model, dim=' + out.dims[1]); \
-})()" || echo "[build] Local embedding pre-download skipped (network error during build)"
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

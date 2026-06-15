@@ -11,6 +11,7 @@ import { join, extname, relative } from 'path'
 import { randomUUID } from 'crypto'
 import { Embedder, VectorStore } from '@cortex/shared-mem9'
 import type { EmbedderConfig, ModelSlot, VectorStoreConfig } from '@cortex/shared-mem9'
+
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
 
@@ -140,7 +141,6 @@ function collectSourceFiles(dir: string): Array<{ path: string; relativePath: st
 // ── Build Embedding Chain from model_routing ──
 
 function buildEmbeddingChain(): { config: EmbedderConfig; chain: ModelSlot[] } {
-  // Get embedding routing
   const routing = db.prepare(
     "SELECT chain FROM model_routing WHERE purpose = 'embedding'"
   ).get() as { chain: string } | undefined
@@ -148,9 +148,8 @@ function buildEmbeddingChain(): { config: EmbedderConfig; chain: ModelSlot[] } {
   const chainSlots: ModelSlot[] = []
 
   if (routing?.chain) {
-    const chain = JSON.parse(routing.chain) as Array<{ accountId: string; model: string }>
-
-    for (const slot of chain) {
+    const parsed = JSON.parse(routing.chain) as Array<{ accountId: string; model: string }>
+    for (const slot of parsed) {
       const account = db.prepare(
         "SELECT id, api_base, api_key, type FROM provider_accounts WHERE id = ? AND status = 'enabled'"
       ).get(slot.accountId) as AccountRow | undefined
@@ -166,21 +165,14 @@ function buildEmbeddingChain(): { config: EmbedderConfig; chain: ModelSlot[] } {
     }
   }
 
-  // Default fallback config — respect EMBEDDING_PROVIDER env var
-  const embeddingProvider = (process.env.EMBEDDING_PROVIDER || 'local') as 'gemini' | 'local'
-  const defaultConfig: EmbedderConfig = embeddingProvider === 'local'
-    ? {
-        provider: 'local' as const,
-        apiKey: '',
-        model: process.env.LOCAL_EMBEDDING_MODEL || 'Xenova/all-MiniLM-L6-v2',
-      }
-    : {
-        provider: 'gemini' as const,
-        apiKey: process.env.GEMINI_API_KEY ?? '',
-        model: process.env.MEM9_EMBEDDING_MODEL || 'gemini-embedding-001',
-      }
+  // Always route through gateway — actual provider resolved by LLM gateway from model_routing DB
+  const gatewayConfig: EmbedderConfig = {
+    provider: 'gemini' as const, // Dummy: gateway ignores this and uses model_routing
+    apiKey: '',
+    model: 'auto',
+  }
 
-  return { config: defaultConfig, chain: embeddingProvider === 'local' ? [] : chainSlots }
+  return { config: gatewayConfig, chain: chainSlots }
 }
 
 // ── Main Embedding Pipeline ──

@@ -66,7 +66,7 @@ indexingRouter.post('/:id/index', async (c) => {
     // Create job record
     const jobId = `idx-${randomUUID().slice(0, 12)}`
     db.prepare(
-      `INSERT INTO index_jobs (id, project_id, branch, status, progress, triggered_by) VALUES (?, ?, ?, 'pending', 0, ?)`
+      `INSERT INTO index_jobs (id, project_id, branch, status, progress, triggered_by, created_at) VALUES (?, ?, ?, 'pending', 0, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
     ).run(jobId, projectId, branch, triggeredBy)
 
     // Fire and forget — run indexing in background
@@ -151,7 +151,7 @@ indexingRouter.post('/:id/index/cancel', (c) => {
     if (!cancelled) {
       // Process already exited, just mark as error
       db.prepare(
-        `UPDATE index_jobs SET status = 'error', error = 'Cancelled by user', completed_at = datetime('now') WHERE id = ?`
+        `UPDATE index_jobs SET status = 'error', error = 'Cancelled by user', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
       ).run(activeJob.id)
     }
 

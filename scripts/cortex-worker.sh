@@ -18,7 +18,7 @@ AGENT_NAME="${HOSTNAME:-worker}"
 ENGINE="claude"
 POLL_INTERVAL=30
 RUN_ONCE=false
-MCP_URL="${HUB_MCP_URL:-https://cortex-mcp.jackle.dev/mcp}"
+MCP_URL="${HUB_MCP_URL:-http://localhost:8318/mcp}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 

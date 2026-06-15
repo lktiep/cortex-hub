@@ -17,6 +17,7 @@ import {
   type ProjectSummary,
 } from '@/lib/api'
 import { Cloud, Link as LinkIcon, Package, Search, Brain, BarChart3, AlertTriangle, Building2, Folder, type LucideIcon, ICON_INLINE } from '@/lib/icons'
+import { parseDateSafe, formatTimeAgo } from '@/lib/date'
 import styles from './page.module.css'
 
 // ── Helpers ──
@@ -30,13 +31,7 @@ function formatNumber(n: number): string {
 }
 
 function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  return `${Math.floor(hrs / 24)}d ago`
+  return formatTimeAgo(dateStr)
 }
 
 function getProviderIcon(provider: string | null): LucideIcon {
@@ -234,7 +229,7 @@ function ProjectCard({
         {enriched?.gitnexus.completedAt ? (
           <span className={styles.projectDate}>Indexed {timeAgo(enriched.gitnexus.completedAt)}</span>
         ) : (
-          <span className={styles.projectDate}>Created {new Date(project.created_at).toLocaleDateString()}</span>
+          <span className={styles.projectDate}>Created {parseDateSafe(project.created_at).toLocaleDateString()}</span>
         )}
       </div>
 

@@ -71,7 +71,7 @@ webhooksRouter.post('/push', async (c) => {
     if (!activeJob) {
       const jobId = `idx-${randomUUID().slice(0, 12)}`
       db.prepare(
-        `INSERT INTO index_jobs (id, project_id, branch, status, progress) VALUES (?, ?, ?, 'pending', 0)`
+        `INSERT INTO index_jobs (id, project_id, branch, status, progress, created_at) VALUES (?, ?, ?, 'pending', 0, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
       ).run(jobId, project.id, branch)
       startIndexing(project.id, jobId, branch).catch(() => {})
       reindexStarted = true
@@ -111,7 +111,7 @@ webhooksRouter.get('/changes', (c) => {
         `SELECT * FROM change_events
          WHERE project_id = ? AND agent_id != ? AND created_at > COALESCE(
            (SELECT created_at FROM change_events WHERE id = ?),
-           datetime('now', '-1 day')
+           strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 day')
          )
          ORDER BY created_at DESC LIMIT ?`
       ).all(projectId, agentId, ack.last_seen_event_id, limit)
@@ -120,7 +120,7 @@ webhooksRouter.get('/changes', (c) => {
       events = db.prepare(
         `SELECT * FROM change_events
          WHERE project_id = ? AND agent_id != ?
-           AND created_at > datetime('now', '-1 day')
+           AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 day')
          ORDER BY created_at DESC LIMIT ?`
       ).all(projectId, agentId, limit)
     }
@@ -144,9 +144,9 @@ webhooksRouter.post('/changes/ack', async (c) => {
 
     db.prepare(
       `INSERT INTO agent_ack (agent_id, project_id, last_seen_event_id, updated_at)
-       VALUES (?, ?, ?, datetime('now'))
+       VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
        ON CONFLICT(agent_id, project_id)
-       DO UPDATE SET last_seen_event_id = excluded.last_seen_event_id, updated_at = datetime('now')`
+       DO UPDATE SET last_seen_event_id = excluded.last_seen_event_id, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')`
     ).run(agentId, projectId, lastSeenEventId)
 
     return c.json({ acknowledged: true })

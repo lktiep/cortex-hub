@@ -150,20 +150,35 @@ export function registerMemoryTools(server: McpServer, env: Env) {
           }
         }
 
+        interface MemoryItem {
+          id: string
+          text: string
+          metadata?: Record<string, unknown>
+          _scope?: string
+        }
+
+        const dataMemories = allMemories as MemoryItem[]
+        if (dataMemories.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `No relevant memories found for query: "${query}"`,
+              },
+            ],
+          }
+        }
+
+        const formattedMemories = dataMemories.map((m, index) => {
+          const scopeStr = m._scope ? ` [Scope: ${m._scope}]` : ''
+          return `### Memory ${index + 1} (ID: ${m.id})${scopeStr}\n\n${m.text || ''}`
+        }).join('\n\n---\n\n')
+
         return {
           content: [
             {
               type: 'text' as const,
-              text: JSON.stringify(
-                {
-                  query,
-                  scopes: searchScopes,
-                  count: allMemories.length,
-                  memories: allMemories,
-                },
-                null,
-                2
-              ),
+              text: `Memories retrieved for query: "${query}"\n\n${formattedMemories}`,
             },
           ],
         }
@@ -173,6 +188,55 @@ export function registerMemoryTools(server: McpServer, env: Env) {
             {
               type: 'text' as const,
               text: `Memory search error: ${error instanceof Error ? error.message : 'Unknown'}`,
+            },
+          ],
+          isError: true,
+        }
+      }
+    }
+  )
+
+  // memory.delete — delete a specific memory by ID
+  server.tool(
+    'cortex_memory_delete',
+    'Delete a specific memory by its ID. Obsolete or incorrect memories should be deleted to prevent them from polluting agent context during search.',
+    {
+      id: z.string().describe('The unique memory ID to delete'),
+    },
+    async ({ id }) => {
+      try {
+        const response = await apiCall(env, `/api/mem9/${id}`, {
+          method: 'DELETE',
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Failed to delete memory: ${response.status} ${errorText}`,
+              },
+            ],
+            isError: true,
+          }
+        }
+
+        const result = await response.json()
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Memory delete error: ${error instanceof Error ? error.message : 'Unknown'}`,
             },
           ],
           isError: true,

@@ -174,7 +174,7 @@ Then run `/install --force` to regenerate `lefthook.yml`.
 
 ### 1. Open Cortex Hub Dashboard
 
-Navigate to **https://hub.jackle.dev**
+Navigate to **http://localhost:3000**
 
 The **Setup Wizard** launches automatically on first visit — configure your LLM provider (OAuth or API key).
 
@@ -209,7 +209,7 @@ If you prefer manual setup over `/install`:
 ### 1. Clone & Run Bootstrap
 
 ```bash
-git clone https://github.com/lktiep/cortex-hub.git
+git clone <your-cortex-hub-repo-url>
 cd cortex-hub
 bash scripts/bootstrap.sh
 # Select: "2) Member"
@@ -225,7 +225,7 @@ bash scripts/install.sh          # macOS/Linux
 ### 3. Verify Connection
 
 ```bash
-curl -s -X POST 'https://cortex-mcp.jackle.dev/mcp' \
+curl -s -X POST 'http://localhost:8318/mcp' \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer YOUR_KEY' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | head -100
@@ -237,10 +237,10 @@ curl -s -X POST 'https://cortex-mcp.jackle.dev/mcp' \
 
 | Service | URL | Port |
 |---------|-----|------|
-| Dashboard | https://hub.jackle.dev | 3000 |
-| API | https://cortex-api.jackle.dev | 4000 |
-| MCP Server | https://cortex-mcp.jackle.dev | 8318 |
-| LLM Proxy | https://cortex-llm.jackle.dev | 8317 |
+| Dashboard | http://localhost:3000 | 3000 |
+| API | http://localhost:4000 | 4000 |
+| MCP Server | http://localhost:8318 | 8318 |
+| LLM Proxy | http://localhost:8317 | 8317 |
 | GitNexus (internal) | http://gitnexus:4848 | 4848 |
 
 ## Troubleshooting
@@ -252,6 +252,6 @@ curl -s -X POST 'https://cortex-mcp.jackle.dev/mcp' \
 | OAuth login fails | Check CLIProxy logs: `docker logs cortex-llm-proxy` |
 | MCP tools not available | Run `/install` or `bash scripts/install.sh --force` |
 | Hooks not enforcing | Check `.cortex/.hooks-version` — run `/install` to update |
-| Post-push webhook not firing | Set `CORTEX_API_URL` env var, or use default (cortex-api.jackle.dev) |
+| Post-push webhook not firing | Set `CORTEX_API_URL` env var, or use default (localhost) |
 | Windows hooks not working | Use `.\scripts\install.ps1` to generate PS1 hooks |
 | `/install` not found | Run `bash scripts/install.sh` from cortex-hub repo first |

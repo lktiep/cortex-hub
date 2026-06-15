@@ -3,6 +3,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
   margin-bottom: var(--space-5);
 }
 
@@ -46,7 +48,8 @@
 .tableWrapper {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  overflow: hidden;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   background: var(--bg-secondary);
 }
 
@@ -54,6 +57,7 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 0.875rem;
+  min-width: 600px;
 }
 
 .table th {
@@ -455,7 +459,7 @@
 /* ── Active Config Panel ── */
 .activeConfigGrid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
@@ -543,11 +547,104 @@
 }
 
 /* Responsive */
-@media (max-width: 1024px) {
+@media (max-width: 1100px) {
+  .table th:nth-child(3),
+  .table td:nth-child(3),
+  .table th:nth-child(4),
+  .table td:nth-child(4) {
+    display: none;
+  }
+}
+
+@media (max-width: 1100px) {
   .configGrid { grid-template-columns: 1fr; }
-  .activeConfigGrid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 800px) {
+  .table th:nth-child(5),
+  .table td:nth-child(5) {
+    display: none;
+  }
 }
 
 @media (max-width: 768px) {
-  .searchBar { width: 200px; }
+  .headerRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .searchBar {
+    width: 100%;
+  }
+}
+
+/* ── Fallback Chain UI Styles ── */
+.chainList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  width: 100%;
+}
+
+.chainSlotRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.slotNumber {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  width: 24px;
+  flex-shrink: 0;
+}
+
+.slotSelectWrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+.slotActions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.slotBtn {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.slotBtn:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.slotBtn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.slotBtnDelete {
+  color: var(--status-error, #ef4444);
+}
+
+.slotBtnDelete:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: var(--status-error, #ef4444);
+  color: #ef4444;
 }

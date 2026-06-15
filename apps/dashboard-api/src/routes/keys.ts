@@ -4,6 +4,30 @@ import { randomBytes, createHash } from 'crypto'
 
 export const keysRouter = new Hono()
 
+async function invalidateMcpCache() {
+  const secret = process.env.INTERNAL_API_SECRET
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (secret) {
+    headers['X-Internal-Secret'] = secret
+  }
+  const urls = ['http://cortex-mcp:8317/auth/cache/invalidate', 'http://localhost:8318/auth/cache/invalidate']
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(1000)
+      })
+      if (res.ok) {
+        break
+      }
+    } catch (e) {
+      // Ignore error and try fallback URL
+    }
+  }
+}
+
 function generateApiKey(): { key: string; hash: string } {
   const prefix = 'sk_ctx_'
   const buffer = randomBytes(32)
@@ -43,7 +67,7 @@ keysRouter.post('/', async (c) => {
       expiresAt = date.toISOString()
     }
 
-    const stmt = db.prepare('INSERT INTO api_keys (id, name, key_hash, scope, permissions, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+    const stmt = db.prepare('INSERT INTO api_keys (id, name, key_hash, scope, permissions, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'))')
     stmt.run(id, name, hash, scope, JSON.stringify(permissions), expiresAt)
 
     return c.json({ 
@@ -67,7 +91,32 @@ keysRouter.delete('/:id', (c) => {
     if (result.changes === 0) {
       return c.json({ error: 'Key not found' }, 404)
     }
+    invalidateMcpCache().catch(() => {})
     return c.json({ success: true })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+keysRouter.put('/:id', async (c) => {
+  const id = c.req.param('id')
+  try {
+    const body = await c.req.json()
+    const { name, scope, permissions = [] } = body
+    
+    if (!name || !scope) {
+      return c.json({ error: 'Name and scope are required' }, 400)
+    }
+
+    const stmt = db.prepare('UPDATE api_keys SET name = ?, scope = ?, permissions = ? WHERE id = ?')
+    const result = stmt.run(name, scope, JSON.stringify(permissions), id)
+
+    if (result.changes === 0) {
+      return c.json({ error: 'Key not found' }, 404)
+    }
+
+    invalidateMcpCache().catch(() => {})
+    return c.json({ success: true, id, name, scope, permissions })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -81,17 +130,17 @@ keysRouter.post('/verify', async (c) => {
     if (!token) {
       return c.json({ valid: false, error: 'Token is required' }, 400)
     }
-
+ 
     const hash = createHash('sha256').update(token).digest('hex')
     const stmt = db.prepare('SELECT id, name, scope, permissions, key_hash FROM api_keys WHERE key_hash = ?')
     const keyRecord = stmt.get(hash) as { id: string; name: string; scope: string; permissions: string; key_hash: string } | undefined
-
+ 
     if (!keyRecord) {
       return c.json({ valid: false, error: 'Invalid API key' }, 401)
     }
-
+ 
     // Update last_used_at
-    const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?')
+    const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\') WHERE id = ?')
     updateStmt.run(keyRecord.id)
 
     return c.json({

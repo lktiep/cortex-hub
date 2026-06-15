@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     scope TEXT NOT NULL,       -- e.g., 'all', 'knowledge', 'hub'
     permissions TEXT,          -- JSON string of permissions
     project_id TEXT,           -- optional scope to a project
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     expires_at TEXT,
     last_used_at TEXT
 );
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS query_logs (
     status TEXT DEFAULT 'ok',
     error TEXT,
     project_id TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE TABLE IF NOT EXISTS session_handoffs (
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS session_handoffs (
     status TEXT DEFAULT 'pending',
     claimed_by TEXT,
     project_id TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     expires_at TEXT
 );
 
@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS organizations (
     name TEXT NOT NULL,
     slug TEXT UNIQUE NOT NULL,
     description TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- ── Projects ──
@@ -66,8 +66,9 @@ CREATE TABLE IF NOT EXISTS projects (
     git_token TEXT,
     indexed_at TEXT,
     indexed_symbols INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
+    enabled BOOLEAN DEFAULT 1,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     UNIQUE(org_id, slug)
 );
 
@@ -84,7 +85,7 @@ CREATE TABLE IF NOT EXISTS index_jobs (
     error TEXT,
     started_at TEXT,
     completed_at TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- ── Usage Logs ──
@@ -97,7 +98,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     total_tokens INTEGER DEFAULT 0,
     project_id TEXT,
     request_type TEXT DEFAULT 'chat',  -- 'chat', 'embedding', 'tool'
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- ── Conductor Tasks ──
@@ -120,7 +121,7 @@ CREATE TABLE IF NOT EXISTS conductor_tasks (
     context TEXT DEFAULT '{}',
     result TEXT,
     completed_by TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     assigned_at TEXT,
     accepted_at TEXT,
     completed_at TEXT
@@ -136,7 +137,7 @@ CREATE TABLE IF NOT EXISTS conductor_task_logs (
     agent_id TEXT,
     action TEXT NOT NULL,
     message TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_conductor_task_logs_task ON conductor_task_logs(task_id);
@@ -150,7 +151,7 @@ CREATE TABLE IF NOT EXISTS conductor_comments (
     comment TEXT NOT NULL,
     comment_type TEXT DEFAULT 'comment'
         CHECK(comment_type IN ('comment', 'agree', 'disagree', 'amendment')),
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_conductor_comments_task ON conductor_comments(task_id);
@@ -159,7 +160,7 @@ CREATE INDEX IF NOT EXISTS idx_conductor_comments_task ON conductor_comments(tas
 CREATE TABLE IF NOT EXISTS hub_config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- Insert defaults
@@ -170,7 +171,7 @@ INSERT OR IGNORE INTO hub_config (key, value) VALUES ('hub_description', 'Self-h
 CREATE TABLE IF NOT EXISTS notification_preferences (
     key TEXT PRIMARY KEY,
     enabled INTEGER DEFAULT 1,
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 INSERT OR IGNORE INTO notification_preferences (key, enabled) VALUES ('agent_disconnect', 1);
@@ -205,8 +206,8 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     valid_from TEXT,
     invalidated_at TEXT,
     superseded_by TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_docs_project ON knowledge_documents(project_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_docs_status ON knowledge_documents(status);
@@ -221,7 +222,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunks (
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
     char_count INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_doc ON knowledge_chunks(document_id);
 
@@ -233,7 +234,7 @@ CREATE TABLE IF NOT EXISTS knowledge_lineage (
     relationship TEXT DEFAULT 'derived'
         CHECK(relationship IN ('derived','fixed')),
     change_summary TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     UNIQUE(parent_id, child_id)
 );
 
@@ -250,7 +251,7 @@ CREATE TABLE IF NOT EXISTS knowledge_usage_log (
     action TEXT NOT NULL
         CHECK(action IN ('suggested','applied','completed','fallback')),
     token_count INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_usage_doc ON knowledge_usage_log(document_id);
@@ -267,7 +268,7 @@ CREATE TABLE IF NOT EXISTS recipe_capture_log (
     title TEXT,
     doc_id TEXT,
     error_message TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_recipe_capture_log_status ON recipe_capture_log(status);
 
@@ -282,15 +283,15 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
     capabilities TEXT DEFAULT '[]',
     models TEXT DEFAULT '[]',
     status TEXT DEFAULT 'enabled',
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- ── Model Routing (purpose → provider/model chain) ──
 CREATE TABLE IF NOT EXISTS model_routing (
     purpose TEXT PRIMARY KEY,
     chain TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- ── Agent Acknowledgement (last seen change event per agent+project) ──
@@ -298,7 +299,7 @@ CREATE TABLE IF NOT EXISTS agent_ack (
     agent_id TEXT NOT NULL,
     project_id TEXT NOT NULL,
     last_seen_event_id TEXT NOT NULL,
-    updated_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     PRIMARY KEY (agent_id, project_id)
 );
 
@@ -308,7 +309,7 @@ CREATE TABLE IF NOT EXISTS budget_settings (
     daily_limit INTEGER DEFAULT 0,
     monthly_limit INTEGER DEFAULT 0,
     alert_threshold REAL DEFAULT 0.8,
-    updated_at TEXT DEFAULT (datetime('now'))
+    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
 -- ── Change Events (git push / manual triggers) ──
@@ -320,7 +321,7 @@ CREATE TABLE IF NOT EXISTS change_events (
     commit_sha TEXT,
     commit_message TEXT,
     files_changed TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_change_events_project ON change_events(project_id);
 CREATE INDEX IF NOT EXISTS idx_change_events_created ON change_events(created_at);
@@ -341,7 +342,7 @@ CREATE TABLE IF NOT EXISTS quality_reports (
     passed INTEGER DEFAULT 0,
     details TEXT,
     api_key_name TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_quality_reports_project ON quality_reports(project_id);
 CREATE INDEX IF NOT EXISTS idx_quality_reports_agent ON quality_reports(agent_id);
@@ -353,3 +354,15 @@ INSERT OR IGNORE INTO setup_status (id, completed) VALUES (1, 0);
 -- Insert default organization
 INSERT OR IGNORE INTO organizations (id, name, slug, description)
 VALUES ('org-default', 'Personal', 'personal', 'Default personal organization');
+
+
+
+-- Create indexes to optimize key verification, hints, and analytics
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_query_logs_agent_created ON query_logs(agent_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_query_logs_project ON query_logs(project_id);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_project ON usage_logs(project_id);
+CREATE INDEX IF NOT EXISTS idx_session_handoffs_agent_status ON session_handoffs(from_agent, status);
+
+

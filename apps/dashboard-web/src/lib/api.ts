@@ -45,7 +45,7 @@ async function apiFetch<T = unknown>(path: string, options: ApiOptions = {}): Pr
 
 // ── Health ──
 export async function checkHealth() {
-  return apiFetch<{ status: string; services?: Record<string, unknown>; uptime?: number; commit?: string; version?: string; buildDate?: string; image?: string }>('/health')
+  return apiFetch<{ status: string; services?: Record<string, unknown>; uptime?: number; commit?: string; version?: string; buildDate?: string; image?: string; ollamaError?: string; chatModelError?: string }>('/health')
 }
 
 // ── API Keys ──
@@ -78,6 +78,17 @@ export async function createApiKey(data: {
 
 export async function revokeApiKey(id: string) {
   return apiFetch<{ success: boolean }>(`/api/keys/${id}`, { method: 'DELETE' })
+}
+
+export async function updateApiKey(id: string, data: {
+  name: string
+  scope: string
+  permissions: string[]
+}) {
+  return apiFetch<{ success: boolean; id: string; name: string; scope: string; permissions: string[] }>(`/api/keys/${id}`, {
+    method: 'PUT',
+    body: data,
+  })
 }
 
 // ── MCP Health ──
@@ -263,6 +274,12 @@ export interface SettingsData {
   services: Record<string, string>
   database: string
   version: string
+  externalUrls?: {
+    dashboard: string | null
+    api: string | null
+    mcp: string | null
+    llmProxy: string | null
+  }
 }
 
 export async function getSettings() {
@@ -298,6 +315,7 @@ export type Project = {
   org_slug?: string
   created_at: string
   updated_at: string
+  enabled?: number
   stats?: { apiKeys: number; queryLogs: number; sessions: number }
 }
 
@@ -354,6 +372,7 @@ export async function updateProject(id: string, data: {
   gitProvider?: string
   gitUsername?: string
   gitToken?: string
+  enabled?: number
 }) {
   return apiFetch<{ success: boolean }>(`/api/projects/${id}`, { method: 'PUT', body: data })
 }

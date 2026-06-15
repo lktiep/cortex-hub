@@ -2,9 +2,8 @@ import { Hono } from 'hono'
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
 import { join, relative } from 'path'
 import { createLogger } from '@cortex/shared-utils'
-import { Embedder } from '@cortex/shared-mem9'
-import type { EmbedderConfig } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
+import { createEmbedder } from '../lib/embedder-factory.js'
 
 const logger = createLogger('intel')
 
@@ -16,19 +15,6 @@ const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 
 /** Max file size for code_read (512KB) */
 const MAX_READ_SIZE = 512 * 1024
-
-/** Resolve Gemini API key for embedding */
-function resolveGeminiApiKey(): string {
-  const envKey = process.env['GEMINI_API_KEY']
-  if (envKey) return envKey
-  try {
-    const row = db.prepare(
-      "SELECT api_key FROM provider_accounts WHERE type = 'gemini' AND status = 'enabled' AND api_key IS NOT NULL LIMIT 1"
-    ).get() as { api_key: string } | undefined
-    if (row?.api_key) return row.api_key
-  } catch { /* DB might not be ready */ }
-  return ''
-}
 
 /**
  * Call GitNexus eval-server HTTP API.
@@ -1029,20 +1015,8 @@ intelRouter.post('/code-search', async (c) => {
     // Resolve collection name
     const collectionName = `cortex-project-${projectId}`
 
-    // Embed the query — respects EMBEDDING_PROVIDER env var
-    const provider = (process.env['EMBEDDING_PROVIDER'] || 'local') as 'gemini' | 'local'
-    const config: EmbedderConfig = provider === 'local'
-      ? {
-          provider: 'local' as const,
-          apiKey: '',
-          model: process.env['LOCAL_EMBEDDING_MODEL'] || 'Xenova/all-MiniLM-L6-v2',
-        }
-      : {
-          provider: 'gemini' as const,
-          apiKey: resolveGeminiApiKey(),
-          model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-001',
-        }
-    const embedder = new Embedder(config)
+    // Embed query through LLM gateway — routes to configured provider (Ollama bge-m3:latest)
+    const embedder = createEmbedder()
     const vector = await embedder.embed(query)
 
     // Build Qdrant filter

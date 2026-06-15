@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register code intelligence tools.
@@ -20,7 +21,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
     params: Record<string, unknown>,
     timeoutMs = 15000,
   ): Promise<unknown> {
-    const response = await fetch(`${apiUrl()}/api/intel/${endpoint}`, {
+    const response = await apiCall(env, `/api/intel/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
@@ -139,7 +140,6 @@ export function registerCodeTools(server: McpServer, env: Env) {
             }
             formatted += '\n---'
             formatted += '\nNext: Run cortex_code_context "<name>" on any symbol to see callers, callees, and full context.'
-            formatted += '\nOr: Run cortex_code_read with file path to see source code.'
           } else {
             formatted += '\n\n---'
             formatted += '\nNo execution flows or symbols found for this query.'
@@ -151,7 +151,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
         const resolvedForCodeSearch = resolvedProject
         if (resolvedForCodeSearch) {
           try {
-            const codeRes = await fetch(`${apiUrl()}/api/intel/code-search`, {
+            const codeRes = await apiCall(env, '/api/intel/code-search', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ query, projectId: resolvedForCodeSearch, branch, limit: limit ?? 5 }),
@@ -187,7 +187,6 @@ export function registerCodeTools(server: McpServer, env: Env) {
                   }
                   codeLines.push('')
                 }
-                codeLines.push('Use cortex_code_read to view the full file content.')
                 formatted += codeLines.join('\n')
               }
             }
@@ -442,7 +441,8 @@ export function registerCodeTools(server: McpServer, env: Env) {
     {},
     async () => {
       try {
-        const response = await fetch(`${apiUrl()}/api/intel/repos`, {
+        const response = await apiCall(env, '/api/intel/repos', {
+          method: 'GET',
           signal: AbortSignal.timeout(10000),
         })
 
@@ -500,93 +500,6 @@ export function registerCodeTools(server: McpServer, env: Env) {
           content: [{
             type: 'text' as const,
             text: `List repos error: ${error instanceof Error ? error.message : 'Unknown'}`,
-          }],
-          isError: true,
-        }
-      }
-    }
-  )
-
-  // ── code_read — read raw source file content ──
-  server.tool(
-    'cortex_code_read',
-    'Read raw source code from an indexed repository. Returns full file content or a line range. Use after cortex_code_search to view complete files. Requires the project to be cloned via Code Indexing.',
-    {
-      file: z.string().describe('Relative file path within the repo (e.g., "src/utils/auth.ts")'),
-      repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL'),
-      projectId: z.string().optional().describe('Project ID. Use repo name instead if possible.'),
-      startLine: z.number().optional().describe('Start line (1-indexed, inclusive)'),
-      endLine: z.number().optional().describe('End line (1-indexed, inclusive)'),
-    },
-    async ({ file, repo, projectId, startLine, endLine }) => {
-      try {
-        const resolvedProject = await resolveRepo(repo, projectId)
-        const res = await fetch(`${apiUrl()}/api/intel/file-content`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectId: resolvedProject, file, startLine, endLine }),
-          signal: AbortSignal.timeout(10000),
-        })
-
-        const data = (await res.json()) as {
-          success?: boolean
-          data?: {
-            file?: string
-            totalLines?: number
-            startLine?: number
-            endLine?: number
-            content?: string
-            sizeBytes?: number
-          }
-          error?: string
-          suggestions?: string[]
-          hint?: string
-        }
-
-        if (!res.ok || !data.success) {
-          let errorMsg = data.error ?? `Failed: ${res.status}`
-          if (data.suggestions && data.suggestions.length > 0) {
-            errorMsg += '\n\nDid you mean one of these files?'
-            for (const s of data.suggestions) {
-              errorMsg += `\n  → ${s}`
-            }
-          }
-          if (data.hint) {
-            errorMsg += `\n\n💡 ${data.hint}`
-          }
-          return {
-            content: [{ type: 'text' as const, text: errorMsg }],
-            isError: true,
-          }
-        }
-
-        const fileData = data.data!
-        const header = `📄 **${fileData.file}** (${fileData.totalLines} lines${fileData.sizeBytes ? `, ${Math.round(fileData.sizeBytes / 1024)}KB` : ''})`
-        const lineRange = fileData.startLine && fileData.endLine
-          ? `\nShowing lines ${fileData.startLine}-${fileData.endLine}`
-          : ''
-
-        // Detect language for syntax highlighting
-        const ext = (fileData.file ?? '').split('.').pop() ?? ''
-        const langMap: Record<string, string> = {
-          ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-          cs: 'csharp', py: 'python', go: 'go', rs: 'rust', java: 'java',
-          kt: 'kotlin', rb: 'ruby', php: 'php', swift: 'swift', dart: 'dart',
-          sql: 'sql', sh: 'bash', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
-          lua: 'lua', vue: 'vue', svelte: 'svelte',
-        }
-        const lang = langMap[ext] ?? ext
-
-        const output = `${header}${lineRange}\n\n\`\`\`${lang}\n${fileData.content}\n\`\`\``
-
-        return {
-          content: [{ type: 'text' as const, text: output }],
-        }
-      } catch (error) {
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `Code read error: ${error instanceof Error ? error.message : 'Unknown'}`,
           }],
           isError: true,
         }

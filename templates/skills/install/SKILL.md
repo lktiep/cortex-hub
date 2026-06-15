@@ -33,7 +33,7 @@ $url = (Invoke-RestMethod "https://api.github.com/repos/lktiep/cortex-hub/conten
 ### If all else fails
 Tell the user to clone the repo and run locally:
 ```
-git clone https://github.com/lktiep/cortex-hub.git ~/Sources/cortex-hub
+git clone <your-cortex-hub-repo-url> ~/Sources/cortex-hub
 bash ~/Sources/cortex-hub/scripts/install.sh
 ```
 

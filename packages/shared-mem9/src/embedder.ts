@@ -6,7 +6,6 @@
  */
 
 import type { EmbedderConfig, ModelSlot } from './types.js'
-import { embedLocal, embedLocalBatch } from './local-embedder.js'
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
@@ -32,18 +31,18 @@ export class Embedder {
     this.chain = chain ?? []
     this.maxRetries = opts?.maxRetries ?? 2
     this.baseDelay = opts?.retryDelayMs ?? 1000
-    this.gatewayUrl = opts?.gatewayUrl
+    this.gatewayUrl = config.gatewayUrl || opts?.gatewayUrl
   }
 
   /** Embed a single text string → float vector */
   async embed(text: string): Promise<number[]> {
-    // Local provider — runs in-process via @xenova/transformers, no network
-    if (this.config.provider === 'local') {
-      return embedLocal(text, this.config.model)
-    }
     // Route through gateway if configured
     if (this.gatewayUrl) {
       return this.embedViaGateway(text)
+    }
+    // Local provider — runs in-process via @xenova/transformers, disabled in favor of Ollama
+    if (this.config.provider === 'local') {
+      throw new Error("In-process local embedding model is disabled. Please configure Ollama or route via Gateway.")
     }
     // If chain is configured, use fallback logic
     if (this.chain.length > 0) {
@@ -64,12 +63,13 @@ export class Embedder {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ input: text, model: 'auto' }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(120000),
     })
+
 
     if (!res.ok) {
       const err = await res.text().catch(() => '')
-      throw new Error(`Gateway embedding failed (${res.status}): ${err.slice(0, 200)}`)
+      throw new Error("Gateway embedding failed (" + res.status + "): " + err.slice(0, 200))
     }
 
     const data = (await res.json()) as {
@@ -82,10 +82,6 @@ export class Embedder {
 
   /** Embed multiple texts in batch */
   async embedBatch(texts: string[]): Promise<number[][]> {
-    // Local provider supports true batching for major speedup
-    if (this.config.provider === 'local') {
-      return embedLocalBatch(texts, this.config.model)
-    }
     return Promise.all(texts.map((t) => this.embed(t)))
   }
 

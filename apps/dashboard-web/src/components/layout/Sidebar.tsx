@@ -22,10 +22,29 @@ const navItems = [
   { href: '/settings', label: 'Settings' },
 ]
 
-export default function Sidebar() {
+interface SidebarProps {
+  isCollapsed: boolean
+  toggleSidebar: () => void
+}
+
+export default function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
   const pathname = usePathname()
   const [isOpen, setIsOpen] = useState(false)
   const { data: health } = useSWR('health', checkHealth, { refreshInterval: 30000 })
+
+  const [showConductor, setShowConductor] = useState(true)
+
+  useEffect(() => {
+    const checkConductor = () => {
+      const val = localStorage.getItem('cortex-show-conductor')
+      if (val !== null) {
+        setShowConductor(val === 'true')
+      }
+    }
+    checkConductor()
+    window.addEventListener('cortex-config-changed', checkConductor)
+    return () => window.removeEventListener('cortex-config-changed', checkConductor)
+  }, [])
 
   const commitShort = health?.commit && health.commit !== 'dev'
     ? health.commit.slice(0, 7)
@@ -49,6 +68,13 @@ export default function Sidebar() {
     return () => { document.body.style.overflow = '' }
   }, [isOpen])
 
+  const filteredNavItems = navItems.filter((item) => {
+    if (!showConductor && (item.href === '/conductor' || item.href === '/sessions')) {
+      return false
+    }
+    return true
+  })
+
   return (
     <>
       {/* Hamburger button — visible only on mobile via CSS */}
@@ -71,19 +97,28 @@ export default function Sidebar() {
         />
       )}
 
-      <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''}`}>
+      <aside className={`${styles.sidebar} ${isCollapsed ? styles.collapsed : ''} ${isOpen ? styles.open : ''}`}>
         {/* Brand */}
         <div className={styles.brand}>
           <div className={styles.logo}>
             <span className={styles.logoIcon}>◇</span>
-            <span className={styles.logoText}>Cortex Hub</span>
+            {!isCollapsed && <span className={styles.logoText}>Cortex Hub</span>}
           </div>
-          <span className={styles.version}>v{health?.version ?? '0.1'}</span>
+          {!isCollapsed && <span className={styles.version}>v{health?.version ?? '0.1'}</span>}
+          
+          {/* Desktop Collapse Toggle */}
+          <button
+            onClick={toggleSidebar}
+            className={styles.collapseButton}
+            aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {isCollapsed ? '▶' : '◀'}
+          </button>
         </div>
 
         {/* Navigation */}
         <nav className={styles.nav}>
-          {navItems.map((item) => {
+          {filteredNavItems.map((item) => {
             const isActive = pathname === item.href ||
               (item.href !== '/' && pathname.startsWith(item.href))
             const IconComponent = NAV_ICONS[item.href]
@@ -93,11 +128,12 @@ export default function Sidebar() {
                 href={item.href}
                 className={`${styles.navItem} ${isActive ? styles.active : ''}`}
                 onClick={closeSidebar}
+                title={isCollapsed ? item.label : undefined}
               >
                 <span className={styles.navIcon}>
                   {IconComponent && <IconComponent size={ICON_DEFAULTS.size} strokeWidth={ICON_DEFAULTS.strokeWidth} />}
                 </span>
-                <span className={styles.navLabel}>{item.label}</span>
+                {!isCollapsed && <span className={styles.navLabel}>{item.label}</span>}
                 {isActive && <span className={styles.activeIndicator} />}
               </Link>
             )
@@ -106,17 +142,25 @@ export default function Sidebar() {
 
         {/* Footer */}
         <div className={styles.footer}>
-          <div className={styles.statusRow}>
-            <StatusDot variant={isOnline ? 'healthy' : 'error'} />
-            <span className={styles.statusText}>
-              {isOnline ? 'All systems online' : 'Connecting...'}
-            </span>
-          </div>
-        <div className={styles.commitRow} title={`Version: v${health?.version ?? '0.0.0'}\nCommit: ${health?.commit ?? 'dev'}\nBuilt: ${health?.buildDate ?? 'N/A'}`}>
-            <code className={styles.commitHash}>
-              v{health?.version ?? '0.0.0'}{commitShort !== 'dev' ? ` · ${commitShort}` : ''}
-            </code>
-          </div>
+          {isCollapsed ? (
+            <div className={styles.statusDotWrapper} title={isOnline ? 'All systems online' : 'Connecting...'}>
+              <StatusDot variant={isOnline ? 'healthy' : 'error'} />
+            </div>
+          ) : (
+            <>
+              <div className={styles.statusRow}>
+                <StatusDot variant={isOnline ? 'healthy' : 'error'} />
+                <span className={styles.statusText}>
+                  {isOnline ? 'All systems online' : 'Connecting...'}
+                </span>
+              </div>
+              <div className={styles.commitRow} title={`Version: v${health?.version ?? '0.0.0'}\nCommit: ${health?.commit ?? 'dev'}\nBuilt: ${health?.buildDate ?? 'N/A'}`}>
+                <code className={styles.commitHash}>
+                  v{health?.version ?? '0.0.0'}{commitShort !== 'dev' ? ` · ${commitShort}` : ''}
+                </code>
+              </div>
+            </>
+          )}
         </div>
       </aside>
     </>

@@ -320,7 +320,7 @@ detect_hub_config() {
 
   # Derive Hub WS URL from MCP URL if not already set
   # WS proxy lives on the MCP server (same domain, /ws/conductor path)
-  # e.g. https://cortex-mcp.jackle.dev/mcp → wss://cortex-mcp.jackle.dev/ws/conductor
+  # e.g. http://localhost:8318/mcp → ws://localhost:8318/ws/conductor
   if [ -z "${CORTEX_HUB_WS_URL:-}" ] && [ -n "$detected_mcp_url" ]; then
     local hub_ws_url
     hub_ws_url=$(node -e "

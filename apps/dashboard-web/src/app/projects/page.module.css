@@ -17,7 +17,7 @@
 /* Stats */
 .statsGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
@@ -58,12 +58,16 @@
 /* Info Grid */
 .infoGrid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
 
-.infoCard { padding: var(--space-5); }
+.infoCard {
+  padding: var(--space-5);
+  min-width: 0;
+  overflow: hidden;
+}
 
 .infoHeader {
   display: flex;
@@ -94,6 +98,7 @@
   align-items: center;
   padding: var(--space-2) 0;
   border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
 }
 
 .gitRow:last-child { border-bottom: none; }
@@ -116,7 +121,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 240px;
+  flex: 1;
+  text-align: right;
+  min-width: 0;
+  margin-left: var(--space-4);
 }
 
 .gitLink:hover { text-decoration: underline; }
@@ -146,6 +154,7 @@
   align-items: center;
   padding: var(--space-2) 0;
   border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
 }
 
 .detailRow:last-child { border-bottom: none; }
@@ -159,6 +168,13 @@
 .detailValue {
   font-size: 0.8125rem;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  flex: 1;
+  margin-left: var(--space-4);
+  min-width: 0;
 }
 
 .detailCode {
@@ -168,6 +184,62 @@
   background: var(--bg-primary);
   padding: 2px 6px;
   border-radius: var(--radius-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  max-width: 70%;
+}
+
+.statusEnabled {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--status-success);
+  background: var(--status-success-bg, rgba(39, 174, 96, 0.1));
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(39, 174, 96, 0.2);
+}
+
+.statusDisabled {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+}
+
+.toggleBtn {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toggleBtn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+}
+
+.toggleBtnActive {
+  color: var(--status-error, #e74c3c);
+  border-color: rgba(231, 76, 60, 0.3);
+  background: rgba(231, 76, 60, 0.05);
+}
+
+.toggleBtnActive:hover:not(:disabled) {
+  background: rgba(231, 76, 60, 0.1);
+  color: var(--status-error, #e74c3c);
+  border-color: var(--status-error, #e74c3c);
 }
 
 .description {
@@ -193,7 +265,11 @@
 }
 
 /* Activity */
-.activityCard { padding: var(--space-5); }
+.activityCard {
+  padding: var(--space-5);
+  min-width: 0;
+  overflow: hidden;
+}
 
 .activityList {
   display: flex;
@@ -207,6 +283,7 @@
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border-subtle);
   transition: background 0.15s;
+  min-width: 0;
 }
 
 .activityRow:last-child { border-bottom: none; }
@@ -330,7 +407,7 @@
 /* Provider Grid */
 .providerGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: var(--space-2);
 }
 
@@ -363,6 +440,8 @@
 .indexingCard {
   padding: var(--space-5);
   margin-bottom: var(--space-6);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .indexingHeader {
@@ -496,6 +575,7 @@
 .indexingActions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
   margin-top: var(--space-3);
 }
@@ -503,6 +583,7 @@
 .branchInput {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -546,6 +627,8 @@
   margin-top: var(--space-4);
   padding-top: var(--space-4);
   border-top: 1px solid var(--border-subtle);
+  width: 100%;
+  overflow: hidden;
 }
 
 .historyTitle {
@@ -561,6 +644,9 @@
   display: flex;
   flex-direction: column;
   gap: 0;
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .historyHeaderRow {
@@ -574,6 +660,7 @@
   letter-spacing: 0.04em;
   background: var(--bg-primary);
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  min-width: 700px;
 }
 
 .historyRow {
@@ -584,6 +671,7 @@
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-subtle);
   align-items: center;
+  min-width: 700px;
 }
 
 .historyRow:last-child { border-bottom: none; }
@@ -846,7 +934,7 @@
 
 .branchStatusGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
@@ -867,6 +955,16 @@
   color: var(--text-primary);
   margin-bottom: var(--space-1);
   font-family: var(--font-mono);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.branchNameText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .branchDot {
@@ -1085,6 +1183,8 @@
 .stateCard {
   padding: var(--space-5);
   margin-bottom: var(--space-6);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .stateList {
@@ -1103,13 +1203,20 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: var(--space-4);
+  min-width: 0;
 }
 
 .stateContent {
   font-size: 0.875rem;
   color: var(--text-primary);
   line-height: 1.5;
-  white-space: pre-wrap;
+  min-width: 0;
+  flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stateMeta {
@@ -1123,12 +1230,13 @@
   border: 1px solid var(--border);
 }
 
-@media (max-width: 1024px) {
-  .statsGrid { grid-template-columns: repeat(2, 1fr); }
-  .infoGrid { grid-template-columns: 1fr; }
-  .providerGrid { grid-template-columns: repeat(2, 1fr); }
+@media (max-width: 1280px) {
+  /* Dynamic auto-fit handles columns wrapping automatically */
   .historyHeaderRow,
-  .historyRow { grid-template-columns: 0.8fr 1fr 0.6fr 0.5fr; }
+  .historyRow {
+    grid-template-columns: 0.8fr 1fr 0.6fr 0.5fr;
+    min-width: 480px;
+  }
   .historyHeaderRow > :nth-child(3),
   .historyHeaderRow > :nth-child(6),
   .historyRow > :nth-child(3),
@@ -1136,4 +1244,40 @@
   .branchStatusGrid { grid-template-columns: 1fr; }
   .pipelineGrid { grid-template-columns: 1fr; }
   .pipelineArrow { transform: rotate(90deg); padding: 0; }
+}
+
+@media (max-width: 600px) {
+  .indexingActions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .branchInput {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .branchField {
+    flex: 1;
+    min-width: 100px;
+  }
+}
+
+@media (max-width: 480px) {
+  .gitRow,
+  .detailRow {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+  }
+  .gitLink {
+    max-width: 100%;
+    word-break: break-all;
+  }
+  .activityRow {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .activityTime {
+    width: 100%;
+    margin-left: 28px;
+  }
 }

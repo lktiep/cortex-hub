@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
+import { apiCall } from '../api-call.js'
 
 /**
  * Register Cortex Conductor task management tools.
@@ -24,7 +25,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
     },
     async ({ title, description, assignTo, priority, requiredCapabilities, dependsOn, notifyOnComplete, context, parentTaskId }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/conductor`, {
+        const response = await apiCall(env, '/api/conductor', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -82,10 +83,14 @@ export function registerTaskTools(server: McpServer, env: Env) {
     },
     async ({ agentId }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/conductor/pickup`, {
+        const effectiveAgentId = agentId || env.API_KEY_OWNER
+        const response = await apiCall(env, '/api/conductor/pickup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agentId }),
+          body: JSON.stringify({
+            agentId: effectiveAgentId,
+            apiKeyOwner: env.API_KEY_OWNER,
+          }),
           signal: AbortSignal.timeout(10000),
         })
 
@@ -100,7 +105,8 @@ export function registerTaskTools(server: McpServer, env: Env) {
         const data = (await response.json()) as { task?: { id: string; title: string; status: string; priority?: number; description?: string } | null }
 
         if (!data.task) {
-          return { content: [{ type: 'text' as const, text: `No pending tasks for agent **${agentId}**.` }] }
+          const displayAgentId = effectiveAgentId || 'unknown'
+          return { content: [{ type: 'text' as const, text: `No pending tasks for agent **${displayAgentId}**.` }] }
         }
 
         const task = data.task
@@ -132,7 +138,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
     },
     async ({ taskId }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/conductor/${encodeURIComponent(taskId)}`, {
+        const response = await apiCall(env, `/api/conductor/${encodeURIComponent(taskId)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -175,7 +181,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
     },
     async ({ taskId, status, message, result, parentTaskId }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/conductor/${encodeURIComponent(taskId)}`, {
+        const response = await apiCall(env, `/api/conductor/${encodeURIComponent(taskId)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status, message, result, parentTaskId }),
@@ -221,8 +227,8 @@ export function registerTaskTools(server: McpServer, env: Env) {
         if (assignedTo) params.set('assignedTo', assignedTo)
         if (limit) params.set('limit', String(limit))
 
-        const url = `${env.DASHBOARD_API_URL}/api/conductor?${params.toString()}`
-        const response = await fetch(url, {
+        const url = `/api/conductor?${params.toString()}`
+        const response = await apiCall(env, url, {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
           signal: AbortSignal.timeout(10000),
@@ -270,7 +276,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
     },
     async ({ taskId }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/conductor/${encodeURIComponent(taskId)}`, {
+        const response = await apiCall(env, `/api/conductor/${encodeURIComponent(taskId)}`, {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
           signal: AbortSignal.timeout(10000),
@@ -368,7 +374,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
     },
     async ({ taskId, summary, roles, subtasks, estimatedEffort }) => {
       try {
-        const response = await fetch(`${env.DASHBOARD_API_URL}/api/conductor/${encodeURIComponent(taskId)}/strategy`, {
+        const response = await apiCall(env, `/api/conductor/${encodeURIComponent(taskId)}/strategy`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

@@ -1,7 +1,7 @@
 /* Stats Grid */
 .statsGrid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-4);
   margin-bottom: var(--space-6);
 }
@@ -144,7 +144,7 @@
 /* Task Cards Grid */
 .tasksGrid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: var(--space-4);
 }
 
@@ -1048,12 +1048,11 @@
 
 /* Responsive */
 @media (max-width: 1200px) {
-  .statsGrid { grid-template-columns: repeat(3, 1fr); }
+  /* Dynamic auto-fit handles statsGrid wrapping automatically */
 }
 
-@media (max-width: 1024px) {
-  .statsGrid { grid-template-columns: repeat(3, 1fr); }
-  .tasksGrid { grid-template-columns: 1fr; }
+@media (max-width: 1100px) {
+  /* Dynamic auto-fill/auto-fit handles wrapping automatically */
   .agentsGrid { grid-template-columns: 1fr; }
 }
 

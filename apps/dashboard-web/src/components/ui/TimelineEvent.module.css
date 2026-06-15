@@ -51,9 +51,8 @@
   font-size: 0.75rem;
   color: var(--text-primary);
   font-family: var(--font-mono);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .meta {

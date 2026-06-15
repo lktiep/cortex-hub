@@ -12,7 +12,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install gitnexus globally
-RUN npm install -g gitnexus@latest
+RUN npm install -g gitnexus@latest --timeout=600000
 
 # Patch eval-server to bind on 0.0.0.0 (instead of 127.0.0.1)
 # Required for Docker inter-container networking
@@ -32,7 +32,7 @@ WORKDIR /app/data
 RUN mkdir -p /root/.gitnexus
 
 ENV PORT=4848
-ENV DEFAULT_REPO=https://github.com/lktiep/cortex-hub.git
+ENV DEFAULT_REPO=
 EXPOSE 4848
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
