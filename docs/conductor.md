@@ -43,7 +43,7 @@ Apply tests + review feedback
 
 ### 1. Start an agent daemon
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/run-agent.sh \
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh \
   | bash -s -- start --daemon --preset fullstack
 ```
 

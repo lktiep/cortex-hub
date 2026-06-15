@@ -17,17 +17,17 @@ Download via GitHub API (bypasses CDN cache, always latest):
 
 ### Unix/macOS
 ```bash
-curl -fsSL "$(curl -fsSL https://api.github.com/repos/DuyPrX/cortex-hub/contents/scripts/install.sh?ref=master | grep download_url | cut -d'"' -f4)" -o /tmp/cortex-install.sh && bash /tmp/cortex-install.sh $ARGUMENTS
+curl -fsSL "$(curl -fsSL https://api.github.com/repos/lktiep/cortex-hub/contents/scripts/install.sh?ref=master | grep download_url | cut -d'"' -f4)" -o /tmp/cortex-install.sh && bash /tmp/cortex-install.sh $ARGUMENTS
 ```
 
 If the API call fails (rate limited), fallback to raw:
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/install.sh" -o /tmp/cortex-install.sh && bash /tmp/cortex-install.sh $ARGUMENTS
+curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh" -o /tmp/cortex-install.sh && bash /tmp/cortex-install.sh $ARGUMENTS
 ```
 
 ### Windows PowerShell
 ```powershell
-$url = (Invoke-RestMethod "https://api.github.com/repos/DuyPrX/cortex-hub/contents/scripts/install.ps1?ref=master").download_url; Invoke-WebRequest -Uri $url -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1 $ARGUMENTS
+$url = (Invoke-RestMethod "https://api.github.com/repos/lktiep/cortex-hub/contents/scripts/install.ps1?ref=master").download_url; Invoke-WebRequest -Uri $url -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1 $ARGUMENTS
 ```
 
 ### If all else fails

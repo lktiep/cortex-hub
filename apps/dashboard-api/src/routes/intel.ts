@@ -713,7 +713,7 @@ export async function getGitNexusRepos() {
   for (const p of projects) {
     projectBySlug.set(p.slug?.toLowerCase(), p)
     projectById.set(p.id, p)
-    // Also map by git URL basename (e.g., "cortex-hub" from github.com/DuyPrX/cortex-hub.git)
+    // Also map by git URL basename (e.g., "cortex-hub" from github.com/lktiep/cortex-hub.git)
     if (p.git_repo_url) {
       const basename = p.git_repo_url.replace(/\.git$/, '').split('/').pop()?.toLowerCase()
       if (basename && !projectBySlug.has(basename)) {

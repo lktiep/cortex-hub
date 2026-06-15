@@ -27,7 +27,7 @@ AI Agent → MCP Server (Bearer token) → Dashboard API → Backend Services
 bash scripts/install.sh
 
 # Or via curl (no clone needed)
-curl -fsSL https://raw.githubusercontent.com/DuyPrX/cortex-hub/master/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh | bash
 ```
 
 This installs:

@@ -264,7 +264,7 @@ app.get('/health', async (c) => {
     version: appVersion,
     commit: process.env['COMMIT_SHA'] || 'dev',
     buildDate: process.env['BUILD_DATE'] || 'unknown',
-    image: `ghcr.io/duyprx/cortex-hub:${(process.env['COMMIT_SHA'] || 'dev').slice(0, 7)}`,
+    image: `${process.env['CORTEX_IMAGE_NAMESPACE'] || 'ghcr.io/lktiep'}/cortex-hub:${(process.env['COMMIT_SHA'] || 'dev').slice(0, 7)}`,
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
     responseTime: Date.now() - startTime,

@@ -67,11 +67,12 @@ app.get('/health', (c) => {
 // Auth cache invalidation endpoint
 app.post('/auth/cache/invalidate', async (c) => {
   const secret = c.env.INTERNAL_API_SECRET || process.env.INTERNAL_API_SECRET
-  if (secret) {
-    const requestSecret = c.req.header('X-Internal-Secret')
-    if (requestSecret !== secret) {
-      return c.json({ error: 'Unauthorized: Invalid internal secret' }, 401)
-    }
+  if (!secret) {
+    return c.json({ error: 'Service unavailable: INTERNAL_API_SECRET not configured' }, 503)
+  }
+  const requestSecret = c.req.header('X-Internal-Secret')
+  if (requestSecret !== secret) {
+    return c.json({ error: 'Unauthorized' }, 401)
   }
   let token: string | undefined = undefined
   try {
