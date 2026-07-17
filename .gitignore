@@ -67,3 +67,6 @@ npm-debug.log*
 # Coverage
 coverage/
 .claude/
+
+# Local scripts
+scripts/local/

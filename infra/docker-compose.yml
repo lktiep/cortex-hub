@@ -11,7 +11,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.13.6
     container_name: cortex-qdrant
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "6333:6333"   # REST API
       - "6334:6334"   # gRPC
@@ -42,7 +42,7 @@ services:
   llm-proxy:
     image: eceasy/cli-proxy-api:latest
     container_name: cortex-llm-proxy
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "8317:8317"   # OpenAI-compatible API
     volumes:
@@ -76,7 +76,7 @@ services:
       network: host
     image: ${CORTEX_IMAGE_NAMESPACE:-ghcr.io/lktiep}/cortex-gitnexus:latest
     container_name: cortex-gitnexus
-    restart: unless-stopped
+    restart: "no"
     labels:
       - "com.containrrr.watchtower.enable=false"
     ports:
@@ -112,7 +112,7 @@ services:
         BUILD_DATE: ${BUILD_DATE:-}
     image: ${CORTEX_IMAGE_NAMESPACE:-ghcr.io/lktiep}/cortex-api:latest
     container_name: cortex-api
-    restart: unless-stopped
+    restart: "no"
     labels:
       - "com.containrrr.watchtower.enable=false"
     ports:
@@ -172,7 +172,7 @@ services:
       network: host
     image: ${CORTEX_IMAGE_NAMESPACE:-ghcr.io/lktiep}/cortex-mcp:latest
     container_name: cortex-mcp
-    restart: unless-stopped
+    restart: "no"
     labels:
       - "com.containrrr.watchtower.enable=false"
     ports:
@@ -215,7 +215,7 @@ services:
   watchtower:
     image: containrrr/watchtower:latest
     container_name: cortex-watchtower
-    restart: unless-stopped
+    restart: "no"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
