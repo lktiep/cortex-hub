@@ -194,6 +194,29 @@ export class VectorStore {
     }
   }
 
+  /**
+   * Delete every point matching a payload filter.
+   *
+   * Needed because re-indexing generates fresh random point ids: without a
+   * filtered delete the previous run's points stay behind, so each re-index
+   * appends a duplicate set and vectors for removed files never disappear.
+   */
+  async deleteByFilter(filter: Record<string, unknown>): Promise<void> {
+    const res = await fetch(
+      `${this.baseUrl}/collections/${this.collection}/points/delete?wait=true`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filter }),
+      },
+    )
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Qdrant delete-by-filter failed (${res.status}): ${err}`)
+    }
+  }
+
   /** Update a point's vector and/or payload */
   async update(
     id: string,

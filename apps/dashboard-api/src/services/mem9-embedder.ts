@@ -291,6 +291,26 @@ async function embedProjectInternal(
 
   await vectorStore.ensureCollection(vectorSize)
 
+  // Drop this project+branch's previous points before writing new ones. Point
+  // ids are random UUIDs, so without this every re-index appended a second full
+  // copy of every chunk (search returned each hit twice) and chunks belonging to
+  // files that have since been deleted or renamed stayed in the index forever.
+  // Runs only after the test embed succeeded, so a dead embedding provider can
+  // never wipe a good index.
+  try {
+    await vectorStore.deleteByFilter({
+      must: [
+        { key: 'project_id', match: { value: projectId } },
+        { key: 'branch', match: { value: branch } },
+      ],
+    })
+    logger.info(`[${jobId}] Cleared previous points for ${projectId}@${branch}`)
+  } catch (err) {
+    const msg = `Failed to clear previous points: ${String(err).slice(0, 200)}`
+    logger.error(`[${jobId}] ${msg}`)
+    return { status: 'error', chunks: 0, errors: [msg] }
+  }
+
   // 5. Embed and store in batches
   let successCount = 0
   const BATCH_SIZE = 5
