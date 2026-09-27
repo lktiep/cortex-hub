@@ -12,9 +12,13 @@ services:
     image: qdrant/qdrant:v1.13.6
     container_name: cortex-qdrant
     restart: unless-stopped
+    # Loopback only: Qdrant has no authentication, and everything that needs it
+    # (cortex-api, the embedder) reaches it over the compose network by name.
+    # Published on 0.0.0.0 it let anyone on the LAN read, edit or drop every
+    # memory and code vector in the stack.
     ports:
-      - "6333:6333"   # REST API
-      - "6334:6334"   # gRPC
+      - "127.0.0.1:6333:6333"   # REST API
+      - "127.0.0.1:6334:6334"   # gRPC
     volumes:
       - qdrant-data:/qdrant/storage
     environment:
@@ -124,8 +128,9 @@ services:
     restart: unless-stopped
     labels:
       - "com.containrrr.watchtower.enable=false"
+    # Loopback only: cortex-api talks to GitNexus over the compose network.
     ports:
-      - "4848:4848"
+      - "127.0.0.1:4848:4848"
     volumes:
       - api-data:/app/data
       - gitnexus-data:/root/.gitnexus

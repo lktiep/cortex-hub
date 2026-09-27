@@ -70,6 +70,10 @@ keysRouter.post('/', async (c) => {
     const stmt = db.prepare('INSERT INTO api_keys (id, name, key_hash, scope, permissions, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'))')
     stmt.run(id, name, hash, scope, JSON.stringify(permissions), expiresAt)
 
+    // Update and delete already do this; without it here a brand new key is
+    // rejected by hub-mcp until its cached key set happens to expire.
+    invalidateMcpCache().catch(() => {})
+
     return c.json({ 
       id,
       name,
@@ -132,11 +136,17 @@ keysRouter.post('/verify', async (c) => {
     }
  
     const hash = createHash('sha256').update(token).digest('hex')
-    const stmt = db.prepare('SELECT id, name, scope, permissions, key_hash FROM api_keys WHERE key_hash = ?')
-    const keyRecord = stmt.get(hash) as { id: string; name: string; scope: string; permissions: string; key_hash: string } | undefined
+    const stmt = db.prepare('SELECT id, name, scope, permissions, key_hash, expires_at FROM api_keys WHERE key_hash = ?')
+    const keyRecord = stmt.get(hash) as { id: string; name: string; scope: string; permissions: string; key_hash: string; expires_at: string | null } | undefined
  
     if (!keyRecord) {
       return c.json({ valid: false, error: 'Invalid API key' }, 401)
+    }
+
+    // An expiry date that nothing checks is not an expiry date: keys created
+    // with expiresInDays kept working forever.
+    if (keyRecord.expires_at && Date.parse(keyRecord.expires_at) <= Date.now()) {
+      return c.json({ valid: false, error: 'API key expired' }, 401)
     }
  
     // Update last_used_at

@@ -308,7 +308,8 @@ export type Project = {
   git_repo_url: string | null
   git_provider: string | null
   git_username?: string | null
-  git_token?: string | null
+  /** The token itself is never returned by the API; this only says whether one is stored. */
+  has_git_token?: boolean
   indexed_at: string | null
   indexed_symbols: number
   org_name?: string

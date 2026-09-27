@@ -667,7 +667,9 @@ function ProjectContent() {
                 setGitUrl(project.git_repo_url ?? '')
                 setGitProvider(project.git_provider ?? '')
                 setGitUsername(project.git_username ?? '')
-                setGitToken(project.git_token ?? '')
+                // The API does not hand the token back. An empty box means
+                // "keep the stored one"; typing replaces it.
+                setGitToken('')
                 setShowEditGit(true)
               }}
             >
@@ -893,7 +895,7 @@ function ProjectContent() {
               <input
                 className={styles.dialogInput}
                 type="password"
-                placeholder="ghp_xxxx or Personal Access Token"
+                placeholder={project.has_git_token ? 'Stored — leave blank to keep' : 'ghp_xxxx or Personal Access Token'}
                 value={gitToken}
                 onChange={(e) => setGitToken(e.target.value)}
               />

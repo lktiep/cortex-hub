@@ -115,8 +115,8 @@ orgsRouter.get('/:id/projects', (c) => {
   try {
     const projects = db
       .prepare('SELECT * FROM projects WHERE org_id = ? ORDER BY created_at DESC')
-      .all(id)
-    return c.json({ projects })
+      .all(id) as Array<Record<string, unknown>>
+    return c.json({ projects: projects.map(redactProject) })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -172,6 +172,20 @@ orgsRouter.post('/:id/projects', async (c) => {
 
 // ── Projects Router (flat) ──
 export const projectsRouter = new Hono()
+
+/**
+ * Strip the git credential out of a project row before it leaves the process.
+ *
+ * `SELECT p.*` put the stored PAT in the body of every project listing, and
+ * the API has no authentication in front of it, so anyone who could reach the
+ * port could read a token that can push to the repository. Callers that need
+ * to know whether a token exists get a boolean instead; the ones that need the
+ * token itself (cloning, ls-remote) read it from the database directly.
+ */
+function redactProject<T extends Record<string, unknown>>(project: T): Omit<T, 'git_token'> & { has_git_token: boolean } {
+  const { git_token, ...rest } = project
+  return { ...rest, has_git_token: Boolean(git_token) }
+}
 
 // ── Lookup project by repo URL, name or id ──
 projectsRouter.get('/lookup', (c) => {
@@ -259,7 +273,7 @@ projectsRouter.get('/:id', (c) => {
       .sort((a, b) => ((b.created_at as string) || '').localeCompare((a.created_at as string) || ''))
       .slice(0, 15)
 
-    return c.json({ ...(project as Record<string, unknown>), stats, activity })
+    return c.json({ ...redactProject(project as Record<string, unknown>), stats, activity })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -296,7 +310,7 @@ projectsRouter.put('/:id', async (c) => {
         git_repo_url = COALESCE(?, git_repo_url),
         git_provider = COALESCE(?, git_provider),
         git_username = COALESCE(?, git_username),
-        git_token = COALESCE(?, git_token),
+        git_token = COALESCE(NULLIF(?, ''), git_token),
         enabled = COALESCE(?, enabled),
         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
        WHERE id = ?`
@@ -340,8 +354,8 @@ projectsRouter.get('/', (c) => {
          JOIN organizations o ON o.id = p.org_id
          ORDER BY p.created_at DESC`
       )
-      .all()
-    return c.json({ projects })
+      .all() as Array<Record<string, unknown>>
+    return c.json({ projects: projects.map(redactProject) })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
