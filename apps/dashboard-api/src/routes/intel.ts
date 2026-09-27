@@ -51,6 +51,7 @@ async function callGitNexus(
 /**
  * Resolve a projectId, slug, or human-readable name to GitNexus-compatible repo name candidates.
  * Returns ordered list of names to try — GitNexus may register repos by:
+ *   0. absolute clone path (e.g., '/app/data/repos/proj-abc123') — unambiguous
  *   1. slug (e.g., 'my-backend')
  *   2. git URL basename (e.g., 'MyBackend')
  *   3. projectId folder name (e.g., 'proj-abc123')
@@ -61,52 +62,71 @@ async function callGitNexus(
 function resolveRepoNames(projectId: string): string[] {
   const candidates: string[] = []
 
-  // If it doesn't look like an internal ID, try as-is first
-  if (!projectId.startsWith('proj-')) {
-    candidates.push(projectId)
-  }
+  let project: { id?: string; slug?: string; name?: string; git_repo_url?: string } | undefined
 
   try {
     // Case-insensitive lookup: match by id, slug, OR name
-    const project = db.prepare(
+    project = db.prepare(
       `SELECT id, slug, name, git_repo_url FROM projects
        WHERE id = ?
           OR slug = ? COLLATE NOCASE
           OR name = ? COLLATE NOCASE
           OR name LIKE ? COLLATE NOCASE`
-    ).get(projectId, projectId, projectId, `%${projectId}%`) as {
-      id?: string; slug?: string; name?: string; git_repo_url?: string
-    } | undefined
-
-    if (project) {
-      // Strategy 1: Use slug
-      if (project.slug && !candidates.includes(project.slug)) {
-        candidates.push(project.slug)
-      }
-
-      // Strategy 2: Extract repo name from git URL (preserves original casing)
-      if (project.git_repo_url) {
-        const repoName = project.git_repo_url
-          .replace(/\.git$/, '')
-          .split('/')
-          .pop()
-        if (repoName && !candidates.includes(repoName)) {
-          candidates.push(repoName)
-        }
-      }
-
-      // Strategy 3: Use project name (human-readable, may differ from slug)
-      if (project.name && !candidates.includes(project.name)) {
-        candidates.push(project.name)
-      }
-
-      // Strategy 4: Use project ID (folder name in /app/data/repos/)
-      if (project.id && !candidates.includes(project.id)) {
-        candidates.push(project.id)
-      }
-    }
+    ).get(projectId, projectId, projectId, `%${projectId}%`) as typeof project
   } catch (error) {
     logger.warn(`resolveRepoNames: DB lookup failed: ${error}`)
+  }
+
+  // The clone path, tried before any name, because it is the only key that
+  // cannot be ambiguous.
+  //
+  // GitNexus registers a repo under its directory basename, and a repo cloned
+  // twice therefore registers twice under one name — a legacy
+  // /app/data/repos/cortex-hub beside the current /app/data/repos/proj-30946766
+  // both answered to "cortex-hub". It then refuses the name outright ("Multiple
+  // registered repos match") while also rejecting the project id, which is not
+  // a name it knows, so every candidate below failed and cortex_code_search
+  // returned 500 for this repo — the one repo the agents editing it search most.
+  // Its own error says to pass the absolute path instead; that path is unique by
+  // construction, so ask by path and let the names stay a fallback.
+  if (project?.id) {
+    candidates.push(join(REPOS_DIR, project.id))
+  } else if (projectId.startsWith('proj-')) {
+    // Unknown to the DB but shaped like an id: the directory is still the best guess.
+    candidates.push(join(REPOS_DIR, projectId))
+  }
+
+  // If it doesn't look like an internal ID, try as-is next
+  if (!projectId.startsWith('proj-') && !candidates.includes(projectId)) {
+    candidates.push(projectId)
+  }
+
+  if (project) {
+    // Strategy 1: Use slug
+    if (project.slug && !candidates.includes(project.slug)) {
+      candidates.push(project.slug)
+    }
+
+    // Strategy 2: Extract repo name from git URL (preserves original casing)
+    if (project.git_repo_url) {
+      const repoName = project.git_repo_url
+        .replace(/\.git$/, '')
+        .split('/')
+        .pop()
+      if (repoName && !candidates.includes(repoName)) {
+        candidates.push(repoName)
+      }
+    }
+
+    // Strategy 3: Use project name (human-readable, may differ from slug)
+    if (project.name && !candidates.includes(project.name)) {
+      candidates.push(project.name)
+    }
+
+    // Strategy 4: Use project ID (folder name in /app/data/repos/)
+    if (project.id && !candidates.includes(project.id)) {
+      candidates.push(project.id)
+    }
   }
 
   // Last resort: use input directly
@@ -116,15 +136,6 @@ function resolveRepoNames(projectId: string): string[] {
 
   return candidates
 }
-
-/**
- * Legacy single-result resolver for backward compatibility.
- */
-function resolveRepoName(projectId: string): string {
-  const names = resolveRepoNames(projectId)
-  return names[0] ?? projectId
-}
-
 
 /**
  * Call GitNexus with multi-candidate repo fallback.
