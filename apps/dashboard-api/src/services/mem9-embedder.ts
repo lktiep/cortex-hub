@@ -327,42 +327,72 @@ async function embedProjectInternal(
   }
 
   // 5. Embed and store in batches
+  //
+  // One batch is now one embedding request and one Qdrant upsert, where it used
+  // to be BATCH_SIZE of each: five parallel HTTP calls to the gateway and five
+  // more to Qdrant, then a flat 200ms sleep. That sleep existed to keep a remote
+  // API's rate limiter happy, but it is priced per request, and batching already
+  // cuts the request count by the batch size — 1256 chunks went from 502
+  // requests to 40. So the sleep is gone and the batch is wider.
+  //
+  // Override with MEM9_BATCH_SIZE / MEM9_BATCH_DELAY_MS if a provider needs it.
   let successCount = 0
-  const BATCH_SIZE = 5
+  const BATCH_SIZE = Math.max(1, Number(process.env['MEM9_BATCH_SIZE']) || 32)
+  const BATCH_DELAY_MS = Math.max(0, Number(process.env['MEM9_BATCH_DELAY_MS']) || 0)
   const totalBatches = Math.ceil(allChunks.length / BATCH_SIZE)
 
   for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
     const batch = allChunks.slice(batchIdx * BATCH_SIZE, (batchIdx + 1) * BATCH_SIZE)
 
-    const embedPromises = batch.map(async (chunk) => {
-      try {
-        const vector = await embedder.embed(chunk.content)
-        const pointId = randomUUID()
+    let vectors: number[][]
+    try {
+      vectors = await embedder.embedBatch(batch.map((chunk) => chunk.content))
+    } catch (err) {
+      // A whole batch failing must not cost the attribution of which chunks
+      // failed, nor the 31 chunks that had nothing wrong with them.
+      const msg = String(err).slice(0, 100)
+      for (const chunk of batch) {
+        errors.push(`${chunk.filePath}#${chunk.chunkIndex}: ${msg}`)
+      }
+      continue
+    }
 
-        await vectorStore.upsert(pointId, vector, {
+    const points = batch.flatMap((chunk, i) => {
+      const vector = vectors[i]
+      if (!vector?.length) {
+        errors.push(`${chunk.filePath}#${chunk.chunkIndex}: embedder returned no vector`)
+        return []
+      }
+      return [{
+        id: randomUUID(),
+        vector,
+        payload: {
           project_id: projectId,
           branch,
           file_path: chunk.filePath,
           chunk_index: chunk.chunkIndex,
           content: chunk.content.slice(0, 2000), // Store first 2KB for retrieval
           indexed_at: new Date().toISOString(),
-        })
-
-        successCount++
-      } catch (err) {
-        errors.push(`${chunk.filePath}#${chunk.chunkIndex}: ${String(err).slice(0, 100)}`)
-      }
+        },
+      }]
     })
 
-    await Promise.all(embedPromises)
+    try {
+      await vectorStore.upsertBatch(points)
+      successCount += points.length
+    } catch (err) {
+      const msg = String(err).slice(0, 100)
+      for (const chunk of batch) {
+        errors.push(`${chunk.filePath}#${chunk.chunkIndex}: ${msg}`)
+      }
+    }
 
     // Report progress
     const progress = Math.round(((batchIdx + 1) / totalBatches) * 100)
     onProgress?.(progress, successCount, allChunks.length)
 
-    // Small delay between batches to avoid rate limiting
-    if (batchIdx < totalBatches - 1) {
-      await new Promise<void>((r) => setTimeout(r, 200))
+    if (BATCH_DELAY_MS > 0 && batchIdx < totalBatches - 1) {
+      await new Promise<void>((r) => setTimeout(r, BATCH_DELAY_MS))
     }
   }
 

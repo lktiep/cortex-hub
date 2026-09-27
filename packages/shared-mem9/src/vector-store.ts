@@ -77,6 +77,34 @@ export class VectorStore {
     }
   }
 
+  /**
+   * Upsert many points in one request.
+   *
+   * Qdrant accepts an array of points per PUT, so writing them one at a time
+   * cost one HTTP roundtrip per chunk — the dominant cost of indexing once the
+   * embedder itself was batched. Same endpoint, same body shape, just not one
+   * point at a time.
+   */
+  async upsertBatch(
+    points: Array<{ id: string; vector: number[]; payload: Record<string, unknown> }>,
+  ): Promise<void> {
+    if (points.length === 0) return
+
+    const res = await fetch(
+      `${this.baseUrl}/collections/${this.collection}/points`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points }),
+      },
+    )
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Qdrant batch upsert failed (${res.status}): ${err}`)
+    }
+  }
+
   /** Search for similar vectors */
   async search(
     vector: number[],

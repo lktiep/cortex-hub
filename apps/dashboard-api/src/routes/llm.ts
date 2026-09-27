@@ -160,6 +160,43 @@ async function embedViaGemini(
   return { vector: data.embedding.values, tokens: Math.ceil(text.length / 4) }
 }
 
+/**
+ * Embed several texts in one Gemini call.
+ *
+ * `:batchEmbedContents` returns one embedding per request, in order, so the
+ * result maps back to the input positionally. A single text still goes through
+ * `:embedContent` — no reason to pay for the batch envelope.
+ */
+async function embedBatchViaGemini(
+  texts: string[], apiKey: string, model: string, baseUrl: string
+): Promise<{ vectors: number[][]; tokens: number }> {
+  const base = baseUrl.includes('generativelanguage.googleapis.com')
+    ? baseUrl.replace(/\/$/, '')
+    : 'https://generativelanguage.googleapis.com/v1beta'
+  const url = `${base}/models/${model}:batchEmbedContents?key=${apiKey}`
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      requests: texts.map((text) => ({
+        model: `models/${model}`,
+        content: { parts: [{ text }] },
+      })),
+    }),
+    signal: AbortSignal.timeout(60000),
+  })
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => '')
+    throw Object.assign(new Error(`Gemini batch embed ${res.status}: ${err.slice(0, 200)}`), { status: res.status })
+  }
+
+  const data = (await res.json()) as { embeddings?: Array<{ values: number[] }> }
+  const vectors = (data.embeddings ?? []).map((e) => e.values)
+  return { vectors, tokens: Math.ceil(texts.join('').length / 4) }
+}
+
 async function embedViaOpenAI(
   text: string, apiKey: string, model: string, baseUrl: string
 ): Promise<{ vector: number[]; tokens: number }> {
@@ -189,6 +226,51 @@ async function embedViaOpenAI(
   return {
     vector: first.embedding,
     tokens: data.usage?.total_tokens ?? Math.ceil(text.length / 4),
+  }
+}
+
+/**
+ * Embed several texts in one OpenAI-compatible call.
+ *
+ * The spec allows an array `input` and returns one object per text carrying its
+ * own `index`, so vectors are re-ordered by that index rather than trusted to
+ * arrive in order. Providers that ignore the array and answer with a single
+ * embedding are not silently accepted: a short `data` array throws, and the
+ * caller falls back to one call per text.
+ */
+async function embedBatchViaOpenAI(
+  texts: string[], apiKey: string, model: string, baseUrl: string
+): Promise<{ vectors: number[][]; tokens: number }> {
+  const url = `${baseUrl.replace(/\/$/, '')}/embeddings`
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model, input: texts }),
+    signal: AbortSignal.timeout(60000),
+  })
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => '')
+    throw Object.assign(new Error(`OpenAI batch embed ${res.status}: ${err.slice(0, 200)}`), { status: res.status })
+  }
+
+  const data = (await res.json()) as {
+    data: Array<{ embedding: number[]; index?: number }>
+    usage?: { total_tokens?: number }
+  }
+
+  const vectors: number[][] = []
+  data.data.forEach((item, i) => {
+    vectors[item.index ?? i] = item.embedding
+  })
+
+  return {
+    vectors,
+    tokens: data.usage?.total_tokens ?? Math.ceil(texts.join('').length / 4),
   }
 }
 
@@ -293,6 +375,59 @@ async function chatViaOpenAI(
   }
 }
 
+/**
+ * Embed every text on one slot, one request where the provider allows it.
+ *
+ * Batching is an optimisation, never a correctness requirement: if a provider
+ * answers a batch with the wrong number of vectors — ollama builds older than
+ * 0.2 ignore an array `input` and return a single embedding — the batch result
+ * is discarded and each text is embedded on its own. A vector landing in the
+ * wrong slot is worse than a slow index, because nothing downstream can detect it.
+ */
+async function embedAll(
+  texts: string[], slot: ProviderSlot
+): Promise<{ vectors: number[][]; tokens: number }> {
+  const gemini = isGeminiProvider(slot)
+
+  if (texts.length > 1) {
+    try {
+      const batch = gemini
+        ? await embedBatchViaGemini(texts, slot.apiKey, slot.model, slot.apiBase)
+        : await embedBatchViaOpenAI(texts, slot.apiKey, slot.model, slot.apiBase)
+
+      const complete =
+        batch.vectors.length === texts.length &&
+        batch.vectors.every((v) => Array.isArray(v) && v.length > 0)
+
+      if (complete) return batch
+      console.warn(
+        `[gateway] ${slot.model} returned ${batch.vectors.length} vectors for ` +
+        `${texts.length} inputs — falling back to one request per text`
+      )
+    } catch (err) {
+      // A 429/5xx is the caller's business (it retries and then falls to the
+      // next slot), so re-throw those; anything else may simply be a provider
+      // that cannot batch, which the per-text path handles.
+      const status = (err as { status?: number }).status ?? 0
+      if (RETRYABLE_CODES.has(status)) throw err
+      console.warn(`[gateway] ${slot.model} batch embed failed, retrying per text: ${String(err).slice(0, 120)}`)
+    }
+  }
+
+  const results = await Promise.all(
+    texts.map((text) =>
+      gemini
+        ? embedViaGemini(text, slot.apiKey, slot.model, slot.apiBase)
+        : embedViaOpenAI(text, slot.apiKey, slot.model, slot.apiBase)
+    )
+  )
+
+  return {
+    vectors: results.map((r) => r.vector),
+    tokens: results.reduce((sum, r) => sum + r.tokens, 0),
+  }
+}
+
 // ═══════════════════════════════════════════════════
 // Gateway Proxy Endpoints
 // ═══════════════════════════════════════════════════
@@ -309,8 +444,13 @@ llmRouter.post('/v1/embeddings', async (c) => {
     project_id?: string
   }
 
-  const input = Array.isArray(body.input) ? body.input[0] : body.input
-  if (!input) return c.json({ error: 'Missing input' }, 400)
+  // An array `input` used to be truncated to its first element, so a caller that
+  // asked for 32 embeddings got one and silently mis-assigned it to the rest.
+  // Every text is embedded now, and the response carries one object per input.
+  const inputs = (Array.isArray(body.input) ? body.input : [body.input]).filter(
+    (t): t is string => typeof t === 'string' && t.length > 0,
+  )
+  if (inputs.length === 0) return c.json({ error: 'Missing input' }, 400)
 
   const agentId = body.agent_id ?? 'internal'
   const projectId = body.project_id
@@ -330,9 +470,7 @@ llmRouter.post('/v1/embeddings', async (c) => {
   for (const slot of orderedChain) {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
-        const result = isGeminiProvider(slot)
-          ? await embedViaGemini(input, slot.apiKey, slot.model, slot.apiBase)
-          : await embedViaOpenAI(input, slot.apiKey, slot.model, slot.apiBase)
+        const result = await embedAll(inputs, slot)
 
         logUsage({
           agentId,
@@ -346,7 +484,11 @@ llmRouter.post('/v1/embeddings', async (c) => {
 
         return c.json({
           object: 'list',
-          data: [{ object: 'embedding', embedding: result.vector, index: 0 }],
+          data: result.vectors.map((embedding, index) => ({
+            object: 'embedding',
+            embedding,
+            index,
+          })),
           model: slot.model,
           usage: { prompt_tokens: result.tokens, total_tokens: result.tokens },
         })

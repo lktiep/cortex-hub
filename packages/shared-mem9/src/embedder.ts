@@ -80,8 +80,60 @@ export class Embedder {
     return first.embedding
   }
 
-  /** Embed multiple texts in batch */
+  /** Embed via the gateway in one request — one vector per text, in order */
+  private async embedBatchViaGateway(texts: string[]): Promise<number[][]> {
+    const url = `${this.gatewayUrl!.replace(/\/$/, '')}/v1/embeddings`
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: texts, model: 'auto' }),
+      signal: AbortSignal.timeout(180000),
+    })
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => '')
+      throw new Error('Gateway batch embedding failed (' + res.status + '): ' + err.slice(0, 200))
+    }
+
+    const data = (await res.json()) as {
+      data: Array<{ embedding: number[]; index?: number }>
+    }
+
+    // Order by the response's own index rather than arrival order, and refuse a
+    // short answer outright: a vector attributed to the wrong text is a silent
+    // corruption that no later stage can notice.
+    const vectors: number[][] = []
+    data.data.forEach((item, i) => {
+      vectors[item.index ?? i] = item.embedding
+    })
+    if (vectors.length !== texts.length || vectors.some((v) => !v?.length)) {
+      throw new Error(
+        `Gateway returned ${data.data.length} embeddings for ${texts.length} inputs`
+      )
+    }
+    return vectors
+  }
+
+  /**
+   * Embed multiple texts.
+   *
+   * Through the gateway this is a single request; the per-text path remains the
+   * fallback, both for direct providers and for a gateway too old to honour an
+   * array input.
+   */
   async embedBatch(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return []
+    if (texts.length === 1) return [await this.embed(texts[0]!)]
+
+    if (this.gatewayUrl) {
+      try {
+        return await this.embedBatchViaGateway(texts)
+      } catch (err) {
+        console.warn(`[embedder] batch embed failed, falling back per text: ${String(err).slice(0, 150)}`)
+      }
+    }
+
     return Promise.all(texts.map((t) => this.embed(t)))
   }
 
