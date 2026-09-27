@@ -57,17 +57,24 @@ services:
     volumes:
       - ollama-models:/root/.ollama
     environment:
-      # Serve several embed requests at once — mem9 calls embedBatch() with
-      # Promise.all over every chunk of a repo.
-      OLLAMA_NUM_PARALLEL: 4
+      # Two slots, matching EMBED_MAX_CONCURRENCY in the gateway. ollama
+      # serialises embedding work internally — measured on this host, a batch of
+      # 32 takes the same ~250ms whether it arrives alone or alongside three
+      # others — so extra slots buy no throughput and each one costs context
+      # memory on a container already at its ceiling.
+      OLLAMA_NUM_PARALLEL: 2
       # Embedding models are small; keep them resident instead of paying the
       # load cost on every mem9 run.
       OLLAMA_KEEP_ALIVE: 24h
-      OLLAMA_MAX_LOADED_MODELS: 2
+      # One. This host uses a single 384-dim embedding model, and room for a
+      # second is what took the container to 3.978 GiB of its 4 GiB limit
+      # (99.46%) — close enough that the next index gets OOM-killed mid-run.
+      OLLAMA_MAX_LOADED_MODELS: 1
     deploy:
       resources:
         limits:
-          memory: 4G
+          # Raise on a host with spare RAM without editing this file.
+          memory: ${OLLAMA_MEMORY_LIMIT:-4G}
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 30s
