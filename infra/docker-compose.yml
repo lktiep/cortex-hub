@@ -43,8 +43,15 @@ services:
     image: eceasy/cli-proxy-api:latest
     container_name: cortex-llm-proxy
     restart: unless-stopped
-    ports:
-      - "8317:8317"   # OpenAI-compatible API
+    # No host port on purpose. CLIProxyAPI serves /v1 with no auth (api-keys
+    # must be literal in config.yaml, which is bind-mounted from this repo, so
+    # a key here would be published like the one 99c58b9 removed). Publishing
+    # 8317 on the host also handed it to the Cloudflare Tunnel connector, which
+    # served cortex-llm.jackle.dev to the internet unauthenticated -- anyone
+    # knowing the hostname could spend the account's quota. Every consumer
+    # (cortex-api, hub-mcp) reaches it over the compose network instead:
+    #   OPENAI_API_BASE=http://llm-proxy:8317/v1   CLIPROXY_URL=http://llm-proxy:8317
+    # Re-exposing it means adding api-keys via a rendered, git-ignored config.
     volumes:
       - cliproxy-auth:/CLIProxyAPI/auth
       - ./cliproxy-config.yaml:/CLIProxyAPI/config.yaml
