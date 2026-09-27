@@ -15,6 +15,29 @@ PORT="${PORT:-4848}"
 # which exceeds container memory limits. Set to 3GB to fit within 4GB container limit.
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=3072}"
 
+# eval-server 1.6.12+ refuses `--host 0.0.0.0` without a bearer token, and other
+# containers can only reach us on a non-loopback bind. Honour an operator-supplied
+# token; otherwise generate one and publish it on the shared /app/data volume so
+# dashboard-api can read it. Persisted, so it survives restarts and stays stable
+# for clients that cached it.
+TOKEN_FILE="${GITNEXUS_AUTH_TOKEN_FILE:-/app/data/gitnexus-auth-token}"
+if [ -n "${GITNEXUS_AUTH_TOKEN:-}" ]; then
+    echo "GitNexus: Using GITNEXUS_AUTH_TOKEN from the environment."
+    mkdir -p "$(dirname "$TOKEN_FILE")"
+    printf '%s' "$GITNEXUS_AUTH_TOKEN" > "$TOKEN_FILE"
+    chmod 600 "$TOKEN_FILE"
+elif [ -s "$TOKEN_FILE" ]; then
+    GITNEXUS_AUTH_TOKEN="$(cat "$TOKEN_FILE")"
+    echo "GitNexus: Reusing the token at $TOKEN_FILE."
+else
+    GITNEXUS_AUTH_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    mkdir -p "$(dirname "$TOKEN_FILE")"
+    printf '%s' "$GITNEXUS_AUTH_TOKEN" > "$TOKEN_FILE"
+    chmod 600 "$TOKEN_FILE"
+    echo "GitNexus: Generated an eval-server token at $TOKEN_FILE."
+fi
+export GITNEXUS_AUTH_TOKEN
+
 # Check if registry.json exists and has entries
 has_indexed_repos() {
     if [ -f "${GITNEXUS_DIR}/registry.json" ]; then
@@ -61,8 +84,9 @@ else
         if [ ! -d "$REPO_PATH/.git" ]; then
             echo "GitNexus: Cloning $REPO_URL..."
             git clone --depth 1 "$REPO_URL" "$REPO_PATH" 2>&1 || {
-                echo "GitNexus: Clone failed, starting eval-server with no repos..."
-                exec gitnexus eval-server --port "$PORT" --host 0.0.0.0 --idle-timeout 0 2>&1
+                # Do not exec here — that would bypass the supervisor below and
+                # bring back the crash loop this script exists to prevent.
+                echo "GitNexus: Clone failed — continuing to the supervisor with no repos."
             }
         else
             echo "GitNexus: Repo already cloned at $REPO_PATH"

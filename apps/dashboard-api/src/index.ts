@@ -3,6 +3,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import { readFileSync } from 'node:fs'
 import { db } from './db/client.js'
+import { gitnexusUrl, gitnexusHeaders } from './lib/gitnexus.js'
 
 // Read version from version.json (copied at build time)
 let appVersion = process.env['APP_VERSION'] || '0.0.0-dev'
@@ -117,9 +118,13 @@ app.use('/api/*', async (c, next) => {
 app.get('/health', async (c) => {
   const startTime = Date.now()
 
-  async function checkService(name: string, url: string): Promise<'ok' | 'error'> {
+  async function checkService(
+    name: string,
+    url: string,
+    headers?: Record<string, string>,
+  ): Promise<'ok' | 'error'> {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(3000) })
+      const res = await fetch(url, { headers, signal: AbortSignal.timeout(3000) })
       return res.ok ? 'ok' : 'error'
     } catch {
       return 'error'
@@ -129,7 +134,8 @@ app.get('/health', async (c) => {
   const [qdrant, cliproxy, gitnexus, mem9, mcp] = await Promise.all([
     checkService('qdrant', `${process.env['QDRANT_URL'] || 'http://qdrant:6333'}/healthz`),
     checkService('cliproxy', `${process.env['LLM_PROXY_URL'] || 'http://llm-proxy:8317'}/v1/models`),
-    checkService('gitnexus', `${process.env['GITNEXUS_URL'] || 'http://gitnexus:4848'}/health`),
+    // eval-server enforces its bearer token on /health too, so probe it with the header.
+    checkService('gitnexus', `${gitnexusUrl()}/health`, gitnexusHeaders()),
     checkService('mem9', `http://localhost:${process.env.PORT || 4000}/api/mem9/health`),
     checkService('mcp', `${process.env['MCP_HEALTH_URL'] || 'http://cortex-mcp:8317/health'}`),
   ])

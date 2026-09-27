@@ -4,12 +4,12 @@ import { join, relative } from 'path'
 import { createLogger } from '@cortex/shared-utils'
 import { db } from '../db/client.js'
 import { createEmbedder } from '../lib/embedder-factory.js'
+import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
 
 const logger = createLogger('intel')
 
 export const intelRouter = new Hono()
 
-const GITNEXUS_URL = () => process.env.GITNEXUS_URL ?? 'http://gitnexus:4848'
 const QDRANT_URL = process.env.QDRANT_URL ?? 'http://qdrant:6333'
 const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 
@@ -28,7 +28,7 @@ async function callGitNexus(
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: gitnexusHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(params),
     signal: AbortSignal.timeout(30000),
   })
@@ -888,7 +888,7 @@ intelRouter.post('/register', async (c) => {
     try {
       const analyzeRes = await fetch(`${GITNEXUS_URL()}/tool/analyze`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: gitnexusHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ path: repoDir, name: repoName }),
         signal: AbortSignal.timeout(120000), // 2 min for analysis
       })
@@ -942,7 +942,7 @@ intelRouter.post('/sync-repos', async (c) => {
         // Try to call GitNexus query to check if already registered
         const checkRes = await fetch(`${GITNEXUS_URL()}/tool/query`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: gitnexusHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ query: 'test', repo: repoName, limit: 1 }),
           signal: AbortSignal.timeout(5000),
         })
@@ -957,7 +957,7 @@ intelRouter.post('/sync-repos', async (c) => {
           // Not registered — try to analyze
           const analyzeRes = await fetch(`${GITNEXUS_URL()}/tool/analyze`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: gitnexusHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ path: repoDir, name: repoName }),
             signal: AbortSignal.timeout(120000),
           })
@@ -1211,6 +1211,7 @@ function findFilesByName(dir: string, basename: string, maxResults: number): str
 intelRouter.get('/health', async (c) => {
   try {
     const res = await fetch(`${GITNEXUS_URL()}/health`, {
+      headers: gitnexusHeaders(),
       signal: AbortSignal.timeout(5000),
     })
 

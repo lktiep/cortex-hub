@@ -12,7 +12,9 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install gitnexus globally
-RUN npm install -g gitnexus@latest --timeout=600000
+# Pinned deliberately: `@latest` made rebuilds non-reproducible, and 1.6.12
+# silently changed the eval-server binding contract mid-deploy. Bump on purpose.
+RUN npm install -g gitnexus@1.6.12 --timeout=600000
 
 # Note: gitnexus binds to 127.0.0.1 by default; entrypoint passes --host 0.0.0.0
 # for Docker inter-container networking.
@@ -31,8 +33,10 @@ ENV PORT=4848
 ENV DEFAULT_REPO=
 EXPOSE 4848
 
+# eval-server enforces its bearer token on /health too. The entrypoint may have
+# generated the token at runtime, so read it from the file rather than the env.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-  CMD node -e "fetch('http://localhost:4848/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+  CMD node -e "const fs=require('fs');const f=process.env.GITNEXUS_AUTH_TOKEN_FILE||'/app/data/gitnexus-auth-token';const t=(process.env.GITNEXUS_AUTH_TOKEN||(fs.existsSync(f)?fs.readFileSync(f,'utf8'):'')).trim();fetch('http://localhost:4848/health',{headers:t?{Authorization:'Bearer '+t}:{}}).then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
 
 # Copy entrypoint script
 COPY infra/gitnexus-entrypoint.sh /usr/local/bin/gitnexus-entrypoint.sh

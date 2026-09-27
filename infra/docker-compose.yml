@@ -92,12 +92,18 @@ services:
       # Bootstrap repo indexed on a fresh volume. eval-server refuses to stay up
       # with an empty registry, so without at least one repo gitnexus crash-loops.
       DEFAULT_REPO: ${DEFAULT_REPO:-}
+      # eval-server 1.6.12+ refuses --host 0.0.0.0 without a bearer token. Leave
+      # this empty and the entrypoint generates one onto the shared api-data
+      # volume, where dashboard-api picks it up.
+      GITNEXUS_AUTH_TOKEN: ${GITNEXUS_AUTH_TOKEN:-}
     deploy:
       resources:
         limits:
           memory: 4G
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4848/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))\""]
+      # The bearer token is enforced on /health too, so the probe must carry it.
+      # It lives in a file because the entrypoint may have generated it at runtime.
+      test: ["CMD-SHELL", "node -e \"const fs=require('fs');const f=process.env.GITNEXUS_AUTH_TOKEN_FILE||'/app/data/gitnexus-auth-token';const t=(process.env.GITNEXUS_AUTH_TOKEN||(fs.existsSync(f)?fs.readFileSync(f,'utf8'):'')).trim();fetch('http://localhost:4848/health',{headers:t?{Authorization:'Bearer '+t}:{}}).then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))\""]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -150,6 +156,9 @@ services:
       LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-Xenova/all-MiniLM-L6-v2}
       # GitNexus
       GITNEXUS_URL: http://gitnexus:4848
+      # Matches the gitnexus service. When empty, dashboard-api reads the token
+      # the gitnexus entrypoint wrote to the shared api-data volume.
+      GITNEXUS_AUTH_TOKEN: ${GITNEXUS_AUTH_TOKEN:-}
     depends_on:
       qdrant:
         condition: service_healthy
