@@ -128,6 +128,11 @@ services:
     ports:
       - "4000:4000"
       - "3000:4000" # Backward compatibility for dashboard port
+      # Cloudflare Tunnel origin. The remotely-managed "cortex-hub" tunnel
+      # routes hub.jackle.dev -> http://localhost:3080, a port left over from
+      # the separate dashboard-web container that 91c99f1 folded into this
+      # service. Without this mapping the hostname answers 502.
+      - "3080:4000"
     volumes:
       - api-data:/app/data
       - gitnexus-data:/root/.gitnexus
