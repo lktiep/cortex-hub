@@ -20,19 +20,62 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # ── Read current version ──
+  # ── Claim the version these images will carry ──
+  #
+  # The bump used to run *after* the builds, so every build tagged itself with
+  # the number the *previous* run had left behind. #22's images published as
+  # v0.7.16 — the tag #21 had already published, with different content — and
+  # v0.7.17 exists nowhere in the registry. A version tag two different builds
+  # answer to is worse than no tag at all: pinning it is a coin toss, and a
+  # rollback lands on whichever build pushed last. So claim the number first,
+  # then build under it.
   version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
-      version: ${{ steps.read.outputs.version }}
+      version: ${{ steps.claim.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: Read version
-        id: read
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Claim the next patch version
+        id: claim
         run: |
-          VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' version.json | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Current version: $VERSION"
+          read_version() {
+            grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' version.json \
+              | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*'
+          }
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          chmod +x scripts/bump-version.sh
+
+          # Two merges landing minutes apart race here: the second run's push is
+          # rejected because master already moved. Re-claim on top of whatever
+          # master is now instead — never force over the other run.
+          for attempt in 1 2 3; do
+            scripts/bump-version.sh patch
+            VERSION=$(read_version)
+            git add version.json
+            if git diff --cached --quiet; then
+              echo "version.json already at v${VERSION}; building under it"
+              echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            git commit -m "chore: release v${VERSION} [skip ci]"
+            if git push; then
+              echo "Building as v${VERSION}"
+              echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "push rejected on attempt ${attempt}; re-claiming on top of origin/${GITHUB_REF_NAME}"
+            git reset --hard HEAD~1
+            git fetch origin "${GITHUB_REF_NAME}"
+            git reset --hard "origin/${GITHUB_REF_NAME}"
+          done
+          echo "::error::could not claim a version after 3 attempts"
+          exit 1
 
   # ── cortex-api (dashboard-api) ──
   build-api:
@@ -190,42 +233,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cortex-gitnexus
           cache-to: type=gha,scope=cortex-gitnexus,mode=max
-
-  # ── Auto-bump patch version after successful build ──
-  bump-version:
-    needs: [build-api, build-web, build-mcp, build-gitnexus]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Bump patch version
-        run: |
-          chmod +x scripts/bump-version.sh
-          scripts/bump-version.sh patch
-
-      - name: Commit version bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Two merges landing minutes apart race here: the second run's images
-          # publish fine, then its push is rejected because master already moved
-          # and the whole job is reported as failed. Recompute the bump on top of
-          # whatever master is now instead — never force over the other run.
-          for attempt in 1 2 3; do
-            git add version.json
-            git diff --cached --quiet && echo "No version change" && exit 0
-            NEW_VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' version.json | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*')
-            git commit -m "chore: bump version to v${NEW_VERSION} [skip ci]"
-            if git push; then exit 0; fi
-            echo "push rejected on attempt ${attempt}; re-bumping on top of origin/${GITHUB_REF_NAME}"
-            git reset --hard HEAD~1
-            git fetch origin "${GITHUB_REF_NAME}"
-            git reset --hard "origin/${GITHUB_REF_NAME}"
-            scripts/bump-version.sh patch
-          done
-          echo "::error::version bump could not be pushed after 3 attempts"
-          exit 1
