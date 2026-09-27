@@ -24,8 +24,21 @@ const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next', '__pycache__',
   '.turbo', 'coverage', '.cache', 'vendor', '.pnpm-store', 'bin', 'obj',
-  'packages', '.vs', '.idea', '.gradle', 'target',
+  '.vs', '.idea', '.gradle', 'target',
 ])
+
+// `packages/` is NuGet's restore directory in a .NET solution — downloaded
+// third-party code, worth skipping. It is also where a pnpm/yarn/lerna monorepo
+// keeps its own source, which is emphatically not. Skipping it unconditionally
+// cost this repo every file under packages/ (120 files indexed, none of them
+// from there), so decide per repository instead of by name.
+function skipsPackagesDir(root: string): boolean {
+  try {
+    return readdirSync(root).some((e) => e.toLowerCase().endsWith('.sln'))
+  } catch {
+    return false
+  }
+}
 
 const CODE_EXTENSIONS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.kt',
@@ -98,6 +111,7 @@ function chunkText(text: string, chunkSize = CHUNK_SIZE, overlap = CHUNK_OVERLAP
 
 function collectSourceFiles(dir: string): Array<{ path: string; relativePath: string }> {
   const files: Array<{ path: string; relativePath: string }> = []
+  const skipPackages = skipsPackagesDir(dir)
 
   function walk(currentDir: string) {
     let entries: string[]
@@ -109,6 +123,7 @@ function collectSourceFiles(dir: string): Array<{ path: string; relativePath: st
 
     for (const entry of entries) {
       if (SKIP_DIRS.has(entry) || entry.startsWith('.')) continue
+      if (entry === 'packages' && skipPackages) continue
 
       const fullPath = join(currentDir, entry)
       let stat
