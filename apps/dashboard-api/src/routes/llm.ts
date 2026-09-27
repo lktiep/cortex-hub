@@ -132,6 +132,15 @@ function logUsage(opts: {
 
 // ── Provider-specific API calls ──
 
+/**
+ * A batch of 32 is roughly 32 times the work of one text, so a flat 60s deadline
+ * aborted work that was progressing fine. Scales with the batch, capped so a
+ * wedged provider is still eventually abandoned.
+ */
+function batchTimeoutMs(count: number): number {
+  return Math.min(300000, 30000 + count * 3000)
+}
+
 function isGeminiProvider(slot: ProviderSlot): boolean {
   return slot.type === 'gemini' || slot.apiBase.includes('generativelanguage.googleapis.com')
 }
@@ -184,7 +193,7 @@ async function embedBatchViaGemini(
         content: { parts: [{ text }] },
       })),
     }),
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(batchTimeoutMs(texts.length)),
   })
 
   if (!res.ok) {
@@ -250,7 +259,7 @@ async function embedBatchViaOpenAI(
     method: 'POST',
     headers,
     body: JSON.stringify({ model, input: texts }),
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(batchTimeoutMs(texts.length)),
   })
 
   if (!res.ok) {
@@ -376,6 +385,39 @@ async function chatViaOpenAI(
 }
 
 /**
+ * Serialise embedding calls so a busy provider queues instead of timing out.
+ *
+ * ollama answers one embedding request at a time and queues the rest inside
+ * itself, where we cannot see them. Twelve index jobs embedding at once
+ * therefore did not go faster — the 30s/60s aborts below fired while the
+ * request was still waiting in ollama's queue, and the caller lost the batch.
+ * A gate in front turns that invisible queue into ordinary waiting: the fetch
+ * timeout only starts once a slot is free.
+ *
+ * Two by default, because one request already saturates a CPU-only ollama.
+ * Raise EMBED_MAX_CONCURRENCY for a provider that fans out server-side.
+ */
+const EMBED_CONCURRENCY = Math.max(1, Number(process.env['EMBED_MAX_CONCURRENCY']) || 2)
+let embedInFlight = 0
+const embedWaiters: Array<() => void> = []
+
+async function withEmbedSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (embedInFlight < EMBED_CONCURRENCY) {
+    embedInFlight++
+  } else {
+    // The releasing call hands the slot over, so the count stays owned throughout.
+    await new Promise<void>((resolve) => embedWaiters.push(resolve))
+    embedInFlight++
+  }
+  try {
+    return await fn()
+  } finally {
+    embedInFlight--
+    embedWaiters.shift()?.()
+  }
+}
+
+/**
  * Embed every text on one slot, one request where the provider allows it.
  *
  * Batching is an optimisation, never a correctness requirement: if a provider
@@ -391,9 +433,11 @@ async function embedAll(
 
   if (texts.length > 1) {
     try {
-      const batch = gemini
-        ? await embedBatchViaGemini(texts, slot.apiKey, slot.model, slot.apiBase)
-        : await embedBatchViaOpenAI(texts, slot.apiKey, slot.model, slot.apiBase)
+      const batch = await withEmbedSlot(() =>
+        gemini
+          ? embedBatchViaGemini(texts, slot.apiKey, slot.model, slot.apiBase)
+          : embedBatchViaOpenAI(texts, slot.apiKey, slot.model, slot.apiBase)
+      )
 
       const complete =
         batch.vectors.length === texts.length &&
@@ -416,9 +460,11 @@ async function embedAll(
 
   const results = await Promise.all(
     texts.map((text) =>
-      gemini
-        ? embedViaGemini(text, slot.apiKey, slot.model, slot.apiBase)
-        : embedViaOpenAI(text, slot.apiKey, slot.model, slot.apiBase)
+      withEmbedSlot(() =>
+        gemini
+          ? embedViaGemini(text, slot.apiKey, slot.model, slot.apiBase)
+          : embedViaOpenAI(text, slot.apiKey, slot.model, slot.apiBase)
+      )
     )
   )
 

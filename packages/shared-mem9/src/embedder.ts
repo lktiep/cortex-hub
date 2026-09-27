@@ -15,6 +15,20 @@ const RETRYABLE_CODES = new Set([429, 502, 503, 504])
 /** Sleep for ms */
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+/** A gateway error worth trying again rather than giving up on */
+function isTransient(err: unknown): boolean {
+  const msg = String(err)
+  const status = Number(msg.match(/\((\d{3})\)/)?.[1] ?? 0)
+  return (
+    RETRYABLE_CODES.has(status) ||
+    msg.includes('TimeoutError') ||
+    msg.includes('aborted') ||
+    msg.includes('fetch failed') ||
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('ECONNRESET')
+  )
+}
+
 export class Embedder {
   private readonly config: EmbedderConfig
   private readonly chain: ModelSlot[]
@@ -38,7 +52,7 @@ export class Embedder {
   async embed(text: string): Promise<number[]> {
     // Route through gateway if configured
     if (this.gatewayUrl) {
-      return this.embedViaGateway(text)
+      return this.withRetries(() => this.embedViaGateway(text))
     }
     // Local provider — runs in-process via @xenova/transformers, disabled in favor of Ollama
     if (this.config.provider === 'local') {
@@ -78,6 +92,28 @@ export class Embedder {
     const first = data.data[0]
     if (!first) throw new Error('Gateway returned empty embedding data')
     return first.embedding
+  }
+
+  /**
+   * Retry a transient gateway failure.
+   *
+   * maxRetries/retryDelayMs were honoured only on the direct-provider fallback
+   * chain, so the gateway path — the one every caller actually uses — had no
+   * retry at all. One timed-out request from a busy provider was fatal, and for
+   * the dimension probe that runs before indexing it took the whole job with it.
+   */
+  private async withRetries<T>(fn: () => Promise<T>): Promise<T> {
+    let last: unknown
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      try {
+        return await fn()
+      } catch (err) {
+        last = err
+        if (attempt === this.maxRetries || !isTransient(err)) break
+        await sleep(this.baseDelay * Math.pow(2, attempt))
+      }
+    }
+    throw last
   }
 
   /** Embed via the gateway in one request — one vector per text, in order */
@@ -128,7 +164,7 @@ export class Embedder {
 
     if (this.gatewayUrl) {
       try {
-        return await this.embedBatchViaGateway(texts)
+        return await this.withRetries(() => this.embedBatchViaGateway(texts))
       } catch (err) {
         console.warn(`[embedder] batch embed failed, falling back per text: ${String(err).slice(0, 150)}`)
       }
