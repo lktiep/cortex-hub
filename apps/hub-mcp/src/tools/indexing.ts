@@ -7,14 +7,15 @@ import { apiCall } from '../api-call.js'
 /**
  * Register indexing tools.
  * Allows agents to trigger code re-indexing after pushing code changes.
- * Looks up project by git_repo_url, then calls dashboard-api indexing API.
+ * Looks up the project by name, id or git_repo_url, then calls the
+ * dashboard-api indexing API.
  */
 export function registerIndexingTools(server: McpServer, env: Env) {
   server.tool(
     'cortex_code_reindex',
     'Trigger re-indexing of a project after code changes. Looks up the project by repo URL and starts a GitNexus re-index job. Call this after pushing significant code changes to keep code intelligence up-to-date.',
     {
-      repo: z.string().describe('Git repository URL (e.g. https://github.com/org/repo)'),
+      repo: z.string().describe('Project name or git repository URL (e.g. "cortex-hub" or https://github.com/org/repo)'),
       branch: z.string().optional().describe('Branch to index (default: main)'),
     },
     async ({ repo, branch }) => {

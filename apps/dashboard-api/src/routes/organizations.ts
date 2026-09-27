@@ -173,22 +173,30 @@ orgsRouter.post('/:id/projects', async (c) => {
 // ── Projects Router (flat) ──
 export const projectsRouter = new Hono()
 
-// ── Lookup project by repo URL ──
+// ── Lookup project by repo URL, name or id ──
 projectsRouter.get('/lookup', (c) => {
   const repo = c.req.query('repo')
   if (!repo) return c.json({ error: 'repo query param required' }, 400)
 
   try {
-    // Try exact match first, then without .git suffix
-    const cleanRepo = repo.replace(/\.git$/, '')
+    // Callers say "cortex-hub" at least as often as they say the full clone
+    // URL: every other repo-taking tool accepts the bare name, and the MCP
+    // reindex tool passes through whatever the agent typed. Matching only
+    // git_repo_url made this report a registered project as unregistered.
+    const cleanRepo = repo.replace(/\.git$/, '').replace(/\/+$/, '')
+    const basename = cleanRepo.split('/').pop() ?? cleanRepo
     const project = db
       .prepare(
         `SELECT id, name, git_repo_url, indexed_at, indexed_symbols
          FROM projects
-         WHERE git_repo_url = ? OR REPLACE(git_repo_url, '.git', '') = ?
+         WHERE git_repo_url = ?
+            OR RTRIM(REPLACE(git_repo_url, '.git', ''), '/') = ?
+            OR id = ?
+            OR slug = ? COLLATE NOCASE
+            OR name = ? COLLATE NOCASE
          LIMIT 1`
       )
-      .get(repo, cleanRepo) as Record<string, unknown> | undefined
+      .get(repo, cleanRepo, repo, basename, basename) as Record<string, unknown> | undefined
 
     if (!project) return c.json({ error: 'Project not found' }, 404)
     return c.json(project)

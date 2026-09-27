@@ -211,8 +211,21 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          NEW_VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' version.json | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*')
-          git add version.json
-          git diff --cached --quiet && echo "No version change" && exit 0
-          git commit -m "chore: bump version to v${NEW_VERSION} [skip ci]"
-          git push
+          # Two merges landing minutes apart race here: the second run's images
+          # publish fine, then its push is rejected because master already moved
+          # and the whole job is reported as failed. Recompute the bump on top of
+          # whatever master is now instead — never force over the other run.
+          for attempt in 1 2 3; do
+            git add version.json
+            git diff --cached --quiet && echo "No version change" && exit 0
+            NEW_VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' version.json | grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*')
+            git commit -m "chore: bump version to v${NEW_VERSION} [skip ci]"
+            if git push; then exit 0; fi
+            echo "push rejected on attempt ${attempt}; re-bumping on top of origin/${GITHUB_REF_NAME}"
+            git reset --hard HEAD~1
+            git fetch origin "${GITHUB_REF_NAME}"
+            git reset --hard "origin/${GITHUB_REF_NAME}"
+            scripts/bump-version.sh patch
+          done
+          echo "::error::version bump could not be pushed after 3 attempts"
+          exit 1
