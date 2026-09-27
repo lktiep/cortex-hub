@@ -12,7 +12,11 @@ debug: false
 # Remote management (for onboarding via web)
 remote-management:
   allow-remote: true
-  secret-key: "${MANAGEMENT_PASSWORD}"
+  # No secret-key here on purpose. CLIProxyAPI expands no env vars in this file,
+  # so a "${MANAGEMENT_PASSWORD}" value was stored and bcrypt-hashed literally —
+  # i.e. the repo itself published a working management credential for a
+  # LAN-exposed, allow-remote endpoint. v7.3.18 also accepts the MANAGEMENT_PASSWORD
+  # env var (docker-compose passes it from .env), which is the only credential we want.
 # OpenAI-compatible endpoints
 # API key is synced from Codex OAuth by dashboard-api startup
 openai-compatibility:
