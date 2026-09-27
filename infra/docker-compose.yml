@@ -127,7 +127,10 @@ services:
     container_name: cortex-gitnexus
     restart: unless-stopped
     labels:
-      - "com.containrrr.watchtower.enable=false"
+      # Watchtower reads com.centurylinklabs.*, never com.containrrr.* — the
+      # label this used to carry was inert, so with WATCHTOWER_LABEL_ENABLE the
+      # monitored set was empty and nothing on this host has ever auto-updated.
+      - "com.centurylinklabs.watchtower.enable=true"
     # Loopback only: cortex-api talks to GitNexus over the compose network.
     ports:
       - "127.0.0.1:4848:4848"
@@ -173,7 +176,10 @@ services:
     container_name: cortex-api
     restart: unless-stopped
     labels:
-      - "com.containrrr.watchtower.enable=false"
+      # Watchtower reads com.centurylinklabs.*, never com.containrrr.* — the
+      # label this used to carry was inert, so with WATCHTOWER_LABEL_ENABLE the
+      # monitored set was empty and nothing on this host has ever auto-updated.
+      - "com.centurylinklabs.watchtower.enable=true"
     ports:
       - "4000:4000"
       - "3000:4000" # Backward compatibility for dashboard port
@@ -250,7 +256,10 @@ services:
     container_name: cortex-mcp
     restart: unless-stopped
     labels:
-      - "com.containrrr.watchtower.enable=false"
+      # Watchtower reads com.centurylinklabs.*, never com.containrrr.* — the
+      # label this used to carry was inert, so with WATCHTOWER_LABEL_ENABLE the
+      # monitored set was empty and nothing on this host has ever auto-updated.
+      - "com.centurylinklabs.watchtower.enable=true"
     ports:
       - "8318:8317"
     volumes:
@@ -297,6 +306,10 @@ services:
     environment:
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_POLL_INTERVAL: 300
+      # Opt-in only: the three cortex images carry the enable label, so the
+      # pinned third-party images (qdrant, ollama) are never touched. This is
+      # the whole of CD here — the build workflow publishes to GHCR and nothing
+      # pushes to this host, which sits on a private LAN behind a tunnel.
       WATCHTOWER_LABEL_ENABLE: "true"
       # Docker 29+ rejects API versions below 1.44.
       DOCKER_API_VERSION: "1.44"
