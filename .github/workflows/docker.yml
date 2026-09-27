@@ -10,6 +10,9 @@ on:
       - 'packages/**'
       - 'infra/Dockerfile.*'
       - 'infra/nginx-dashboard.conf'
+      # Baked into cortex-gitnexus by COPY in Dockerfile.gitnexus, so editing it
+      # is a source change that needs a rebuild — same as nginx-dashboard.conf.
+      - 'infra/gitnexus-entrypoint.sh'
       - 'version.json'
   workflow_dispatch:
 
