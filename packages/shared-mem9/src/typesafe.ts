@@ -192,19 +192,27 @@ async function mapWithConcurrency<T, R>(
 }
 
 export interface RerankOptions {
-  /** Max simultaneous requests. TypeSafe answers in ~50-500ms, so this sets throughput. */
-  concurrency?: number
   /** What the caller is looking for — replaces the default relevance wording. */
   instructions?: string
-  criteria?: { true: string; false: string }
   /**
-   * How much to trust the reranker vs the original retrieval score, 0..1.
-   * 1 = rerank score only; 0 = ignore the reranker. Blending keeps a candidate
-   * the embedder was very sure about from being buried by one flat Jev answer.
+   * Hard cap on how many candidates are ranked. Beyond it the tail keeps its
+   * retrieval order and sorts below everything that was ranked.
+   */
+  maxCandidates?: number
+  /** Candidates per Jev call. A larger pool is ranked in rounds. */
+  roundSize?: number
+  /** How much of each candidate the reranker is shown. */
+  excerptChars?: number
+  /** Max rounds in flight at once. Only matters for pools above roundSize. */
+  concurrency?: number
+  /**
+   * How much to trust the reranker's ordering, 0..1. 1 = ranked order only.
+   * Below 1 the retrieval score acts inside a single rank gap, so it breaks
+   * ties and nudges neighbours but can never reorder the list wholesale.
    */
   weight?: number
-  /** Candidates that fail (network, rate limit) keep their original score. */
-  onError?: (index: number, err: unknown) => void
+  /** A round that fails (network, rate limit) leaves its candidates in retrieval order. */
+  onError?: (round: number, err: unknown) => void
 }
 
 export interface Reranked<T> {
@@ -213,18 +221,48 @@ export interface Reranked<T> {
   score: number
   /** Original retrieval score, untouched. */
   retrievalScore: number
-  /** Jev's probability that this candidate answers the query, or null if the call failed. */
+  /**
+   * Where the reranker put this candidate, 1.0 for first down to 1/n for last,
+   * or null if its round failed. This is a *position*, not a probability: it
+   * says "ranked above that one", never "94% relevant", and it is only
+   * comparable within the same round.
+   */
   relevance: number | null
 }
 
+/** Build the one choice question that ranks a whole round of candidates. */
+function buildRoundQuestion(
+  round: Array<{ text: string }>,
+  instructions: string,
+  excerptChars: number,
+): { question: ChoiceQuestion; ids: string[] } {
+  const criteria: Record<string, string> = {}
+  const ids: string[] = []
+  round.forEach((c, i) => {
+    const id = `c${i + 1}`
+    ids.push(id)
+    criteria[id] = c.text.slice(0, excerptChars).replace(/\s+/g, ' ').trim()
+  })
+  // No "none of these" option on purpose. Offered one, Jev returns it for a
+  // third of real questions and the answer carries no ordering, so the cut has
+  // to live in a separate graded question instead of inside the ranking.
+  return { question: choice(instructions, criteria), ids }
+}
+
 /**
- * Re-rank retrieval candidates by asking Jev, per candidate, whether it
- * actually answers the query — the judgement a single embedding cannot make.
+ * Re-rank retrieval candidates by asking Jev, in one call, to order the whole
+ * pool against the query — the judgement a single embedding cannot make.
+ *
+ * One question about the pool, not one question per candidate. The per-candidate
+ * shape reads naturally and measures worse: on a 200-question LoCoMo set
+ * vectorize-io/hindsight put listwise at recall@1 0.94 against 0.87 for one call
+ * per candidate, at a thirtieth of the calls — and a thirtieth of the latency,
+ * because N round trips collapse into one. TypeSafe's own re-ranking cookbook
+ * reports top-1 5% -> 18% and top-10 38% -> 62% over BM25 on CLERC:
+ * https://docs.typesafe.ai/cookbooks/rerank_typesafe
  *
  * Intended shape: over-fetch from the vector store (4-5x the wanted limit),
- * rerank, then trim. TypeSafe's own re-ranking cookbook reports top-1 accuracy
- * 5% -> 18% and top-10 38% -> 62% over BM25 on CLERC with this pattern:
- * https://docs.typesafe.ai/cookbooks/rerank_typesafe
+ * rerank, then trim.
  */
 export async function rerankByRelevance<T>(
   client: TypeSafeClient,
@@ -233,36 +271,82 @@ export async function rerankByRelevance<T>(
   opts: RerankOptions = {},
 ): Promise<Array<Reranked<T>>> {
   const weight = opts.weight ?? 1
-  const question = noul(
-    opts.instructions ??
-      'Does the candidate passage contain what is needed to answer the query?',
-    opts.criteria ?? {
-      true: 'The passage contains the specific code, definition or fact the query asks for',
-      false: 'The passage is about a related topic but does not contain what the query asks for',
-    },
-  )
+  const maxCandidates = opts.maxCandidates ?? 300
+  const roundSize = Math.max(2, opts.roundSize ?? 250)
+  const excerptChars = opts.excerptChars ?? 400
+  const instructions =
+    opts.instructions ?? 'Which passage contains what is needed to answer the query?'
 
-  const scored = await mapWithConcurrency(candidates, opts.concurrency ?? 8, async (c, i) => {
-    try {
-      const res = await client.systemOne(
-        { query, candidate_passage: c.text },
-        { relevant: question },
-      )
-      const answer = res.answers.relevant
-      const relevance = answer && answer.type === 'noul' ? answer.noul : null
-      return { item: c.item, retrievalScore: c.score, relevance }
-    } catch (err) {
-      opts.onError?.(i, err)
-      return { item: c.item, retrievalScore: c.score, relevance: null }
+  // A rank gap. Every score below is expressed in these units, so a failed
+  // round, an unranked tail and a tie-break all stay on one comparable scale.
+  const gap = 1 / Math.max(candidates.length, 1)
+  const tieBreak = (retrievalScore: number) => (1 - weight) * gap * retrievalScore
+
+  // Ranking a 10k-hit pool would cost more than it can pay back, and the tail
+  // of a vector search is noise anyway: cap it and leave the rest as retrieved.
+  const ranked = candidates.slice(0, maxCandidates)
+  const unranked: Array<Reranked<T>> = candidates.slice(maxCandidates).map((c) => ({
+    item: c.item,
+    retrievalScore: c.score,
+    relevance: null,
+    score: tieBreak(c.score),
+  }))
+
+  const rounds: Array<Array<{ item: T; text: string; score: number }>> = []
+  for (let i = 0; i < ranked.length; i += roundSize) {
+    rounds.push(ranked.slice(i, i + roundSize))
+  }
+
+  const perRound = await mapWithConcurrency(rounds, opts.concurrency ?? 4, async (round, r) => {
+    const fallback = (): Array<Reranked<T>> =>
+      round.map((c) => ({
+        item: c.item,
+        retrievalScore: c.score,
+        relevance: null,
+        score: tieBreak(c.score),
+      }))
+
+    if (round.length < 2) {
+      // Nothing to order. Asking would spend a call to learn that c1 wins.
+      return fallback()
     }
+
+    const { question, ids } = buildRoundQuestion(round, instructions, excerptChars)
+
+    let probabilities: Record<string, number>
+    try {
+      const res = await client.systemOne({ query }, { best: question })
+      const answer = res.answers.best
+      if (!answer || answer.type !== 'choice') throw new Error('expected a choice answer')
+      probabilities = answer.probabilities ?? {}
+    } catch (err) {
+      // A partial outage degrades to today's ordering instead of dropping results.
+      opts.onError?.(r, err)
+      return fallback()
+    }
+
+    const order = ids
+      .map((id, i) => ({ i, p: probabilities[id] }))
+      .filter((e): e is { i: number; p: number } => typeof e.p === 'number')
+      .sort((a, b) => b.p - a.p)
+
+    if (order.length === 0) return fallback()
+
+    const out = fallback()
+    order.forEach((e, rank) => {
+      const c = round[e.i]!
+      // Top = 1.0, each place below one gap lower. The probability itself is
+      // not a calibrated confidence, so only its position is used.
+      const position = (order.length - rank) / order.length
+      out[e.i] = {
+        item: c.item,
+        retrievalScore: c.score,
+        relevance: position,
+        score: position + tieBreak(c.score),
+      }
+    })
+    return out
   })
 
-  return scored
-    .map((s) => ({
-      ...s,
-      // A failed candidate keeps its retrieval score, so a partial outage
-      // degrades to today's ordering instead of dropping results.
-      score: s.relevance === null ? s.retrievalScore : s.relevance * weight + s.retrievalScore * (1 - weight),
-    }))
-    .sort((a, b) => b.score - a.score)
+  return [...perRound.flat(), ...unranked].sort((a, b) => b.score - a.score)
 }

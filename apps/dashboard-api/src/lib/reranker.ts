@@ -9,10 +9,17 @@
  * first.
  *
  * A reranker fixes the ordering rather than the retrieval: over-fetch cheap
- * vector candidates, then ask a decision model about each one. This wraps
- * TypeSafe's Jev, which answers a typed yes/no with a calibrated probability
- * instead of generating text, so there is nothing to parse and each candidate
- * costs a fraction of a chat completion.
+ * vector candidates, then ask a decision model to order them. This wraps
+ * TypeSafe's Jev, which answers a typed question instead of generating text, so
+ * there is nothing to parse and one search costs a fraction of a chat
+ * completion.
+ *
+ * The question is asked once about the whole pool, not once per candidate. The
+ * per-candidate version shipped first because it reads naturally; it is both
+ * slower and less accurate, and vectorize-io/hindsight measured the difference
+ * on a 200-question set at recall@1 0.94 listwise against 0.87 per candidate —
+ * with a thirtieth of the calls, so a search now waits on one round trip
+ * instead of ceil(candidates / 8) of them.
  *
  * Disabled unless TYPESAFE_API_KEY is set — with no key every search path keeps
  * exactly its current behaviour.
@@ -27,17 +34,31 @@ const logger = createLogger('reranker')
 /** How many candidates to pull per wanted result when reranking is on. */
 export const RERANK_OVERFETCH = 4
 
-/** Requests in flight per search. Jev answers in ~50-500ms, so this is throughput. */
-const RERANK_CONCURRENCY = 8
+/**
+ * Candidates per Jev call. Above this the pool is ranked in rounds, whose
+ * positions are then merged — so keep the whole pool in one round when it fits.
+ */
+const RERANK_ROUND_SIZE = 250
+
+/** Hard ceiling on what gets ranked at all; the tail keeps its vector order. */
+const RERANK_MAX_CANDIDATES = 300
+
+/** Characters of each excerpt shown to the reranker. */
+const RERANK_EXCERPT_CHARS = 400
 
 /**
- * How much the rerank probability counts against the vector score.
+ * How much the reranked order counts against the vector score.
  *
- * Not 1.0 on purpose: Jev returns a calibrated probability, and a flat answer
- * near 0.5 carries no information. Blending keeps a candidate the embedder was
- * certain about from being buried by one indecisive judgement.
+ * Not 1.0 so that the vector score still breaks ties — but it is deliberately
+ * only a tie-break. Jev's probabilities are rank positions, not calibrated
+ * confidences, so treating them as a blendable quantity lets a 0.2 weight on a
+ * cosine score silently undo the whole ranking once the pool is large enough
+ * that one rank gap (1/n) is smaller than the spread in vector scores.
  */
-const RERANK_WEIGHT = 0.8
+const RERANK_WEIGHT = 0.9
+
+/** One listwise call carries the whole pool, so it needs more than the 15s default. */
+const RERANK_TIMEOUT_MS = 45_000
 
 export interface Reranker {
   rerank<T>(
@@ -65,21 +86,20 @@ export function getReranker(): Reranker | null {
   const client = new TypeSafeClient({
     apiKey,
     model: process.env['TYPESAFE_MODEL'] ?? 'jev-latest',
+    timeoutMs: RERANK_TIMEOUT_MS,
   })
 
   cached = {
     rerank: (query, candidates) =>
       rerankByRelevance(client, query, candidates, {
-        concurrency: RERANK_CONCURRENCY,
         weight: RERANK_WEIGHT,
+        roundSize: RERANK_ROUND_SIZE,
+        maxCandidates: RERANK_MAX_CANDIDATES,
+        excerptChars: RERANK_EXCERPT_CHARS,
         instructions:
-          'Does the candidate source file excerpt contain the code that answers the query?',
-        criteria: {
-          true: 'The excerpt contains the implementation, declaration or definition the query asks about',
-          false: 'The excerpt only mentions or uses the subject of the query, or is about a neighbouring concern',
-        },
-        onError: (index, err) => {
-          logger.warn(`candidate ${index} kept its vector score: ${String(err).slice(0, 160)}`)
+          'Which source file excerpt contains the code that answers the query — the implementation, declaration or definition asked about, not a file that merely mentions or uses it?',
+        onError: (round, err) => {
+          logger.warn(`rerank round ${round} kept its vector order: ${String(err).slice(0, 160)}`)
         },
       }),
   }
