@@ -16,7 +16,7 @@ export function registerIndexingTools(server: McpServer, env: Env) {
     'Trigger re-indexing of a project after code changes. Looks up the project by repo URL and starts a GitNexus re-index job. Call this after pushing significant code changes to keep code intelligence up-to-date.',
     {
       repo: z.string().describe('Project name or git repository URL (e.g. "cortex-hub" or https://github.com/org/repo)'),
-      branch: z.string().optional().describe('Branch to index (default: main)'),
+      branch: z.string().optional().describe("Branch to index (default: the repository's own default branch)"),
     },
     async ({ repo, branch }) => {
       try {
@@ -65,7 +65,9 @@ export function registerIndexingTools(server: McpServer, env: Env) {
         const indexRes = await apiCall(env, `/api/projects/${projectId}/index`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ branch: branch ?? 'main', triggeredBy: 'reindex' }),
+          // Omit the branch entirely when the caller did not give one: the API
+          // resolves the repository's real default, which is not always 'main'.
+          body: JSON.stringify(branch ? { branch, triggeredBy: 'reindex' } : { triggeredBy: 'reindex' }),
         })
 
         const indexData = (await indexRes.json()) as Record<string, unknown>

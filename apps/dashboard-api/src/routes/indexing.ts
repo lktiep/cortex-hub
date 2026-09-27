@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { db } from '../db/client.js'
-import { startIndexing, cancelJob, buildAuthUrl } from '../services/indexer.js'
+import { startIndexing, cancelJob, buildAuthUrl, resolveDefaultBranch } from '../services/indexer.js'
 import { embedProject } from '../services/mem9-embedder.js'
 import { buildKnowledgeFromDocs } from '../services/docs-knowledge-builder.js'
 
@@ -52,16 +52,18 @@ indexingRouter.post('/:id/index', async (c) => {
       return c.json({ error: 'An indexing job is already running', jobId: activeJob.id }, 409)
     }
 
-    // Parse branch from body
-    let branch = 'main'
+    // Parse branch from body — when the caller does not name one, ask the
+    // remote rather than assuming 'main'.
+    let branch: string | null = null
     let triggeredBy = 'manual'
     try {
       const body = await c.req.json()
       if (body.branch) branch = body.branch
       if (body.triggeredBy) triggeredBy = body.triggeredBy
     } catch {
-      // No body is OK, use default branch
+      // No body is OK
     }
+    if (!branch) branch = await resolveDefaultBranch(projectId)
 
     // Create job record
     const jobId = `idx-${randomUUID().slice(0, 12)}`
@@ -257,7 +259,7 @@ indexingRouter.get('/:id/branches', async (c) => {
 indexingRouter.get('/:id/branches/diff', async (c) => {
   const projectId = c.req.param('id')
   const branch = c.req.query('branch')
-  const base = c.req.query('base') ?? 'main'
+  const base = c.req.query('base') ?? (await resolveDefaultBranch(projectId))
 
   if (!branch) return c.json({ error: 'branch query param required' }, 400)
   if (branch === base) return c.json({ diff: [], message: 'Same branch' })

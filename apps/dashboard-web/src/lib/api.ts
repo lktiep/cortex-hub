@@ -664,10 +664,12 @@ export interface BranchDiff {
   error?: string
 }
 
-export async function getBranchDiff(projectId: string, branch: string, base = 'main') {
-  return apiFetch<BranchDiff>(
-    `/api/projects/${projectId}/branches/diff?branch=${encodeURIComponent(branch)}&base=${encodeURIComponent(base)}`
-  )
+export async function getBranchDiff(projectId: string, branch: string, base?: string) {
+  // Leave base out unless the caller picked one: the API then diffs against
+  // the repository's own default branch, which is not always 'main'.
+  const params = new URLSearchParams({ branch })
+  if (base) params.set('base', base)
+  return apiFetch<BranchDiff>(`/api/projects/${projectId}/branches/diff?${params.toString()}`)
 }
 
 export interface BranchIndexStatus {

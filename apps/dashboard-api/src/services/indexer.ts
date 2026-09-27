@@ -42,6 +42,52 @@ export function buildAuthUrl(url: string, username?: string | null, token?: stri
 }
 
 /**
+ * The branch to index when the caller did not name one.
+ *
+ * Defaulting to the literal 'main' quietly indexed the wrong thing for every
+ * repository that is still on 'master' — the clone succeeded, the checkout
+ * fell back, and the job reported success against stale code. Ask the remote
+ * what its HEAD points at instead, and cache the answer on the project so the
+ * network round trip happens once.
+ */
+export async function resolveDefaultBranch(projectId: string): Promise<string> {
+  const project = db.prepare(
+    'SELECT git_repo_url, git_username, git_token, default_branch FROM projects WHERE id = ?'
+  ).get(projectId) as {
+    git_repo_url: string | null
+    git_username: string | null
+    git_token: string | null
+    default_branch: string | null
+  } | undefined
+
+  if (project?.default_branch) return project.default_branch
+  if (!project?.git_repo_url) return 'main'
+
+  try {
+    const { execFileSync } = await import('child_process')
+    const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
+    const output = execFileSync('git', ['ls-remote', '--symref', authUrl, 'HEAD'], {
+      timeout: 15000,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    const match = output.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m)
+    if (match?.[1]) {
+      db.prepare('UPDATE projects SET default_branch = ? WHERE id = ?').run(match[1], projectId)
+      logger.info(`Resolved default branch for ${projectId}: ${match[1]}`)
+      return match[1]
+    }
+  } catch (err) {
+    // A credential or network problem is the clone's business to report, not
+    // this helper's: fall through to the old default so nothing new breaks.
+    const msg = String(err).replace(/\/\/[^@]+@/g, '//<redacted>@')
+    logger.warn(`Could not resolve default branch for ${projectId}: ${msg.slice(0, 200)}`)
+  }
+
+  return 'main'
+}
+
+/**
  * Update job status in the database.
  */
 function updateJob(jobId: string, updates: Record<string, unknown>) {

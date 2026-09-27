@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS projects (
     git_provider TEXT,              -- 'github', 'gitlab', 'bitbucket', 'azure', 'local'
     git_username TEXT,
     git_token TEXT,
+    default_branch TEXT,            -- resolved from the remote HEAD on first use
     indexed_at TEXT,
     indexed_symbols INTEGER DEFAULT 0,
     enabled BOOLEAN DEFAULT 1,

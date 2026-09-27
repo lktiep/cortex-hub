@@ -39,6 +39,12 @@ try {
   db.exec('ALTER TABLE projects ADD COLUMN enabled BOOLEAN DEFAULT 1')
 } catch (e) { /* ignore if exists */ }
 
+// Not every repository is on 'main'. Left unset, it is resolved from the
+// remote HEAD the first time the project is indexed and cached here.
+try {
+  db.exec('ALTER TABLE projects ADD COLUMN default_branch TEXT')
+} catch (e) { /* ignore if exists */ }
+
 // Conductor Phase 1v2: session identity columns
 const sessionIdentityCols = [
   'ALTER TABLE session_handoffs ADD COLUMN hostname TEXT',
