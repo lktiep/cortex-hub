@@ -58,7 +58,8 @@ services:
         limits:
           memory: 256M
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8317/v1/models > /dev/null || exit 1"]
+      # The eceasy/cli-proxy-api image ships no wget or curl — probe the port with bash.
+      test: ["CMD-SHELL", "bash -c '(echo > /dev/tcp/localhost/8317) 2>/dev/null'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -88,6 +89,9 @@ services:
       - /etc/timezone:/etc/timezone:ro
     environment:
       PORT: 4848
+      # Bootstrap repo indexed on a fresh volume. eval-server refuses to stay up
+      # with an empty registry, so without at least one repo gitnexus crash-loops.
+      DEFAULT_REPO: ${DEFAULT_REPO:-}
     deploy:
       resources:
         limits:
@@ -222,7 +226,8 @@ services:
       WATCHTOWER_CLEANUP: "true"
       WATCHTOWER_POLL_INTERVAL: 300
       WATCHTOWER_LABEL_ENABLE: "true"
-      DOCKER_API_VERSION: "1.43"
+      # Docker 29+ rejects API versions below 1.44.
+      DOCKER_API_VERSION: "1.44"
     deploy:
       resources:
         limits:

@@ -117,12 +117,9 @@ if [ -d "$REPOS_DIR" ]; then
     echo "GitNexus: Auto-discovery complete. ${ANALYZED} new repos analyzed. Total registered: ${TOTAL}"
 fi
 
-# Start the eval-server in the background
-echo "GitNexus: Starting eval-server on port $PORT..."
-gitnexus eval-server --port "$PORT" --host 0.0.0.0 --idle-timeout 0 &
-EVAL_PID=$!
-
-# Run background watchdog daemon to index new/re-indexed repos
+# Run background watchdog daemon to index new/re-indexed repos.
+# Started BEFORE eval-server so it can pick up repos the dashboard clones while
+# the registry is still empty.
 (
     echo "GitNexus: Starting watchdog daemon..."
     while true; do
@@ -148,7 +145,44 @@ EVAL_PID=$!
         fi
     done
 ) &
+WATCHDOG_PID=$!
 
-# Wait for eval-server to exit
-wait $EVAL_PID
+# Supervise eval-server. It refuses to stay up with an empty registry, so if we
+# exited here the container would die and `restart: unless-stopped` would spin it
+# in a ~3s crash loop — burning CPU, flooding logs, and letting dependents start
+# against a dead service. Instead: wait for a repo, run, and restart if it dies.
+# eval-server holds a LadybugDB, so give it a window to close cleanly rather than
+# killing it outright. Stays under Docker's default 10s stop timeout.
+cleanup() {
+    trap - TERM INT
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    if [ -n "${EVAL_PID:-}" ]; then
+        kill -TERM "$EVAL_PID" 2>/dev/null || true
+        for _ in $(seq 1 8); do
+            kill -0 "$EVAL_PID" 2>/dev/null || break
+            sleep 1
+        done
+        kill -KILL "$EVAL_PID" 2>/dev/null || true
+    fi
+    exit 0
+}
+trap cleanup TERM INT
+
+while true; do
+    if ! has_indexed_repos; then
+        echo "GitNexus: Registry empty — waiting for a repo to be indexed."
+        echo "GitNexus: Add one via the Dashboard (Projects -> Index Repo), or set DEFAULT_REPO."
+        while ! has_indexed_repos; do
+            sleep 10
+        done
+        echo "GitNexus: Repo detected ($(count_registered_repos) registered)."
+    fi
+
+    echo "GitNexus: Starting eval-server on port $PORT..."
+    gitnexus eval-server --port "$PORT" --host 0.0.0.0 --idle-timeout 0 &
+    EVAL_PID=$!
+    wait "$EVAL_PID" || true
+    echo "GitNexus: eval-server exited — restarting in 10s."
+    sleep 10
+done
 
