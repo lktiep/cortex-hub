@@ -35,6 +35,43 @@ services:
       start_period: 10s
 
   # ─────────────────────────────────────────────
+  # Ollama — Embedding Engine
+  # 1fbfafc removed the in-process @xenova/transformers embedder and routed
+  # every embedding through the LLM gateway, but never added the Ollama server
+  # the gateway was meant to call. Without this service `model_routing` has
+  # nothing to point at, so mem9 answers 503 "No embedding providers
+  # configured" and every project card shows "Mem9 Error".
+  #
+  # No host port on purpose: only cortex-api talks to it, over the compose
+  # network at http://ollama:11434/v1. Publishing 11434 would expose an
+  # unauthenticated model runner on the LAN and to any tunnel route.
+  # ─────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:0.34.4
+    container_name: cortex-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      # Serve several embed requests at once — mem9 calls embedBatch() with
+      # Promise.all over every chunk of a repo.
+      OLLAMA_NUM_PARALLEL: 4
+      # Embedding models are small; keep them resident instead of paying the
+      # load cost on every mem9 run.
+      OLLAMA_KEEP_ALIVE: 24h
+      OLLAMA_MAX_LOADED_MODELS: 2
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ─────────────────────────────────────────────
   # CLIProxy — LLM Gateway (OAuth-based)
   # API:  http://localhost:8317/v1 (OpenAI-compatible)
   # Zero SQL, zero Redis — just config + OAuth tokens
@@ -163,9 +200,11 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-}
       MEM9_EMBEDDING_MODEL: ${MEM9_EMBEDDING_MODEL:-gemini-embedding-001}
-      # Embedding provider: local (default, free, fast) or gemini (API, $$)
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
-      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-Xenova/all-MiniLM-L6-v2}
+      # Embeddings are resolved from the model_routing table by the gateway, not
+      # from env. EMBEDDING_PROVIDER and LOCAL_EMBEDDING_MODEL used to select an
+      # in-process @xenova/transformers model; 1fbfafc deleted that code, so both
+      # were silently doing nothing while still advertising a local embedder.
+      OLLAMA_API_BASE: http://ollama:11434/v1
       # GitNexus
       GITNEXUS_URL: http://gitnexus:4848
       # Matches the gitnexus service. When empty, dashboard-api reads the token
@@ -175,6 +214,8 @@ services:
       qdrant:
         condition: service_healthy
       gitnexus:
+        condition: service_started
+      ollama:
         condition: service_started
     deploy:
       resources:
@@ -263,3 +304,5 @@ volumes:
     name: cortex-gitnexus-data
   cliproxy-auth:
     name: cortex-cliproxy-auth
+  ollama-models:
+    name: cortex-ollama-models

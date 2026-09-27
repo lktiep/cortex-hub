@@ -3,7 +3,9 @@
  *
  * All embedding requests are routed through the internal LLM gateway
  * (/api/llm/v1/embeddings), which reads model_routing from the database
- * and forwards to the configured provider (currently Ollama bge-m3:latest, 1024-dim).
+ * and forwards to the configured provider. The bundled default is the ollama
+ * container serving all-minilm (384-dim, ~15ms/text on CPU); bge-m3 (1024-dim,
+ * ~87ms) is also pulled for text where multilingual recall matters more.
  *
  * NOTE: Never switch embedding providers without re-embedding all documents.
  * Different providers generate vectors with different dimensions, which corrupts
@@ -32,12 +34,16 @@ export function createEmbedder(): Embedder {
 }
 
 /**
- * Returns the embedding vector dimension for the active provider.
- * Used to ensure Qdrant collections are created with the right size.
- * Current provider: Ollama bge-m3:latest → 1024 dimensions.
+ * Probes the active route for its vector dimension.
+ *
+ * The dimension follows whatever model_routing points at, so it cannot be a
+ * constant — this used to return a hardcoded 1024 that silently went wrong the
+ * moment the routed model changed. Callers that create a Qdrant collection must
+ * use this rather than assume a size.
  */
-export function getActiveEmbeddingDim(): number {
-  return 1024
+export async function getActiveEmbeddingDim(): Promise<number> {
+  const vector = await createEmbedder().embed('dimension probe')
+  return vector.length
 }
 
 /**

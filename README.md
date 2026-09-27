@@ -213,7 +213,7 @@ Reproducible retrieval benchmarks against industry-standard datasets.
 
 Cortex matches MemPalace within 0.6 points on R@5 — while being **free, offline, and 60x faster per embedding**. NDCG@10 is 62% higher: when Cortex finds the answer, it places it at #1, not just somewhere in top 5.
 
-MemPalace requires a paid OpenAI API key for embeddings. Cortex runs `Xenova/all-MiniLM-L6-v2` in-process — zero network, zero cost, zero rate limits.
+MemPalace requires a paid OpenAI API key for embeddings. Cortex embeds through a local Ollama container — zero external network, zero cost, zero rate limits. The figures above were measured with the in-process `Xenova/all-MiniLM-L6-v2` embedder that shipped at the time; see the note below.
 
 ```bash
 # Run benchmark (no API key needed)
@@ -229,12 +229,26 @@ See [`benchmarks/README.md`](benchmarks/README.md) for full methodology, per-cat
 
 Cortex supports two interchangeable embedding backends:
 
-| Provider | Model | Dim | Speed | Cost | Quality |
-|---|---|---|---|---|---|
-| `local` **(default)** | `Xenova/all-MiniLM-L6-v2` | 384 | **~10-50ms in-process** | **Free** | **96.7% R@5** |
-| `gemini` | `gemini-embedding-001` | 768 | ~600ms/text via API | $$ | 96.7% R@5 |
+Every embedding goes through the internal LLM gateway (`/api/llm/v1/embeddings`),
+which resolves the provider from the `model_routing` table at request time. Point
+it at whichever backend you prefer from **Settings → Providers**:
 
-Local mode (default) runs the model in-process via [`@huggingface/transformers`](https://huggingface.co/docs/transformers.js) — no network, no API key, no rate limits, fully offline. Switch to Gemini via `EMBEDDING_PROVIDER=gemini` env var if needed.
+| Provider | Model | Dim | Speed | Cost |
+|---|---|---|---|---|
+| `ollama` **(default, bundled)** | `bge-m3` | 1024 | ~100-250ms/text on CPU | **Free** |
+| `ollama` | `all-minilm` | 384 | **~10-30ms/text on CPU** | **Free** |
+| `gemini` | `gemini-embedding-001` | 768 | ~600ms/text via API | $$ |
+
+The stack ships an `ollama` container with no host port, so local embedding needs
+no API key and never leaves the compose network. `bge-m3` is the default because
+it handles non-English text well; `all-minilm` is the one to pick when throughput
+matters more than multilingual recall.
+
+> **Note:** an earlier release ran `Xenova/all-MiniLM-L6-v2` in-process via
+> `@huggingface/transformers`, selected with `EMBEDDING_PROVIDER=local`. That code
+> was removed in `1fbfafc` in favour of the gateway. Both `EMBEDDING_PROVIDER` and
+> `LOCAL_EMBEDDING_MODEL` are now ignored — set the provider in the dashboard
+> instead.
 
 ---
 

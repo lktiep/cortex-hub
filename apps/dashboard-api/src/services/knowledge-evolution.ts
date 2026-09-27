@@ -13,7 +13,8 @@
 
 import { randomUUID } from 'crypto'
 import { Embedder, VectorStore } from '@cortex/shared-mem9'
-import type { EmbedderConfig, VectorStoreConfig } from '@cortex/shared-mem9'
+import type { VectorStoreConfig } from '@cortex/shared-mem9'
+import { createEmbedder } from '../lib/embedder-factory.js'
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
 
@@ -30,24 +31,18 @@ const CLIPROXY_URL = () =>
 // Anti-loop: track docs addressed in current health check cycle
 const addressedInCycle = new Set<string>()
 
-function resolveGeminiApiKey(): string {
-  const envKey = process.env['GEMINI_API_KEY']
-  if (envKey) return envKey
-  try {
-    const row = db.prepare(
-      "SELECT api_key FROM provider_accounts WHERE type = 'gemini' AND status = 'enabled' AND api_key IS NOT NULL LIMIT 1"
-    ).get() as { api_key: string } | undefined
-    if (row?.api_key) return row.api_key
-  } catch { /* DB might not be ready */ }
-  return ''
-}
-
+/**
+ * Embeds through the LLM gateway like every other caller.
+ *
+ * This used to build its own Gemini embedder from GEMINI_API_KEY or a gemini
+ * provider row, which meant knowledge evolution hit generativelanguage.
+ * googleapis.com directly — with an empty key on any install that routes
+ * embeddings elsewhere. Vectors written here must also match the ones the rest
+ * of the knowledge collection was embedded with, and only the gateway knows
+ * which provider that is.
+ */
 function getEmbedder(): Embedder {
-  return new Embedder({
-    provider: 'gemini' as const,
-    apiKey: resolveGeminiApiKey(),
-    model: process.env['MEM9_EMBEDDING_MODEL'] || 'gemini-embedding-001',
-  } satisfies EmbedderConfig)
+  return createEmbedder()
 }
 
 function getVectorStore(): VectorStore {
