@@ -12,7 +12,22 @@ export { Embedder } from './embedder.js'
 export { VectorStore } from './vector-store.js'
 export { LlmClient } from './llm.js'
 export { HistoryStore } from './history.js'
+export { TypeSafeClient, rerankByRelevance, noul, choice, score } from './typesafe.js'
 export type { SqliteDb } from './history.js'
+export type {
+  TypeSafeConfig,
+  Question,
+  NoulQuestion,
+  ChoiceQuestion,
+  ScoreQuestion,
+  Answer,
+  NoulAnswer,
+  ChoiceAnswer,
+  ScoreAnswer,
+  SystemOneResult,
+  RerankOptions,
+  Reranked,
+} from './typesafe.js'
 
 export type {
   Mem9Config,

@@ -233,16 +233,40 @@ Every embedding goes through the internal LLM gateway (`/api/llm/v1/embeddings`)
 which resolves the provider from the `model_routing` table at request time. Point
 it at whichever backend you prefer from **Settings → Providers**:
 
-| Provider | Model | Dim | Speed | Cost |
+| Provider | Model | Dim | Median / p90 per text | Cost |
 |---|---|---|---|---|
-| `ollama` **(default, bundled)** | `bge-m3` | 1024 | ~100-250ms/text on CPU | **Free** |
-| `ollama` | `all-minilm` | 384 | **~10-30ms/text on CPU** | **Free** |
-| `gemini` | `gemini-embedding-001` | 768 | ~600ms/text via API | $$ |
+| `ollama` **(bundled)** | `all-minilm` | 384 | **27ms / 64ms** | **Free** |
+| `ollama` **(bundled)** | `bge-m3` | 1024 | 500ms / 638ms | **Free** |
+| `gemini` | `gemini-embedding-001` | 768 | ~600ms via API | $$ |
 
 The stack ships an `ollama` container with no host port, so local embedding needs
-no API key and never leaves the compose network. `bge-m3` is the default because
-it handles non-English text well; `all-minilm` is the one to pick when throughput
-matters more than multilingual recall.
+no API key and never leaves the compose network.
+
+Measured on this repo's own index (1256 chunks of real source, 8 queries with a
+known answer file, 12 CPU cores, no GPU) — run `pnpm bench:rerank` in
+`benchmarks/` to reproduce:
+
+| Model | Index 1256 chunks | recall@1 | recall@3 | recall@5 | MRR |
+|---|---|---|---|---|---|
+| `all-minilm` | **43s** | 2/8 | 3/8 | 6/8 | 0.400 |
+| `bge-m3` | 662s (15x) | **4/8** | **5/8** | 6/8 | **0.594** |
+
+Read that as a ranking problem, not a retrieval problem: both models put the
+right file in the top 5 equally often, and `bge-m3` only buys a better *order*
+for 15x the indexing cost. Pick `all-minilm` when a caller reads several hits,
+`bge-m3` when it reads only the first — or keep `all-minilm` and fix the order
+with a reranker, below.
+
+#### Reranking (optional)
+
+Set `TYPESAFE_API_KEY` and `/api/intel/code-search` over-fetches vector
+candidates and reorders them by asking TypeSafe Jev (`POST
+api.typesafe.ai/v1/systemone`)
+whether each one actually contains what the query asked for — a typed yes/no with
+a calibrated probability, not a chat completion to parse. With no key the search
+path is byte-for-byte what it is today, and if a rerank call fails the candidate
+keeps its vector score, so an outage degrades to the current ordering rather than
+breaking search.
 
 > **Note:** an earlier release ran `Xenova/all-MiniLM-L6-v2` in-process via
 > `@huggingface/transformers`, selected with `EMBEDDING_PROVIDER=local`. That code

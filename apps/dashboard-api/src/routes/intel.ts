@@ -4,6 +4,7 @@ import { join, relative } from 'path'
 import { createLogger } from '@cortex/shared-utils'
 import { db } from '../db/client.js'
 import { createEmbedder } from '../lib/embedder-factory.js'
+import { getReranker, RERANK_OVERFETCH } from '../lib/reranker.js'
 import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
 
 const logger = createLogger('intel')
@@ -1030,12 +1031,19 @@ intelRouter.post('/code-search', async (c) => {
 
     const searchLimit = limit ?? 10
 
+    // With a reranker configured, over-fetch and let it decide the final order.
+    // A single embedding can only answer "is this similar"; the reranker answers
+    // "does this actually contain what was asked for", which is what lifts the
+    // top few hits. Without one this stays an exact-limit vector search.
+    const reranker = getReranker()
+    const fetchLimit = reranker ? Math.min(searchLimit * RERANK_OVERFETCH, 50) : searchLimit
+
     const res = await fetch(`${QDRANT_URL}/collections/${collectionName}/points/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         vector,
-        limit: searchLimit,
+        limit: fetchLimit,
         with_payload: true,
         filter: must.length > 0 ? { must } : undefined,
       }),
@@ -1062,7 +1070,7 @@ intelRouter.post('/code-search', async (c) => {
       result?: Array<{ id: string; score: number; payload?: Record<string, unknown> }>
     }
 
-    const results = (data.result ?? []).map((hit) => ({
+    const hits = (data.result ?? []).map((hit) => ({
       score: hit.score,
       filePath: hit.payload?.file_path as string | undefined,
       chunkIndex: hit.payload?.chunk_index as number | undefined,
@@ -1070,9 +1078,35 @@ intelRouter.post('/code-search', async (c) => {
       branch: hit.payload?.branch as string | undefined,
     }))
 
+    let results = hits
+    let reranked = false
+
+    if (reranker && hits.length > 1) {
+      try {
+        const ranked = await reranker.rerank(
+          query,
+          hits.map((h) => ({
+            item: h,
+            // The chunk already starts with a "// File: <path>" line, but the
+            // path is worth repeating: half of what identifies a chunk is where
+            // it lives, and the payload copy is truncated at 2000 chars.
+            text: `${h.filePath ?? ''}\n${h.content ?? ''}`,
+            score: h.score,
+          })),
+        )
+        results = ranked.map((r) => ({ ...r.item, score: r.score, vectorScore: r.retrievalScore, relevance: r.relevance }))
+        reranked = true
+      } catch (err) {
+        // Reranking is an improvement, not a dependency: fall back to vector order.
+        logger.warn(`[code-search] rerank failed, using vector order: ${String(err).slice(0, 200)}`)
+      }
+    }
+
+    results = results.slice(0, searchLimit)
+
     return c.json({
       success: true,
-      data: { query, projectId, results },
+      data: { query, projectId, reranked, results },
     })
   } catch (error) {
     logger.error(`Code search (Qdrant) failed: ${String(error)}`)

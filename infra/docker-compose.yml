@@ -205,6 +205,11 @@ services:
       # in-process @xenova/transformers model; 1fbfafc deleted that code, so both
       # were silently doing nothing while still advertising a local embedder.
       OLLAMA_API_BASE: http://ollama:11434/v1
+      # Reranking (optional). With no key, every search path keeps its current
+      # pure-vector behaviour; with one, /api/intel/code-search over-fetches
+      # candidates and reorders them with a TypeSafe Jev relevance decision.
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      TYPESAFE_MODEL: ${TYPESAFE_MODEL:-jev-latest}
       # GitNexus
       GITNEXUS_URL: http://gitnexus:4848
       # Matches the gitnexus service. When empty, dashboard-api reads the token
