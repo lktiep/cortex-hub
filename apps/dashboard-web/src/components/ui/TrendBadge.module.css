@@ -11,6 +11,8 @@
   line-height: 1;
   vertical-align: middle;
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .up {
@@ -29,6 +31,5 @@
 }
 
 .arrow {
-  font-size: 0.85rem;
-  line-height: 1;
+  flex-shrink: 0;
 }

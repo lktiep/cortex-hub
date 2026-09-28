@@ -50,6 +50,10 @@
   --border-default: rgba(255, 255, 255, 0.1);
   --border-hover: rgba(255, 255, 255, 0.15);
   --border-accent: rgba(124, 92, 252, 0.3);
+  /* Alias — a lot of page CSS refers to the generic "--border" token;
+     keep it in lockstep with --border-default so every card/table/divider
+     that uses it renders instead of silently dropping the border. */
+  --border: var(--border-default);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -113,6 +117,18 @@ a {
 
 a:hover {
   color: var(--accent-tertiary);
+}
+
+/* ── Focus Rings (keyboard accessibility) ── */
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Inputs already draw their own focus glow — don't double it up */
+.input:focus-visible {
+  outline: none;
 }
 
 /* ── Typography ── */
@@ -352,15 +368,18 @@ h4 { font-size: 1rem; }
   50% { box-shadow: 0 0 30px rgba(124, 92, 252, 0.2); }
 }
 
-@keyframes pulse-ring {
-  0% {
-    box-shadow: 0 0 0 0 rgba(124, 92, 252, 0.35);
-  }
-  70% {
-    box-shadow: 0 0 0 6px rgba(124, 92, 252, 0);
-  }
+/* A brief opacity dip on the digits themselves — no box, no ring. Reads
+   as "this number just refreshed" without looking like an empty input. */
+@keyframes value-pulse {
+  0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(124, 92, 252, 0);
+    opacity: 1;
+  }
+  15% {
+    opacity: 0.55;
+  }
+  30% {
+    opacity: 1;
   }
 }
 
@@ -380,19 +399,11 @@ h4 { font-size: 1rem; }
   will-change: transform, opacity;
 }
 
-/* Live-updating data pulse ring */
+/* Live-updating data cue — a subtle, boxless opacity flash on the digits
+   themselves rather than a ring drawn around them. */
 .live-value {
-  position: relative;
   display: inline-block;
-}
-
-.live-value::after {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border-radius: var(--radius-sm);
-  animation: pulse-ring 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  pointer-events: none;
+  animation: value-pulse 3.6s ease-in-out infinite;
 }
 
 .glow-btn {
@@ -477,5 +488,22 @@ h4 { font-size: 1rem; }
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
+  }
+}
+
+/* ── Reduced motion ──
+   Turns off decorative animation everywhere: entrance fades/slides, the
+   sidebar's active-pill slide-in, gauge/ring transitions, and the
+   live-value pulse. `NumberTransition` also checks this query directly
+   in JS and renders the final number immediately instead of counting up,
+   since a rAF-driven count-up can't be stopped by CSS alone. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

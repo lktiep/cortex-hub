@@ -58,7 +58,7 @@ function ActivitySkeleton() {
 function GaugeSkeleton() {
   return (
     <div className={styles.gaugeSkeletonCard}>
-      <Skeleton width={100} height={100} className={styles.gaugeSkeletonRing} />
+      <Skeleton width={112} height={112} className={styles.gaugeSkeletonRing} />
       <SkeletonText width={40} height="0.75rem" />
       <SkeletonText width={60} height="0.625rem" />
     </div>
@@ -312,7 +312,9 @@ export default function DashboardPage() {
 
         {/* Right: Quick Stats */}
         <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Intelligence</h2>
+          <div className={styles.sectionHeader}>
+            <h2 className={styles.sectionTitle}>Intelligence</h2>
+          </div>
 
           {!overview ? (
             <>

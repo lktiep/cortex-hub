@@ -21,11 +21,15 @@ export interface GaugeChartProps {
 export function GaugeChart({ value, label, subtitle, color, Icon, id }: GaugeChartProps) {
   const radius = 42
   const circumference = 2 * Math.PI * radius
-  const offset = circumference - (value / 100) * circumference
+  // A true 0-3% value renders as a near-invisible speck on a ring this
+  // thin — draw at least a small visible arc while still labelling the
+  // real number underneath.
+  const displayValue = Math.max(value, 3)
+  const offset = circumference - (displayValue / 100) * circumference
   const statusColor = value > 90 ? '#e74c3c' : value > 70 ? '#f5a623' : color
 
   return (
-    <div className={styles.gaugeCard}>
+    <div className={styles.gaugeCard} style={{ '--gauge-accent': statusColor } as React.CSSProperties}>
       <div className={styles.container}>
         <svg viewBox="0 0 100 100" className={styles.svg}>
           <defs>
@@ -39,9 +43,9 @@ export function GaugeChart({ value, label, subtitle, color, Icon, id }: GaugeCha
             cy="50"
             r={radius}
             fill="none"
-            stroke="var(--border)"
-            strokeWidth="6"
-            opacity="0.3"
+            stroke="var(--border-default)"
+            strokeWidth="7"
+            opacity="0.5"
           />
           <circle
             cx="50"
@@ -49,7 +53,7 @@ export function GaugeChart({ value, label, subtitle, color, Icon, id }: GaugeCha
             r={radius}
             fill="none"
             stroke={`url(#grad-${id})`}
-            strokeWidth="6"
+            strokeWidth="7"
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
@@ -60,7 +64,7 @@ export function GaugeChart({ value, label, subtitle, color, Icon, id }: GaugeCha
         </svg>
         <div className={styles.center}>
           <span className={styles.icon}>
-            <Icon size={22} strokeWidth={ICON_DEFAULTS.strokeWidth} />
+            <Icon size={20} strokeWidth={ICON_DEFAULTS.strokeWidth} />
           </span>
           <span className={styles.value}>{value}%</span>
         </div>

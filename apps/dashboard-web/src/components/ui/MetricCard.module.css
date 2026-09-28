@@ -1,13 +1,17 @@
-/* ── MetricCard (Stat Pill) ── */
+/* ── MetricCard (Stat Card) ──
+   Layout is a strict vertical stack — header row, big value, then an
+   optional full-width sparkline baseline — so the trend line can never
+   overlap the label or value regardless of card width. */
 
 .metricCard {
   display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
   background: var(--bg-secondary);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
+  overflow: hidden;
   transition:
     transform var(--transition-normal),
     border-color var(--transition-normal),
@@ -24,44 +28,65 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(124, 92, 252, 0.12);
 }
 
-.icon {
-  width: 36px;
-  height: 36px;
+.header {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent-glow);
-  border-radius: var(--radius-md);
-  flex-shrink: 0;
-  color: var(--accent-primary);
-}
-
-.content {
-  display: flex;
-  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
   min-width: 0;
 }
 
+.icon {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-secondary);
+  flex-shrink: 0;
+}
+
+/* No ellipsis: a metric label must stay fully readable at every card
+   width from a 7-up 1280px row down to a single mobile column. It wraps
+   to a second line instead of losing characters — the trend badge lives
+   on the value row below so it never has to fight the label for space. */
+.label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.35;
+}
+
+.valueRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
 .value {
-  font-size: 1.25rem;
+  font-size: 1.5rem;
   font-weight: 700;
   color: var(--text-primary);
   font-family: var(--font-mono);
   line-height: 1.2;
 }
 
-.label {
-  font-size: 0.625rem;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+.trendBadge {
+  flex-shrink: 0;
 }
 
-.trend {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
+/* Sparkline baseline — sits below the value, bleeding to the card edges
+   for a subtle "chart footer" feel. Never shares a row with any text. */
+.sparkline {
+  margin: var(--space-1) calc(var(--space-4) * -1) calc(var(--space-4) * -1);
+  color: var(--spark-color, var(--accent-primary));
+  line-height: 0;
+  opacity: 0.9;
 }
 
 @keyframes fadeInUp {

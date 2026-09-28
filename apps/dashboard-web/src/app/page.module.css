@@ -2,12 +2,34 @@
    Dashboard — page.module.css
    ══════════════════════════════════════════════ */
 
-/* ── Hero Stats Bar ── */
+/* ── Hero Stats Bar ──
+   7 cards. Column counts are picked so a row is never left with a lone
+   orphan card: 7 (single row), 4 (4+3), 2 (2+2+2+1 only below tablet,
+   where a short last row reads as a natural wrap rather than a mistake),
+   1 (stacked) on phones. */
 .heroBar {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-6);
+}
+
+@media (max-width: 1599px) {
+  .heroBar {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 899px) {
+  .heroBar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 479px) {
+  .heroBar {
+    grid-template-columns: 1fr;
+  }
 }
 
 
@@ -70,7 +92,7 @@
 }
 
 .sectionTitle {
-  font-size: 1rem;
+  font-size: 1.125rem;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
@@ -532,7 +554,7 @@
   background: var(--bg-secondary);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: var(--space-4);
+  padding: var(--space-5) var(--space-4);
   display: flex;
   flex-direction: column;
   align-items: center;

@@ -8,6 +8,9 @@ interface SparklineProps {
   strokeWidth?: number
   /** Show gradient fill beneath the line */
   fill?: boolean
+  /** Stretch to fill the parent's width (viewBox keeps using `width` as its coordinate space) */
+  responsive?: boolean
+  className?: string
 }
 
 let sparklineIdCounter = 0
@@ -19,6 +22,8 @@ export function Sparkline({
   height = 24,
   strokeWidth = 2,
   fill = true,
+  responsive = false,
+  className,
 }: SparklineProps) {
   if (!data || data.length === 0) return null
 
@@ -43,11 +48,13 @@ export function Sparkline({
 
   return (
     <svg
-      width={width}
+      width={responsive ? '100%' : width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
       fill="none"
-      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+      className={className}
+      style={{ display: 'block', verticalAlign: 'middle' }}
     >
       {fill && (
         <defs>

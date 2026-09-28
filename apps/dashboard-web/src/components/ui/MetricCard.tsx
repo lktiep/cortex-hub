@@ -34,21 +34,24 @@ export function MetricCard({
   return (
     <div
       className={styles.metricCard}
-      style={{ '--stagger-index': index } as React.CSSProperties}
+      style={{ '--stagger-index': index, '--spark-color': color || '#4a90d9' } as React.CSSProperties}
     >
-      <span className={styles.icon}>
-        <Icon size={ICON_DEFAULTS.size} strokeWidth={ICON_DEFAULTS.strokeWidth} />
-      </span>
-      <div className={styles.content}>
-        <span className={`${styles.value} live-value`}>{value}</span>
+      <div className={styles.header}>
+        <span className={styles.icon}>
+          <Icon size={16} strokeWidth={ICON_DEFAULTS.strokeWidth} />
+        </span>
+        {/* Full label, no truncation — wraps to a second line rather than
+            losing characters to an ellipsis. The trend badge lives on the
+            value row below so it never competes with the label for width. */}
         <span className={styles.label}>{label}</span>
       </div>
-      {(trendValue !== undefined || sparklineData) && (
-        <div className={styles.trend}>
-          {sparklineData && (
-            <Sparkline data={sparklineData} color={color || '#4a90d9'} width={60} height={20} />
-          )}
-          {trendValue !== undefined && <TrendBadge value={trendValue} />}
+      <div className={styles.valueRow}>
+        <span className={`${styles.value} live-value`}>{value}</span>
+        {trendValue !== undefined && <TrendBadge value={trendValue} className={styles.trendBadge} />}
+      </div>
+      {sparklineData && (
+        <div className={styles.sparkline}>
+          <Sparkline data={sparklineData} color={color || '#4a90d9'} width={100} height={28} responsive />
         </div>
       )}
     </div>

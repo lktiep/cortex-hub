@@ -134,7 +134,6 @@ export default function Sidebar({ isCollapsed, toggleSidebar }: SidebarProps) {
                   {IconComponent && <IconComponent size={ICON_DEFAULTS.size} strokeWidth={ICON_DEFAULTS.strokeWidth} />}
                 </span>
                 {!isCollapsed && <span className={styles.navLabel}>{item.label}</span>}
-                {isActive && <span className={styles.activeIndicator} />}
               </Link>
             )
           })}

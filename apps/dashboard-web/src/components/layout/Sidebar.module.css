@@ -131,16 +131,21 @@
   box-shadow: 0 4px 12px -2px rgba(124, 92, 252, 0.15);
 }
 
-/* Animated pill indicator for active state */
-.activeIndicator {
+/* Animated left accent bar for the active nav item.
+   A ::before on the item itself (rather than an absolutely-positioned
+   sibling span) so it always paints within its own parent's stacking
+   context — a sibling with z-index:-1 needs .navItem to establish a new
+   stacking context to land behind it and nowhere else, which
+   position:relative alone does not do, so it silently vanished behind
+   the page background instead. */
+.navItem.active::before {
+  content: '';
   position: absolute;
   inset: 0;
-  background: var(--accent-glow);
   border-radius: var(--radius-md);
   border-left: 3px solid var(--accent-primary);
-  z-index: -1;
+  pointer-events: none;
   animation: pillSlideIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
-  will-change: transform, opacity;
 }
 
 .navIcon {
