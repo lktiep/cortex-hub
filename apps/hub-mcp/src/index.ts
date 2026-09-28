@@ -279,13 +279,23 @@ app.all('/mcp', async (c) => {
       const latencyMs = Date.now() - startTime
       const inputSize = bodyText.length
 
+      // Reading the body is how telemetry sizes the answer and how hints get
+      // appended to it. A GET /mcp answers with the standalone SSE stream, whose
+      // body only ends when the connection does, so awaiting text() on it never
+      // returns: the response never leaves this handler, the client receives no
+      // headers at all, and it reports the connection as closed. Size the
+      // buffered JSON responses and hand a live stream straight back.
+      const isEventStream = res.headers.get('content-type')?.includes('text/event-stream') ?? false
+
       let outputSize = 0
       let respBody = ''
-      try {
-        const cloned = res.clone()
-        respBody = await cloned.text()
-        outputSize = respBody.length
-      } catch { /* ignore clone failures */ }
+      if (!isEventStream) {
+        try {
+          const cloned = res.clone()
+          respBody = await cloned.text()
+          outputSize = respBody.length
+        } catch { /* ignore clone failures */ }
+      }
 
       const store = telemetryStorage.getStore()
       const computeTokens = store?.computeTokens || 0
