@@ -48,6 +48,11 @@ export interface MemoryItem {
   userId?: string
   agentId?: string
   metadata?: Record<string, unknown>
+  /**
+   * Relevance in [0, 1], blended with recency by `Mem9.search`. It is the cosine
+   * similarity when the vector arm answered alone, and the fused rank when the
+   * lexical arm matched too — ordered the same way, but not a similarity.
+   */
   score?: number
   createdAt: string
   updatedAt: string

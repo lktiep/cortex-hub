@@ -483,8 +483,19 @@ Vector data is stored in Qdrant, not SQLite. Dimensions depend on the configured
 Agent memories managed by mem9. Each memory is a vector embedding of conversation context.
 
 - **Dimensions:** 384 (local embedder) or 768 (Gemini)
-- **Payloads:** userId, agentId, metadata (type, session_id, project_id, etc.)
+- **Sparse vector:** `text` (BM25, `modifier: idf`) — the lexical arm of memory search, fused with the dense arm by rank. A collection created before it has none and is searched by vector alone until it is migrated (below).
+- **Payloads:** userId, agentId, hash, metadata (type, session_id, project_id, etc.)
 - **Used by:** `cortex_memory_store`, `cortex_memory_search`
+
+Qdrant cannot add a sparse vector to an existing collection, so an older install copies its memories into one that has it:
+
+```bash
+docker exec cortex-api node apps/dashboard-api/dist/scripts/migrate-memories.js           # report only
+docker exec cortex-api node apps/dashboard-api/dist/scripts/migrate-memories.js --apply   # copy, snapshot, switch
+docker compose restart cortex-api
+```
+
+`--apply` copies into `cortex_memories_hybrid` (reusing the stored embeddings), snapshots `cortex_memories`, deletes it and makes `cortex_memories` an alias of the copy. The snapshot stays inside the Qdrant container (`/qdrant/snapshots` is not a volume), so `docker cp` it out if you want to keep the rollback.
 
 ### `knowledge`
 

@@ -5,6 +5,7 @@
  */
 
 import type { VectorStoreConfig, QdrantPoint, QdrantSearchResult } from './types.js'
+import { SPARSE_VECTOR_NAME } from './sparse.js'
 import type { SparseVector } from './sparse.js'
 
 export class VectorStore {
@@ -124,19 +125,30 @@ export class VectorStore {
     return data.result.count
   }
 
-  /** Upsert a point (memory) into the collection */
+  /**
+   * Upsert a point (memory) into the collection.
+   *
+   * With a sparse vector the point addresses both by name; without one it is a
+   * plain dense point, which is all a collection created before hybrid search
+   * can hold.
+   */
   async upsert(
     id: string,
     vector: number[],
     payload: Record<string, unknown>,
+    sparseVector?: SparseVector,
   ): Promise<void> {
+    const point = sparseVector
+      ? { id, vector: { '': vector, [SPARSE_VECTOR_NAME]: sparseVector }, payload }
+      : { id, vector, payload }
+
     const res = await fetch(
       `${this.baseUrl}/collections/${this.collection}/points`,
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          points: [{ id, vector, payload }],
+          points: [point],
         }),
       },
     )
@@ -230,6 +242,48 @@ export class VectorStore {
     }))
   }
 
+  /**
+   * The lexical arm: rank by BM25 over the sparse vector.
+   *
+   * Scores are BM25, not similarities — unbounded and only comparable within one
+   * query — so a caller fuses these by rank rather than by score.
+   */
+  async searchSparse(
+    sparseVector: SparseVector,
+    filter?: Record<string, unknown>,
+    limit = 10,
+  ): Promise<QdrantSearchResult[]> {
+    const res = await fetch(
+      `${this.baseUrl}/collections/${this.collection}/points/query`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: sparseVector,
+          using: SPARSE_VECTOR_NAME,
+          filter,
+          limit,
+          with_payload: true,
+        }),
+      },
+    )
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Qdrant sparse search failed (${res.status}): ${err}`)
+    }
+
+    const data = (await res.json()) as {
+      result: { points: Array<{ id: string; score: number; payload: Record<string, unknown> }> }
+    }
+
+    return data.result.points.map((r) => ({
+      id: String(r.id),
+      score: r.score,
+      payload: r.payload,
+    }))
+  }
+
   /** Get a specific point by ID */
   async get(id: string): Promise<QdrantPoint | null> {
     const res = await fetch(
@@ -252,9 +306,9 @@ export class VectorStore {
     }
   }
 
-  /** List all points matching a filter */
+  /** List points matching a filter — every point when there is none */
   async list(
-    filter: Record<string, unknown>,
+    filter?: Record<string, unknown>,
     limit = 100,
   ): Promise<QdrantPoint[]> {
     const res = await fetch(
@@ -334,9 +388,10 @@ export class VectorStore {
     id: string,
     vector: number[],
     payload: Record<string, unknown>,
+    sparseVector?: SparseVector,
   ): Promise<void> {
     // Qdrant upsert overwrites, so this is the same as upsert
-    await this.upsert(id, vector, payload)
+    await this.upsert(id, vector, payload, sparseVector)
   }
 
   /** Check if Qdrant is reachable */

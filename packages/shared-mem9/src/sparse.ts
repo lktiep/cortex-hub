@@ -1,5 +1,5 @@
 /**
- * Lexical (BM25) sparse vectors, the second arm of hybrid code search.
+ * Lexical (BM25) sparse vectors, the second arm of hybrid code and memory search.
  *
  * A dense embedding can only answer "is this similar to the question". It cannot
  * answer "does this contain the identifier that was typed", which is most of
@@ -65,6 +65,57 @@ export function tokenizeCode(text: string): string[] {
   return tokens
 }
 
+/** Anything that turns text into search terms; index and query must share one. */
+export type Tokenizer = (text: string) => string[]
+
+/** `đơn hàng` → `don hang`: what the same words look like typed without an IME. */
+function foldDiacritics(token: string): string {
+  return token.normalize('NFD').replace(/\p{M}+/gu, '').replace(/đ/g, 'd')
+}
+
+/**
+ * Split prose into search terms — memories, not code.
+ *
+ * `tokenizeCode` splits on anything outside ASCII, which turns `đơn hàng` into
+ * `ơn` and `h`, `ng`: Vietnamese could not match itself. This one splits on
+ * Unicode letters and digits, keeps numbers (a port, a PR number, an amount are
+ * facts here, not array indices), and still breaks identifiers into their parts,
+ * since memories quote code as often as they describe it.
+ *
+ * Every accented term is also stored folded, so `don hang bi treo` finds a
+ * memory written as `Đơn hàng bị treo`. The accented form stays as well: a query
+ * typed with diacritics matches it twice and outranks the words it merely looks
+ * like without them (`má`, `mà`, `mã` all fold to `ma`).
+ */
+export function tokenizeText(text: string): string[] {
+  const tokens: string[] = []
+  const push = (token: string) => {
+    if (token.length < 2) return
+    tokens.push(token)
+    const folded = foldDiacritics(token)
+    if (folded !== token && folded.length > 1) tokens.push(folded)
+  }
+
+  for (const word of text.normalize('NFC').split(/[^\p{L}\p{N}_]+/u)) {
+    if (!word) continue
+
+    const whole = word.toLowerCase()
+    push(whole)
+
+    const parts = word
+      .split('_')
+      .flatMap((p) => p.split(/(?<=[\p{Ll}\p{N}])(?=\p{Lu})|(?<=\p{Lu})(?=\p{Lu}\p{Ll})/u))
+
+    if (parts.length < 2) continue
+    for (const part of parts) {
+      const token = part.toLowerCase()
+      if (token !== whole) push(token)
+    }
+  }
+
+  return tokens
+}
+
 /**
  * FNV-1a, 32 bits — Qdrant indexes sparse dimensions by u32.
  *
@@ -94,8 +145,12 @@ function termFrequencies(tokens: string[]): Map<number, number> {
  * The stored half of BM25: tf saturated by k1 and normalised by how much longer
  * this document is than the average one.
  */
-export function documentSparseVector(text: string, averageLength: number): SparseVector {
-  const tokens = tokenizeCode(text)
+export function documentSparseVector(
+  text: string,
+  averageLength: number,
+  tokenize: Tokenizer = tokenizeCode,
+): SparseVector {
+  const tokens = tokenize(text)
   const counts = termFrequencies(tokens)
 
   // An empty corpus average would divide by zero; fall back to this document.
@@ -113,15 +168,15 @@ export function documentSparseVector(text: string, averageLength: number): Spars
 }
 
 /** The asked half: one flat unit per distinct term, weighted by Qdrant's IDF. */
-export function querySparseVector(text: string): SparseVector {
-  const indices = [...new Set(tokenizeCode(text).map(hashToken))]
+export function querySparseVector(text: string, tokenize: Tokenizer = tokenizeCode): SparseVector {
+  const indices = [...new Set(tokenize(text).map(hashToken))]
   return { indices, values: indices.map(() => 1) }
 }
 
 /** Mean token count across a corpus — the `avgdl` that BM25 normalises against. */
-export function averageTokenLength(texts: string[]): number {
+export function averageTokenLength(texts: string[], tokenize: Tokenizer = tokenizeCode): number {
   if (texts.length === 0) return 0
   let total = 0
-  for (const text of texts) total += tokenizeCode(text).length
+  for (const text of texts) total += tokenize(text).length
   return total / texts.length
 }

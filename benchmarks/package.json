@@ -8,7 +8,8 @@
     "bench:longmemeval": "tsx longmemeval_bench.ts",
     "bench:rerank": "tsx rerank_bench.ts",
     "bench:retrieval": "tsx retrieval_bench.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bench:mem9": "tsx mem9_bench.ts"
   },
   "devDependencies": {
     "tsx": "^4.21.0",

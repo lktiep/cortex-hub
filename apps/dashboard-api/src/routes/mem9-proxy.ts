@@ -15,6 +15,7 @@ import type { Mem9Config } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
 import { createEmbedder } from '../lib/embedder-factory.js'
+import { MEMORY_COLLECTION, memoryQdrantUrl } from '../lib/memory-collection.js'
 
 export const mem9ProxyRouter = new Hono()
 
@@ -73,8 +74,8 @@ function getMem9Config(): Mem9Config {
       gatewayUrl,
     },
     vectorStore: {
-      url: process.env['QDRANT_URL'] || 'http://qdrant:6333',
-      collection: 'cortex_memories',
+      url: memoryQdrantUrl(),
+      collection: MEMORY_COLLECTION,
     },
   }
 }

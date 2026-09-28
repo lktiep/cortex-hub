@@ -10,6 +10,7 @@ so that benchmark dependencies stay out of the main build.
 | --------------- | ---------------------------------------------------------------- | ----------- |
 | LongMemEval-S   | `cortex_knowledge_search` retrieval quality (R@5 / R@10 / NDCG)  | Implemented |
 | Code retrieval  | `cortex_code_search` ordering: vector vs BM25 vs RRF hybrid       | Implemented |
+| Mem9 memory     | `cortex_memory_search` ordering, and what `add()` costs           | Implemented |
 | Reranking       | Whether an LLM reranker improves that ordering                    | Implemented |
 | ConvoMem        | Conversational memory recall over long dialogues                 | Roadmap     |
 | LoCoMo          | Long conversation memory recall                                  | Roadmap     |
@@ -205,6 +206,106 @@ pnpm --filter @cortex/benchmarks bench:retrieval -- --project <projectId>
 
 The per-query rank table it prints is the part worth reading: an average can stay
 flat while a mode fixes as many orderings as it breaks.
+
+## Mem9 memory — vector vs hybrid, and the cost of `add()`
+
+`mem9_bench.ts` measures the memory engine behind `cortex_memory_search` and
+`cortex_memory_store`, through `Mem9.search()` and `Mem9.add()` themselves —
+recency blend included — so the numbers are the ones an agent gets.
+
+### How it works
+
+1. **Two corpora**, because they fail differently:
+   - **longmemeval** — for each of 100 LongMemEval-S questions, every user turn
+     of its haystack (~240) is stored as one user's memories: 24,216 in all.
+     The turns marked as evidence are the answer. This is much harder than the
+     session-level benchmark above: the target is one turn among hundreds of
+     turns from the same person, not a session among sessions.
+   - **dev** — `gold_memory_search.ts`: 36 short facts about a fictional
+     codebase, a third of them Vietnamese, many carrying an identifier, with 24
+     hand-written queries. What the hub actually stores, recalled through an
+     English-only embedder.
+2. **Seeded as production holds memories today**: one dense vector per point,
+   the payload Mem9 writes, all with the same timestamp so recency is flat and
+   only relevance decides the order.
+3. **Then migrated**: `copyToHybridCollection` — the same code the production
+   migration runs — copies the collection into one with the lexical arm, reusing
+   the dense vectors, and every query runs again. `vector` and `hybrid` rows
+   differ only in how memories are retrieved.
+4. **`add()` timing** runs the real embed → search → write path against the
+   same Qdrant with the LLM stubbed out, so it measures Mem9's own work around
+   the two LLM calls, not the calls.
+
+### Results — `all-minilm`, 100 questions
+
+| Corpus | Mode | n | r@1 | r@3 | r@5 | r@10 | MRR | p50 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| dev | vector | 24 | 0.917 | 1.000 | 1.000 | 1.000 | 0.951 | 59 ms |
+| dev | **hybrid** | 24 | **1.000** | 1.000 | 1.000 | 1.000 | **1.000** | 71 ms |
+| longmemeval | vector | 100 | 0.450 | 0.710 | 0.800 | 0.890 | 0.601 | 62 ms |
+| longmemeval | **hybrid** | 100 | **0.550** | **0.790** | **0.870** | **0.900** | **0.685** | 65 ms |
+
+Per query, hybrid put the answer higher than vector for 30 LongMemEval questions
+and lower for 6; on dev, 2 higher and none lower (`VNPay callback signature` 2 →
+1, `reconcilePayments` 3 → 1 — both an identifier the embedder cannot read).
+Like code search, the gain is almost all ordering: recall@10 barely moves, top-1
+moves ten points. The dev set is small and was already easy for the vector arm;
+LongMemEval is the number to trust. The `vector` rows are identical before and
+after this change — a collection that has not been migrated behaves exactly as
+it did.
+
+Fusion is reciprocal rank (k = 60) done in Mem9 rather than in Qdrant, because
+the result has to stay a relevance in [0, 1]: `search()` blends it with recency,
+and the hub merges it with session summaries scored 1.0. When the lexical arm
+matches nothing, or fails, the answer is the vector arm's with its cosine scores
+intact.
+
+The tokenizer is not the code one. `tokenizeCode` splits on anything outside
+ASCII, which turns `đơn hàng` into `ơn`, `h`, `ng`; `tokenizeText` keeps Unicode
+words, keeps numbers (a port or an amount is a fact in a memory), still splits
+identifiers, and stores every accented word folded as well, so `don hang bi treo`
+finds `Đơn hàng bị treo`.
+
+### `add()` — 8 facts per call, LLM stubbed, old and new code interleaved
+
+| Code | p50 | mean | p90 |
+|---|---:|---:|---:|
+| before | 1,430 ms | 1,393 ms | 1,853 ms |
+| after, vector-only collection | 274 ms | 304 ms | 559 ms |
+| after, hybrid collection | 248 ms | 288 ms | 649 ms |
+
+The old path embedded each fact on its own, searched for it, and later embedded
+the same text again to store it — sixteen embedding round trips and eight
+searches, one after another, for eight facts. Now the facts go in one embedding request, the lookups run at once,
+and an ADD reuses its fact's vector. With a real LLM the two model calls still
+dominate `add()`; this is the ~1.1 s around them.
+
+`add()` also checks the content hash it always stored but never read: stating
+the same 8 facts again stored **0** new memories (the old code stored all 8 a
+second time) and reported them as `NONE` with the id already holding them.
+
+### How to run
+
+```bash
+# a throwaway Qdrant and Ollama — never a live hub
+docker run -d --name mem9-bench-qdrant -p 16333:6333 qdrant/qdrant:v1.13.6
+docker run -d --name mem9-bench-ollama -p 11435:11434 ollama/ollama
+docker exec mem9-bench-ollama ollama pull all-minilm
+
+QDRANT_URL=http://localhost:16333 OLLAMA_API_BASE=http://localhost:11435/v1 \
+  pnpm --filter @cortex/benchmarks bench:mem9 -- --questions 100 --label after
+```
+
+| Flag | Description |
+|---|---|
+| `--questions N` | LongMemEval questions to include (default 100; 0 runs dev only) |
+| `--model NAME` | Embedding model (default: `all-minilm`) |
+| `--label NAME` | Tag for the result file in `results/` |
+| `--keep` | Leave both bench collections behind |
+
+LongMemEval questions read `data/longmemeval_s_cleaned.json`, which the
+knowledge benchmark downloads on its first run; without it, pass
+`--questions 0` for the dev corpus alone.
 
 ## Roadmap
 

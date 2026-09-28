@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   tokenizeCode,
+  tokenizeText,
   hashToken,
   documentSparseVector,
   querySparseVector,
@@ -127,5 +128,40 @@ describe('averageTokenLength', () => {
 
   it('is 0 for an empty corpus', () => {
     expect(averageTokenLength([])).toBe(0)
+  })
+})
+
+describe('tokenizeText', () => {
+  it('keeps Vietnamese words whole, and folded so they match text typed without accents', () => {
+    expect(tokenizeText('Đơn hàng bị treo')).toEqual(['đơn', 'don', 'hàng', 'hang', 'bị', 'bi', 'treo'])
+  })
+
+  it('matches accented text from an unaccented query', () => {
+    const stored = new Set(tokenizeText('Đơn hàng bị treo ở trạng thái pending'))
+    expect(tokenizeText('don hang bi treo pending').every((t) => stored.has(t))).toBe(true)
+  })
+
+  it('treats composed and decomposed accents as the same word', () => {
+    expect(tokenizeText('tiếng'.normalize('NFD'))).toEqual(tokenizeText('tiếng'.normalize('NFC')))
+  })
+
+  it('still breaks identifiers into their parts', () => {
+    expect(tokenizeText('cart_v2_enabled')).toEqual(['cart_v2_enabled', 'cart', 'v2', 'enabled'])
+    expect(tokenizeText('OrderService.cancelOrder')).toEqual([
+      'orderservice',
+      'order',
+      'service',
+      'cancelorder',
+      'cancel',
+      'order',
+    ])
+  })
+
+  it('keeps numbers, which in a memory are facts', () => {
+    expect(tokenizeText('Postgres on 5433, not 5432')).toEqual(['postgres', 'on', '5433', 'not', '5432'])
+  })
+
+  it('drops single characters and punctuation', () => {
+    expect(tokenizeText('a ? b - 7')).toEqual([])
   })
 })
