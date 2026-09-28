@@ -135,7 +135,10 @@ teardown
 setup
 POST='{"tool_name":"mcp__cortex-hub__cortex_memory_search","tool_input":{},"tool_response":{}}'
 printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
-check "memory_search records both markers" 0 "$(grep -q '^tool=' "$STATE/memory-recalled" 2>/dev/null && grep -q '^tool=' "$STATE/discovery-used" 2>/dev/null && echo 0 || echo 1)"
+check "memory_search records the recall"   0 "$(grep -q '^tool=' "$STATE/memory-recalled" 2>/dev/null && echo 0 || echo 1)"
+# Recall must not open the discovery gate, or /cs alone unlocks Grep and Glob and the agent
+# never has to ask cortex where the code is.
+check "memory_search is not discovery"     0 "$([ ! -f "$STATE/discovery-used" ] && echo 0 || echo 1)"
 teardown
 
 echo "track-quality.sh — session id comes from tool_response"

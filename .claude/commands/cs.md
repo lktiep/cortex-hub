@@ -1,6 +1,7 @@
-# /cs — Cortex Start v0.7.0
+# /cs — Cortex Start v0.8.0
 
-> Version: 0.7.0 | Updated: 2026-04-11
+> Version: 0.8.0 | Updated: 2026-09-28
+> Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
 > Changelog: v0.7.0 — unified versioning, removed STATE.md, streamlined tool guidance, auto-memory safety net
 > Changelog: v2.1 — added plan quality gate before implementation
 > Changelog: v2.0 — added task pickup, detect changes, recipe health, workflow recipes, versioning

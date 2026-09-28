@@ -792,7 +792,7 @@ fi
 # Templates define how agents use Cortex tools (code, continue, phase, onboard).
 
 WORKFLOWS_DIR=".agents/workflows"
-WORKFLOW_VERSION="2"  # Bump when updating templates
+WORKFLOW_VERSION="0.8"  # Must match the cortex-workflows-version marker in the templates
 WORKFLOW_MARKER="<!-- cortex-workflows-version: -->"
 
 echo -e "${BLUE}>>> Deploying Cortex workflow templates to ${WORKFLOWS_DIR}...${NC}"
@@ -825,7 +825,7 @@ if [ "$NEEDS_UPDATE" = true ]; then
         done
     else
         # Source 2: Download from GitHub
-        TEMPLATES_BASE="https://raw.githubusercontent.com/lktiep/cortex-hub/main/templates/workflows"
+        TEMPLATES_BASE="https://raw.githubusercontent.com/lktiep/cortex-hub/master/templates/workflows"
         WORKFLOW_FILES=("code.md" "continue.md" "phase.md")
 
         echo -e "${BLUE}    Downloading templates from GitHub...${NC}"

@@ -1,6 +1,7 @@
-# /ce — Cortex End v0.7.0
+# /ce — Cortex End v0.8.0
 
-> Version: 0.7.0 | Updated: 2026-04-11
+> Version: 0.8.0 | Updated: 2026-09-28
+> Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
 > Changelog: v0.7.0 — unified versioning, session_end auto-saves memory, removed STATE.md, streamlined steps
 > Changelog: v2.0 — added detect_changes, tool stats, task completion, recipe capture check
 

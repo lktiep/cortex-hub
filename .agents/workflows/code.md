@@ -1,6 +1,7 @@
 ---
 description: Write code following project-specific quality gates from project-profile.json
 ---
+<!-- cortex-workflows-version: 0.8 -->
 # /code — Implement with Quality Gates
 
 // turbo-all

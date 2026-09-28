@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Hub — Unified Installer (v0.7.0)
+# Cortex Hub — Unified Installer (v0.8.0)
 # One script for everything: global skill + MCP config + project hooks + IDE setup.
 # Idempotent. Version-aware. Auto-updating. Multi-IDE.
 #
@@ -873,10 +873,10 @@ case "$TOOL_NAME" in
   *cortex_quality_report*) record quality-reported ;;
   *cortex_code_search*|*cortex_code_context*|*cortex_code_impact*|*cortex_cypher*)
     record discovery-used ;;
-  *cortex_knowledge_search*)
-    record discovery-used; record knowledge-recalled ;;
-  *cortex_memory_search*)
-    record discovery-used; record memory-recalled ;;
+  # Recall is not discovery: knowledge and memory answer "why" and "has this broken before",
+  # not "where is the code". Arming discovery-used here would let /cs alone open Grep and Glob.
+  *cortex_knowledge_search*) record knowledge-recalled ;;
+  *cortex_memory_search*)    record memory-recalled ;;
   *cortex_task_pickup*)    record tasks-checked ;;
   *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
 esac
@@ -1013,9 +1013,10 @@ with open('$USER_SETTINGS','w') as f: json.dump(d, f, indent=2)
   # ── Slash commands (/cs, /ce) ──
   mkdir -p .claude/commands
   cat > .claude/commands/cs.md << 'CMDEOF'
-# /cs — Cortex Start v0.7.0
+# /cs — Cortex Start v0.8.0
 
-> Version: 0.7.0 | Updated: 2026-04-11
+> Version: 0.8.0 | Updated: 2026-09-28
+> Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
 > Changelog: v0.7.0 — unified versioning, removed STATE.md, streamlined tool guidance, auto-memory safety net
 > Changelog: v2.1 — added plan quality gate before implementation
 > Changelog: v2.0 — added task pickup, detect changes, recipe health, workflow recipes, versioning
@@ -1126,9 +1127,10 @@ CMDEOF
   sed_inplace "s|__GIT_REPO__|${GIT_REPO}|g" .claude/commands/cs.md
 
   cat > .claude/commands/ce.md << 'CMDEOF'
-# /ce — Cortex End v0.7.0
+# /ce — Cortex End v0.8.0
 
-> Version: 0.7.0 | Updated: 2026-04-11
+> Version: 0.8.0 | Updated: 2026-09-28
+> Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
 > Changelog: v0.7.0 — unified versioning, session_end auto-saves memory, removed STATE.md, streamlined steps
 > Changelog: v2.0 — added detect_changes, tool stats, task completion, recipe capture check
 
@@ -1428,8 +1430,10 @@ case "$TOOL_NAME" in
   *cortex_quality_report*) record quality-reported ;;
   *cortex_code_search*|*cortex_code_context*|*cortex_code_impact*|*cortex_cypher*)
     record discovery-used ;;
-  *cortex_knowledge_search*) record discovery-used; record knowledge-recalled ;;
-  *cortex_memory_search*)    record discovery-used; record memory-recalled ;;
+  # Recall is not discovery: it answers "why" and "has this broken before", not "where is the
+  # code". Arming discovery-used here would let /cs alone open glob and search_file_content.
+  *cortex_knowledge_search*) record knowledge-recalled ;;
+  *cortex_memory_search*)    record memory-recalled ;;
   *cortex_task_pickup*)      record tasks-checked ;;
   *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
 esac

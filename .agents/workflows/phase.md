@@ -1,6 +1,7 @@
 ---
 description: Start a new phase with automated gate checks and verification
 ---
+<!-- cortex-workflows-version: 0.8 -->
 # /phase — Phase Management with Quality Gates
 
 // turbo-all

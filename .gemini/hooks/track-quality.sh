@@ -53,8 +53,10 @@ case "$TOOL_NAME" in
   *cortex_quality_report*) record quality-reported ;;
   *cortex_code_search*|*cortex_code_context*|*cortex_code_impact*|*cortex_cypher*)
     record discovery-used ;;
-  *cortex_knowledge_search*) record discovery-used; record knowledge-recalled ;;
-  *cortex_memory_search*)    record discovery-used; record memory-recalled ;;
+  # Recall is not discovery: it answers "why" and "has this broken before", not "where is the
+  # code". Arming discovery-used here would let /cs alone open glob and search_file_content.
+  *cortex_knowledge_search*) record knowledge-recalled ;;
+  *cortex_memory_search*)    record memory-recalled ;;
   *cortex_task_pickup*)      record tasks-checked ;;
   *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
 esac
