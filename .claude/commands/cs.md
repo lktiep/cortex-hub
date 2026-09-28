@@ -38,7 +38,7 @@ If the tool is not available (e.g. in solo dev mode), skip this step.
 
 ## Step 5: Working State Check
 Run `git status`. If uncommitted changes:
-- `cortex_detect_changes(scope: "all")` — analyze risk level
+- `cortex_detect_changes(diff: "<output of git diff HEAD>")` — analyze risk level. The hub cannot see your working tree, so pass the diff
 - Report affected symbols and blast radius
 
 ## Step 6: Situational Summary
@@ -100,7 +100,7 @@ Running sessions in two organizations with one API key at once? Pass `org: "<org
 4. If non-obvious → `cortex_knowledge_store` to save for others
 
 ### Before committing:
-1. `cortex_detect_changes(scope: "staged")` — verify blast radius
+1. `cortex_detect_changes(diff: "<output of git diff --staged>")` — verify blast radius. `risk_level: "unknown"` means a lookup failed: it is not a pass
 2. Commit
 3. After push → `cortex_code_reindex(repo: "...", branch: "<branch>")`
 

@@ -9,7 +9,7 @@ Run ALL steps IN ORDER before ending the session.
 
 ## Step 1: Pre-commit Check
 If uncommitted changes exist:
-- `cortex_detect_changes(scope: "all")` — verify blast radius
+- `cortex_detect_changes(diff: "<output of git diff HEAD>")` — verify blast radius
 - If HIGH risk → warn user before proceeding
 
 ## Step 2: Quality Gates

@@ -245,14 +245,20 @@ Report the results of a quality gate check (e.g. build, typecheck, lint, test ou
 
 ### `cortex_detect_changes`
 
-Detect uncommitted changes and analyze their risk level across the indexed codebase. Shows changed symbols, affected processes, and risk assessment.
+Check a change before committing it: the indexed symbols it touches, the execution flows those symbols are steps of, and a risk level. The hub cannot see your working tree, so the caller passes its diff.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `scope` | string | no | Scope: `all` (default), `staged`, or `unstaged` |
-| `projectId` | string | no | Project ID to scope analysis to |
+| `diff` | string | yes, unless `scope: "compare"` | Unified diff: the output of `git diff --staged` (the next commit) or `git diff HEAD` (all uncommitted work). Any context size. For a large change, hunk bodies may be left out: `git diff --staged -U0 \| grep -E '^(diff \|--- \|\+\+\+ \|@@ )'` |
+| `repo` | string | no | Repository the diff belongs to. Defaults to the repo of your active session |
+| `projectId` | string | no | Project ID, instead of `repo` |
+| `org` | string | no | Organization to scope the call to |
+| `scope` | string | no | `compare` compares the indexed code with `baseRef`; it is the only scope that works without a diff |
+| `baseRef` | string | no | Branch, tag or commit for `scope: "compare"` |
 
-**Returns:** JSON with changed symbols, affected execution flows, and risk assessment.
+Lines are matched against the last indexed commit, so reindex after pushing. Without a `diff` and without `scope: "compare"` the call is refused (400) with these instructions, rather than reporting "no changes".
+
+**Returns:** `summary` (`changed_count`, `affected_count`, `risk_level`, `files`, `new_files`, `files_without_symbols`), `changed_symbols`, `affected_processes`. `risk_level` is `none` for an empty diff, `low` / `medium` / `high` / `critical` by the number of affected flows (0 / ≤5 / ≤15 / more), and `unknown` with `partial: true` when a graph lookup failed: a lower bound, not a pass.
 
 ---
 

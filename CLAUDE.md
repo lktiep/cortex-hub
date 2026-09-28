@@ -65,7 +65,10 @@ finding the spot in one call and spending five:
 - `cortex_knowledge_store(title: "...", content: "...")` — team-wide (bug fixes, patterns, decisions)
 
 ### Before committing
-`cortex_detect_changes(scope: "staged")` — shows affected symbols and risk level.
+`cortex_detect_changes(diff: "<output of git diff --staged>")` — shows affected symbols and risk level.
+The hub cannot see your working tree, so the diff has to be passed; for a large change send only
+the headers: `git diff --staged -U0 | grep -E '^(diff |--- |\+\+\+ |@@ )'`. `risk_level: "unknown"`
+means a lookup failed, not that the change is safe.
 
 ### After pushing
 `cortex_code_reindex(repo: "cortex-hub", branch: "<branch>")` — keeps code intelligence fresh.

@@ -840,7 +840,7 @@ statsRouter.get('/hints/:agentId', (c) => {
     }
 
     if (currentTool.includes('cypher')) {
-      hints.push('💡 Cypher: labels(n) for the type, n.name and n.filePath as properties. MATCH (n) WHERE n.name CONTAINS "X" RETURN n.name, labels(n) LIMIT 20')
+      hints.push('💡 Cypher: labels(n) AS type for the type; n.id, n.name, n.filePath, n.startLine and n.endLine as properties. MATCH (n) WHERE n.name CONTAINS "X" RETURN n.name, labels(n) AS type LIMIT 20')
     }
 
     if (currentTool.includes('list_repos')) {

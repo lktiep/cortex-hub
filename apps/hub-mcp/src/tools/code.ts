@@ -398,16 +398,31 @@ export function registerCodeTools(server: McpServer, env: Env) {
   )
 
   // ── detect_changes — pre-commit risk analysis ──
+  // The hub cannot see the caller's working tree, so the caller sends its diff. Asking the
+  // hub to run `git diff` itself is what reported "No changes detected" for every change.
   server.tool(
     'cortex_detect_changes',
-    'Detect uncommitted changes and analyze their risk level across the indexed codebase. Shows changed symbols, affected processes, and risk assessment.',
+    'Check a change before you commit it: the indexed symbols it touches, the execution flows those symbols are steps of, and a risk level. ' +
+      'The hub cannot see your working tree, so pass `diff`: the output of `git diff --staged` (what the next commit contains) or `git diff HEAD` (all uncommitted work). ' +
+      'For a large change, send headers only: `git diff --staged -U0 | grep -E \'^(diff |--- |\\+\\+\\+ |@@ )\'`. ' +
+      'Lines are matched against the last indexed commit, so reindex after pushing. New files are listed apart, since the graph cannot know them yet. ' +
+      'risk_level "unknown" means a lookup failed: it is not a pass. To compare the indexed code with a ref instead, pass scope "compare" and baseRef.',
     {
-      scope: z.string().optional().describe('Scope of changes to detect: "all" (default), "staged", or "unstaged"'),
-      projectId: z.string().optional().describe('Project ID to scope analysis to'),
+      diff: z.string().optional().describe('Unified diff text, as `git diff --staged` or `git diff HEAD` prints it. Any context size; hunk bodies may be left out.'),
+      repo: z.string().optional().describe('Repository the diff belongs to (e.g. "cortex-hub") or its git URL. Omit to use the repo of your active session.'),
+      projectId: z.string().optional().describe('Project ID. Use repo name instead if possible.'),
+      org: z.string().optional().describe(ORG_DESC),
+      scope: z.string().optional().describe('Only "compare" works without a diff: it compares the indexed code with baseRef.'),
+      baseRef: z.string().optional().describe('Branch, tag or commit to compare with when scope is "compare".'),
     },
-    async ({ scope, projectId }) => {
+    async ({ diff, repo, projectId, org, scope, baseRef }) => {
       try {
-        const data = await callIntel('detect-changes', { scope: scope ?? 'all', projectId })
+        const resolvedProject = await resolveRepo(repo, projectId)
+        const data = await callIntel(
+          'detect-changes',
+          { diff, scope, baseRef, projectId: resolvedProject, orgId: org },
+          60000,
+        )
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
         }
@@ -423,7 +438,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
   // ── cypher — direct graph queries ──
   server.tool(
     'cortex_cypher',
-    'Run Cypher queries directly against the GitNexus knowledge graph. Supports MATCH, RETURN, WHERE, ORDER BY for exploring code relationships.\n\nAvailable node properties: name, filePath. Use labels(n) for type.\nExample: MATCH (n) WHERE n.name CONTAINS "Attack" RETURN n.name, labels(n) LIMIT 20',
+    'Run Cypher queries directly against the GitNexus knowledge graph. Supports MATCH, RETURN, WHERE, ORDER BY for exploring code relationships.\n\nAvailable node properties: id, name, filePath, startLine, endLine. Use labels(n) for type, and alias it (labels(n) AS type) for a readable column.\nExample: MATCH (n) WHERE n.name CONTAINS "Attack" RETURN n.name, labels(n) LIMIT 20',
     {
       query: z.string().describe('Cypher query to run (e.g., MATCH (n:Function) RETURN n.name LIMIT 10)'),
       repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL'),
@@ -441,7 +456,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
         const errMsg = error instanceof Error ? error.message : 'Unknown'
         // ── P2: Include schema hint when property not found ──
         const schemaHint = errMsg.includes('Cannot find property')
-          ? '\n\n💡 Available properties: name, filePath. Use labels(n) for node type, not n.type.\nExample: MATCH (n) WHERE n.name CONTAINS "X" RETURN n.name, labels(n) LIMIT 20'
+          ? '\n\n💡 Available properties: id, name, filePath, startLine, endLine. Use labels(n) for node type, not n.type.\nExample: MATCH (n) WHERE n.name CONTAINS "X" RETURN n.name, labels(n) LIMIT 20'
           : ''
         return {
           content: [{ type: 'text' as const, text: `Cypher query error: ${errMsg}${schemaHint}` }],

@@ -7,6 +7,7 @@ import { createEmbedder } from '../lib/embedder-factory.js'
 import { getReranker, RERANK_OVERFETCH } from '../lib/reranker.js'
 import { hasSparseVector, buildHybridQuery, HYBRID_FETCH_FLOOR } from '../lib/hybrid-search.js'
 import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
+import { analyzeDiff, parseCypherTable, MAX_DIFF_CHARS, type RunCypher } from '../lib/diff-symbols.js'
 
 const logger = createLogger('intel')
 
@@ -126,19 +127,26 @@ function orgsWithIndexedProjects(): OrgRow[] {
  * created_at when it reuses a row, so "most recent" means the last repo the agent opened.
  */
 function orgOfActiveSession(apiKeyOwner: string | null | undefined): string | undefined {
+  return projectOfActiveSession(apiKeyOwner)?.org_id
+}
+
+/** The project of the caller's most recent session, by the same rule as orgOfActiveSession. */
+function projectOfActiveSession(
+  apiKeyOwner: string | null | undefined,
+): { id: string; org_id: string } | undefined {
   if (!apiKeyOwner) return undefined
   try {
     const row = db.prepare(
-      `SELECT p.org_id AS org_id
+      `SELECT p.id AS id, p.org_id AS org_id
          FROM session_handoffs s
          JOIN projects p ON p.id = s.project_id
         WHERE (s.api_key_name = ? OR s.from_agent = ?)
         ORDER BY (s.status = 'active') DESC, s.created_at DESC
         LIMIT 1`
-    ).get(apiKeyOwner, apiKeyOwner) as { org_id?: string } | undefined
-    return row?.org_id ?? undefined
+    ).get(apiKeyOwner, apiKeyOwner) as { id?: string; org_id?: string } | undefined
+    return row?.id && row.org_id ? { id: row.id, org_id: row.org_id } : undefined
   } catch (error) {
-    logger.warn(`orgOfActiveSession failed: ${String(error)}`)
+    logger.warn(`projectOfActiveSession failed: ${String(error)}`)
     return undefined
   }
 }
@@ -323,6 +331,27 @@ async function callGitNexusWithFallback(
   } catch {
     throw lastError
   }
+}
+
+/**
+ * Cypher bound to one project's graph, or null when none of its names reaches one.
+ *
+ * GitNexus answers a failed query with HTTP 200 and an "Error: ..." body, so the generic
+ * fallback above would accept the first candidate name whether or not it is a repo. Each
+ * candidate is probed with a query that cannot fail on a real graph instead. There is
+ * deliberately no repo-less fallback: a diff belongs to one repository, and on a hub with a
+ * single indexed repo that fallback would map it onto somebody else's code.
+ */
+async function cypherForProject(ref: string, orgId?: string): Promise<{ repo: string; run: RunCypher } | null> {
+  for (const candidate of resolveRepoNames(ref, orgId)) {
+    try {
+      parseCypherTable(await callGitNexus('cypher', { query: 'RETURN 1 AS ok', repo: candidate }))
+      return { repo: candidate, run: (query) => callGitNexus('cypher', { query, repo: candidate }) }
+    } catch {
+      logger.info(`cypherForProject: "${candidate}" is not a graph for ${ref}, trying next...`)
+    }
+  }
+  return null
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1057,28 +1086,102 @@ intelRouter.get('/repos', async (c) => {
 })
 
 // ── Detect Changes: pre-commit risk analysis ──
+//
+// The hub's clone never holds the caller's uncommitted work, so asking GitNexus to run
+// `git diff` there reported "No changes detected" for every change an agent was about to
+// commit. The caller sends its diff instead and it is mapped onto the graph here. What the
+// hub can answer by itself is a comparison of history it has, so scope "compare" still
+// goes to GitNexus; the working-tree scopes without a diff are refused with the fix.
 intelRouter.post('/detect-changes', async (c) => {
   try {
     const body = await c.req.json()
-    const { scope, projectId, orgId } = body as {
+    const { scope, projectId, orgId, diff, baseRef } = body as {
       scope?: string
       projectId?: string
       orgId?: string
+      diff?: unknown
+      baseRef?: string
+    }
+    const apiKeyOwner = c.req.header('X-API-Key-Owner')
+
+    if (diff !== undefined) {
+      if (typeof diff !== 'string') {
+        return c.json({ success: false, error: 'diff must be the text of a unified diff.' }, 400)
+      }
+      if (diff.length > MAX_DIFF_CHARS) {
+        return c.json(
+          {
+            success: false,
+            error: `The diff is ${diff.length} characters; the limit is ${MAX_DIFF_CHARS}.`,
+            hint: 'Check the change in parts: pass `git diff --staged -- <paths>` for a subset of files.',
+          },
+          413,
+        )
+      }
+
+      // A diff belongs to one repository: the one named, else the one the caller's session opened.
+      const ref = projectId ?? projectOfActiveSession(apiKeyOwner)?.id
+      if (!ref) {
+        return c.json(
+          {
+            success: false,
+            error: 'No repository to map the diff onto.',
+            hint: 'Pass repo (e.g. "cortex-hub"), or call cortex_session_start for this repo first.',
+          },
+          400,
+        )
+      }
+      const orgScope = resolveOrgScope({ orgId, projectId: ref, apiKeyOwner })
+      if (projectOutsideScope(ref, orgScope)) {
+        return c.json(outsideScopeResponse(ref), 403)
+      }
+
+      const graph = await cypherForProject(ref, orgScope.orgId)
+      if (!graph) {
+        return c.json(
+          {
+            success: false,
+            error: `"${ref}" has no code graph on this hub, so the diff cannot be mapped onto it.`,
+            hint: 'Index the repo first (cortex_code_reindex), then check the change again.',
+          },
+          404,
+        )
+      }
+
+      const impact = await analyzeDiff(diff, graph.run)
+      return c.json({ success: true, data: { ...impact, repo: ref } })
     }
 
-    // A named project is only refused when we know the caller's organization and the
-    // project belongs to a different one. See projectOutsideScope.
-    const orgScope = resolveOrgScope({ orgId, projectId, apiKeyOwner: c.req.header('X-API-Key-Owner') })
-    if (projectOutsideScope(projectId, orgScope)) {
-      return c.json(outsideScopeResponse(projectId as string), 403)
+    if (scope === 'compare') {
+      if (!baseRef) {
+        return c.json({ success: false, error: 'scope "compare" needs baseRef, e.g. "master" or "v0.8.3".' }, 400)
+      }
+      const orgScope = resolveOrgScope({ orgId, projectId, apiKeyOwner })
+      if (projectOutsideScope(projectId, orgScope)) {
+        return c.json(outsideScopeResponse(projectId as string), 403)
+      }
+      const results = await callGitNexusWithFallback(
+        'detect_changes',
+        { scope: 'compare', base_ref: baseRef },
+        projectId,
+        orgScope.orgId,
+      )
+      return c.json({ success: true, data: results })
     }
 
-    const params: Record<string, unknown> = {
-      scope: scope ?? 'all',
-    }
-
-    const results = await callGitNexusWithFallback('detect_changes', params, projectId, orgScope.orgId)
-    return c.json({ success: true, data: results })
+    return c.json(
+      {
+        success: false,
+        error:
+          `The hub cannot see your working tree, so scope "${scope ?? 'all'}" alone would report ` +
+          'no changes whatever you have edited.',
+        hint:
+          'Pass diff: the output of `git diff --staged` (what the next commit contains) or ' +
+          '`git diff HEAD` (all uncommitted work). To compare the indexed code against a ref, ' +
+          'pass scope "compare" with baseRef.',
+      },
+      400,
+    )
   } catch (error) {
     logger.error(`Detect changes failed: ${String(error)}`)
     return c.json(

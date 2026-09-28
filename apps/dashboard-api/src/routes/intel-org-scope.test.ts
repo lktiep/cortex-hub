@@ -212,7 +212,7 @@ describe('a named project', () => {
       post('/impact', { ...body, target: 'charge' }),
       post('/context', { ...body, name: 'charge' }),
       post('/cypher', { ...body, query: 'MATCH (n) RETURN n LIMIT 1' }),
-      post('/detect-changes', { ...body }),
+      post('/detect-changes', { ...body, diff: 'diff --git a/src/index.ts b/src/index.ts\n' }),
       post('/code-search', { ...body, query: 'charge' }),
       post('/file-content', { ...body, file: 'src/index.ts' }),
     ])

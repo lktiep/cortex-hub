@@ -44,7 +44,7 @@ at session start, and again when something breaks.
 | **Recalling past context** | `cortex_memory_search` | Past decisions and debugging findings. Once at session start, then on an error. |
 | **Contributing knowledge** | `cortex_knowledge_store` | Store a non-obvious fix or reusable pattern. Include tags. |
 | **Storing personal memory** | `cortex_memory_store` | Session findings and workarounds, for the next session. |
-| **Before committing** | `cortex_detect_changes` | `scope: "staged"` — affected symbols and risk level. |
+| **Before committing** | `cortex_detect_changes` | `diff:` the output of `git diff --staged` — affected symbols and risk level. The hub cannot see your working tree. |
 | **After the verify commands** | `cortex_quality_report` | Report the real build/typecheck/lint output, not an intention. |
 
 ---
