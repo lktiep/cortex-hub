@@ -190,6 +190,65 @@ function createMcpServer(env: Env, permissions?: string[]) {
   return server
 }
 
+/** How often an idle SSE stream says something, so a proxy does not reap it. */
+const SSE_KEEPALIVE_MS = 25_000
+
+/**
+ * Make the standalone SSE stream say something immediately, and keep saying it.
+ *
+ * The stream carries nothing until the server has a message to push, so the
+ * response is headers and no body bytes — which is fine over a direct connection
+ * and fatal through a proxy. The proxy in front of this server withholds the
+ * response headers until the first body byte arrives, so the client never sees
+ * the stream open and reports the connection closed, even though the origin
+ * answered 200 the moment it was asked. A direct request to the container gets
+ * its headers in 8ms; the same request through the tunnel times out with zero
+ * bytes received, while an unauthorized GET (which has a body) comes back through
+ * the same tunnel in 300ms.
+ *
+ * A line starting with `:` is an SSE comment and every conformant client ignores
+ * it, so one on connect is a byte that costs nothing, and one every 25s keeps an
+ * idle stream from being dropped by an idle timeout.
+ */
+function withFirstByte(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder()
+  const reader = body.getReader()
+  let keepAlive: ReturnType<typeof setInterval> | undefined
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(': open\n\n'))
+
+      keepAlive = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(': ping\n\n'))
+        } catch {
+          // The stream is already closed; the pump's finally clears the timer.
+        }
+      }, SSE_KEEPALIVE_MS)
+
+      void (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            controller.enqueue(value)
+          }
+          controller.close()
+        } catch (err) {
+          controller.error(err)
+        } finally {
+          if (keepAlive) clearInterval(keepAlive)
+        }
+      })()
+    },
+    cancel(reason) {
+      if (keepAlive) clearInterval(keepAlive)
+      return reader.cancel(reason)
+    },
+  })
+}
+
 // ─── MCP Streamable HTTP handler ───────────────────────────────────
 // Supports both GET (SSE stream) and POST (JSON-RPC) as required by
 // the MCP Streamable HTTP transport spec. This is what mcp-remote expects.
@@ -286,6 +345,16 @@ app.all('/mcp', async (c) => {
       // headers at all, and it reports the connection as closed. Size the
       // buffered JSON responses and hand a live stream straight back.
       const isEventStream = res.headers.get('content-type')?.includes('text/event-stream') ?? false
+
+      // Nothing below this applies to a stream: a GET carries no JSON-RPC call, so
+      // there is no tool to log and no answer to append hints to. Hand it back
+      // with a first byte in front of it and stay out of the way.
+      if (isEventStream && res.body) {
+        return new Response(withFirstByte(res.body), {
+          status: res.status,
+          headers: res.headers,
+        })
+      }
 
       let outputSize = 0
       let respBody = ''

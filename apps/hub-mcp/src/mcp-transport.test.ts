@@ -7,8 +7,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
  * telemetry wrapper around the transport used to buffer every response body to
  * measure its size, and an SSE body only ends when the connection does — so the
  * await never resolved, the response never left the handler, and the client
- * reported CONNECTION_CLOSED with zero bytes received. These tests pin the
- * behaviour that broke: headers come back promptly, and POST is still measured.
+ * reported CONNECTION_CLOSED with zero bytes received.
+ *
+ * Headers alone then turned out not to be enough: the proxy in front of this
+ * server withholds them until the first body byte arrives, and the stream has
+ * nothing to say until the server pushes a message, so through the tunnel the
+ * client still saw nothing. These tests pin both halves — the response comes back
+ * promptly AND it starts with a byte — plus the fact that POST is still measured.
  */
 
 const realFetch = globalThis.fetch
@@ -57,6 +62,36 @@ describe('GET /mcp (standalone SSE stream)', () => {
 
     // Leave no open stream behind for the next test.
     await res.body?.cancel()
+  })
+
+  it('starts the stream with a byte, so a proxy releases the headers', async () => {
+    const app = (await import('./index.js')).default
+
+    const res = await app.fetch(
+      new Request('http://localhost/mcp', {
+        method: 'GET',
+        headers: { Accept: 'text/event-stream', Authorization: 'Bearer test-key' },
+      }),
+      {} as never,
+    )
+
+    const reader = res.body!.getReader()
+    const first = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('the stream sent no byte within 3s — a proxy will hold the headers back and the client will see nothing')),
+          3000,
+        ),
+      ),
+    ])
+
+    expect(first.done).toBe(false)
+    const text = new TextDecoder().decode(first.value)
+    // A line starting with ':' is an SSE comment: a byte that costs the client nothing.
+    expect(text.startsWith(':')).toBe(true)
+
+    await reader.cancel()
   })
 
   it('still answers 401 for a GET without a token', async () => {
