@@ -34,7 +34,7 @@ Start a new execution session with optional agent identity metadata. Returns a s
 | `capabilities` | string[] | no | Agent capabilities list |
 | `role` | string | no | Agent role from `agent-identity.json` |
 
-**Returns:** `session_id`, `mission_brief`, `status`, `identity` object, `relevant_knowledge` array.
+**Returns:** `session_id`, `mission_brief`, `status`, `identity` object, `project` (`id`, `orgId`), `relevant_knowledge` array. `orgId` is the boundary of a cross-repo code search.
 
 ---
 
@@ -57,13 +57,16 @@ Tools for searching, reading, and analyzing code via the GitNexus AST graph and 
 
 ### `cortex_code_search`
 
-Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. Omit `repo` to search across all indexed projects.
+Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. Omit `repo` to search every indexed repo **in your organization** — the intended way to answer a question that spans repos (a product's client, server and tools). Projects are isolated per organization, so the search never crosses into another one.
+
+The organization is taken from, in order: `org`; the organization of the project you named; your latest `cortex_session_start`; the only organization with indexed code. If several organizations have code and none of those applies, the search is refused with the list of organizations rather than widened to all of them.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string | yes | Natural language or code query |
 | `repo` | string | no | Repository name (e.g. `cortex-hub`) or git URL |
 | `projectId` | string | no | Project ID (use `repo` instead if possible) |
+| `org` | string | no | Organization ID. Omit it: the hub uses the organization of your latest session |
 | `branch` | string | no | Git branch to search |
 | `limit` | number | no | Max results (default: 5) |
 
@@ -80,6 +83,7 @@ Get a 360-degree view of a code symbol: methods, callers, callees, and related e
 | `name` | string | yes | Function, class, or symbol name to explore |
 | `repo` | string | no | Repository name or git URL |
 | `projectId` | string | no | Project ID |
+| `org` | string | no | Organization ID. Omit it: the hub uses the organization of your latest session |
 | `file` | string | no | File path to disambiguate when multiple symbols share the same name |
 
 **Returns:** Raw context output showing the symbol's relationships in the code graph.
@@ -95,6 +99,7 @@ Analyze the blast radius of changing a specific symbol to verify downstream impa
 | `target` | string | yes | Function, class, or file name to analyze |
 | `repo` | string | no | Repository name or git URL |
 | `projectId` | string | no | Project ID |
+| `org` | string | no | Organization ID. Omit it: the hub uses the organization of your latest session |
 | `branch` | string | no | Git branch to analyze |
 | `direction` | string | no | `upstream` or `downstream` (default: `downstream`) |
 
@@ -117,9 +122,11 @@ Trigger re-indexing of a project after code changes. Looks up the project by rep
 
 ### `cortex_list_repos`
 
-List all indexed repositories with project ID mapping. Use to find which `projectId` or repo name to pass to other code tools.
+List the indexed repositories of your organization with project ID mapping — exactly the set a search without `repo` covers. Use it to find which repo name to pass to other code tools.
 
-*No parameters.*
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `org` | string | no | Organization ID. Omit it: the hub uses the organization of your latest session |
 
 **Returns:** Table of indexed repositories with name, slug, symbol count, and flow count.
 
@@ -134,6 +141,7 @@ Run Cypher queries directly against the GitNexus knowledge graph for exploring c
 | `query` | string | yes | Cypher query (e.g. `MATCH (n:Function) RETURN n.name LIMIT 10`) |
 | `repo` | string | no | Repository name or git URL |
 | `projectId` | string | no | Project ID |
+| `org` | string | no | Organization ID. Omit it: the hub uses the organization of your latest session |
 
 **Available node properties:** `name`, `filePath`. Use `labels(n)` for node type.
 

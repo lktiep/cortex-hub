@@ -17,7 +17,7 @@ agentId: "claude-code"
 ide: "<your IDE>"
 branch: "<current git branch>"
 ```
-Save `session_id` and `projectId` from the response.
+Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
 If `recentChanges.count > 0` → warn user and `git pull` before any edits.
 
 ## Step 2: Recall Context (parallel)
@@ -84,11 +84,14 @@ at session start, then when something breaks — not before every lookup.
 touching a file another agent may hold.
 
 ### Cross-project lookup:
+Projects are isolated per organization; related repos (client, server, tools) share one.
 ```
-cortex_code_search(query: "...", repo: "my-backend")
+cortex_code_search(query: "...")                      # every repo in this organization
+cortex_code_search(query: "...", repo: "my-backend")  # one repo
 cortex_code_context(name: "...", repo: "my-backend")
-cortex_code_read(file: "...", repo: "my-backend")
+cortex_list_repos()                                   # the repos "every repo" covers
 ```
+Running sessions in two organizations with one API key at once? Pass `org: "<orgId>"`.
 
 ### When hitting an error:
 1. `cortex_knowledge_search` → check if known

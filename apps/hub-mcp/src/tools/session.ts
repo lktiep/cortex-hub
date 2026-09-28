@@ -34,6 +34,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
       // Register session with the dashboard API
       let sessionId = `sess_${Math.random().toString(36).substr(2, 9)}`
       let resolvedProjectId: string | undefined
+      let resolvedOrgId: string | undefined
       let recentSessions: unknown[] = []
       try {
         const response = await apiCall(env, '/api/sessions/start', {
@@ -54,9 +55,10 @@ export function registerSessionTools(server: McpServer, env: Env) {
         })
 
         if (response.ok) {
-          const data = await response.json() as { sessionId?: string; project?: { id: string }; recentSessions?: unknown[] }
+          const data = await response.json() as { sessionId?: string; project?: { id: string; orgId?: string }; recentSessions?: unknown[] }
           if (data.sessionId) sessionId = data.sessionId
           if (data.project?.id) resolvedProjectId = data.project.id
+          if (data.project?.orgId) resolvedOrgId = data.project.orgId
           if (data.recentSessions) recentSessions = data.recentSessions
         }
       } catch {
@@ -129,7 +131,9 @@ export function registerSessionTools(server: McpServer, env: Env) {
                 capabilities: capabilities ?? [],
                 role: role ?? null,
               },
-              project: resolvedProjectId ? { id: resolvedProjectId } : undefined,
+              // orgId is the boundary of a cross-repo search: code tools called without
+              // `repo:` search every repo in this organization and nothing outside it.
+              project: resolvedProjectId ? { id: resolvedProjectId, orgId: resolvedOrgId } : undefined,
               recent_sessions: recentSessions.length > 0 ? recentSessions : undefined,
               relevant_knowledge: relevantKnowledge.length > 0 ? relevantKnowledge : undefined,
             }, null, 2)

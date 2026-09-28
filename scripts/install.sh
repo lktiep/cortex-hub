@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HOOKS_VERSION=7
-HOOKS_MINOR=3
+HOOKS_MINOR=4
 MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
@@ -1080,7 +1080,7 @@ agentId: "claude-code"
 ide: "<your IDE>"
 branch: "<current git branch>"
 ```
-Save `session_id` and `projectId` from the response.
+Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
 If `recentChanges.count > 0` → warn user and `git pull` before any edits.
 
 ## Step 2: Recall Context (parallel)
@@ -1147,11 +1147,14 @@ at session start, then when something breaks — not before every lookup.
 touching a file another agent may hold.
 
 ### Cross-project lookup:
+Projects are isolated per organization; related repos (client, server, tools) share one.
 ```
-cortex_code_search(query: "...", repo: "my-backend")
+cortex_code_search(query: "...")                      # every repo in this organization
+cortex_code_search(query: "...", repo: "my-backend")  # one repo
 cortex_code_context(name: "...", repo: "my-backend")
-cortex_code_read(file: "...", repo: "my-backend")
+cortex_list_repos()                                   # the repos "every repo" covers
 ```
+Running sessions in two organizations with one API key at once? Pass `org: "<orgId>"`.
 
 ### When hitting an error:
 1. `cortex_knowledge_search` → check if known
@@ -1643,6 +1646,10 @@ reworded version of the same query. Ask a different question or switch tool inst
 \`cortex_code_impact\` before editing something exported or shared. Knowledge and memory are
 for errors and decisions, not for locating code.
 
+**Across repos:** omit \`repo:\` to search every repo in the organization of this project
+(the client + server + tools of one product). Projects are isolated per organization, so it never reaches
+another one. Running sessions in two organizations with one API key? Pass \`org:\`.
+
 ### Error Protocol
 1. \`cortex_knowledge_search\` first — someone may have solved this
 2. \`cortex_memory_search\` — you may have seen it before
@@ -2005,6 +2012,11 @@ hits before choosing, and do not re-run a reworded version of the same query —
 already 1.000, so it returns the same set. Ask a different question or switch tool instead.
 
 `cortex_code_impact` before editing something exported or shared — not as a ritual on every file.
+
+**Across repos:** omit `repo:` to search every repo in the organization of this project —
+related repos (the client, server and tools of one product) belong to one, and a cross-repo
+search never leaves it. `cortex_list_repos()` shows exactly which repos that covers. Running sessions in two
+organizations with one API key at once? Pass `org:` — the `project.orgId` returned by `cortex_session_start`.
 
 **Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
 at session start, then whenever something breaks.

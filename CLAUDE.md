@@ -71,11 +71,18 @@ finding the spot in one call and spending five:
 `cortex_code_reindex(repo: "cortex-hub", branch: "<branch>")` — keeps code intelligence fresh.
 
 ### Cross-project lookup
-Use `repo:` parameter directly:
+Projects are isolated per **organization**. Related repos — a product's client, server and
+tools — belong in the same one, and that is the boundary of a cross-repo search:
 ```
-cortex_code_search(query: "user auth", repo: "my-backend")
+cortex_code_search(query: "login packet")                     # every repo in your organization
+cortex_code_search(query: "user auth", repo: "my-backend")     # one repo
 cortex_code_context(name: "validateToken", repo: "my-backend")
+cortex_list_repos()                                            # what "every repo" covers
 ```
+The organization comes from `org:` if you pass it, else the repo you named, else your latest
+`cortex_session_start` (its `project.orgId`). With several organizations and none of those,
+the search is refused rather than widened. If you run sessions in two organizations with one
+API key at once, pass `org:` — the latest session is the other one's.
 
 ## Ending a Session
 

@@ -12,6 +12,13 @@ import { apiCall } from '../api-call.js'
  *
  * Proxied via Dashboard API — GitNexus runs as a CLI tool server-side.
  */
+// Projects are isolated per organization. Every code tool takes the same optional `org`,
+// and the hub falls back to the organization of the caller's active session, so the common
+// case — no repo, no org — searches this product's repos and stops at the org boundary.
+const ORG_DESC =
+  "Organization ID to scope this call to. Omit it and the hub infers the organization from " +
+  "your active session; a cross-repo search never leaves it."
+
 export function registerCodeTools(server: McpServer, env: Env) {
   const apiUrl = () => env.DASHBOARD_API_URL || 'http://localhost:4000'
 
@@ -53,20 +60,22 @@ export function registerCodeTools(server: McpServer, env: Env) {
   // ── code_search — query codebase concepts and workflows ──
   server.tool(
     'cortex_code_search',
-    'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. Accepts repo name (e.g. "cortex-hub"), git URL, or projectId. OMIT repo to search across ALL indexed projects in parallel and get ranked hints (perfect when you don\'t know which project has the code).',
+    'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. Accepts repo name (e.g. "cortex-hub"), git URL, or projectId. OMIT repo to search every indexed repo in your ORGANIZATION in parallel and get ranked hints — that is the way to answer a question that spans repos (client + server + tools of one product). Projects are isolated per organization, so a cross-repo search never reaches another organization\'s code.',
     {
       query: z.string().describe('Natural language or code query to search for'),
-      repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL. Preferred over projectId.'),
+      repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL. Preferred over projectId. Omit to search the whole organization.'),
       projectId: z.string().optional().describe('Project ID (e.g. "proj-704127e3"). Use repo name instead if possible.'),
+      org: z.string().optional().describe(ORG_DESC),
       branch: z.string().optional().describe('Git branch to search'),
       limit: z.number().optional().describe('Maximum flows to return (default: 5)'),
     },
-    async ({ query, repo, projectId, branch, limit }) => {
+    async ({ query, repo, projectId, org, branch, limit }) => {
       try {
         const resolvedProject = await resolveRepo(repo, projectId)
         const data = (await callIntel('search', {
           query,
           projectId: resolvedProject,
+          orgId: org,
           branch,
           limit: limit ?? 5,
         })) as { data?: { formatted?: string }; success?: boolean }
@@ -98,6 +107,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
               const cypherRes = await callIntel('cypher', {
                 query: `MATCH (n:${symbolType}) WHERE ${conditions} RETURN DISTINCT n.name AS name LIMIT 10`,
                 projectId: resolvedProject,
+                orgId: org,
               })
               // Response shape: { success, data: { raw: "{ \"markdown\": \"...\", \"row_count\": N }\n---\n..." } }
               const wrapper = cypherRes as { data?: { raw?: string; formatted?: string; row_count?: number } }
@@ -154,7 +164,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
             const codeRes = await apiCall(env, '/api/intel/code-search', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query, projectId: resolvedForCodeSearch, branch, limit: limit ?? 5 }),
+              body: JSON.stringify({ query, projectId: resolvedForCodeSearch, orgId: org, branch, limit: limit ?? 5 }),
               signal: AbortSignal.timeout(15000),
             })
 
@@ -224,15 +234,17 @@ export function registerCodeTools(server: McpServer, env: Env) {
       target: z.string().describe('The name of the function, class, or file to analyze'),
       repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL'),
       projectId: z.string().optional().describe('Project ID. Use repo name instead if possible.'),
+      org: z.string().optional().describe(ORG_DESC),
       branch: z.string().optional().describe('Git branch to analyze'),
       direction: z.enum(['upstream', 'downstream']).optional().describe('Direction to analyze (default: downstream)'),
     },
-    async ({ target, repo, projectId, branch, direction }) => {
+    async ({ target, repo, projectId, org, branch, direction }) => {
       try {
         const resolvedProject = await resolveRepo(repo, projectId)
         const data = await callIntel('impact', {
           target,
           projectId: resolvedProject,
+          orgId: org,
           branch,
           direction: direction ?? 'downstream',
         }) as { data?: { results?: { raw?: string } } }
@@ -249,6 +261,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
             const contextData = await callIntel('context', {
               name: target,
               projectId,
+              orgId: org,
             }) as { data?: { results?: { raw?: string } } }
 
             contextRaw = contextData?.data?.results?.raw ?? ''
@@ -266,6 +279,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
                       name: target,
                       file: filePath,
                       projectId,
+                      orgId: org,
                     }) as { data?: { results?: { raw?: string } } }
                     contextRaw = retryData?.data?.results?.raw ?? contextRaw
                   } catch { /* keep first response */ }
@@ -297,6 +311,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
                   const methodImpact = await callIntel('impact', {
                     target: methods[0],
                     projectId,
+                    orgId: org,
                     direction: direction ?? 'downstream',
                   }) as { data?: { results?: { raw?: string } } }
 
@@ -355,12 +370,13 @@ export function registerCodeTools(server: McpServer, env: Env) {
       name: z.string().describe('The name of the function, class, or symbol to explore'),
       repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL'),
       projectId: z.string().optional().describe('Project ID. Use repo name instead if possible.'),
+      org: z.string().optional().describe(ORG_DESC),
       file: z.string().optional().describe('File path to disambiguate when multiple symbols share the same name'),
     },
-    async ({ name, repo, projectId, file }) => {
+    async ({ name, repo, projectId, org, file }) => {
       try {
         const resolvedProject = await resolveRepo(repo, projectId)
-        const data = await callIntel('context', { name, projectId: resolvedProject, file }) as {
+        const data = await callIntel('context', { name, projectId: resolvedProject, orgId: org, file }) as {
           data?: { results?: { raw?: string } }
         }
 
@@ -412,11 +428,12 @@ export function registerCodeTools(server: McpServer, env: Env) {
       query: z.string().describe('Cypher query to run (e.g., MATCH (n:Function) RETURN n.name LIMIT 10)'),
       repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL'),
       projectId: z.string().optional().describe('Project ID. Use repo name instead if possible.'),
+      org: z.string().optional().describe(ORG_DESC),
     },
-    async ({ query, repo, projectId }) => {
+    async ({ query, repo, projectId, org }) => {
       try {
         const resolvedProject = await resolveRepo(repo, projectId)
-        const data = await callIntel('cypher', { query, projectId: resolvedProject })
+        const data = await callIntel('cypher', { query, projectId: resolvedProject, orgId: org })
         return {
           content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
         }
@@ -437,11 +454,13 @@ export function registerCodeTools(server: McpServer, env: Env) {
   // ── list_repos — discover indexed repositories and their project mapping ──
   server.tool(
     'cortex_list_repos',
-    'List all indexed repositories with project ID mapping. Use this to find which projectId to pass to code_search, code_context, code_impact, and cypher tools.',
-    {},
-    async () => {
+    'List the indexed repositories of your organization with their project ID mapping. Use this to see which repos a cross-repo search covers, and which name to pass as `repo:` to code_search, code_context, code_impact and cypher.',
+    {
+      org: z.string().optional().describe(ORG_DESC),
+    },
+    async ({ org }) => {
       try {
-        const response = await apiCall(env, '/api/intel/repos', {
+        const response = await apiCall(env, `/api/intel/repos${org ? `?orgId=${encodeURIComponent(org)}` : ''}`, {
           method: 'GET',
           signal: AbortSignal.timeout(10000),
         })
@@ -450,12 +469,22 @@ export function registerCodeTools(server: McpServer, env: Env) {
           throw new Error(`Failed to list repos: ${response.status}`)
         }
 
-        const data = await response.json() as { success?: boolean; data?: unknown }
+        const data = await response.json() as {
+          success?: boolean
+          data?: unknown
+          orgId?: string | null
+          organizations?: Array<{ id: string; name: string }>
+        }
         const repoData = data?.data
 
         const lines: string[] = ['📦 Indexed Repositories\n']
 
-        if (Array.isArray(repoData) && repoData.length > 0) {
+        if (data?.organizations && data.organizations.length > 0) {
+          // The hub could not tell which organization this caller is in, and there are several.
+          lines.push('Projects are isolated per organization, and this call could not be placed in one.')
+          lines.push('Call `cortex_session_start` for your repo first, or pass `org:`:\n')
+          for (const o of data.organizations) lines.push(`  • ${o.name} — \`org: "${o.id}"\``)
+        } else if (Array.isArray(repoData) && repoData.length > 0) {
           // Deduplicate by name
           const seen = new Map<string, typeof repoData[0]>()
           for (const repo of repoData) {
@@ -481,7 +510,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
           }
 
           lines.push('')
-          lines.push(`Total: ${seen.size} repositories indexed.`)
+          lines.push(`Total: ${seen.size} repositories indexed${data?.orgId ? ` in organization \`${data.orgId}\`` : ''}.`)
         } else {
           lines.push('No indexed repositories found.')
         }
@@ -491,6 +520,8 @@ export function registerCodeTools(server: McpServer, env: Env) {
         lines.push('  `cortex_code_search(query: "...", repo: "cortex-hub")`')
         lines.push('  `cortex_code_context(name: "MyClass", repo: "my-backend")`')
         lines.push('  No need to use `projectId` — just use the repo name.')
+        lines.push('  Omit `repo` to search every repo listed above at once — projects are isolated')
+        lines.push('  per organization, so that stays inside this one.')
 
         return {
           content: [{ type: 'text' as const, text: lines.join('\n') }],

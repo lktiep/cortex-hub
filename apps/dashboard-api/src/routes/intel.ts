@@ -49,6 +49,159 @@ async function callGitNexus(
   }
 }
 
+// ── Organization isolation ───────────────────────────────────────────────────────────
+//
+// Projects live inside an organization, and related repos are grouped by putting them in
+// the same one — a game's client, its server and its tools, for instance, so that one
+// question can be answered from all three. A multi-project search is therefore meant to
+// span an organization, never the whole instance. The fan-out below read
+// `SELECT ... FROM projects WHERE indexed_symbols > 0` and returned symbol names, file
+// paths and flow summaries from every other organization on the hub.
+//
+// The scope anchor, in order:
+//   1. an explicit orgId on the request
+//   2. the project the caller named (projectId, or scopeRepo when the search spans repos),
+//      looked up in the caller's own organization first
+//   3. the caller's own latest session (X-API-Key-Owner -> session_handoffs.project_id)
+//   4. the only organization that owns indexed projects, when there is exactly one
+//
+// If none of those resolve while several organizations exist, the fan-out is refused
+// rather than widened: an agent that cannot say where it is does not get to read
+// everywhere. A caller that names one project is a different question — see
+// projectOutsideScope below.
+
+type OrgRow = { id: string; name: string; slug: string }
+type ProjectRef = { id: string; slug: string; name: string; git_repo_url: string | null; org_id: string }
+
+/**
+ * The project a caller means by id, slug or name, optionally looked up inside one
+ * organization. The name match is a LIKE, so an exact id/slug/name wins over a partial
+ * one: "server" must not resolve to "Yulgang Server Tools" when "Server" exists.
+ */
+function findProject(ref: string, orgId?: string): ProjectRef | undefined {
+  return db.prepare(
+    `SELECT id, slug, name, git_repo_url, org_id FROM projects
+      WHERE (id = ?
+         OR slug = ? COLLATE NOCASE
+         OR name = ? COLLATE NOCASE
+         OR name LIKE ? COLLATE NOCASE)
+        AND (? IS NULL OR org_id = ?)
+      ORDER BY (id = ?) DESC,
+               (slug = ? COLLATE NOCASE) DESC,
+               (name = ? COLLATE NOCASE) DESC
+      LIMIT 1`
+  ).get(ref, ref, ref, `%${ref}%`, orgId ?? null, orgId ?? null, ref, ref, ref) as ProjectRef | undefined
+}
+
+/** org_id of a project named by id, slug or name. undefined when the DB knows no such project. */
+function orgOfProject(ref: string | undefined | null, withinOrg?: string): string | undefined {
+  if (!ref) return undefined
+  try {
+    return findProject(ref, withinOrg)?.org_id
+  } catch (error) {
+    logger.warn(`orgOfProject failed for "${ref}": ${String(error)}`)
+    return undefined
+  }
+}
+
+function orgsWithIndexedProjects(): OrgRow[] {
+  try {
+    return db.prepare(
+      `SELECT DISTINCT o.id AS id, o.name AS name, o.slug AS slug
+         FROM organizations o
+         JOIN projects p ON p.org_id = o.id
+        WHERE p.indexed_symbols > 0
+        ORDER BY o.name`
+    ).all() as OrgRow[]
+  } catch (error) {
+    logger.warn(`orgsWithIndexedProjects failed: ${String(error)}`)
+    return []
+  }
+}
+
+/**
+ * The organization the caller is currently working in, taken from its most recent session.
+ * The agent already declared its repo at cortex_session_start, so nothing has to be passed
+ * on every later call. An active session outranks a closed one, and session start bumps
+ * created_at when it reuses a row, so "most recent" means the last repo the agent opened.
+ */
+function orgOfActiveSession(apiKeyOwner: string | null | undefined): string | undefined {
+  if (!apiKeyOwner) return undefined
+  try {
+    const row = db.prepare(
+      `SELECT p.org_id AS org_id
+         FROM session_handoffs s
+         JOIN projects p ON p.id = s.project_id
+        WHERE (s.api_key_name = ? OR s.from_agent = ?)
+        ORDER BY (s.status = 'active') DESC, s.created_at DESC
+        LIMIT 1`
+    ).get(apiKeyOwner, apiKeyOwner) as { org_id?: string } | undefined
+    return row?.org_id ?? undefined
+  } catch (error) {
+    logger.warn(`orgOfActiveSession failed: ${String(error)}`)
+    return undefined
+  }
+}
+
+type OrgScope = {
+  orgId?: string
+  /** Where the scope came from — logged, and reported when a fan-out is refused. */
+  source: 'explicit' | 'project' | 'session' | 'only-org' | 'unresolved'
+  /** Populated when source is 'unresolved' and more than one organization has code. */
+  candidates?: OrgRow[]
+}
+
+function resolveOrgScope(hints: {
+  orgId?: string
+  projectId?: string
+  scopeRepo?: string
+  apiKeyOwner?: string | null
+}): OrgScope {
+  if (hints.orgId) return { orgId: hints.orgId, source: 'explicit' }
+
+  const session = orgOfActiveSession(hints.apiKeyOwner)
+  const ref = hints.projectId ?? hints.scopeRepo
+  if (ref) {
+    // Two organizations may each have a "server". If the caller's own organization has a
+    // match, that is the one it means.
+    if (session && orgOfProject(ref, session)) return { orgId: session, source: 'session' }
+    // Otherwise the project it named decides. The session is not used to refuse a named
+    // project: one API key can have sessions open in two organizations at once, and the
+    // latest of them says nothing about which one this call came from.
+    const named = orgOfProject(ref)
+    if (named) return { orgId: named, source: 'project' }
+  }
+
+  if (session) return { orgId: session, source: 'session' }
+
+  const orgs = orgsWithIndexedProjects()
+  if (orgs.length === 1 && orgs[0]) return { orgId: orgs[0].id, source: 'only-org' }
+
+  return { source: 'unresolved', candidates: orgs }
+}
+
+/**
+ * True when the caller named a project that belongs to a *different* organization than the
+ * one it is working in. A project the DB does not know is not refused: GitNexus also answers
+ * to legacy clone names that were never rows in `projects`, and those cannot be attributed
+ * to any organization — refusing them would break lookups that have nothing to do with
+ * isolation. What matters is that a project we *can* attribute is never read from outside
+ * the caller's own organization.
+ */
+function projectOutsideScope(ref: string | undefined, scope: OrgScope): boolean {
+  if (!ref || !scope.orgId) return false
+  if (orgOfProject(ref, scope.orgId)) return false
+  return orgOfProject(ref) !== undefined
+}
+
+function outsideScopeResponse(ref: string) {
+  return {
+    success: false as const,
+    error: `Project "${ref}" belongs to another organization.`,
+    hint: 'Projects are isolated per organization. Search within your own organization, or open that project from its own organization.',
+  }
+}
+
 /**
  * Resolve a projectId, slug, or human-readable name to GitNexus-compatible repo name candidates.
  * Returns ordered list of names to try — GitNexus may register repos by:
@@ -60,20 +213,15 @@ async function callGitNexus(
  * Supports case-insensitive matching and search by name column,
  * so agents can just say repo: "MyBackend" without needing a projectId.
  */
-function resolveRepoNames(projectId: string): string[] {
+function resolveRepoNames(projectId: string, orgId?: string): string[] {
   const candidates: string[] = []
 
-  let project: { id?: string; slug?: string; name?: string; git_repo_url?: string } | undefined
+  let project: ProjectRef | undefined
 
   try {
-    // Case-insensitive lookup: match by id, slug, OR name
-    project = db.prepare(
-      `SELECT id, slug, name, git_repo_url FROM projects
-       WHERE id = ?
-          OR slug = ? COLLATE NOCASE
-          OR name = ? COLLATE NOCASE
-          OR name LIKE ? COLLATE NOCASE`
-    ).get(projectId, projectId, projectId, `%${projectId}%`) as typeof project
+    // Case-insensitive lookup by id, slug or name. The name match is a LIKE, so without
+    // the org constraint "client" could resolve to another organization's project.
+    project = findProject(projectId, orgId)
   } catch (error) {
     logger.warn(`resolveRepoNames: DB lookup failed: ${error}`)
   }
@@ -146,12 +294,13 @@ async function callGitNexusWithFallback(
   tool: string,
   params: Record<string, unknown>,
   projectId?: string,
+  orgId?: string,
 ): Promise<unknown> {
   if (!projectId) {
     return callGitNexus(tool, params)
   }
 
-  const candidates = resolveRepoNames(projectId)
+  const candidates = resolveRepoNames(projectId, orgId)
   logger.info(`GitNexus fallback: trying candidates ${JSON.stringify(candidates)} for ${tool}`)
 
   let lastError: unknown = null
@@ -286,14 +435,27 @@ function formatSearchResults(query: string, data: unknown): string {
 intelRouter.post('/search', async (c) => {
   try {
     const body = await c.req.json()
-    const { query, limit, projectId, branch } = body as {
+    const { query, limit, projectId, branch, orgId, scopeRepo } = body as {
       query: string
       limit?: number
       projectId?: string
       branch?: string
+      orgId?: string
+      /** The repo the caller is working in. Anchors a multi-project search to its organization. */
+      scopeRepo?: string
     }
 
     if (!query) return c.json({ error: 'Query is required' }, 400)
+
+    const scope = resolveOrgScope({
+      orgId,
+      projectId,
+      scopeRepo,
+      apiKeyOwner: c.req.header('X-API-Key-Owner'),
+    })
+    if (projectOutsideScope(projectId, scope)) {
+      return c.json(outsideScopeResponse(projectId as string), 403)
+    }
 
     const params: Record<string, unknown> = {
       query,
@@ -306,12 +468,32 @@ intelRouter.post('/search', async (c) => {
 
     // ── No projectId: smart fan-out search across ALL indexed repos ──
     if (!projectId) {
-      logger.info(`Code search: fan-out across all repos for "${query}"`)
+      // Several organizations have code and nothing says which one the caller is in. Widening
+      // the search would read across the isolation boundary, so say what is missing instead.
+      if (!scope.orgId) {
+        const names = (scope.candidates ?? []).map(o => `${o.name} (orgId: ${o.id})`).join(', ')
+        return c.json({
+          success: true,
+          data: {
+            query,
+            limit: limit ?? 5,
+            source: 'gitnexus',
+            formatted: '⚠️ Multi-project search needs to know which organization to search.\n\n'
+              + 'Projects are isolated per organization, so a search across repos stays inside one.\n'
+              + `Organizations with indexed code: ${names || 'none'}\n\n`
+              + 'Pass `repo:` to search one project, or `org:` to search every repo in that organization.',
+            results: null,
+          },
+        })
+      }
+
+      logger.info(`Code search: fan-out across org ${scope.orgId} (via ${scope.source}) for "${query}"`)
       const allProjects = db.prepare(
         `SELECT id, slug, name, indexed_symbols FROM projects
          WHERE indexed_symbols > 0
+           AND org_id = ?
          ORDER BY indexed_symbols DESC`
-      ).all() as Array<{ id: string; slug: string; name: string; indexed_symbols: number }>
+      ).all(scope.orgId) as Array<{ id: string; slug: string; name: string; indexed_symbols: number }>
 
       if (allProjects.length === 0) {
         return c.json({
@@ -320,7 +502,7 @@ intelRouter.post('/search', async (c) => {
             query,
             limit: limit ?? 5,
             source: 'gitnexus',
-            formatted: '⚠️ No indexed repositories found. Index a project via Code Indexing in the dashboard.',
+            formatted: '⚠️ No indexed repositories found in this organization. Index a project via Code Indexing in the dashboard.',
             results: null,
           },
         })
@@ -545,7 +727,7 @@ intelRouter.post('/search', async (c) => {
     }
 
     // ── projectId provided: original single-repo search with fallback ──
-    const repoCandidates: string[] = resolveRepoNames(projectId)
+    const repoCandidates: string[] = resolveRepoNames(projectId, scope.orgId)
     params.repo = repoCandidates[0]
     logger.info(`Code search: trying candidates ${JSON.stringify(repoCandidates)} from "${projectId}"`)
 
@@ -602,19 +784,27 @@ intelRouter.post('/search', async (c) => {
 intelRouter.post('/impact', async (c) => {
   try {
     const body = await c.req.json()
-    const { target, direction, projectId } = body as {
+    const { target, direction, projectId, orgId } = body as {
       target: string
       direction?: string
       projectId?: string
+      orgId?: string
     }
     if (!target) return c.json({ error: 'Target is required' }, 400)
+
+    // A named project is only refused when we know the caller's organization and the
+    // project belongs to a different one. See projectOutsideScope.
+    const scope = resolveOrgScope({ orgId, projectId, apiKeyOwner: c.req.header('X-API-Key-Owner') })
+    if (projectOutsideScope(projectId, scope)) {
+      return c.json(outsideScopeResponse(projectId as string), 403)
+    }
 
     const params: Record<string, unknown> = {
       target,
       direction: direction ?? 'downstream',
     }
 
-    const results = await callGitNexusWithFallback('impact', params, projectId)
+    const results = await callGitNexusWithFallback('impact', params, projectId, scope.orgId)
 
     return c.json({
       success: true,
@@ -637,17 +827,25 @@ intelRouter.post('/impact', async (c) => {
 intelRouter.post('/context', async (c) => {
   try {
     const body = await c.req.json()
-    const { name, projectId, file } = body as {
+    const { name, projectId, file, orgId } = body as {
       name: string
       projectId?: string
       file?: string
+      orgId?: string
     }
     if (!name) return c.json({ error: 'Symbol name is required' }, 400)
+
+    // A named project is only refused when we know the caller's organization and the
+    // project belongs to a different one. See projectOutsideScope.
+    const scope = resolveOrgScope({ orgId, projectId, apiKeyOwner: c.req.header('X-API-Key-Owner') })
+    if (projectOutsideScope(projectId, scope)) {
+      return c.json(outsideScopeResponse(projectId as string), 403)
+    }
 
     const params: Record<string, unknown> = { name, content: true }
     if (file) params.file = file
 
-    let results = await callGitNexusWithFallback('context', params, projectId) as { raw?: string }
+    let results = await callGitNexusWithFallback('context', params, projectId, scope.orgId) as { raw?: string }
 
     // Post-process CLI hints
     if (results?.raw) {
@@ -679,7 +877,7 @@ intelRouter.post('/context', async (c) => {
           logger.info(`Context auto-disambiguate: resolved "${name}" + file "${file}" → uid "${uidMatch[1]}"`)
           try {
             const retryParams: Record<string, unknown> = { name: uidMatch[1], content: true }
-            const retryResults = await callGitNexusWithFallback('context', retryParams, projectId) as { raw?: string }
+            const retryResults = await callGitNexusWithFallback('context', retryParams, projectId, scope.orgId) as { raw?: string }
             if (retryResults?.raw && !retryResults.raw.includes('not found')) {
               retryResults.raw = rewriteGitNexusHints(retryResults.raw)
               results = retryResults
@@ -712,13 +910,22 @@ intelRouter.post('/context', async (c) => {
 /**
  * Fetch and parse GitNexus repositories, enriched with project DB metadata.
  */
-export async function getGitNexusRepos() {
+/**
+ * GitNexus repos, mapped to projects. With `scope.orgId` the listing is restricted to that
+ * organization: this is what agents call to discover what they can search, and it used to
+ * name every repo on the instance. Every repo is mapped against *all* projects first, so a
+ * repo that belongs to another organization is recognised as such and never passes for an
+ * unattributed one. Unattributed repos (legacy clones, repos registered by hand) are kept
+ * only when `keepUnattributed` says they cannot belong to anyone else.
+ */
+export async function getGitNexusRepos(scope: { orgId?: string; keepUnattributed?: boolean } = {}) {
   const gitNexusResult = await callGitNexus('list_repos', {})
 
   // Enrich with project DB data for project ID mapping
   const projects = db.prepare(
-    'SELECT id, slug, name, git_repo_url, indexed_symbols FROM projects'
-  ).all() as Array<{ id: string; slug: string; name: string; git_repo_url: string | null; indexed_symbols: number | null }>
+    'SELECT id, slug, name, git_repo_url, indexed_symbols, org_id FROM projects'
+  ).all() as Array<{ id: string; slug: string; name: string; git_repo_url: string | null; indexed_symbols: number | null; org_id: string }>
+  const orgOfProjectId = new Map(projects.map(p => [p.id, p.org_id]))
 
   // Build a lookup for matching by slug or repo URL basename
   const projectBySlug = new Map<string, typeof projects[0]>()
@@ -811,14 +1018,35 @@ export async function getGitNexusRepos() {
       }
     })
   }
-  return repos
+
+  if (!scope.orgId) return repos
+  return repos.filter(r => r.projectId
+    ? orgOfProjectId.get(r.projectId) === scope.orgId
+    : scope.keepUnattributed === true)
 }
 
 // ── List Repos: discover indexed repositories with project mapping ──
 intelRouter.get('/repos', async (c) => {
   try {
-    const repos = await getGitNexusRepos()
-    return c.json({ success: true, data: repos })
+    const scope = resolveOrgScope({
+      orgId: c.req.query('orgId') ?? undefined,
+      scopeRepo: c.req.query('repo') ?? undefined,
+      apiKeyOwner: c.req.header('X-API-Key-Owner'),
+    })
+    // Same rule as the fan-out: with several organizations and nothing to say which one the
+    // caller is in, name the organizations rather than every repo in all of them.
+    if (!scope.orgId && (scope.candidates?.length ?? 0) > 1) {
+      return c.json({
+        success: true,
+        data: [],
+        orgId: null,
+        organizations: scope.candidates,
+        hint: 'Projects are isolated per organization. Pass orgId to list one organization\'s repos.',
+      })
+    }
+    // With only one organization holding code, an unattributed clone cannot be anyone else's.
+    const repos = await getGitNexusRepos({ orgId: scope.orgId, keepUnattributed: scope.source === 'only-org' })
+    return c.json({ success: true, data: repos, orgId: scope.orgId ?? null })
   } catch (error) {
     logger.error(`List repos failed: ${String(error)}`)
     return c.json(
@@ -832,16 +1060,24 @@ intelRouter.get('/repos', async (c) => {
 intelRouter.post('/detect-changes', async (c) => {
   try {
     const body = await c.req.json()
-    const { scope, projectId } = body as {
+    const { scope, projectId, orgId } = body as {
       scope?: string
       projectId?: string
+      orgId?: string
+    }
+
+    // A named project is only refused when we know the caller's organization and the
+    // project belongs to a different one. See projectOutsideScope.
+    const orgScope = resolveOrgScope({ orgId, projectId, apiKeyOwner: c.req.header('X-API-Key-Owner') })
+    if (projectOutsideScope(projectId, orgScope)) {
+      return c.json(outsideScopeResponse(projectId as string), 403)
     }
 
     const params: Record<string, unknown> = {
       scope: scope ?? 'all',
     }
 
-    const results = await callGitNexusWithFallback('detect_changes', params, projectId)
+    const results = await callGitNexusWithFallback('detect_changes', params, projectId, orgScope.orgId)
     return c.json({ success: true, data: results })
   } catch (error) {
     logger.error(`Detect changes failed: ${String(error)}`)
@@ -856,16 +1092,24 @@ intelRouter.post('/detect-changes', async (c) => {
 intelRouter.post('/cypher', async (c) => {
   try {
     const body = await c.req.json()
-    const { query: cypherQuery, projectId } = body as {
+    const { query: cypherQuery, projectId, orgId } = body as {
       query: string
       projectId?: string
+      orgId?: string
     }
 
     if (!cypherQuery) return c.json({ error: 'Cypher query is required' }, 400)
 
+    // A named project is only refused when we know the caller's organization and the
+    // project belongs to a different one. See projectOutsideScope.
+    const scope = resolveOrgScope({ orgId, projectId, apiKeyOwner: c.req.header('X-API-Key-Owner') })
+    if (projectOutsideScope(projectId, scope)) {
+      return c.json(outsideScopeResponse(projectId as string), 403)
+    }
+
     const params: Record<string, unknown> = { query: cypherQuery }
 
-    const results = await callGitNexusWithFallback('cypher', params, projectId)
+    const results = await callGitNexusWithFallback('cypher', params, projectId, scope.orgId)
     return c.json({ success: true, data: results })
   } catch (error) {
     logger.error(`Cypher query failed: ${String(error)}`)
@@ -1014,16 +1258,24 @@ intelRouter.post('/sync-repos', async (c) => {
 intelRouter.post('/code-search', async (c) => {
   try {
     const body = await c.req.json()
-    const { query, projectId, branch, limit, file } = body as {
+    const { query, projectId, branch, limit, file, orgId } = body as {
       query: string
       projectId?: string
       branch?: string
       limit?: number
       file?: string
+      orgId?: string
     }
 
     if (!query) return c.json({ error: 'query is required' }, 400)
     if (!projectId) return c.json({ error: 'projectId is required for code search' }, 400)
+
+    // One Qdrant collection per project, so this route is single-project by construction —
+    // but the project it is handed still has to be one the caller may read.
+    const scope = resolveOrgScope({ orgId, projectId, apiKeyOwner: c.req.header('X-API-Key-Owner') })
+    if (projectOutsideScope(projectId, scope)) {
+      return c.json(outsideScopeResponse(projectId), 403)
+    }
 
     // Resolve collection name
     const collectionName = `cortex-project-${projectId}`
@@ -1157,21 +1409,28 @@ intelRouter.post('/code-search', async (c) => {
 intelRouter.post('/file-content', async (c) => {
   try {
     const body = await c.req.json()
-    const { projectId, file, startLine, endLine } = body as {
+    const { projectId, file, startLine, endLine, orgId } = body as {
       projectId: string
       file: string
       startLine?: number
       endLine?: number
+      orgId?: string
     }
 
     if (!projectId) return c.json({ error: 'projectId is required' }, 400)
     if (!file) return c.json({ error: 'file path is required' }, 400)
 
+    // Raw file contents are the most direct read there is — same org boundary as search.
+    const scope = resolveOrgScope({ orgId, projectId, apiKeyOwner: c.req.header('X-API-Key-Owner') })
+    if (projectOutsideScope(projectId, scope)) {
+      return c.json(outsideScopeResponse(projectId), 403)
+    }
+
     // Resolve any identifier (project ID, name, slug, URL) → actual directory
     // Uses the same resolveRepoNames logic as code_search/code_context
     let resolvedId = projectId
     if (!existsSync(join(REPOS_DIR, projectId))) {
-      const candidates = resolveRepoNames(projectId)
+      const candidates = resolveRepoNames(projectId, scope.orgId)
       for (const candidate of candidates) {
         if (existsSync(join(REPOS_DIR, candidate))) {
           resolvedId = candidate
