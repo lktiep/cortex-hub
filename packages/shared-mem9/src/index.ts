@@ -13,6 +13,17 @@ export { VectorStore } from './vector-store.js'
 export { LlmClient } from './llm.js'
 export { HistoryStore } from './history.js'
 export { TypeSafeClient, rerankByRelevance, noul, choice, score } from './typesafe.js'
+export {
+  tokenizeCode,
+  hashToken,
+  documentSparseVector,
+  querySparseVector,
+  averageTokenLength,
+  BM25_K1,
+  BM25_B,
+  SPARSE_VECTOR_NAME,
+} from './sparse.js'
+export type { SparseVector } from './sparse.js'
 export type { SqliteDb } from './history.js'
 export type {
   TypeSafeConfig,

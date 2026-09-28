@@ -191,6 +191,10 @@ importers:
         version: 4.75.0(@cloudflare/workers-types@4.20260317.1)
 
   benchmarks:
+    dependencies:
+      '@cortex/shared-mem9':
+        specifier: workspace:*
+        version: link:../packages/shared-mem9
     devDependencies:
       '@types/node':
         specifier: ^22.19.0

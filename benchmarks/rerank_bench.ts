@@ -25,6 +25,8 @@
  * rows were skipped, which is still a useful baseline.
  */
 
+import { CODE_SEARCH_GOLD } from './gold_code_search.js'
+
 const QDRANT_URL = process.env.QDRANT_URL ?? 'http://qdrant:6333'
 const OLLAMA_URL = process.env.OLLAMA_API_BASE ?? 'http://ollama:11434/v1'
 const TYPESAFE_URL = 'https://api.typesafe.ai/v1/systemone'
@@ -35,21 +37,6 @@ const OVERFETCH = 4
 const TOP_K = 5
 const CONCURRENCY = 8
 
-/** query -> the file that actually answers it */
-const GROUND_TRUTH: Array<[string, string]> = [
-  ['how are duplicate points removed when re-indexing a project', 'apps/dashboard-api/src/services/mem9-embedder.ts'],
-  ['delete qdrant points matching a payload filter', 'packages/shared-mem9/src/vector-store.ts'],
-  ['extract facts from a conversation and decide ADD UPDATE DELETE', 'packages/shared-mem9/src/prompts.ts'],
-  ['fallback chain retry on 429 and 503 with exponential backoff', 'packages/shared-mem9/src/llm.ts'],
-  ['which model does the embedding gateway route to', 'apps/dashboard-api/src/routes/llm.ts'],
-  ['verify an api key and check its permissions', 'apps/dashboard-api/src/routes/keys.ts'],
-  ['xoá knowledge document theo id', 'apps/dashboard-api/src/routes/knowledge.ts'],
-  ['decide if a finished task contains a reusable pattern worth saving', 'apps/dashboard-api/src/services/recipe-capture.ts'],
-  ['rewrite a low quality knowledge doc and bump its generation', 'apps/dashboard-api/src/services/knowledge-evolution.ts'],
-  ['assign a task to an agent and update its status', 'apps/dashboard-api/src/routes/conductor.ts'],
-  ['clone a git repository using a stored token', 'apps/dashboard-api/src/services/indexer.ts'],
-  ['start a session and return the project id', 'apps/dashboard-api/src/routes/sessions.ts'],
-]
 
 interface Chunk { file: string; chunkIndex: number; text: string }
 
@@ -181,8 +168,8 @@ async function main() {
 
   const corpus = await loadCorpus(`cortex-project-${projectId}`)
   const indexedFiles = new Set(corpus.map((c) => c.file))
-  const dropped = GROUND_TRUTH.filter(([, f]) => !indexedFiles.has(f))
-  const queries = GROUND_TRUTH.filter(([, f]) => indexedFiles.has(f))
+  const dropped = CODE_SEARCH_GOLD.filter(([, f]) => !indexedFiles.has(f))
+  const queries = CODE_SEARCH_GOLD.filter(([, f]) => indexedFiles.has(f))
 
   console.log(`corpus: ${corpus.length} chunks across ${indexedFiles.size} files`)
   if (dropped.length) {

@@ -5,6 +5,7 @@ import { createLogger } from '@cortex/shared-utils'
 import { db } from '../db/client.js'
 import { createEmbedder } from '../lib/embedder-factory.js'
 import { getReranker, RERANK_OVERFETCH } from '../lib/reranker.js'
+import { hasSparseVector, buildHybridQuery, HYBRID_FETCH_FLOOR } from '../lib/hybrid-search.js'
 import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
 
 const logger = createLogger('intel')
@@ -1038,17 +1039,38 @@ intelRouter.post('/code-search', async (c) => {
     const reranker = getReranker()
     const fetchLimit = reranker ? Math.min(searchLimit * RERANK_OVERFETCH, 50) : searchLimit
 
-    const res = await fetch(`${QDRANT_URL}/collections/${collectionName}/points/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        vector,
-        limit: fetchLimit,
-        with_payload: true,
-        filter: must.length > 0 ? { must } : undefined,
-      }),
-      signal: AbortSignal.timeout(10000),
-    })
+    // Fuse a BM25 arm in when the collection was indexed with one. Each arm
+    // returns its own ranking and Qdrant merges them by reciprocal rank, so a
+    // chunk that both arms like outranks one that only looks similar. Collections
+    // indexed before this existed have no sparse vector and search exactly as
+    // before.
+    const hybrid = (await hasSparseVector(QDRANT_URL, collectionName))
+      ? buildHybridQuery({
+          vector,
+          query,
+          limit: Math.max(fetchLimit, HYBRID_FETCH_FLOOR),
+          filter: must.length > 0 ? { must } : undefined,
+        })
+      : null
+
+    const res = hybrid
+      ? await fetch(`${QDRANT_URL}/collections/${collectionName}/points/query`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(hybrid),
+          signal: AbortSignal.timeout(10000),
+        })
+      : await fetch(`${QDRANT_URL}/collections/${collectionName}/points/search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            vector,
+            limit: fetchLimit,
+            with_payload: true,
+            filter: must.length > 0 ? { must } : undefined,
+          }),
+          signal: AbortSignal.timeout(10000),
+        })
 
     if (!res.ok) {
       const errText = await res.text()
@@ -1066,11 +1088,15 @@ intelRouter.post('/code-search', async (c) => {
       return c.json({ error: `Qdrant search failed: ${errText}` }, 500)
     }
 
+    // /points/search answers with an array, /points/query wraps it in `points`.
     const data = (await res.json()) as {
-      result?: Array<{ id: string; score: number; payload?: Record<string, unknown> }>
+      result?:
+        | Array<{ id: string; score: number; payload?: Record<string, unknown> }>
+        | { points?: Array<{ id: string; score: number; payload?: Record<string, unknown> }> }
     }
+    const points = Array.isArray(data.result) ? data.result : (data.result?.points ?? [])
 
-    const hits = (data.result ?? []).map((hit) => ({
+    const hits = points.map((hit) => ({
       score: hit.score,
       filePath: hit.payload?.file_path as string | undefined,
       chunkIndex: hit.payload?.chunk_index as number | undefined,
@@ -1106,7 +1132,9 @@ intelRouter.post('/code-search', async (c) => {
 
     return c.json({
       success: true,
-      data: { query, projectId, reranked, results },
+      // `retrieval` says what `score` means: a cosine similarity from the vector
+      // arm alone, or a reciprocal-rank-fusion score once both arms have voted.
+      data: { query, projectId, retrieval: hybrid ? 'hybrid' : 'vector', reranked, results },
     })
   } catch (error) {
     logger.error(`Code search (Qdrant) failed: ${String(error)}`)

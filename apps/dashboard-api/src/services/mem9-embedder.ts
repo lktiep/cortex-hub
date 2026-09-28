@@ -9,7 +9,13 @@
 import { readdirSync, readFileSync, statSync } from 'fs'
 import { join, extname, relative } from 'path'
 import { randomUUID } from 'crypto'
-import { Embedder, VectorStore } from '@cortex/shared-mem9'
+import {
+  Embedder,
+  VectorStore,
+  averageTokenLength,
+  documentSparseVector,
+  SPARSE_VECTOR_NAME,
+} from '@cortex/shared-mem9'
 import type { EmbedderConfig, ModelSlot, VectorStoreConfig } from '@cortex/shared-mem9'
 
 import { db } from '../db/client.js'
@@ -304,7 +310,43 @@ async function embedProjectInternal(
     return { status: 'error', chunks: 0, errors: [msg] }
   }
 
-  await vectorStore.ensureCollection(vectorSize)
+  // Turn on the lexical arm of hybrid search if this collection can carry it.
+  //
+  // Qdrant will not add a sparse vector to a collection that already exists, so
+  // the only way to gain one is to build the collection again — which throws away
+  // every branch stored in it, not just the one being indexed. Rebuild when this
+  // project+branch is the only tenant (it always is today), and otherwise leave
+  // the collection alone and index dense-only: search falls back by itself.
+  let otherBranchPoints = 0
+  try {
+    otherBranchPoints = await vectorStore.count({
+      must: [{ key: 'project_id', match: { value: projectId } }],
+      must_not: [{ key: 'branch', match: { value: branch } }],
+    })
+  } catch {
+    // A collection that does not exist yet cannot be counted; 0 is the answer.
+  }
+
+  const { sparseVectorEnabled } = await vectorStore.ensureCollection(vectorSize, {
+    sparseVectorName: SPARSE_VECTOR_NAME,
+    recreate: otherBranchPoints === 0,
+  })
+
+  if (sparseVectorEnabled) {
+    logger.info(`[${jobId}] Hybrid search enabled: writing BM25 sparse vectors`)
+  } else {
+    logger.warn(
+      `[${jobId}] Dense-only index: collection has no '${SPARSE_VECTOR_NAME}' sparse vector` +
+        (otherBranchPoints > 0 ? ` and holds ${otherBranchPoints} points from another branch` : ''),
+    )
+  }
+
+  // BM25 measures a document against the average length of the corpus it lives
+  // in, so the average has to be the one for this project, computed before the
+  // first point is written.
+  const averageLength = sparseVectorEnabled
+    ? averageTokenLength(allChunks.map((chunk) => chunk.content))
+    : 0
 
   // Drop this project+branch's previous points before writing new ones. Point
   // ids are random UUIDs, so without this every re-index appended a second full
@@ -366,6 +408,9 @@ async function embedProjectInternal(
       return [{
         id: randomUUID(),
         vector,
+        sparseVector: sparseVectorEnabled
+          ? documentSparseVector(chunk.content, averageLength)
+          : undefined,
         payload: {
           project_id: projectId,
           branch,
@@ -378,7 +423,7 @@ async function embedProjectInternal(
     })
 
     try {
-      await vectorStore.upsertBatch(points)
+      await vectorStore.upsertBatch(points, sparseVectorEnabled ? SPARSE_VECTOR_NAME : undefined)
       successCount += points.length
     } catch (err) {
       const msg = String(err).slice(0, 100)

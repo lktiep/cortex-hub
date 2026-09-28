@@ -6,12 +6,16 @@
   "description": "Reproducible retrieval-quality benchmarks for Cortex Hub knowledge_search",
   "scripts": {
     "bench:longmemeval": "tsx longmemeval_bench.ts",
-    "typecheck": "tsc --noEmit",
-    "bench:rerank": "tsx rerank_bench.ts"
+    "bench:rerank": "tsx rerank_bench.ts",
+    "bench:retrieval": "tsx retrieval_bench.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "tsx": "^4.21.0",
     "typescript": "^5.7.0",
     "@types/node": "^22.19.0"
+  },
+  "dependencies": {
+    "@cortex/shared-mem9": "workspace:*"
   }
 }

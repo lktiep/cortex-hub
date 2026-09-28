@@ -9,6 +9,8 @@ so that benchmark dependencies stay out of the main build.
 | Benchmark       | What it measures                                                 | Status      |
 | --------------- | ---------------------------------------------------------------- | ----------- |
 | LongMemEval-S   | `cortex_knowledge_search` retrieval quality (R@5 / R@10 / NDCG)  | Implemented |
+| Code retrieval  | `cortex_code_search` ordering: vector vs BM25 vs RRF hybrid       | Implemented |
+| Reranking       | Whether an LLM reranker improves that ordering                    | Implemented |
 | ConvoMem        | Conversational memory recall over long dialogues                 | Roadmap     |
 | LoCoMo          | Long conversation memory recall                                  | Roadmap     |
 | MemBench        | Broad memory stress-test across tasks                            | Roadmap     |
@@ -125,6 +127,84 @@ pnpm --filter @cortex/benchmarks bench:longmemeval --cleanup
 - Qdrant reachable from the API
 
 Dataset (~100 MB) is auto-downloaded and cached on first run.
+
+## Code retrieval — vector vs BM25 vs hybrid
+
+`retrieval_bench.ts` answers one question: does fusing a lexical arm into code
+search order results better than the vector arm alone? Recall@10 on cortex-hub's
+own index was already 1.000 while recall@1 was 0.533, so the gap to close was
+ordering, not retrieval.
+
+### How it works
+
+1. **Corpus** — scrolls the chunks back out of a live `cortex-project-*`
+   collection, so they are byte-for-byte the ones production serves. No
+   re-chunking, no drift.
+2. **Bench collection** — builds a throwaway collection carrying both arms
+   (`vectors` + `sparse_vectors: {text: {modifier: 'idf'}}`), embedding with the
+   production embedder and weighting with the production `documentSparseVector`.
+   A collection is needed because Qdrant cannot add a sparse vector to one that
+   already exists, so a project indexed before hybrid search landed cannot be
+   measured in place.
+3. **Three modes, same corpus and same query embedding** — dense search, sparse
+   alone, and both arms merged by reciprocal rank fusion inside Qdrant.
+4. **Cleanup** — the collection is deleted even if the run throws, unless
+   `--keep`.
+
+The gold set lives in `gold_code_search.ts` and is shared with the rerank bench.
+It is **hand-written**, and deliberately so: generating queries from each chunk's
+own leading comment produced 120 questions that rewarded literal matching, where
+BM25 scored r@1 0.775 against vector's 0.533. That measures how the questions
+were made, not how the retrievers rank.
+
+### Results — cortex-hub's own index, `all-minilm`, n = 15
+
+| Mode | r@1 | r@3 | r@5 | r@10 | MRR | Cost per query |
+|---|---:|---:|---:|---:|---:|---|
+| vector | 0.533 | 0.667 | 0.800 | 1.000 | 0.656 | ~12 ms, 0 tokens |
+| bm25 | 0.267 | 0.667 | 0.933 | 1.000 | 0.530 | ~8 ms, 0 tokens |
+| **hybrid (RRF)** | **0.600** | **0.733** | 0.800 | 1.000 | **0.703** | **~8 ms, 0 tokens** |
+| vector + LLM rerank | no change to r@1 | — | — | — | — | +2.1 s, 1,359 tokens |
+| bge-m3 dense | worse than all-minilm | — | — | — | — | 226x the query latency |
+
+Hybrid is what shipped: it is the only option that moved r@1, and it costs a
+second Qdrant prefetch arm rather than a model call. Per query it improved 3
+orderings and regressed 0. Note that BM25 alone is the *worst* of the three at
+r@1 — the win is in the fusion, not in the lexical arm, and anyone tempted to
+replace vector search with BM25 on the strength of "keywords work better for
+code" should read that row first. The LLM reranker does not move r@1 at all for
+two seconds and 1.4k tokens per query, and is not even deterministic between runs
+at temperature 0. bge-m3 is *worse* here despite being the larger model.
+
+The dense numbers were cross-checked against `/points/search` on the live
+production collection with the same 15 queries: identical rank for every query,
+which is how the harness is known to measure the thing production serves rather
+than an artefact of its own bench collection.
+
+Hybrid needs a collection created with the sparse vector, so it activates on
+re-index. Search reports which path served a query as `retrieval: 'hybrid' |
+'vector'` — a collection indexed before this landed keeps behaving exactly as it
+did.
+
+### How to run
+
+```bash
+# from inside the cortex-api container, where qdrant and ollama resolve
+tsx retrieval_bench.ts --project <projectId>
+tsx retrieval_bench.ts --project <projectId> --model bge-m3 --keep
+
+# or against a local stack
+pnpm --filter @cortex/benchmarks bench:retrieval -- --project <projectId>
+```
+
+| Flag | Description |
+|---|---|
+| `--project ID` | Which `cortex-project-<ID>` collection to read the corpus from (required) |
+| `--model NAME` | Embedding model for the dense arm (default: `all-minilm`) |
+| `--keep` | Leave the bench collection behind for inspection |
+
+The per-query rank table it prints is the part worth reading: an average can stay
+flat while a mode fixes as many orderings as it breaks.
 
 ## Roadmap
 
