@@ -281,7 +281,7 @@ services:
       CLIPROXY_URL: http://llm-proxy:8317
       GITNEXUS_URL: http://gitnexus:4848
       MCP_SERVER_NAME: "cortex-hub"
-      MCP_SERVER_VERSION: "0.7.0"
+      MCP_SERVER_VERSION: "0.8.0"
       API_KEYS: ${MCP_API_KEYS:-}
     depends_on:
       cortex-api:
