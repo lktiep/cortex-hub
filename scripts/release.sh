@@ -2,7 +2,10 @@
 # ============================================================
 # release.sh — cut a stable Cortex Hub release
 #
-#   ./scripts/release.sh [patch|minor|major]      (default: minor)
+#   ./scripts/release.sh [patch|minor|major|current]      (default: minor)
+#
+# `current` releases the version already in version.json without claiming a
+# new one — for a release run whose version was claimed but whose builds failed.
 #
 # CI owns the version number. Every merge to master already claims the next
 # patch version in version.json and publishes images under it, so bumping and
@@ -20,8 +23,8 @@ set -euo pipefail
 
 BUMP="${1:-minor}"
 case "$BUMP" in
-  patch|minor|major) ;;
-  *) echo "Usage: $0 [patch|minor|major]" >&2; exit 1 ;;
+  patch|minor|major|current) ;;
+  *) echo "Usage: $0 [patch|minor|major|current]" >&2; exit 1 ;;
 esac
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -35,7 +38,13 @@ case "$BUMP" in
   patch) NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
   minor) NEXT="${MAJOR}.$((MINOR + 1)).0" ;;
   major) NEXT="$((MAJOR + 1)).0.0" ;;
+  current) NEXT="${CURRENT}" ;;
 esac
+
+if [ "$BUMP" = "current" ] && gh release view "v${NEXT}" > /dev/null 2>&1; then
+  echo "v${NEXT} is already released; pick patch, minor or major." >&2
+  exit 1
+fi
 
 # A run still queued would claim a version first and shift this one.
 if gh run list --workflow docker.yml --branch master --limit 5 --json status \

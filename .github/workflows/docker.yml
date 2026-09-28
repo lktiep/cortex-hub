@@ -21,9 +21,12 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Which part of the version to claim
+        # `current` claims nothing and builds under the version already in
+        # version.json: the way to finish a release whose builds failed after
+        # its version was claimed, without skipping a number.
+        description: Which part of the version to claim (current = rebuild the claimed one)
         type: choice
-        options: [patch, minor, major]
+        options: [patch, minor, major, current]
         default: patch
       stable:
         description: Publish as a stable release (git tag, GitHub Release, :stable images)
@@ -68,6 +71,7 @@ jobs:
       # The commit every image is built from: the release commit, so that
       # v<version> in git, in the registry and in /health name the same tree.
       sha: ${{ steps.claim.outputs.sha }}
+      short_sha: ${{ steps.claim.outputs.short_sha }}
       date: ${{ steps.claim.outputs.date }}
     steps:
       - uses: actions/checkout@v4
@@ -94,12 +98,15 @@ jobs:
             {
               echo "version=${VERSION}"
               echo "sha=$(git rev-parse HEAD)"
+              echo "short_sha=$(git rev-parse --short=7 HEAD)"
               echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             } >> "$GITHUB_OUTPUT"
             exit 0
           }
           for attempt in 1 2 3; do
-            scripts/bump-version.sh "${BUMP}"
+            if [ "${BUMP}" != "current" ]; then
+              scripts/bump-version.sh "${BUMP}"
+            fi
             VERSION=$(read_version)
             git add version.json
             if git diff --cached --quiet; then
@@ -140,14 +147,19 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          # Tag and label from the checked-out release commit, not github.sha.
-          context: git
+          # The sha tag and revision label name the release commit, not
+          # github.sha. Not `context: git`: it reads the ref from the checkout,
+          # and a checkout of a commit is a detached HEAD it refuses
+          # ("Cannot find detached HEAD ref"), which failed every build.
           images: ${{ env.REGISTRY }}/lktiep/cortex-api
           tags: |
             type=raw,value=latest
             type=raw,value=v${{ needs.version.outputs.version }}
             type=raw,value=stable,enable=${{ inputs.stable == true }}
-            type=sha
+            type=raw,value=sha-${{ needs.version.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.version.outputs.sha }}
+            org.opencontainers.image.version=v${{ needs.version.outputs.version }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -186,14 +198,19 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          # Tag and label from the checked-out release commit, not github.sha.
-          context: git
+          # The sha tag and revision label name the release commit, not
+          # github.sha. Not `context: git`: it reads the ref from the checkout,
+          # and a checkout of a commit is a detached HEAD it refuses
+          # ("Cannot find detached HEAD ref"), which failed every build.
           images: ${{ env.REGISTRY }}/lktiep/cortex-hub-web
           tags: |
             type=raw,value=latest
             type=raw,value=v${{ needs.version.outputs.version }}
             type=raw,value=stable,enable=${{ inputs.stable == true }}
-            type=sha
+            type=raw,value=sha-${{ needs.version.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.version.outputs.sha }}
+            org.opencontainers.image.version=v${{ needs.version.outputs.version }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -232,14 +249,19 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          # Tag and label from the checked-out release commit, not github.sha.
-          context: git
+          # The sha tag and revision label name the release commit, not
+          # github.sha. Not `context: git`: it reads the ref from the checkout,
+          # and a checkout of a commit is a detached HEAD it refuses
+          # ("Cannot find detached HEAD ref"), which failed every build.
           images: ${{ env.REGISTRY }}/lktiep/cortex-mcp
           tags: |
             type=raw,value=latest
             type=raw,value=v${{ needs.version.outputs.version }}
             type=raw,value=stable,enable=${{ inputs.stable == true }}
-            type=sha
+            type=raw,value=sha-${{ needs.version.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.version.outputs.sha }}
+            org.opencontainers.image.version=v${{ needs.version.outputs.version }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -278,14 +300,19 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
-          # Tag and label from the checked-out release commit, not github.sha.
-          context: git
+          # The sha tag and revision label name the release commit, not
+          # github.sha. Not `context: git`: it reads the ref from the checkout,
+          # and a checkout of a commit is a detached HEAD it refuses
+          # ("Cannot find detached HEAD ref"), which failed every build.
           images: ${{ env.REGISTRY }}/lktiep/cortex-gitnexus
           tags: |
             type=raw,value=latest
             type=raw,value=v${{ needs.version.outputs.version }}
             type=raw,value=stable,enable=${{ inputs.stable == true }}
-            type=sha
+            type=raw,value=sha-${{ needs.version.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ needs.version.outputs.sha }}
+            org.opencontainers.image.version=v${{ needs.version.outputs.version }}
 
       - uses: docker/setup-buildx-action@v3
 
