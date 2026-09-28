@@ -16,6 +16,22 @@ on:
       - 'version.json'
   workflow_dispatch:
 
+# ── One master build at a time ──
+#
+# Two merges landed within ten seconds and both builds pushed `:latest`. They
+# finished in the other order, so `:latest` ended up carrying the *older* commit
+# while both runs reported success, and watchtower deployed code that was missing
+# the change merged after it. The commit a moving tag points at cannot be decided
+# by whichever build happens to finish last.
+#
+# Queueing rather than cancelling, because each run also claims a version and
+# pushes an immutable tag under it: a cancelled run would leave a claimed version
+# with no images behind it. Runs start in trigger order, so the newest commit
+# builds last and `:latest` ends up where it belongs.
+concurrency:
+  group: docker-images-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
 
