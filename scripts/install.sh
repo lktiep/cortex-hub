@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HOOKS_VERSION=7
-HOOKS_MINOR=4
+HOOKS_MINOR=5
 MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
@@ -982,8 +982,10 @@ HOOKEOF
   ok "Hooks: all 5 hooks installed (v${HOOKS_VERSION}.${HOOKS_MINOR})"
 
   # ── settings.json ──
-  # Call bash directly — works on macOS (native) and Windows (Git Bash)
-  # No node/PS dependency. .sh scripts have internal path resolution via git.
+  # Call bash directly — works on macOS (native) and Windows (Git Bash).
+  # The path is anchored to CLAUDE_PROJECT_DIR because Claude Code runs a hook in the
+  # shell cwd, which follows every cd: a relative path failed with No such file in a
+  # subdirectory, and Claude Code treats that as non-blocking, so every gate opened.
   cat > .claude/settings.json << 'EOF'
 {
   "hooks": {
@@ -993,7 +995,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/session-init.sh"
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-init.sh\""
           }
         ]
       }
@@ -1004,7 +1006,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/enforce-session.sh"
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-session.sh\""
           }
         ]
       },
@@ -1013,7 +1015,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/enforce-commit.sh"
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/enforce-commit.sh\""
           }
         ]
       }
@@ -1024,7 +1026,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/track-quality.sh"
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/track-quality.sh\""
           }
         ]
       }
@@ -1035,7 +1037,7 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/session-end-check.sh"
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-end-check.sh\""
           }
         ]
       }

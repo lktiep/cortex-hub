@@ -405,6 +405,40 @@ check "hub-mcp reads m.memory"              0 "$(grep -q 'm\.memory' "$MEM" && e
 check "and the shared type still says memory" 0 "$(grep -q '^  memory: string$' "$REPO/packages/shared-mem9/src/types.ts" && echo 0 || echo 1)"
 check "an empty body is named, not blank"   0 "$(grep -q 'stored with an empty body' "$MEM" && echo 0 || echo 1)"
 
+echo "hook commands must resolve from any cwd, not only the repo root"
+# Claude Code runs a hook in the Bash tool's cwd, which follows every cd. Registered as
+# `bash .claude/hooks/x.sh`, a hook run below the root failed with "No such file", which
+# Claude Code reports as a non-blocking error and then lets the tool call through: every
+# gate was open for as long as the agent's shell sat in a subdirectory.
+SB=$(mktemp -d); mkdir -p "$SB/apps/web" "$SB/.cortex/.session-state"; cp -R "$REPO/.claude" "$SB/.claude"
+hook_cmds() { python3 -c 'import json,sys
+for evs in json.load(open(sys.argv[1]))["hooks"].values():
+    for m in evs:
+        for h in m["hooks"]: print(h["command"])' "$1"; }
+run_registered() {  # $1 = command as registered, stdin = payload; prints "rc|output"
+  local out rc
+  out=$(cd "$SB/apps/web" && CLAUDE_PROJECT_DIR="$SB" CORTEX_HUB_API_URL=http://127.0.0.1:9 sh -c "$1" 2>&1); rc=$?
+  printf '%s|%s' "$rc" "$out"
+}
+not_found() {
+  case "$1" in
+    127\|*|*'No such file'*) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
+while IFS= read -r cmd; do
+  name=$(printf '%s' "$cmd" | sed -E 's|.*/([a-z-]+\.sh).*|\1|')
+  res=$(printf '%s' "$(tool_payload Edit)" | run_registered "$cmd")
+  check "$name found from a subdirectory"   0 "$(not_found "$res")"
+done < <(hook_cmds "$REPO/.claude/settings.json")
+EDIT_CMD=$(hook_cmds "$REPO/.claude/settings.json" | grep enforce-session)
+check "and still blocks Edit from there"    2 "$(printf '%s' "$(tool_payload Edit)" | run_registered "$EDIT_CMD" | cut -d'|' -f1)"
+check "the old relative form did not"       127 "$(printf '%s' "$(tool_payload Edit)" | run_registered 'bash .claude/hooks/enforce-session.sh' | cut -d'|' -f1)"
+rm -rf "$SB"
+# The installer writes settings.json from its own heredoc, so the two must not drift.
+INSTALLED=$(awk "/cat > .claude\/settings.json << 'EOF'/{f=1;next} f&&/^EOF\$/{exit} f" "$REPO/scripts/install.sh")
+check "install.sh writes the same settings.json" 0 "$([ "$INSTALLED" = "$(cat "$REPO/.claude/settings.json")" ] && echo 0 || echo 1)"
+
 echo
 echo "passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]
