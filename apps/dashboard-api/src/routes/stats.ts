@@ -624,71 +624,155 @@ statsRouter.get('/tool-analytics', (c) => {
   }
 })
 
+// ── Workflow-quality helpers ──────────────────────────────────────────────────────────────
+// created_at is written as strftime('%Y-%m-%dT%H:%M:%SZ'), so a cutoff has to carry the T and
+// the Z or the string comparison silently widens: 'T' sorts above every digit, so a cutoff of
+// "2026-09-28 11:00:00" also matches 09:00 on the same day, and a two-hour window became a day.
+function isoCutoff(msAgo: number): string {
+  return new Date(Date.now() - msAgo).toISOString().replace(/\.\d+Z$/, 'Z')
+}
+
+// Words that carry no retrieval signal, so two queries differing only in these are the same query.
+const QUERY_STOP_WORDS = new Set([
+  'the', 'a', 'an', 'of', 'in', 'to', 'for', 'and', 'or', 'is', 'are', 'was', 'how', 'what',
+  'where', 'which', 'that', 'this', 'it', 'on', 'with', 'do', 'does', 'did', 'we', 'i', 'my',
+])
+
+function queryTokens(query: string): Set<string> {
+  return new Set(
+    query.toLowerCase().split(/[^a-z0-9_]+/).filter(w => w.length > 2 && !QUERY_STOP_WORDS.has(w))
+  )
+}
+
+// Two searches that share half their meaningful words return nearly the same hits: recall@10 on
+// this index is 1.000 (benchmarks/retrieval_bench.ts, n=15), so a reword cannot surface a file
+// the first call missed. Spotting the reword is what lets the hint say something useful.
+function isReword(a: Set<string>, b: Set<string>): boolean {
+  if (a.size === 0 || b.size === 0) return false
+  let shared = 0
+  for (const token of a) if (b.has(token)) shared++
+  return shared / Math.min(a.size, b.size) >= 0.5
+}
+
+function loggedQueries(rows: Array<{ tool: string; params: string | null }>, toolFragment: string): string[] {
+  const queries: string[] = []
+  for (const row of rows) {
+    if (!row.tool.includes(toolFragment)) continue
+    try {
+      const query = (JSON.parse(row.params ?? '{}') as { query?: unknown }).query
+      if (typeof query === 'string' && query.trim()) queries.push(query)
+    } catch {
+      // params is free-form text for some tools; a row we cannot parse simply is not counted
+    }
+  }
+  return queries
+}
+
+// Returns how many of these searches were rewordings of an earlier one in the same list.
+function countRewords(queries: string[]): number {
+  const distinct: Array<Set<string>> = []
+  let rewords = 0
+  for (const query of queries) {
+    const tokens = queryTokens(query)
+    if (distinct.some(seen => isReword(seen, tokens))) rewords++
+    else distinct.push(tokens)
+  }
+  return rewords
+}
+
 // ── Session Compliance Check ──
-// Returns which Cortex tools were used/missed in a session, with a compliance score
+// Scores how the session was worked, not how many different tools it touched.
+//
+// The previous version was usedTools / 13 across five categories, which made the best strategy
+// for an A grade "call every tool once" — including cortex_cypher and cortex_code_impact on
+// files that needed neither. This scores the things that actually change the outcome: recall
+// before editing, one search read properly instead of three rewordings, gates reported, session
+// closed. A signal that does not apply to a session is dropped from the denominator rather than
+// counted against it.
 statsRouter.get('/session-compliance/:sessionId', (c) => {
   const sessionId = c.req.param('sessionId')
 
   try {
-    // Get session info to find agent_id and time range
     const session = db.prepare(
       'SELECT id, from_agent, created_at, status FROM session_handoffs WHERE id = ?'
     ).get(sessionId) as { id: string; from_agent: string; created_at: string; status: string } | undefined
 
     if (!session) return c.json({ error: 'Session not found' }, 404)
 
-    // Get all tool calls made by this agent since session started
-    const toolCalls = db.prepare(`
-      SELECT DISTINCT tool FROM query_logs 
+    const calls = db.prepare(`
+      SELECT tool, params, status, created_at FROM query_logs
       WHERE agent_id = ? AND created_at >= ?
-      ORDER BY tool
-    `).all(session.from_agent, session.created_at) as Array<{ tool: string }>
+      ORDER BY id ASC
+    `).all(session.from_agent, session.created_at) as Array<{
+      tool: string; params: string | null; status: string; created_at: string
+    }>
 
-    const usedTools = new Set(toolCalls.map(t => t.tool))
+    const usedTools = new Set(calls.map(c2 => c2.tool))
+    const has = (fragment: string) => calls.some(c2 => c2.tool.includes(fragment))
 
-    const recommendedTools = {
-      discovery: ['cortex_code_search', 'cortex_code_context', 'cortex_cypher'],
-      safety: ['cortex_code_impact', 'cortex_detect_changes'],
-      learning: ['cortex_knowledge_search', 'cortex_memory_search'],
-      contribution: ['cortex_knowledge_store', 'cortex_memory_store'],
-      lifecycle: ['cortex_session_start', 'cortex_session_end', 'cortex_quality_report'],
+    const codeSearches = loggedQueries(calls, 'code_search')
+    const rewords = countRewords(codeSearches)
+    const failedCalls = calls.filter(c2 => c2.status && c2.status !== 'ok')
+
+    // Recall belongs at the start of the session — after twenty calls it is archaeology, not context.
+    const firstFew = calls.slice(0, 4).map(c2 => c2.tool)
+    const recalledEarly = firstFew.some(t => t.includes('knowledge_search') || t.includes('memory_search'))
+
+    type Signal = { id: string; weight: number; earned: number; detail: string }
+    const signals: Signal[] = [
+      {
+        id: 'session-opened', weight: 10, earned: has('session_start') ? 1 : 0,
+        detail: 'cortex_session_start ties the work to a project and a branch',
+      },
+      {
+        id: 'recalled-early', weight: 20, earned: recalledEarly ? 1 : 0,
+        detail: 'knowledge/memory recall in the first few calls, before any decisions were re-made',
+      },
+      {
+        id: 'used-discovery', weight: 20,
+        earned: has('code_search') || has('code_context') || has('cypher') ? 1 : 0,
+        detail: 'the codebase was located with the index rather than guessed at',
+      },
+      {
+        id: 'reported-quality', weight: 10, earned: has('quality_report') ? 1 : 0,
+        detail: 'build/typecheck/lint results reached the hub',
+      },
+      {
+        id: 'session-closed', weight: 15, earned: has('session_end') ? 1 : 0,
+        detail: 'the session was closed, so the next one can pick it up',
+      },
+    ]
+
+    // Search discipline only applies to a session that searched at all.
+    if (codeSearches.length > 0) {
+      signals.push({
+        id: 'search-discipline', weight: 25,
+        earned: Math.max(0, 1 - rewords / codeSearches.length),
+        detail: `${codeSearches.length} code search(es), ${rewords} of them a rewording of an earlier one`,
+      })
     }
 
-    // Calculate per-category compliance
-    const categories = Object.entries(recommendedTools).map(([category, tools]) => {
-      const used = tools.filter(t => usedTools.has(t))
-      const missing = tools.filter(t => !usedTools.has(t))
-      return {
-        category,
-        used,
-        missing,
-        score: tools.length > 0 ? Math.round((used.length / tools.length) * 100) : 100,
-      }
-    })
+    const totalWeight = signals.reduce((sum, sig) => sum + sig.weight, 0)
+    const earnedWeight = signals.reduce((sum, sig) => sum + sig.weight * sig.earned, 0)
+    const overallScore = Math.round((earnedWeight / totalWeight) * 100)
 
-    // Overall compliance score
-    const totalRecommended = Object.values(recommendedTools).flat()
-    const totalUsed = totalRecommended.filter(t => usedTools.has(t))
-    const overallScore = Math.round((totalUsed.length / totalRecommended.length) * 100)
-
-    // Generate improvement hints
     const hints: string[] = []
-    const missingDiscovery = categories.find(c => c.category === 'discovery')?.missing ?? []
-    const missingSafety = categories.find(c => c.category === 'safety')?.missing ?? []
-    const missingLearning = categories.find(c => c.category === 'learning')?.missing ?? []
-    const missingContribution = categories.find(c => c.category === 'contribution')?.missing ?? []
-
-    if (missingDiscovery.length > 0) {
-      hints.push(`🔍 Use ${missingDiscovery.join(', ')} BEFORE grep/find for AST-aware search`)
+    if (rewords > 0) {
+      hints.push(
+        `🔁 ${rewords} of ${codeSearches.length} code searches reworded an earlier query. ` +
+        'Recall@10 on this index is 1.000 — a reword returns the same set. Read all ten hits, ' +
+        'then ask a different question or switch tool (cortex_code_context for a symbol, rg for an exact literal).'
+      )
     }
-    if (missingSafety.length > 0) {
-      hints.push(`🛡️ Use ${missingSafety.join(', ')} before editing core files to check blast radius`)
+    if (!recalledEarly) {
+      hints.push('📚 Run cortex_knowledge_search + cortex_memory_search at the start of the session, not after the decisions are made.')
     }
-    if (missingLearning.length > 0) {
-      hints.push(`📚 Use ${missingLearning.join(', ')} when encountering errors — someone may have solved it already`)
+    const firstFailure = failedCalls[0]
+    if (firstFailure && !has('knowledge_store')) {
+      hints.push(`🧩 ${failedCalls.length} tool call(s) failed this session (${firstFailure.tool}). If you worked out why, cortex_knowledge_store it so nobody debugs it twice.`)
     }
-    if (missingContribution.length > 0) {
-      hints.push(`💡 Use ${missingContribution.join(', ')} to share your findings with other agents`)
+    if (!has('session_end')) {
+      hints.push('🔚 Close the session with cortex_session_end so its summary is searchable next time.')
     }
 
     return c.json({
@@ -696,10 +780,10 @@ statsRouter.get('/session-compliance/:sessionId', (c) => {
       agent: session.from_agent,
       overallScore,
       grade: overallScore >= 80 ? 'A' : overallScore >= 60 ? 'B' : overallScore >= 40 ? 'C' : 'D',
+      signals,
+      searches: { total: codeSearches.length, rewords },
+      failedCalls: failedCalls.length,
       toolsUsed: [...usedTools],
-      totalUsed: totalUsed.length,
-      totalRecommended: totalRecommended.length,
-      categories,
       hints,
     })
   } catch (error) {
@@ -708,78 +792,83 @@ statsRouter.get('/session-compliance/:sessionId', (c) => {
 })
 
 // ── Cortex Hints Engine ──
-// Returns contextual hints based on which tools an agent has/hasn't used recently
+// One or two hints appended to every MCP tool response — the only steering channel that reaches
+// every client regardless of its local rule files. That makes it expensive: a hint that fires on
+// every call is a hint agents learn to skip. So it nags about outcomes, not about tool coverage.
 statsRouter.get('/hints/:agentId', (c) => {
   const agentId = c.req.param('agentId')
-  const currentTool = c.req.query('currentTool')
+  const currentTool = c.req.query('currentTool') ?? ''
 
   try {
-    // Get tools used by this agent in the last 2 hours (current session window)
-    const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19)
-    const recentTools = db.prepare(`
-      SELECT DISTINCT tool FROM query_logs 
+    const calls = db.prepare(`
+      SELECT tool, params, status FROM query_logs
       WHERE agent_id = ? AND created_at >= ?
-    `).all(agentId, since) as Array<{ tool: string }>
+      ORDER BY id ASC
+    `).all(agentId, isoCutoff(2 * 60 * 60 * 1000)) as Array<{
+      tool: string; params: string | null; status: string
+    }>
 
-    const used = new Set(recentTools.map(t => t.tool))
+    const has = (fragment: string) => calls.some(c2 => c2.tool.includes(fragment))
     const hints: string[] = []
 
-    // Context-aware hints based on current tool and what's missing
-    if (!used.has('cortex_session_start')) {
-      hints.push('⚠️ Start your session first: cortex_session_start tracks your work and enables compliance.')
+    if (!has('session_start')) {
+      hints.push('⚠️ Call cortex_session_start first — without it nothing you do is attached to a project, and the hooks block edits.')
     }
 
-    if (currentTool === 'cortex_code_search' || currentTool === 'cortex_cypher' || currentTool === 'cortex_code_context') {
-      // Agent is doing code discovery — remind about impact checking
-      if (!used.has('cortex_code_impact')) {
-        hints.push('🛡️ Before editing, run cortex_code_impact to check blast radius of your changes.')
-      }
-      // P2: Suggest alternatives when search may fail
-      if (currentTool === 'cortex_code_search' && !used.has('cortex_code_context')) {
-        hints.push('🔍 If code_search returns empty (repo has 0 flows), try cortex_code_context or cortex_cypher for symbol-level queries.')
-      }
+    if (currentTool.includes('code_search')) {
+      const queries = loggedQueries(calls, 'code_search')
+      // The call being answered is already logged, so the last query is this one.
+      const current = queries[queries.length - 1]
+      const earlier = queries.slice(0, -1)
+      const isReworded = current !== undefined
+        && earlier.some(q => isReword(queryTokens(q), queryTokens(current)))
 
-      if (currentTool === 'cortex_code_context' && !used.has('cortex_list_repos')) {
-        hints.push('📦 If you get "symbol not found", use cortex_list_repos to find the correct projectId for your repository.')
-      }
-      if (currentTool === 'cortex_cypher') {
-        hints.push('💡 Cypher tips: Use labels(n) for type, n.name and n.filePath as properties. Example: MATCH (n) WHERE n.name CONTAINS "X" RETURN n.name, labels(n) LIMIT 20')
-      }
-    }
-
-    if (currentTool === 'cortex_list_repos') {
-      // Agent is discovering repos — suggest next code tools
-      hints.push('🔍 Now use the projectId from the list with cortex_code_search, cortex_code_context, or cortex_cypher.')
-    }
-
-    if (currentTool === 'cortex_quality_report') {
-      // Agent is reporting quality — check if they used discovery/safety tools
-      if (!used.has('cortex_code_search') && !used.has('cortex_cypher')) {
-        hints.push('🔍 You reported quality without using code search tools. Try cortex_code_search or cortex_cypher next time for better code understanding.')
-      }
-      if (!used.has('cortex_knowledge_store') && !used.has('cortex_memory_store')) {
-        hints.push('💡 Consider using cortex_knowledge_store or cortex_memory_store to share your findings.')
+      if (isReworded) {
+        hints.push(
+          '🔁 That is a rewording of a query you already ran, and it returns the same set: ' +
+          'recall@10 on this index is 1.000, so nothing new can appear. Read all ten hits from the ' +
+          'first call. If the answer is not among them, ask a different question, or use ' +
+          'cortex_code_context for a known symbol and rg for an exact literal.'
+        )
+      } else if (earlier.length === 0) {
+        hints.push(
+          '📖 Scan all the hits before picking one: on this index the target file is rank 1 for ' +
+          '8 of 15 benchmark queries but inside the top 10 for 15 of 15. One search read properly ' +
+          'beats three searches skimmed.'
+        )
       }
     }
 
-    if (currentTool === 'cortex_session_end') {
-      // Session ending — give overall compliance hint
-      if (!used.has('cortex_quality_report')) {
-        hints.push('📊 You should call cortex_quality_report with build/typecheck/lint results before ending.')
+    if (currentTool.includes('cypher')) {
+      hints.push('💡 Cypher: labels(n) for the type, n.name and n.filePath as properties. MATCH (n) WHERE n.name CONTAINS "X" RETURN n.name, labels(n) LIMIT 20')
+    }
+
+    if (currentTool.includes('list_repos')) {
+      hints.push('🔍 Use the projectId from this list with cortex_code_search, cortex_code_context or cortex_cypher.')
+    }
+
+    if (currentTool.includes('quality_report')) {
+      if (!has('code_search') && !has('code_context') && !has('cypher')) {
+        hints.push('🔍 This session reported quality without locating anything through the index. If you edited code you found by guesswork, check cortex_code_impact on what you touched.')
       }
-      if (!used.has('cortex_memory_store')) {
-        hints.push('🧠 Store what you learned: cortex_memory_store persists insights for your next session.')
+      const failed = calls.filter(c2 => c2.status && c2.status !== 'ok')
+      const firstFailed = failed[0]
+      if (firstFailed && !has('knowledge_store')) {
+        hints.push(`🧩 ${failed.length} call(s) failed earlier (${firstFailed.tool}). If you found the cause, cortex_knowledge_store it.`)
       }
     }
 
-    // General hints based on low tool coverage
-    const discoveryTools = ['cortex_code_search', 'cortex_code_context', 'cortex_cypher']
-    const usedDiscovery = discoveryTools.filter(t => used.has(t)).length
-    if (usedDiscovery === 0 && used.size > 2) {
-      hints.push('🔍 You haven\'t used any code discovery tools yet. Try cortex_code_search before grep for better results.')
+    if (currentTool.includes('session_end')) {
+      if (!has('quality_report')) {
+        hints.push('📊 Call cortex_quality_report with the build/typecheck/lint results before ending.')
+      }
+      if (!has('memory_store')) {
+        hints.push('🧠 cortex_memory_store what this session decided — that is what the next one recalls.')
+      }
     }
 
-    return c.json({ agentId, hints, toolsUsedCount: used.size })
+    // Two at most. Beyond that the block gets skimmed and the useful one goes with it.
+    return c.json({ agentId, hints: hints.slice(0, 2), toolsUsedCount: new Set(calls.map(c2 => c2.tool)).size })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -789,7 +878,7 @@ statsRouter.get('/hints/:agentId', (c) => {
 // ── Conductor: Live agent status (enriched with session identity) ──
 statsRouter.get('/conductor/agents', (c) => {
   try {
-    const cutoff30m = new Date(Date.now() - 30 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+    const cutoff30m = isoCutoff(30 * 60 * 1000)
 
     // Get active agents from query_logs (recent MCP tool calls)
     const agents = db.prepare(`
