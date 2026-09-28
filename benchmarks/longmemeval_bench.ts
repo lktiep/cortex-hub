@@ -22,6 +22,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
+import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -280,7 +281,7 @@ async function downloadDataset(): Promise<void> {
 
   // Node's fetch body is a WHATWG ReadableStream; convert for pipeline.
   const nodeStream = Readable.fromWeb(
-    res.body as unknown as import('node:stream/web').ReadableStream,
+    res.body as unknown as WebReadableStream,
   )
   const out = createWriteStream(DATASET_PATH)
   await pipeline(nodeStream, out)
@@ -929,16 +930,6 @@ async function run(): Promise<number> {
   log('')
   log(`Results written to ${resultsPath}`)
   return 0
-}
-
-async function cleanupDocs(apiUrl: string, docIds: string[]): Promise<void> {
-  for (const id of docIds) {
-    try {
-      await deleteJson(`${apiUrl}/api/knowledge/${encodeURIComponent(id)}`)
-    } catch {
-      // best-effort
-    }
-  }
 }
 
 run()

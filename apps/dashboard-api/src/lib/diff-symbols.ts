@@ -147,7 +147,12 @@ export function parseUnifiedDiff(diff: string): DiffFiles {
     if (line.startsWith('diff ')) {
       closeHunk()
       oldPath = null
-      path = null
+      // The `--- `/`+++ ` lines that follow settle the path. When they were cut too —
+      // headers trimmed to `diff --git` and `@@` lines — the git header still names the
+      // file, as long as both sides agree (a rename needs the lines it left out).
+      const sameFile = /^diff --git a\/(.+) b\/\1$/.exec(line)
+      path = sameFile ? sameFile[1]! : null
+      marking = path !== null
     } else if (line.startsWith('--- ')) {
       oldPath = cleanPath(line.slice(4), 'a/')
     } else if (line.startsWith('+++ ')) {

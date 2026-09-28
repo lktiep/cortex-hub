@@ -1,4 +1,5 @@
-import Database, { Database as SqliteDatabase } from 'better-sqlite3'
+import type { Database as SqliteDatabase } from 'better-sqlite3';
+import Database from 'better-sqlite3'
 import { join } from 'path'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
@@ -29,21 +30,21 @@ db.exec(schemaStr)
 // Safe migrations for early schema changes without drop
 try {
   db.exec('ALTER TABLE projects ADD COLUMN git_username TEXT')
-} catch (e) { /* ignore if exists */ }
+} catch { /* ignore if exists */ }
 
 try {
   db.exec('ALTER TABLE projects ADD COLUMN git_token TEXT')
-} catch (e) { /* ignore if exists */ }
+} catch { /* ignore if exists */ }
 
 try {
   db.exec('ALTER TABLE projects ADD COLUMN enabled BOOLEAN DEFAULT 1')
-} catch (e) { /* ignore if exists */ }
+} catch { /* ignore if exists */ }
 
 // Not every repository is on 'main'. Left unset, it is resolved from the
 // remote HEAD the first time the project is indexed and cached here.
 try {
   db.exec('ALTER TABLE projects ADD COLUMN default_branch TEXT')
-} catch (e) { /* ignore if exists */ }
+} catch { /* ignore if exists */ }
 
 // Conductor Phase 1v2: session identity columns
 const sessionIdentityCols = [
@@ -56,7 +57,7 @@ const sessionIdentityCols = [
   "ALTER TABLE session_handoffs ADD COLUMN last_activity TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
 ]
 for (const sql of sessionIdentityCols) {
-  try { db.exec(sql) } catch (e) { /* ignore if column exists */ }
+  try { db.exec(sql) } catch { /* ignore if column exists */ }
 }
 // Knowledge evolution: quality counters + lineage metadata (OpenSpace-inspired)
 const knowledgeEvolutionCols = [
@@ -71,7 +72,7 @@ const knowledgeEvolutionCols = [
   "ALTER TABLE knowledge_documents ADD COLUMN category TEXT DEFAULT 'general'",
 ]
 for (const sql of knowledgeEvolutionCols) {
-  try { db.exec(sql) } catch (e) { /* ignore if column exists */ }
+  try { db.exec(sql) } catch { /* ignore if column exists */ }
 }
 
 // Index jobs: extended status + git metadata + mem9 + docs-knowledge progress
@@ -131,7 +132,7 @@ const dynamicInstallerPatches = [
   "ALTER TABLE provider_accounts ADD COLUMN updated_at TEXT",
 ]
 for (const sql of dynamicInstallerPatches) {
-  try { db.exec(sql) } catch (e) { /* ignore if column exists */ }
+  try { db.exec(sql) } catch { /* ignore if column exists */ }
 }
 
 if (existsSync(schemaPath)) {
@@ -194,11 +195,11 @@ try {
       try {
         const tableCheck = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table)
         if (!tableCheck) continue
-        const rows = db.prepare(`SELECT * FROM ${table}`).all() as Record<string, any>[]
+        const rows = db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[]
         for (const row of rows) {
           let needsUpdate = false
           const updates: string[] = []
-          const params: any[] = []
+          const params: unknown[] = []
           for (const col of cols) {
             if (row[col] !== undefined && row[col] !== null) {
               const originalVal = String(row[col])
@@ -256,11 +257,11 @@ try {
           try {
             const tableCheck = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table)
             if (!tableCheck) continue
-            const rows = db.prepare(`SELECT * FROM ${table}`).all() as Record<string, any>[]
+            const rows = db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[]
             for (const row of rows) {
               let needsUpdate = false
               const updates: string[] = []
-              const params: any[] = []
+              const params: unknown[] = []
               for (const col of cols) {
                 if (row[col] !== undefined && row[col] !== null) {
                   const val = String(row[col])
@@ -277,7 +278,7 @@ try {
                     val.startsWith('2026-05-23T06:')
                   )
                   if (isDoubleShifted) {
-                    const restored = (db.prepare(`SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, ?) as r`).get(val, offsetModifier) as any).r
+                    const restored = (db.prepare(`SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, ?) as r`).get(val, offsetModifier) as { r: string }).r
                     needsUpdate = true
                     updates.push(`${col} = ?`)
                     params.push(restored)

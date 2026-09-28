@@ -26,6 +26,7 @@ import { getFactExtractionPrompt, getMemoryUpdatePrompt } from './prompts.js'
 import { documentSparseVector, querySparseVector, tokenizeText, SPARSE_VECTOR_NAME } from './sparse.js'
 import type { SparseVector } from './sparse.js'
 import { fuseByRank } from './fusion.js'
+import { blendRecency, byScore } from './recency.js'
 
 /**
  * How deep each arm reads before fusion. At the default limit the two arms would
@@ -353,36 +354,8 @@ export class Mem9 {
       updatedAt: (r.payload.updated_at as string) ?? '',
     }))
 
-    // Apply recency boost to re-rank memories chronologically when appropriate
     const now = Date.now()
-    const scoredMemories = memories.map((m) => {
-      const time = m.createdAt ? new Date(m.createdAt).getTime() : 0
-      const ageInDays = Math.max(0, (now - time) / (1000 * 60 * 60 * 24))
-
-      let recencyScore = 0
-      if (m.metadata?.type === 'session-summary') {
-        // Fast exponential decay for session summaries: half-life of 2 days
-        recencyScore = Math.exp(-ageInDays / 2)
-      } else {
-        // Slower linear decay for general memories: linear decay over 90 days
-        recencyScore = Math.max(0, 1 - ageInDays / 90)
-      }
-
-      const isSession = m.metadata?.type === 'session-summary'
-      // For session summaries, recency is a highly significant signal (50/50 balance)
-      const weightVector = isSession ? 0.5 : 0.9
-      const weightRecency = isSession ? 0.5 : 0.1
-
-      const finalScore = ((m.score ?? 0) * weightVector) + (recencyScore * weightRecency)
-
-      return {
-        ...m,
-        score: finalScore,
-      }
-    })
-
-    // Sort by final score descending
-    scoredMemories.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+    const scoredMemories = byScore(memories.map((m) => blendRecency(m, now)))
 
     return { memories: scoredMemories, tokensUsed: 0 }
   }

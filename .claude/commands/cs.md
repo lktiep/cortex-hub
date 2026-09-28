@@ -1,6 +1,7 @@
-# /cs — Cortex Start v0.8.0
+# /cs — Cortex Start v0.9.0
 
-> Version: 0.8.0 | Updated: 2026-09-28
+> Version: 0.9.0 | Updated: 2026-09-28
+> Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
 > Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
 > Changelog: v0.7.0 — unified versioning, removed STATE.md, streamlined tool guidance, auto-memory safety net
 > Changelog: v2.1 — added plan quality gate before implementation
@@ -59,8 +60,8 @@ For the REST of this session, use cortex tools naturally:
 
 ### Before implementing a plan:
 1. Draft plan with steps + files to change
-2. `cortex_plan_quality(plan: "<your plan>")` → score 0-100
-3. If score < 60 → refine. If 60-80 → proceed with caution. If > 80 → execute.
+2. `cortex_plan_quality(plan: "<your plan>", request: "<what the user asked>")` → scorecard, 0-10
+3. 8.0 or more → execute. Below that → address the listed improvements and resubmit with `iteration: 2` (max 3), then escalate to the user.
 
 ### Finding the code to change:
 **Start from what you know, not from a fixed ladder:**

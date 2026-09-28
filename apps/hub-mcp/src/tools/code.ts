@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
 
@@ -20,7 +20,6 @@ const ORG_DESC =
   "your active session; a cross-repo search never leaves it."
 
 export function registerCodeTools(server: McpServer, env: Env) {
-  const apiUrl = () => env.DASHBOARD_API_URL || 'http://localhost:4000'
 
   // ── Helper: call Dashboard API intel endpoints ──
   async function callIntel(
@@ -37,7 +36,18 @@ export function registerCodeTools(server: McpServer, env: Env) {
 
     if (!response.ok) {
       const errorText = await response.text()
-      throw new Error(`${endpoint} failed: ${response.status} ${errorText}`)
+      // The API answers a refused call with { error, hint }. Put those on their own lines so
+      // the fix is readable, rather than one line of escaped JSON a client truncates.
+      let detail = errorText
+      try {
+        const parsed = JSON.parse(errorText) as { error?: unknown; hint?: unknown }
+        if (typeof parsed.error === 'string') {
+          detail = typeof parsed.hint === 'string' ? `${parsed.error}\n${parsed.hint}` : parsed.error
+        }
+      } catch {
+        // Not JSON (a proxy error page, say): pass the text through as it came.
+      }
+      throw new Error(`${endpoint} failed (${response.status}): ${detail}`)
     }
 
     return response.json()

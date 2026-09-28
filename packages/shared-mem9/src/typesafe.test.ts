@@ -9,6 +9,7 @@ import { rerankByRelevance, type TypeSafeClient } from './typesafe.js'
 function fakeClient(order: (ids: string[]) => string[]) {
   const calls: Array<Record<string, unknown>> = []
   const client = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stands in for the client's untyped question tree
     async systemOne(state: unknown, questions: Record<string, any>) {
       calls.push({ state, questions })
       const ids = Object.keys(questions.best.criteria)
@@ -40,7 +41,8 @@ describe('rerankByRelevance', () => {
     const { client, calls } = fakeClient((ids) => ids)
     await rerankByRelevance(client, 'q', cand(30))
     expect(calls).toHaveLength(1)
-    expect(Object.keys((calls[0]!.questions as any).best.criteria)).toHaveLength(30)
+    const questions = calls[0]!.questions as { best: { criteria: Record<string, unknown> } }
+    expect(Object.keys(questions.best.criteria)).toHaveLength(30)
   })
 
   it('puts the reranker’s pick first even when it was retrieved last', async () => {

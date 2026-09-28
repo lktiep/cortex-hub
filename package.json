@@ -1,6 +1,6 @@
 {
   "name": "cortex-hub",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "The Neural Intelligence Platform for AI Agent Orchestration",
   "packageManager": "pnpm@10.32.1",

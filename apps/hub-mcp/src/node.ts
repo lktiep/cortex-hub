@@ -1,5 +1,5 @@
 import { serve } from '@hono/node-server'
-import { IncomingMessage } from 'node:http'
+import type { IncomingMessage } from 'node:http'
 import app from './index.js'
 
 const port = Number(process.env.PORT) || 8317

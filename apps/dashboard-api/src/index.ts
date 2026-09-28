@@ -5,13 +5,17 @@ import { readFileSync } from 'node:fs'
 import { db } from './db/client.js'
 import { gitnexusUrl, gitnexusHeaders } from './lib/gitnexus.js'
 
-// Read version from version.json (copied at build time)
-let appVersion = process.env['APP_VERSION'] || '0.0.0-dev'
-try {
-  const versionJson = JSON.parse(readFileSync('./version.json', 'utf-8'))
-  appVersion = versionJson.version || appVersion
-} catch {
-  // version.json not found — use fallback
+// The release CI builds under is passed in as APP_VERSION. version.json is the
+// fallback for a local build: in an image it can lag, because CI claims the
+// next version after the commit it builds was written.
+let appVersion = process.env['APP_VERSION'] || ''
+if (!appVersion) {
+  try {
+    const versionJson = JSON.parse(readFileSync('./version.json', 'utf-8')) as { version?: string }
+    appVersion = versionJson.version || '0.0.0-dev'
+  } catch {
+    appVersion = '0.0.0-dev' // version.json not found
+  }
 }
 import { cors } from 'hono/cors'
 import { logger as honoLogger } from 'hono/logger'
@@ -81,15 +85,16 @@ app.use('/api/*', async (c, next) => {
   if (!projectId && c.req.header('Content-Type')?.includes('application/json')) {
     try {
       const cloned = c.req.raw.clone()
-      const body = (await cloned.json()) as Record<string, any>
-      projectId = body?.projectId || body?.project_id || null
+      const body = (await cloned.json()) as Record<string, unknown> | null
+      const bodyProject = body?.['projectId'] || body?.['project_id']
+      projectId = typeof bodyProject === 'string' ? bodyProject : null
 
-      const repo = body?.repo || null
+      const repo = body?.['repo'] || null
       if (!projectId && repo && typeof repo === 'string') {
         // Resolve project slug/name from repo URL
         projectId = repo.replace(/\.git$/, '').replace(/^https?:\/\/.*\//, '').split(/[/\\]/).pop() || repo
       }
-    } catch (e) {
+    } catch {
       // ignore JSON parse/read errors
     }
   }
@@ -270,7 +275,7 @@ app.get('/health', async (c) => {
     version: appVersion,
     commit: process.env['COMMIT_SHA'] || 'dev',
     buildDate: process.env['BUILD_DATE'] || 'unknown',
-    image: `${process.env['CORTEX_IMAGE_NAMESPACE'] || 'ghcr.io/lktiep'}/cortex-hub:${(process.env['COMMIT_SHA'] || 'dev').slice(0, 7)}`,
+    image: `${process.env['CORTEX_IMAGE_NAMESPACE'] || 'ghcr.io/lktiep'}/cortex-api:v${appVersion}`,
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
     responseTime: Date.now() - startTime,

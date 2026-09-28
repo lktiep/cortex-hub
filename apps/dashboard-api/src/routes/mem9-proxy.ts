@@ -10,8 +10,8 @@
  */
 
 import { Hono } from 'hono'
-import { Mem9, Embedder } from '@cortex/shared-mem9'
-import type { Mem9Config } from '@cortex/shared-mem9'
+import { Mem9, blendRecency, byScore } from '@cortex/shared-mem9'
+import type { Embedder, Mem9Config, MemoryItem } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
 import { createEmbedder } from '../lib/embedder-factory.js'
@@ -172,7 +172,7 @@ mem9ProxyRouter.post('/search', async (c) => {
     }
 
     // 2. Fetch actual session handoffs from SQLite database to guarantee latest session context
-    let sqliteSessions: any[] = []
+    let sqliteSessions: MemoryItem[] = []
     if (projectId) {
       try {
         const rows = db.prepare(`
@@ -181,7 +181,8 @@ mem9ProxyRouter.post('/search', async (c) => {
           ORDER BY created_at DESC LIMIT 3
         `).all(projectId) as Array<{ id: string; task_summary: string; created_at: string; from_agent: string }>
 
-        sqliteSessions = rows.map(r => ({
+        const now = Date.now()
+        sqliteSessions = rows.map(r => blendRecency({
           id: `session-${r.id}`,
           memory: `[Session Summary] ${r.task_summary}`,
           hash: '',
@@ -196,17 +197,17 @@ mem9ProxyRouter.post('/search', async (c) => {
           score: 1.0,
           createdAt: r.created_at,
           updatedAt: r.created_at
-        }))
+        }, now))
       } catch (err) {
         console.warn('[mem9-proxy] failed to fetch sqlite sessions:', err)
       }
     }
 
     // 3. Merge SQLite sessions and filter duplicates from Qdrant results
-    let combinedMemories = [...result.memories]
+    const combinedMemories = [...result.memories]
     if (sqliteSessions.length > 0) {
       for (const sess of sqliteSessions) {
-        const dupIndex = combinedMemories.findIndex(m => m.metadata?.session_id === sess.metadata.session_id)
+        const dupIndex = combinedMemories.findIndex(m => m.metadata?.['session_id'] === sess.metadata?.['session_id'])
         if (dupIndex !== -1) {
           combinedMemories[dupIndex] = sess
         } else {
@@ -215,34 +216,9 @@ mem9ProxyRouter.post('/search', async (c) => {
       }
     }
 
-    // 4. Re-rank combined memories by applying recency boost
-    const now = Date.now()
-    const scoredMemories = combinedMemories.map((m) => {
-      const time = m.createdAt ? new Date(m.createdAt).getTime() : 0
-      const ageInDays = Math.max(0, (now - time) / (1000 * 60 * 60 * 24))
-
-      let recencyScore = 0
-      if (m.metadata?.type === 'session-summary') {
-        // Fast exponential decay for session summaries: half-life of 2 days
-        recencyScore = Math.exp(-ageInDays / 2)
-      } else {
-        // Slower linear decay for general memories: linear decay over 90 days
-        recencyScore = Math.max(0, 1 - ageInDays / 90)
-      }
-
-      const isSession = m.metadata?.type === 'session-summary'
-      const weightVector = isSession ? 0.5 : 0.9
-      const weightRecency = isSession ? 0.5 : 0.1
-
-      const finalScore = ((m.score ?? 0) * weightVector) + (recencyScore * weightRecency)
-
-      return {
-        ...m,
-        score: finalScore,
-      }
-    })
-
-    scoredMemories.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+    // 4. Re-rank. Mem9.search already blended recency into its own scores; only the
+    //    session rows read from SQLite still carry a raw score and need it applied.
+    const scoredMemories = byScore(combinedMemories)
     const finalMemories = scoredMemories.slice(0, limit ?? 10)
 
     c.header('X-Cortex-Compute-Tokens', String(result.tokensUsed || 0))

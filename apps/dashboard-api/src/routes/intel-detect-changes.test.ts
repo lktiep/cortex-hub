@@ -111,6 +111,7 @@ const DIFF = [
 type Reply = {
   error?: string
   hint?: string
+  command?: string
   data: { repo?: string; summary: Record<string, unknown>; changed_symbols: Array<{ name: string }> }
 }
 
@@ -154,10 +155,19 @@ describe('POST /api/intel/detect-changes', () => {
   })
 
   it('refuses the working-tree scopes without a diff instead of reporting no changes', async () => {
-    for (const scope of [undefined, 'all', 'staged', 'unstaged']) {
+    const commands: Array<[string | undefined, string]> = [
+      [undefined, 'git diff HEAD'],
+      ['all', 'git diff HEAD'],
+      ['staged', 'git diff --staged'],
+      ['unstaged', 'git diff'],
+    ]
+    for (const [scope, command] of commands) {
       const { status, json } = await post({ scope, projectId: 'yg-server' })
       expect(status).toBe(400)
-      expect(json.hint).toContain('git diff --staged')
+      // The command that fixes the call, for this scope, in the error an agent reads first.
+      expect(json.command).toBe(command)
+      expect(json.error).toContain(`\`${command}\``)
+      expect(json.hint).toContain('worktree')
     }
     expect(calls).toEqual([])
   })

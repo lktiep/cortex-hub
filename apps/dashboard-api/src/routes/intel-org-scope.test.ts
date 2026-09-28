@@ -85,6 +85,7 @@ async function post(path: string, body: Record<string, unknown>, apiKeyOwner?: s
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (apiKeyOwner) headers['X-API-Key-Owner'] = apiKeyOwner
   const res = await app.request(`/api/intel${path}`, { method: 'POST', headers, body: JSON.stringify(body) })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a test reads whatever JSON the route answered
   return { status: res.status, json: await res.json() as Record<string, any> }
 }
 

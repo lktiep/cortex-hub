@@ -41,7 +41,7 @@ function getContainerStats(): ContainerInfo[] {
     const stats: ContainerInfo[] = []
 
     // Get stats for all running containers in one call
-    let statsMap: Record<string, { cpu: string; memory: string; memPercent: number }> = {}
+    const statsMap: Record<string, { cpu: string; memory: string; memPercent: number }> = {}
     try {
       const statsOutput = execFileSync('docker', [
         'stats', '--no-stream',

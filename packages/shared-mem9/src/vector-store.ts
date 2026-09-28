@@ -30,12 +30,14 @@ export class VectorStore {
     exists: boolean
     vectorSize?: number
     sparseVectorNames: string[]
+    points?: number
   }> {
     const res = await fetch(`${this.baseUrl}/collections/${this.collection}`)
     if (!res.ok) return { exists: false, sparseVectorNames: [] }
 
     const info = (await res.json()) as {
       result: {
+        points_count?: number
         config: {
           params: {
             vectors?: { size?: number }
@@ -50,6 +52,7 @@ export class VectorStore {
       exists: true,
       vectorSize: params.vectors?.size,
       sparseVectorNames: Object.keys(params.sparse_vectors ?? {}),
+      points: info.result.points_count,
     }
   }
 
@@ -60,6 +63,11 @@ export class VectorStore {
    * anyway: adding one to a live collection is not something Qdrant supports, and
    * silently dropping a populated collection to gain it would throw away every
    * branch indexed in it. Pass `recreate` to accept that cost deliberately.
+   *
+   * The same holds for a dimension mismatch, which is what switching embedding
+   * models produces. An empty collection is rebuilt; a populated one is refused
+   * unless `recreate` is set, because for memories and knowledge there is no
+   * source to rebuild it from — the points are the only copy.
    */
   async ensureCollection(
     vectorSize: number,
@@ -76,8 +84,20 @@ export class VectorStore {
         return { sparseVectorEnabled: sparseVectorName ? hasSparse : false }
       }
 
-      // Wrong dimensions, or a deliberate rebuild to gain the sparse vector.
-      await fetch(`${this.baseUrl}/collections/${this.collection}`, { method: 'DELETE' })
+      if (!dimsMatch && !recreate && (info.points ?? 1) > 0) {
+        throw new Error(
+          `Qdrant collection '${this.collection}' holds ${info.points ?? 'an unknown number of'} points ` +
+            `of dimension ${info.vectorSize ?? 'unknown'}, but the embedder produces ${vectorSize}. ` +
+            `Refusing to drop it: re-embed the points into a new collection, or switch back to the ` +
+            `embedding model that wrote them.`,
+        )
+      }
+
+      // Empty with the wrong dimensions, or a deliberate rebuild.
+      const del = await fetch(`${this.baseUrl}/collections/${this.collection}`, { method: 'DELETE' })
+      if (!del.ok) {
+        throw new Error(`Failed to drop Qdrant collection '${this.collection}' (${del.status}): ${await del.text()}`)
+      }
     }
 
     const body: Record<string, unknown> = {

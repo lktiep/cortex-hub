@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
 
@@ -10,7 +10,6 @@ import { apiCall } from '../api-call.js'
  * This enables self-evaluation: "Is Cortex making me more effective?"
  */
 export function registerAnalyticsTools(server: McpServer, env: Env) {
-  const apiUrl = () => env.DASHBOARD_API_URL || 'http://localhost:4000'
 
   // ── cortex_tool_stats — view tool usage analytics ──
   server.tool(

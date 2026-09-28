@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { randomUUID } from 'crypto'
 import { db } from '../db/client.js'
+import { isEmbeddingModel } from '../lib/embedding-models.js'
 
 export const accountsRouter = new Hono()
 
@@ -163,7 +164,7 @@ accountsRouter.post('/', async (c) => {
 
     // Auto-configure embedding routing if this provider has embedding models
     const modelList: string[] = body.models ?? []
-    const embedModel = modelList.find((m: string) => m.includes('embed'))
+    const embedModel = modelList.find(isEmbeddingModel)
     if (embedModel) {
       const existingRouting = db.prepare("SELECT purpose FROM model_routing WHERE purpose = 'embedding'").get()
       if (!existingRouting) {

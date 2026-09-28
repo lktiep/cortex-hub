@@ -1,4 +1,5 @@
-import { spawn, ChildProcess } from 'child_process'
+import type { ChildProcess } from 'child_process';
+import { spawn } from 'child_process'
 import { existsSync, mkdirSync, rmSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { join, extname } from 'path'
 import { db } from '../db/client.js'

@@ -285,11 +285,11 @@ qualityRouter.get('/summary', (c) => {
 // ── POST /plan-quality — Assess plan quality (8 criteria, threshold >= 8.0) ──
 qualityRouter.post('/plan-quality', async (c) => {
   try {
-    const body = await c.req.json() as PlanInput
+    const body = await c.req.json() as Partial<PlanInput>
     if (!body.plan) return c.json({ error: 'plan is required' }, 400)
-    if (!body.request) return c.json({ error: 'request is required' }, 400)
 
-    const result = assessPlanQuality(body)
+    // Without the request, completeness and scope are judged on the plan alone.
+    const result = assessPlanQuality({ ...body, plan: body.plan, request: body.request ?? '' })
     return c.json({ result })
   } catch (error) {
     return c.json({ error: String(error) }, 500)

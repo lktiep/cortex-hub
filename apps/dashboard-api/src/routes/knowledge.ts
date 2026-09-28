@@ -7,8 +7,8 @@
 
 import { Hono } from 'hono'
 import { randomUUID } from 'crypto'
-import { Embedder, VectorStore } from '@cortex/shared-mem9'
-import type { EmbedderConfig, VectorStoreConfig } from '@cortex/shared-mem9'
+import { VectorStore } from '@cortex/shared-mem9'
+import type { VectorStoreConfig, Embedder } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { normalizeProjectId } from '../db/project-utils.js'
 import { createLogger } from '@cortex/shared-utils'
@@ -144,8 +144,21 @@ async function hierarchicalSearch(
   fetchLimit: number,
   filter?: { must: Array<Record<string, unknown>> },
 ): Promise<Array<{ id: string; score: number; payload?: Record<string, unknown> }> | null> {
-  // Stage 1: Find top clusters
   try {
+    // A small corpus is searched flat. Narrowing to five clusters can only lose
+    // documents there — a chunk whose cluster assignment failed carries no
+    // cluster_id and is never reached — and a flat search reads it all anyway.
+    const countRes = await fetch(`${QDRANT_URL}/collections/${COLLECTION}/points/count`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filter, exact: false }),
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!countRes.ok) return null
+    const { result: counted } = (await countRes.json()) as { result?: { count?: number } }
+    if ((counted?.count ?? 0) <= CLUSTER_THRESHOLD) return null
+
+    // Stage 1: Find top clusters
     const clusterFilter = filter ? {
       must: filter.must.filter(f => 'key' in f && (f as { key: string }).key === 'project_id'),
     } : undefined
@@ -639,15 +652,18 @@ knowledgeRouter.post('/search', async (c) => {
         signal: AbortSignal.timeout(10000),
       })
 
-      if (!res.ok) {
+      if (res.status === 404) {
+        // No knowledge stored yet: the collection is created on first write.
+        searchResults = []
+      } else if (!res.ok) {
         const errText = await res.text()
         return c.json({ error: `Search failed: ${errText}` }, 500)
+      } else {
+        const flatData = (await res.json()) as {
+          result?: Array<{ id: string; score: number; payload?: Record<string, unknown> }>
+        }
+        searchResults = flatData.result ?? []
       }
-
-      const flatData = (await res.json()) as {
-        result?: Array<{ id: string; score: number; payload?: Record<string, unknown> }>
-      }
-      searchResults = flatData.result ?? []
     }
 
     const data = { result: searchResults }
@@ -797,8 +813,6 @@ knowledgeRouter.post('/migrate-clusters', async (c) => {
       ? { must: [{ key: 'project_id', match: { value: normalizedProjectId } }] }
       : undefined
 
-    // Get vector size from first point
-    let vectorSize = 384
 
     while (true) {
       const scrollBody: Record<string, unknown> = {
@@ -840,7 +854,6 @@ knowledgeRouter.post('/migrate-clusters', async (c) => {
         const vector = point.vector
         if (!vector || !Array.isArray(vector)) continue
 
-        vectorSize = vector.length
         const pointProjectId = (point.payload?.project_id as string) || null
         const docId = (point.payload?.document_id as string) || point.id
 

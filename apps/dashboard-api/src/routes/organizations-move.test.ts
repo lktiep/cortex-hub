@@ -59,6 +59,7 @@ async function move(projectId: string, body: Record<string, unknown>) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a test reads whatever JSON the route answered
   return { status: res.status, json: await res.json() as Record<string, any> }
 }
 

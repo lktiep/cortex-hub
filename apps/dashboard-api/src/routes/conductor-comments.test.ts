@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { Hono } from 'hono'
 import { readFileSync } from 'fs'
@@ -7,9 +7,6 @@ import { fileURLToPath } from 'url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-
-// ── In-memory DB with schema ──
-let testDb: InstanceType<typeof Database>
 
 // ── Mock broadcastComment ──
 const mockBroadcastComment = vi.fn()

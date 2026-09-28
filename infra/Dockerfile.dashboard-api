@@ -78,8 +78,11 @@ ENV NODE_ENV=production
 ENV PORT=4000
 ARG COMMIT_SHA=unknown
 ARG BUILD_DATE=unknown
+ARG APP_VERSION=
 ENV COMMIT_SHA=${COMMIT_SHA}
 ENV BUILD_DATE=${BUILD_DATE}
+# Empty for a local build: the API then reads version.json.
+ENV APP_VERSION=${APP_VERSION}
 
 # Install git + SSL certs (required for HTTPS git operations) and tzdata for timezone config
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates tzdata && rm -rf /var/lib/apt/lists/*

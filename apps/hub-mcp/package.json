@@ -1,6 +1,6 @@
 {
   "name": "@cortex/hub-mcp",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -17,6 +17,7 @@
     "build": "tsc",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
     "clean": "rm -rf dist",
     "test": "vitest run --passWithNoTests"
   },

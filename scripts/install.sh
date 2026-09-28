@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Hub — Unified Installer (v0.8.0)
+# Cortex Hub — Unified Installer (v0.9.0)
 # One script for everything: global skill + MCP config + project hooks + IDE setup.
 # Idempotent. Version-aware. Auto-updating. Multi-IDE.
 #
@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HOOKS_VERSION=7
-HOOKS_MINOR=6
+HOOKS_MINOR=7
 MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
@@ -1063,9 +1063,10 @@ with open('$USER_SETTINGS','w') as f: json.dump(d, f, indent=2)
   # ── Slash commands (/cs, /ce) ──
   mkdir -p .claude/commands
   cat > .claude/commands/cs.md << 'CMDEOF'
-# /cs — Cortex Start v0.8.0
+# /cs — Cortex Start v0.9.0
 
-> Version: 0.8.0 | Updated: 2026-09-28
+> Version: 0.9.0 | Updated: 2026-09-28
+> Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
 > Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
 > Changelog: v0.7.0 — unified versioning, removed STATE.md, streamlined tool guidance, auto-memory safety net
 > Changelog: v2.1 — added plan quality gate before implementation
@@ -1124,8 +1125,8 @@ For the REST of this session, use cortex tools naturally:
 
 ### Before implementing a plan:
 1. Draft plan with steps + files to change
-2. `cortex_plan_quality(plan: "<your plan>")` → score 0-100
-3. If score < 60 → refine. If 60-80 → proceed with caution. If > 80 → execute.
+2. `cortex_plan_quality(plan: "<your plan>", request: "<what the user asked>")` → scorecard, 0-10
+3. 8.0 or more → execute. Below that → address the listed improvements and resubmit with `iteration: 2` (max 3), then escalate to the user.
 
 ### Finding the code to change:
 **Start from what you know, not from a fixed ladder:**
@@ -1180,9 +1181,10 @@ CMDEOF
   sed_inplace "s|__GIT_REPO__|${GIT_REPO}|g" .claude/commands/cs.md
 
   cat > .claude/commands/ce.md << 'CMDEOF'
-# /ce — Cortex End v0.8.0
+# /ce — Cortex End v0.9.0
 
-> Version: 0.8.0 | Updated: 2026-09-28
+> Version: 0.9.0 | Updated: 2026-09-28
+> Changelog: v0.9.0 — version synced with the v0.9.0 release
 > Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
 > Changelog: v0.7.0 — unified versioning, session_end auto-saves memory, removed STATE.md, streamlined steps
 > Changelog: v2.0 — added detect_changes, tool stats, task completion, recipe capture check

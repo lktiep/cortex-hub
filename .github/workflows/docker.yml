@@ -14,7 +14,21 @@ on:
       # is a source change that needs a rebuild — same as nginx-dashboard.conf.
       - 'infra/gitnexus-entrypoint.sh'
       - 'version.json'
+  # A stable release: run this by hand with `stable` on (scripts/release.sh does).
+  # It claims a patch/minor/major version, builds under it, tags the images
+  # `:stable` as well, and publishes git tag v<version> plus a GitHub Release on
+  # the exact commit the images were built from.
   workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to claim
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      stable:
+        description: Publish as a stable release (git tag, GitHub Release, :stable images)
+        type: boolean
+        default: false
 
 # ── One master build at a time ──
 #
@@ -51,13 +65,19 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.claim.outputs.version }}
+      # The commit every image is built from: the release commit, so that
+      # v<version> in git, in the registry and in /health name the same tree.
+      sha: ${{ steps.claim.outputs.sha }}
+      date: ${{ steps.claim.outputs.date }}
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Claim the next patch version
+      - name: Claim the next version
         id: claim
+        env:
+          BUMP: ${{ inputs.bump || 'patch' }}
         run: |
           read_version() {
             grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' version.json \
@@ -70,20 +90,26 @@ jobs:
           # Two merges landing minutes apart race here: the second run's push is
           # rejected because master already moved. Re-claim on top of whatever
           # master is now instead — never force over the other run.
+          claimed() {
+            {
+              echo "version=${VERSION}"
+              echo "sha=$(git rev-parse HEAD)"
+              echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
           for attempt in 1 2 3; do
-            scripts/bump-version.sh patch
+            scripts/bump-version.sh "${BUMP}"
             VERSION=$(read_version)
             git add version.json
             if git diff --cached --quiet; then
               echo "version.json already at v${VERSION}; building under it"
-              echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-              exit 0
+              claimed
             fi
             git commit -m "chore: release v${VERSION} [skip ci]"
             if git push; then
-              echo "Building as v${VERSION}"
-              echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-              exit 0
+              echo "Building as v${VERSION} from $(git rev-parse --short HEAD)"
+              claimed
             fi
             echo "push rejected on attempt ${attempt}; re-claiming on top of origin/${GITHUB_REF_NAME}"
             git reset --hard HEAD~1
@@ -102,6 +128,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
 
       - uses: docker/login-action@v3
         with:
@@ -112,10 +140,13 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
+          # Tag and label from the checked-out release commit, not github.sha.
+          context: git
           images: ${{ env.REGISTRY }}/lktiep/cortex-api
           tags: |
             type=raw,value=latest
             type=raw,value=v${{ needs.version.outputs.version }}
+            type=raw,value=stable,enable=${{ inputs.stable == true }}
             type=sha
 
       - uses: docker/setup-buildx-action@v3
@@ -126,8 +157,9 @@ jobs:
           file: infra/Dockerfile.dashboard-api
           push: true
           build-args: |
-            COMMIT_SHA=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            COMMIT_SHA=${{ needs.version.outputs.sha }}
+            BUILD_DATE=${{ needs.version.outputs.date }}
+            APP_VERSION=${{ needs.version.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cortex-api
@@ -142,6 +174,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
 
       - uses: docker/login-action@v3
         with:
@@ -152,10 +186,13 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
+          # Tag and label from the checked-out release commit, not github.sha.
+          context: git
           images: ${{ env.REGISTRY }}/lktiep/cortex-hub-web
           tags: |
             type=raw,value=latest
             type=raw,value=v${{ needs.version.outputs.version }}
+            type=raw,value=stable,enable=${{ inputs.stable == true }}
             type=sha
 
       - uses: docker/setup-buildx-action@v3
@@ -166,8 +203,9 @@ jobs:
           file: infra/Dockerfile.dashboard-web
           push: true
           build-args: |
-            COMMIT_SHA=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            COMMIT_SHA=${{ needs.version.outputs.sha }}
+            BUILD_DATE=${{ needs.version.outputs.date }}
+            APP_VERSION=${{ needs.version.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cortex-hub-web
@@ -182,6 +220,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
 
       - uses: docker/login-action@v3
         with:
@@ -192,10 +232,13 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
+          # Tag and label from the checked-out release commit, not github.sha.
+          context: git
           images: ${{ env.REGISTRY }}/lktiep/cortex-mcp
           tags: |
             type=raw,value=latest
             type=raw,value=v${{ needs.version.outputs.version }}
+            type=raw,value=stable,enable=${{ inputs.stable == true }}
             type=sha
 
       - uses: docker/setup-buildx-action@v3
@@ -206,8 +249,9 @@ jobs:
           file: infra/Dockerfile.hub-mcp
           push: true
           build-args: |
-            COMMIT_SHA=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            COMMIT_SHA=${{ needs.version.outputs.sha }}
+            BUILD_DATE=${{ needs.version.outputs.date }}
+            APP_VERSION=${{ needs.version.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cortex-mcp
@@ -222,6 +266,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
 
       - uses: docker/login-action@v3
         with:
@@ -232,10 +278,13 @@ jobs:
       - uses: docker/metadata-action@v5
         id: meta
         with:
+          # Tag and label from the checked-out release commit, not github.sha.
+          context: git
           images: ${{ env.REGISTRY }}/lktiep/cortex-gitnexus
           tags: |
             type=raw,value=latest
             type=raw,value=v${{ needs.version.outputs.version }}
+            type=raw,value=stable,enable=${{ inputs.stable == true }}
             type=sha
 
       - uses: docker/setup-buildx-action@v3
@@ -249,3 +298,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=cortex-gitnexus
           cache-to: type=gha,scope=cortex-gitnexus,mode=max
+
+  # ── Stable release: git tag + GitHub Release, once every image is published ──
+  release:
+    if: ${{ inputs.stable == true }}
+    needs: [version, build-api, build-web, build-mcp, build-gitnexus]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Tag v${{ needs.version.outputs.version }} and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+          SHA: ${{ needs.version.outputs.sha }}
+        run: |
+          if gh release view "v${VERSION}" > /dev/null 2>&1; then
+            echo "Release v${VERSION} already exists; leaving it as it is"
+            exit 0
+          fi
+          # Notes are generated from the PRs merged since the previous release;
+          # edit them afterwards with `gh release edit v${VERSION} --notes-file ...`.
+          gh release create "v${VERSION}" \
+            --target "${SHA}" \
+            --title "v${VERSION}" \
+            --generate-notes \
+            --latest

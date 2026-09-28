@@ -78,7 +78,7 @@ app.post('/auth/cache/invalidate', async (c) => {
   try {
     const body = await c.req.json()
     token = body.token
-  } catch (e) {
+  } catch {
     // If JSON parsing fails or is empty, we will clear the entire cache
   }
   invalidateTokenCache(token)
@@ -162,6 +162,7 @@ function createMcpServer(env: Env, permissions?: string[]) {
   const originalTool = server.tool.bind(server)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const serverAny = server as any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same untyped overloads as serverAny above
   serverAny.tool = (name: string, description: string, schema: any, handler: any) => {
     if (allowedTools && !allowedTools.has(name)) {
       return {
@@ -304,7 +305,7 @@ app.all('/mcp', async (c) => {
   let bodyText = ''
   try {
     bodyText = await c.req.text()
-  } catch (e) {}
+  } catch { /* no body */ }
 
   const reqInit: RequestInit = {
     method: c.req.raw.method,
@@ -330,7 +331,7 @@ app.all('/mcp', async (c) => {
         projectId = rawRepo.replace(/\.git$/, '').replace(/^https?:\/\/.*\//, '').split(/[/\\]/).pop() || rawRepo
       }
     }
-  } catch (e) {}
+  } catch { /* not a JSON-RPC body: logged as tool 'unknown' */ }
 
   try {
     const response = await telemetryStorage.run({ computeTokens: 0, computeModel: null }, async () => {
@@ -389,7 +390,7 @@ app.all('/mcp', async (c) => {
             computeTokens,
             computeModel,
           })
-        }).catch((err: any) => console.error('[MCP Telemetry Error]', err))
+        }).catch((err: unknown) => console.error('[MCP Telemetry Error]', err))
       }
 
       if (toolName !== 'unknown' && toolName !== 'cortex_health' && agentId !== 'unknown') {
@@ -424,8 +425,9 @@ app.all('/mcp', async (c) => {
     })
 
     return response
-  } catch (error: any) {
+  } catch (error) {
     console.error('[MCP Streamable Error]', error)
+    const message = error instanceof Error ? error.message : String(error)
     const latencyMs = Date.now() - startTime
 
     if (toolName !== 'unknown') {
@@ -438,18 +440,18 @@ app.all('/mcp', async (c) => {
           tool: toolName,
           params: argsObj,
           status: 'error',
-          error: error.message,
+          error: message,
           latencyMs,
           projectId,
           inputSize: bodyText.length,
           outputSize: 0,
         })
-      }).catch((err: any) => console.error('[MCP Telemetry Error]', err))
+      }).catch((err: unknown) => console.error('[MCP Telemetry Error]', err))
     }
 
     return c.json({
       jsonrpc: '2.0',
-      error: { code: -32603, message: error.message || 'Internal error' },
+      error: { code: -32603, message: message || 'Internal error' },
       id: null,
     }, 500)
   }

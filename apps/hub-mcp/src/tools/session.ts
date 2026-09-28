@@ -1,5 +1,5 @@
 import type { Env } from '../types.js'
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { apiCall } from '../api-call.js'
 

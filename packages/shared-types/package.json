@@ -1,6 +1,6 @@
 {
   "name": "@cortex/shared-types",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -14,6 +14,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
     "clean": "rm -rf dist",
     "dev": "tsc --watch"
   },

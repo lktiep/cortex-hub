@@ -12,8 +12,8 @@
 import { readdirSync, readFileSync, statSync } from 'fs'
 import { join, extname, relative, basename } from 'path'
 import { randomUUID } from 'crypto'
-import { Embedder, VectorStore } from '@cortex/shared-mem9'
-import type { EmbedderConfig, VectorStoreConfig } from '@cortex/shared-mem9'
+import { VectorStore } from '@cortex/shared-mem9'
+import type { VectorStoreConfig } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
 
@@ -130,21 +130,6 @@ function collectDocFiles(dir: string): Array<{ path: string; relativePath: strin
 
   walk(dir)
   return files
-}
-
-/**
- * Resolve Gemini API key from env or provider_accounts table.
- */
-function resolveGeminiApiKey(): string {
-  const envKey = process.env['GEMINI_API_KEY']
-  if (envKey) return envKey
-  try {
-    const row = db.prepare(
-      "SELECT api_key FROM provider_accounts WHERE type = 'gemini' AND status = 'enabled' AND api_key IS NOT NULL LIMIT 1"
-    ).get() as { api_key: string } | undefined
-    if (row?.api_key) return row.api_key
-  } catch { /* DB might not be ready */ }
-  return ''
 }
 
 // ── Main Pipeline ──

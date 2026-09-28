@@ -1,4 +1,3 @@
-import { z } from 'zod'
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
@@ -15,7 +14,6 @@ export function registerHealthTools(server: McpServer, env: Env) {
     'Check health status of all Cortex Hub backend services',
     {},
     async () => {
-      const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
 
       // Build service list, skipping undefined/empty URLs
       const services: Array<{ name: string; url?: string; apiPath?: string }> = [

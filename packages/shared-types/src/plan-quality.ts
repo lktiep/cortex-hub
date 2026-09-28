@@ -29,7 +29,7 @@ export type PlanQualityResult = {
 export type PlanInput = {
   /** The plan text / description */
   plan: string
-  /** Original user request */
+  /** Original user request. Empty when unknown: completeness is then judged on the plan alone. */
   request: string
   /** Iteration number (1-based) */
   iteration?: number
@@ -197,7 +197,7 @@ function assessFeasibility(plan: string, lines: string[]): PlanCriterion {
   }
 }
 
-function assessRiskAwareness(plan: string, lines: string[]): PlanCriterion {
+function assessRiskAwareness(plan: string, _lines: string[]): PlanCriterion {
   let score = 4 // start low, earn points
 
   // Risk/concern mentions
@@ -240,11 +240,12 @@ function assessScopeBoundary(plan: string, request: string, _lines: string[]): P
     score += 2
   }
 
-  // Plan size proportional to request
-  const requestWords = request.split(/\s+/).length
-  const planWords = plan.split(/\s+/).length
-  const ratio = planWords / Math.max(requestWords, 1)
-  if (ratio > 50) score -= 1 // plan is massively longer than request
+  // Plan size proportional to request (only measurable when the request was given)
+  if (request.trim()) {
+    const requestWords = request.split(/\s+/).length
+    const planWords = plan.split(/\s+/).length
+    if (planWords / requestWords > 50) score -= 1 // plan is massively longer than request
+  }
 
   score = Math.max(1, Math.min(10, score))
 
@@ -258,7 +259,7 @@ function assessScopeBoundary(plan: string, request: string, _lines: string[]): P
   }
 }
 
-function assessOrdering(plan: string, lines: string[]): PlanCriterion {
+function assessOrdering(plan: string, _lines: string[]): PlanCriterion {
   let score = 5
 
   // Has numbered/ordered steps

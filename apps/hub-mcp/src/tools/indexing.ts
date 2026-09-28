@@ -20,7 +20,6 @@ export function registerIndexingTools(server: McpServer, env: Env) {
     },
     async ({ repo, branch }) => {
       try {
-        const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
 
         // Step 1: Look up project by repo URL
         const lookupRes = await apiCall(env, `/api/projects/lookup?repo=${encodeURIComponent(repo)}`)

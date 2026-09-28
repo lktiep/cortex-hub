@@ -26,6 +26,7 @@ export {
 } from './sparse.js'
 export type { SparseVector, Tokenizer } from './sparse.js'
 export { fuseByRank, RRF_K } from './fusion.js'
+export { blendRecency, byScore, isSessionSummary } from './recency.js'
 export { describeCollection, copyToHybridCollection, switchToHybridCollection } from './migrate.js'
 export type { CollectionShape, HybridCopyOptions, HybridCopyReport, HybridSwitchReport } from './migrate.js'
 export type { SqliteDb } from './history.js'

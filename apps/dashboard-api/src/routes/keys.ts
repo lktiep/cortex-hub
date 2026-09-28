@@ -22,7 +22,7 @@ async function invalidateMcpCache() {
       if (res.ok) {
         break
       }
-    } catch (e) {
+    } catch {
       // Ignore error and try fallback URL
     }
   }
@@ -38,7 +38,7 @@ function generateApiKey(): { key: string; hash: string } {
 
 keysRouter.get('/', (c) => {
   const stmt = db.prepare('SELECT id, name, scope, permissions, created_at as createdAt, expires_at as expiresAt, last_used_at as lastUsed FROM api_keys ORDER BY created_at DESC')
-  const keys = stmt.all().map((k: any) => ({
+  const keys = (stmt.all() as Array<Record<string, unknown> & { permissions: string | null }>).map((k) => ({
     ...k,
     prefix: 'sk_ctx_',
     permissions: k.permissions ? JSON.parse(k.permissions) : [],

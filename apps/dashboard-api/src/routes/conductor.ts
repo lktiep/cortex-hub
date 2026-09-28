@@ -529,14 +529,14 @@ conductorRouter.post('/', async (c) => {
   try {
     const body = await c.req.json()
     const headerApiKeyOwner = c.req.header('X-API-Key-Owner')
-    let {
+    const {
       title,
       description,
       priority = 5,
       assignedTo,
       projectId,
       metadata,
-      parentTaskId,
+      parentTaskId: requestedParentTaskId,
       dependsOn,
       notifyOnComplete,
       requiredCapabilities,
@@ -560,6 +560,8 @@ conductorRouter.post('/', async (c) => {
       sessionAgent?: string
     }
 
+    // Reassigned below when an agent's own active task becomes the parent.
+    let parentTaskId = requestedParentTaskId
     if (!title) return c.json({ error: 'Title is required' }, 400)
 
     // Validate parent exists if specified
@@ -639,10 +641,10 @@ conductorRouter.post('/', async (c) => {
 // ── Pickup task (flexible identity matching) ──
 conductorRouter.post('/pickup', async (c) => {
   try {
-    let body: any = {}
+    let body: unknown = {}
     try {
       body = await c.req.json()
-    } catch {}
+    } catch { /* no body: pick up with the header identity */ }
 
     const headerApiKeyOwner = c.req.header('X-API-Key-Owner')
     const { agentId, apiKeyOwner = headerApiKeyOwner, sessionAgent } = body as {

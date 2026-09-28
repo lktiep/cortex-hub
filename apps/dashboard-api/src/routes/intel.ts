@@ -1092,6 +1092,12 @@ intelRouter.get('/repos', async (c) => {
 // commit. The caller sends its diff instead and it is mapped onto the graph here. What the
 // hub can answer by itself is a comparison of history it has, so scope "compare" still
 // goes to GitNexus; the working-tree scopes without a diff are refused with the fix.
+const WORKING_TREE_DIFF: Record<string, string> = {
+  staged: 'git diff --staged',
+  unstaged: 'git diff',
+  all: 'git diff HEAD',
+}
+
 intelRouter.post('/detect-changes', async (c) => {
   try {
     const body = await c.req.json()
@@ -1169,16 +1175,25 @@ intelRouter.post('/detect-changes', async (c) => {
       return c.json({ success: true, data: results })
     }
 
+    // Instructions written before the diff parameter existed still call scope "staged" or
+    // "all" alone, and a git worktree cut from such a commit carries them however current the
+    // main checkout is. Name the one command that makes the call work, rather than leave the
+    // agent to work out that the tool it was told to use needs something else.
+    const command = WORKING_TREE_DIFF[scope ?? 'all'] ?? 'git diff HEAD'
     return c.json(
       {
         success: false,
         error:
           `The hub cannot see your working tree, so scope "${scope ?? 'all'}" alone would report ` +
-          'no changes whatever you have edited.',
+          `no changes whatever you have edited. Run \`${command}\` and call again with diff set to its output.`,
         hint:
-          'Pass diff: the output of `git diff --staged` (what the next commit contains) or ' +
-          '`git diff HEAD` (all uncommitted work). To compare the indexed code against a ref, ' +
-          'pass scope "compare" with baseRef.',
+          'Run it in the directory you edited: in a git worktree that is the worktree, since the main ' +
+          'checkout does not hold its changes. `git diff --staged` is what the next commit contains, ' +
+          '`git diff HEAD` all uncommitted work; for a large change add `-U0` and keep only the ' +
+          '`diff`/`---`/`+++`/`@@` lines. Instructions that call cortex_detect_changes with a scope and ' +
+          'no diff predate the diff parameter. To compare the indexed code against a ref, pass scope ' +
+          '"compare" with baseRef.',
+        command,
       },
       400,
     )

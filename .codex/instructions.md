@@ -21,6 +21,10 @@ reworded version of the same query. Ask a different question or switch tool inst
 `cortex_code_impact` before editing something exported or shared. Knowledge and memory are
 for errors and decisions, not for locating code.
 
+**Across repos:** omit `repo:` to search every repo in the organization of this project
+(the client + server + tools of one product). Projects are isolated per organization, so it never reaches
+another one. Running sessions in two organizations with one API key? Pass `org:`.
+
 ### Error Protocol
 1. `cortex_knowledge_search` first — someone may have solved this
 2. `cortex_memory_search` — you may have seen it before

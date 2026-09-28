@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
+import { isEmbeddingModel } from '../lib/embedding-models.js'
 
 export const setupRouter = new Hono()
 
@@ -475,8 +476,8 @@ setupRouter.post('/configure-provider', async (c) => {
         if (res.ok) {
           const data = (await res.json()) as { data?: { id: string }[] }
           const all = data.data ?? []
-          chatModels = all.filter((m) => !m.id.includes('embed')).map((m) => m.id)
-          embedModels = all.filter((m) => m.id.includes('embed')).map((m) => m.id)
+          chatModels = all.filter((m) => !isEmbeddingModel(m.id)).map((m) => m.id)
+          embedModels = all.filter((m) => isEmbeddingModel(m.id)).map((m) => m.id)
           modelsDetected = all.length
         }
       }

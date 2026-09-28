@@ -55,6 +55,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=8317
+# The release CI builds under; what the MCP handshake reports as serverInfo.version.
+ARG APP_VERSION=0.0.0-dev
+ENV MCP_SERVER_VERSION=${APP_VERSION}
 
 # Install tzdata for timezone configuration
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*

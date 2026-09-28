@@ -11,8 +11,8 @@
  */
 
 import { randomUUID } from 'crypto'
-import { Embedder, VectorStore } from '@cortex/shared-mem9'
-import type { EmbedderConfig, VectorStoreConfig } from '@cortex/shared-mem9'
+import { VectorStore } from '@cortex/shared-mem9'
+import type { VectorStoreConfig, Embedder } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
 import { createEmbedder } from '../lib/embedder-factory.js'
@@ -42,8 +42,9 @@ const COLLECTION = 'knowledge'
 const CHUNK_SIZE = 1500
 const CHUNK_OVERLAP = 300
 
-const CLIPROXY_URL = () =>
-  process.env.LLM_ROUTED_URL || `http://localhost:${process.env.PORT || 4000}/api/llm`
+// The hub's own routed gateway (routes/llm.ts): model_routing chain + fallback, not CLIProxy.
+const LLM_GATEWAY_URL = () =>
+  process.env.LLM_GATEWAY_URL || process.env.LLM_ROUTED_URL || `http://localhost:${process.env.PORT || 4000}/api/llm`
 
 // Rate limit: max captures per hour
 const RATE_LIMIT = 5
@@ -118,7 +119,7 @@ function resolveLlmModel(): string {
 
 async function analyzeForCapture(context: string): Promise<CaptureAnalysis | null> {
   try {
-    const res = await fetch(`${CLIPROXY_URL()}/v1/chat/completions`, {
+    const res = await fetch(`${LLM_GATEWAY_URL()}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

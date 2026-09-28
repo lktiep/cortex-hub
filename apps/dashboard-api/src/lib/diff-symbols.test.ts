@@ -99,6 +99,25 @@ describe('parseUnifiedDiff', () => {
     })
   })
 
+  it('reads a diff cut down to its git headers and hunk headers', () => {
+    const gitHeadersOnly = [
+      'diff --git a/src/b.ts b/src/b.ts',
+      '@@ -5,2 +4,0 @@',
+      '@@ -40 +41 @@',
+      'diff --git a/src/old.ts b/src/new.ts',
+      '@@ -7,3 +7,1 @@',
+      '',
+    ].join('\n')
+
+    // The rename cannot be placed without its --- line, so it is left out rather than guessed.
+    expect(ranges(gitHeadersOnly)).toEqual({
+      'src/b.ts': [
+        { start: 5, end: 6 },
+        { start: 40, end: 40 },
+      ],
+    })
+  })
+
   it('lists new files apart, covers deleted files whole, and reads a rename by its old path', () => {
     const diff = [
       'diff --git a/src/new.ts b/src/new.ts',

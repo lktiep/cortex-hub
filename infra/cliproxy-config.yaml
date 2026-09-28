@@ -17,17 +17,10 @@ remote-management:
   # i.e. the repo itself published a working management credential for a
   # LAN-exposed, allow-remote endpoint. v7.3.18 also accepts the MANAGEMENT_PASSWORD
   # env var (docker-compose passes it from .env), which is the only credential we want.
-# OpenAI-compatible endpoints
-# API key is synced from Codex OAuth by dashboard-api startup
-openai-compatibility:
-  - name: "cortex-openai"
-    base-url: "https://api.openai.com/v1"
-    api-key-entries:
-      - api-key: "${OPENAI_API_KEY:-placeholder}"
-    models:
-      - name: "text-embedding-3-small"
-        alias: "text-embedding-3-small"
-      - name: "text-embedding-3-large"
-        alias: "text-embedding-3-large"
-      - name: "gpt-5.4-mini"
-        alias: "gpt-5.4-mini"
+# OpenAI-compatible endpoints: none here on purpose. For the same reason as the
+# management key, an api-key written as "${OPENAI_API_KEY:-placeholder}" was sent
+# to OpenAI literally: every model it declared (text-embedding-3-*, gpt-5.4-mini)
+# was listed by /v1/models and answered 401 — including as a fallback in a chat
+# routing chain. Nothing synced a real key into it. Add an API-key provider
+# through the dashboard setup wizard, which writes it to the auth volume
+# (auth-dir above) rather than to this bind-mounted, committed file.

@@ -73,12 +73,6 @@ interface ChunkResult {
   content: string
 }
 
-interface RoutingRow {
-  purpose: string
-  chain: string
-  updated_at: string
-}
-
 interface AccountRow {
   id: string
   api_base: string
