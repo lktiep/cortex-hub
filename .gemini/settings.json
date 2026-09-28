@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/session-init.sh", "name": "cortex_session_init"}
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "write_file|replace|edit_file|create_file|insert_text|glob|search_file_content|run_shell_command|shell",
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/enforce-session.sh", "name": "cortex_enforce_session"}
+        ]
+      },
+      {
+        "matcher": "run_shell_command|shell",
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/enforce-commit.sh", "name": "cortex_enforce_commit"}
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/track-quality.sh", "name": "cortex_track_quality"}
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/session-end-check.sh", "name": "cortex_session_end_check"}
+        ]
+      }
+    ]
+  }
+}

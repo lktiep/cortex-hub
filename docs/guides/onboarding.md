@@ -79,13 +79,14 @@ bash scripts/install.sh --force
 |--------|---------|-------------|
 | `install.sh` | **Unified installer** — global skill + MCP + project hooks + IDE setup | Everything. Use this. |
 | `install.ps1` | Windows PowerShell equivalent | Windows users |
-| `onboard.sh` | Full interactive onboarding (legacy) | First-time guided setup with prompts |
-| `onboard.ps1` | Windows interactive onboarding (legacy) | First-time on Windows with prompts |
+| `onboard.sh` | Interactive onboarding — prompts, then calls `install.sh` for hooks + rules | First-time guided setup with prompts |
+| `onboard.ps1` | Windows interactive onboarding — calls `install.ps1` for hooks + rules | First-time on Windows with prompts |
 
 ### Relationship: `install.sh` vs `onboard.sh`
 
 - **`install.sh`** — The unified installer. One script does everything: global `/install` skill, MCP config, project hooks, IDE detection, auto-update. Idempotent and non-interactive (reads API key from env/`.env` file).
-- **`onboard.sh`** — Legacy interactive onboarding. Prompts for API key, MCP URL, tool selection. Use if you prefer a guided step-by-step setup.
+- **`onboard.sh`** — Interactive onboarding. Prompts for API key, MCP URL and tool selection, then delegates the enforcement hooks and the IDE rule files to `install.sh --skip-global`. It used to generate its own copies of both; they drifted three versions behind (no discovery gate, no recall gate, `cortex_quality_report` alone unlocking a commit), so a guided setup installed weaker enforcement than the unified installer. There is now one generator.
+- Both entry points that a new member actually hits — `install.sh` at the repo root and `scripts/bootstrap.sh` (the `curl | bash` path) — run `scripts/onboard.sh` for the "Member" role, so this is the path that matters most.
 
 ---
 

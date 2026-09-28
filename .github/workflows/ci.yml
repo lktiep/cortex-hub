@@ -128,6 +128,30 @@ jobs:
       - name: Test
         run: pnpm test
 
+  # ── Enforcement hooks (they decide what every agent may do — nothing checked them) ──
+  ci-hooks:
+    name: "Hooks: enforcement tests & installer sync"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          for f in scripts/install.sh scripts/onboard.sh scripts/bootstrap.sh \
+                   scripts/sync-install-templates.sh scripts/test-hooks.sh \
+                   .claude/hooks/*.sh .gemini/hooks/*.sh; do
+            bash -n "$f"
+          done
+
+      - name: Enforcement hook tests
+        run: bash scripts/test-hooks.sh
+
+      - name: Installers match the hooks they ship
+        run: bash scripts/sync-install-templates.sh --check
+
   # ── Python CI (flake8/ruff — only on *.py files) ───────────────────────────
   ci-python:
     name: "Python: Lint & Test"

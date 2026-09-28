@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $HOOKS_VERSION = 7
-$HOOKS_MINOR = 0
+$HOOKS_MINOR = 1
 $LATEST_VERSION = "$HOOKS_VERSION.$HOOKS_MINOR"
 $MCP_URL_DEFAULT = "http://localhost:8318/mcp"
 
@@ -232,7 +232,7 @@ if ($CheckOnly) {
     Write-Host "  MCP configured: $McpConfigured"
     Write-Host "  Hooks version:  $InstalledVersion (latest: $LATEST_VERSION)"
     Write-Host "  Profile:        $(if (Test-Path '.cortex\project-profile.json') { 'yes' } else { 'no' })"
-    Write-Host "  Claude hooks:   $(if (Test-Path '.claude\hooks\enforce-session.ps1') { 'yes' } else { 'no' })"
+    Write-Host "  Claude hooks:   $(if (Test-Path '.claude\hooks\enforce-session.sh') { 'yes' } else { 'no' })"
     Write-Host "  Lefthook:       $(if (Test-Path 'lefthook.yml') { 'yes' } else { 'no' })"
     if ($InstalledVersion -ne $LATEST_VERSION) { Write-Warn ("Update available: " + $InstalledVersion + " -> " + $LATEST_VERSION + ". Run /install --force") }
     exit 0
@@ -245,7 +245,7 @@ if ($Force) {
 } elseif ($InstalledVersion -ne $LATEST_VERSION) {
     $NeedsUpdate = $true
     Write-Info ("Updating hooks v" + $InstalledVersion + " -> v" + $LATEST_VERSION)
-} elseif (-not (Test-Path ".claude\hooks\enforce-session.ps1")) {
+} elseif (-not (Test-Path ".claude\hooks\enforce-session.sh")) {
     $NeedsUpdate = $true
     Write-Info "Missing files detected, regenerating..."
 } else {
@@ -373,38 +373,178 @@ if ($NeedsUpdate) {
         # session-init.sh
         Write-ShHook "session-init" @'
 #!/bin/bash
+# Cortex Session Init (v7.1) — arms the gates; keeps discovery state across compaction.
+#
+# SessionStart fires on four different things: startup, resume, clear and compact.
+# Wiping the discovery markers on all four is why a long task suddenly finds Grep and
+# Edit blocked again halfway through itself — the context was compacted, the work was
+# not restarted. Only a genuinely new session clears the gates.
+#
+# v7.0 also touched `session-started` here, which made the whole session gate vacuous: the
+# marker existed before cortex_session_start had ever been called, so the "no session yet"
+# branch of enforce-session.sh was dead code and enforce-commit.sh's session check always
+# passed. Only the tracker writes that marker now, from a real cortex_session_start call.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 mkdir -p "$STATE_DIR"
-touch "$STATE_DIR/session-started"
-rm -f "$STATE_DIR/quality-gates-passed" "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" "$STATE_DIR/session-ended" "$STATE_DIR/discovery-used" 2>/dev/null
-echo "Run /cs to initialize Cortex session. Grep/Edit BLOCKED until cortex discovery tools used."
+
+INPUT=$(cat 2>/dev/null || true)
+SOURCE=""
+if [ -n "$INPUT" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null || true)
+  elif command -v python3 >/dev/null 2>&1; then
+    SOURCE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("source",""))' 2>/dev/null || true)
+  fi
+fi
+
+case "$SOURCE" in
+  compact|resume)
+    echo "Cortex: same session (${SOURCE}) — discovery state kept, gates stay as they were."
+    exit 0 ;;
+esac
+
+# A new session: everything from the last one is stale, including the markers that
+# were never reset before and so stayed satisfied for months.
+rm -f "$STATE_DIR/session-started" \
+      "$STATE_DIR/quality-gates-passed" \
+      "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" \
+      "$STATE_DIR/quality-reported" \
+      "$STATE_DIR/session-ended" "$STATE_DIR/discovery-used" \
+      "$STATE_DIR/knowledge-recalled" "$STATE_DIR/memory-recalled" \
+      "$STATE_DIR/changes-checked" "$STATE_DIR/tasks-checked" \
+      "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
+echo "Run /cs first: cortex_session_start, then knowledge+memory recall. Until then edits are BLOCKED, and Grep/Glob stay blocked until a cortex discovery tool has run."
 '@
 
         # enforce-session.sh
         Write-ShHook "enforce-session" @'
 #!/bin/bash
+# Cortex Session Enforcement (v6.1) — hold tools back until the cortex workflow is followed.
+#
+# What this can and cannot do: the hook shares a filesystem with the agent it gates, so
+# it cannot stop an agent that decides to forge a marker. What it can do is make the
+# correct path the easy one, and make the wrong path visible. That is why markers must
+# now carry evidence of a real tool call instead of merely existing, and why the way out
+# is an explicit, named file rather than a silent trick.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+
+INPUT=$(cat)
+TOOL_NAME=""
+COMMAND=""
+if command -v jq >/dev/null 2>&1; then
+  TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+  COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1; then
+  # Without this fallback the whole gate silently became a no-op on any machine without jq.
+  eval "$(printf '%s' "$INPUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
+print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
+" 2>/dev/null || true)"
+fi
+
+[ -z "$TOOL_NAME" ] && { echo "BLOCKED: Cannot parse hook input (install jq or python3)." >&2; exit 2; }
+
+# An escape hatch that has to be asked for out loud. When the hub is unreachable the
+# tools this gate points at cannot run, and a gate with no path through it just stops
+# the work — so there is a way out, it is one line, and it leaves a trace.
+if [ -s "$STATE_DIR/gate-off" ]; then
+  exit 0
+fi
+
+# A marker counts only if a tool wrote evidence into it. An empty file is a touch.
+marker_ok() {
+  [ -s "$STATE_DIR/$1" ] && grep -q '^tool=' "$STATE_DIR/$1" 2>/dev/null
+}
+
+# A search command counts as codebase search when it *starts* a command: `cd apps && grep -r x`
+# is the search this gate is about. `pnpm build | grep error` filters output of something
+# else and has nothing to do with finding code, so it stays allowed.
+is_codebase_search() {
+  # Everything after a heredoc marker is data being written, not commands being run —
+  # a file whose text happens to contain the word grep is not a search.
+  local cmd="${1%%<<*}"
+  printf '%s' "$cmd" | grep -Eq '(^|[;&]{1,2}[[:space:]]*|\([[:space:]]*)[[:space:]]*(sudo[[:space:]]+)?(grep|egrep|fgrep|rg|ag|ack|find|fd)[[:space:]]' && return 0
+  printf '%s' "$cmd" | grep -Eq '(^|[;&]{1,2}[[:space:]]*)[[:space:]]*git[[:space:]]+grep[[:space:]]' && return 0
+  return 1
+}
+
+# Writing the escape hatch itself can never be blocked by the gate it opens, or the only
+# way out of a gate armed against an unreachable hub is a trick.
+is_gate_off_write() {
+  printf '%s' "$1" | grep -Eq '>[[:space:]]*"?[^"[:space:]]*\.cortex/\.session-state/gate-off"?[[:space:]]*$'
+}
+
+# Editing through Bash is still editing. Gating Edit/Write while leaving `cat > file`,
+# `sed -i` and `tee` open meant the recall gate only ever applied to agents that used
+# the dedicated tools.
+is_file_write() {
+  printf '%s' "$1" | grep -Eq '(^|[;&|]{1,2}[[:space:]]*)[[:space:]]*(sed[[:space:]]+-i|tee[[:space:]]|dd[[:space:]]|truncate[[:space:]]|install[[:space:]]+-)' && return 0
+  # Drop the redirects that write nowhere — `2>/dev/null` and `>&2` are not file edits —
+  # then anything left pointing at a name is one.
+  local cmd
+  cmd=$(printf '%s' "$1" | sed -E 's/[0-9]*>>?[[:space:]]*&[0-9-]//g; s/[0-9]*>>?[[:space:]]*"?\/dev\/[a-zA-Z0-9]+"?//g')
+  printf '%s' "$cmd" | grep -Eq '>>?[[:space:]]*"?[^&|"[:space:]]' && return 0
+  return 1
+}
+
+HOW_OUT="If the Cortex hub is unreachable (MCP reports CONNECTION_CLOSED), say so and write the reason: echo 'hub unreachable' > .cortex/.session-state/gate-off"
+
+# ── Session started: enforce discovery-first + knowledge/memory recall ──
 if [ -f "$STATE_DIR/session-started" ]; then
-  if [ ! -f "$STATE_DIR/discovery-used" ]; then
-    INPUT=$(cat)
-    TOOL=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
-    CMD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
-    [ "$TOOL" = "Grep" ] && { echo "BLOCKED: Use cortex_code_search FIRST." >&2; exit 2; }
-    [[ "$TOOL" = "Bash" && "$CMD" =~ ^(find\ |grep\ |rg\ |ag\ ) ]] && { echo "BLOCKED: Use cortex_code_search FIRST." >&2; exit 2; }
+  if ! marker_ok discovery-used; then
+    if [ "$TOOL_NAME" = "Grep" ] || [ "$TOOL_NAME" = "Glob" ]; then
+      echo "BLOCKED: use cortex_code_search first — it is AST-aware and returns the target file inside the top 10 far more reliably than a pattern guess. $HOW_OUT" >&2
+      exit 2
+    fi
+    if [ "$TOOL_NAME" = "Bash" ] && is_codebase_search "$COMMAND"; then
+      echo "BLOCKED: use cortex_code_search first. find/grep/rg unlock once a cortex discovery tool has run — and stay the right choice for an exact literal (env var, config key, error string), not for a question about behaviour. $HOW_OUT" >&2
+      exit 2
+    fi
+    WRITES_A_FILE=0
+    case "$TOOL_NAME" in
+      Edit|Write|NotebookEdit) WRITES_A_FILE=1 ;;
+      Bash) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
+    esac
+    if [ "$WRITES_A_FILE" = "1" ]; then
+      if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
+        echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
+        exit 2
+      fi
+    fi
   fi
   exit 0
 fi
-INPUT=$(cat)
-TOOL=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
-CMD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
-case "$TOOL" in
-  Edit|Write|NotebookEdit) echo "BLOCKED: Call cortex_session_start first." >&2; exit 2 ;;
+
+# ── Session NOT started: block writes and codebase search, allow plain reads ──
+# Until v7.1 of session-init this branch never ran: the init hook created the session-started
+# marker itself, so every session looked started before cortex_session_start was ever called.
+case "$TOOL_NAME" in
+  Edit|Write|NotebookEdit)
+    echo "BLOCKED: call cortex_session_start first (or run /cs). No edits without a session." >&2
+    exit 2 ;;
+  Grep|Glob)
+    echo "BLOCKED: run /cs first (cortex_session_start + knowledge/memory recall), then search with cortex_code_search. $HOW_OUT" >&2
+    exit 2 ;;
   Bash)
-    [[ "$CMD" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ |pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0
-    [[ "$CMD" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ |sed\ -i) ]] && { echo "BLOCKED: Call cortex_session_start first." >&2; exit 2; }
-    ;;
+    if is_codebase_search "$COMMAND"; then
+      echo "BLOCKED: run /cs first, then search with cortex_code_search. find/grep/rg unlock once a cortex discovery tool has run. $HOW_OUT" >&2
+      exit 2
+    fi
+    # The write check goes before the read allowlist, or `cat > file` passes as a read.
+    if is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND"; then
+      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+      exit 2
+    fi
+    [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|show)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0
+    [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ ) ]] && {
+      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+      exit 2
+    }
+    exit 0 ;;
 esac
 exit 0
 '@
@@ -412,56 +552,190 @@ exit 0
         # enforce-commit.sh
         Write-ShHook "enforce-commit" @'
 #!/bin/bash
+# Cortex Commit Enforcement (v5.0) — a commit needs the workflow behind it.
+#
+# v4 accepted `quality-gates-passed`, which the tracker used to write the moment
+# cortex_quality_report was called — so reporting a failure unlocked the commit just as
+# well as passing. The marker now comes only from build/typecheck/lint actually running
+# green, and the report is a separate, softer expectation.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 INPUT=$(cat)
-CMD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
-[[ ! "$CMD" =~ ^git\ (commit|push) ]] && exit 0
-if [[ "$CMD" =~ ^git\ commit ]]; then
+COMMAND=""
+if command -v jq >/dev/null 2>&1; then
+  COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1; then
+  COMMAND=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+fi
+[[ ! "$COMMAND" =~ ^git\ (commit|push) ]] && exit 0
+
+if [[ "$COMMAND" =~ ^git\ commit ]]; then
   MISSING=""
-  [ ! -f "$STATE_DIR/session-started" ] && MISSING="$MISSING\n  - cortex_session_start (not called)"
-  [ ! -f "$STATE_DIR/discovery-used" ] && MISSING="$MISSING\n  - cortex discovery tools (0 calls)"
-  [ ! -f "$STATE_DIR/quality-gates-passed" ] && MISSING="$MISSING\n  - Quality gates: run build/typecheck/lint then cortex_quality_report"
+  [ ! -f "$STATE_DIR/session-started" ] && MISSING="${MISSING}\n  - cortex_session_start (not called)"
+  [ ! -s "$STATE_DIR/discovery-used" ] && MISSING="${MISSING}\n  - cortex_code_search / code_context / knowledge_search (no discovery recorded — search before you edit)"
+  [ ! -s "$STATE_DIR/quality-gates-passed" ] && MISSING="${MISSING}\n  - Quality gates: run build, typecheck and lint and let them pass (calling cortex_quality_report no longer counts)"
   if [ -n "$MISSING" ]; then
-    echo -e "BLOCKED: Cannot commit — missing steps:$MISSING" >&2
+    echo "BLOCKED: cannot commit — missing Cortex workflow steps:${MISSING}" >&2
+    echo "" >&2
+    echo "See the 'Finding code fast' and 'Quality Gates' sections of CLAUDE.md." >&2
     exit 2
   fi
+  [ ! -s "$STATE_DIR/quality-reported" ] && echo "REMINDER: call cortex_quality_report with the gate results so the dashboard sees this session." >&2
 fi
-[[ "$CMD" =~ ^git\ push ]] && echo "REMINDER: After push, call cortex_code_reindex." >&2
+
+if [[ "$COMMAND" =~ ^git\ push ]]; then
+  echo "REMINDER: after push, call cortex_code_reindex so code intelligence matches what you pushed." >&2
+fi
 exit 0
 '@
 
         # track-quality.sh
         Write-ShHook "track-quality" @'
 #!/bin/bash
+# Cortex Quality Tracker (v4.0) — records what actually happened, as evidence.
+#
+# Two things changed from v3, both of them bugs found by reading a real hook payload:
+#   1. The field is `tool_response`, not `tool_output`. v3 read `tool_output`, so the
+#      session id was never captured and the auto-close on exit never had anything to
+#      close — on this repo `.cortex/.session-state/session-id` had never once been written.
+#   2. Markers were empty files, so a `touch` was indistinguishable from a tool call and
+#      the gates could be satisfied without doing any of the work. They now carry the tool
+#      name and a timestamp, and the enforcement hook requires that content.
+#
+# Note on exit codes: PostToolUse does not fire at all when a Bash command exits non-zero,
+# so a failing `pnpm build` cannot mark its gate. What it can still do is hide the failure
+# behind `|| true` or a pipe, which is why the output is scanned for failure signatures.
+
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 mkdir -p "$STATE_DIR"
+
 INPUT=$(cat)
-CMD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
-TOOL=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null || echo "")
-[[ "$CMD" =~ (pnpm|npm|yarn)\ build ]] && touch "$STATE_DIR/gate-build"
-[[ "$CMD" =~ (pnpm|npm|yarn)\ typecheck ]] && touch "$STATE_DIR/gate-typecheck"
-[[ "$CMD" =~ (pnpm|npm|yarn)\ lint ]] && touch "$STATE_DIR/gate-lint"
-[[ "$CMD" =~ cargo\ build ]] && touch "$STATE_DIR/gate-build"
-[[ "$CMD" =~ cargo\ clippy ]] && touch "$STATE_DIR/gate-lint"
-[[ "$CMD" =~ go\ build ]] && touch "$STATE_DIR/gate-build"
-[[ "$CMD" =~ go\ vet ]] && touch "$STATE_DIR/gate-lint"
-[[ "$CMD" =~ dotnet\ build ]] && touch "$STATE_DIR/gate-build"
-[ -f "$STATE_DIR/gate-build" ] && [ -f "$STATE_DIR/gate-typecheck" ] && [ -f "$STATE_DIR/gate-lint" ] && touch "$STATE_DIR/quality-gates-passed"
-[[ "$TOOL" =~ cortex_session_start ]] && touch "$STATE_DIR/session-started"
-[[ "$TOOL" =~ cortex_session_end ]] && touch "$STATE_DIR/session-ended"
-[[ "$TOOL" =~ cortex_quality_report ]] && touch "$STATE_DIR/quality-gates-passed"
-[[ "$TOOL" =~ cortex_(code_search|knowledge_search|memory_search|code_context|code_impact|cypher) ]] && touch "$STATE_DIR/discovery-used"
+COMMAND=""
+TOOL_NAME=""
+OUTPUT=""
+
+if command -v jq >/dev/null 2>&1; then
+  COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+  TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+  OUTPUT=$(printf '%s' "$INPUT" | jq -r '[(.tool_response // .tool_output // empty)] | tostring' 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1; then
+  eval "$(printf '%s' "$INPUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+r=d.get('tool_response', d.get('tool_output',''))
+print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
+print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
+print(f'OUTPUT={repr(json.dumps(r) if not isinstance(r,str) else r)}')
+" 2>/dev/null || true)"
+fi
+
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+# Evidence, not existence: the enforcement hook only accepts a marker that says who wrote it.
+record() {
+  printf 'tool=%s at=%s\n' "${2:-$TOOL_NAME}" "$NOW" > "$STATE_DIR/$1"
+}
+
+# A command that reports success while the build failed — `pnpm build || true`, or a pipe
+# that swallows the status. If the output says it failed, the gate does not open.
+looks_failed() {
+  printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖|FAIL |Exit status [1-9]'
+}
+
+mark_gate() {
+  looks_failed && return 0
+  record "$1" "$COMMAND"
+}
+
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ build ]]    && mark_gate gate-build
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ typecheck ]] && mark_gate gate-typecheck
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ lint ]]      && mark_gate gate-lint
+[[ "$COMMAND" =~ cargo\ build ]]               && mark_gate gate-build
+[[ "$COMMAND" =~ cargo\ clippy ]]              && mark_gate gate-lint
+[[ "$COMMAND" =~ go\ build ]]                  && mark_gate gate-build
+[[ "$COMMAND" =~ go\ vet ]]                    && mark_gate gate-lint
+[[ "$COMMAND" =~ dotnet\ build ]]              && mark_gate gate-build
+
+# Quality gates pass when the commands passed — not when a tool was called to say so.
+if [ -s "$STATE_DIR/gate-build" ] && [ -s "$STATE_DIR/gate-typecheck" ] && [ -s "$STATE_DIR/gate-lint" ]; then
+  record quality-gates-passed "build+typecheck+lint"
+elif [ -s "$STATE_DIR/gate-build" ] && [ -s "$STATE_DIR/gate-lint" ] && [ ! -s "$STATE_DIR/gate-typecheck" ]; then
+  # Languages without a separate typecheck step (Go, Rust): build + lint is the full set.
+  if [ -f "$PROJECT_DIR/.cortex/project-profile.json" ] \
+     && ! grep -q '"typecheck"' "$PROJECT_DIR/.cortex/project-profile.json" 2>/dev/null; then
+    record quality-gates-passed "build+lint (no typecheck in project-profile)"
+  fi
+fi
+
+# ── Cortex tool calls ──
+case "$TOOL_NAME" in
+  *cortex_session_start*)
+    record session-started
+    # The id arrives inside an MCP text block, so the JSON is escaped one level deep —
+    # dropping the backslashes first is what makes one pattern work for both shapes.
+    SESSION_ID=$(printf '%s' "$INPUT" | tr -d '\\' \
+      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+    [ -n "$SESSION_ID" ] && printf '%s\n' "$SESSION_ID" > "$STATE_DIR/session-id"
+    ;;
+  *cortex_session_end*)    record session-ended ;;
+  *cortex_quality_report*) record quality-reported ;;
+  *cortex_code_search*|*cortex_code_context*|*cortex_code_impact*|*cortex_cypher*)
+    record discovery-used ;;
+  *cortex_knowledge_search*)
+    record discovery-used; record knowledge-recalled ;;
+  *cortex_memory_search*)
+    record discovery-used; record memory-recalled ;;
+  *cortex_task_pickup*)    record tasks-checked ;;
+  *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
+esac
 exit 0
 '@
 
         # session-end-check.sh
         Write-ShHook "session-end-check" @'
 #!/bin/bash
+# Cortex Session End Check (v6) — closes the cortex session when the session really ends.
+#
+# v5 was wired to the Stop event, which fires every time the agent finishes a turn. Had the
+# session id ever been captured (it was not — v3 of the tracker read the wrong JSON field),
+# this would have closed the session after the first answer and left the rest of the
+# conversation running outside it. It belongs on SessionEnd.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-[ -f "$STATE_DIR/session-started" ] && [ ! -f "$STATE_DIR/session-ended" ] && echo "WARNING: cortex_session_end has not been called."
+
+[ -f "$STATE_DIR/session-started" ] || exit 0
+[ -f "$STATE_DIR/session-ended" ] && exit 0
+
+SESSION_ID=""
+[ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
+
+if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
+  echo "WARNING: cortex session not closed — no session id was recorded. Run /ce next time."
+  exit 0
+fi
+
+API_URL="${CORTEX_HUB_API_URL:-http://localhost:4000}"
+ACTIONS=""
+[ -s "$STATE_DIR/knowledge-recalled" ]   && ACTIONS="${ACTIONS} knowledge-searched"
+[ -s "$STATE_DIR/memory-recalled" ]      && ACTIONS="${ACTIONS} memory-searched"
+[ -s "$STATE_DIR/discovery-used" ]       && ACTIONS="${ACTIONS} code-searched"
+[ -s "$STATE_DIR/changes-checked" ]      && ACTIONS="${ACTIONS} changes-checked"
+[ -s "$STATE_DIR/quality-gates-passed" ] && ACTIONS="${ACTIONS} quality-passed"
+[ -s "$STATE_DIR/quality-reported" ]     && ACTIONS="${ACTIONS} quality-reported"
+[ -s "$STATE_DIR/tasks-checked" ]        && ACTIONS="${ACTIONS} tasks-checked"
+[ -s "$STATE_DIR/gate-off" ]             && ACTIONS="${ACTIONS} gate-off($(head -c 80 "$STATE_DIR/gate-off" | tr -d '"\n'))"
+
+SUMMARY="Session auto-closed (no /ce)."
+[ -n "$ACTIONS" ] && SUMMARY="Session auto-closed. Activity:${ACTIONS}."
+
+curl -X POST "${API_URL}/api/sessions/${SESSION_ID}/end" \
+  -H 'Content-Type: application/json' \
+  -d "{\"summary\":\"${SUMMARY}\"}" \
+  --connect-timeout 5 -s -o /dev/null || true
+
+touch "$STATE_DIR/session-ended"
+echo "INFO: cortex session $SESSION_ID auto-closed.${ACTIONS:+ Activity:${ACTIONS}}"
 exit 0
 '@
 
@@ -479,7 +753,7 @@ exit 0
     "PostToolUse": [
       {"matcher": "", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/track-quality.sh\""}]}
     ],
-    "Stop": [
+    "SessionEnd": [
       {"matcher": "", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/session-end-check.sh\""}]}
     ]
   }
@@ -509,47 +783,190 @@ exit 0
         if (-not (Test-Path $cmdDir)) { New-Item -ItemType Directory -Path $cmdDir -Force | Out-Null }
 
         @'
-# /cs — Cortex Start (mandatory session init)
+# /cs — Cortex Start v0.7.0
 
-Run these steps IN ORDER. Do NOT skip any step.
+> Version: 0.7.0 | Updated: 2026-04-11
+> Changelog: v0.7.0 — unified versioning, removed STATE.md, streamlined tool guidance, auto-memory safety net
+> Changelog: v2.1 — added plan quality gate before implementation
+> Changelog: v2.0 — added task pickup, detect changes, recipe health, workflow recipes, versioning
+
+Run ALL steps IN ORDER. Do NOT proceed to user work until Step 7 completes.
 
 ## Step 1: Session Start
-Call `cortex_session_start` with repo, mode: "development", agentId, ide, os, branch.
-If `recentChanges.count > 0` → warn user and run `git pull`.
+Call `cortex_session_start`:
+```
+repo: "__GIT_REPO__"
+mode: "development"
+agentId: "claude-code"
+ide: "<your IDE>"
+branch: "<current git branch>"
+```
+Save `session_id` and `projectId` from the response.
+If `recentChanges.count > 0` → warn user and `git pull` before any edits.
 
-## Step 2: Knowledge Recall
-Call `cortex_knowledge_search` with query: "session summary progress next session"
+## Step 2: Recall Context (parallel)
+Call BOTH in parallel:
+- `cortex_knowledge_search(query: "session summary progress next session")`
+- `cortex_memory_search(query: "session context decisions lessons", agentId: "claude-code")`
 
-## Step 3: Memory Recall
-Call `cortex_memory_search` with query: "session context decisions lessons", agentId: "claude-code"
+These return what was done last session, key decisions, and next steps.
 
-## Step 4: Check for Conflicts
-Call `cortex_changes` with agentId and projectId from step 1.
+## Step 3: Conflict Check
+`cortex_changes(agentId: "claude-code", projectId: "<from step 1>")`
 
-## Step 5: Summarize
-Print brief summary: recent progress, unseen changes, key memories. Confirm ready.
+## Step 4: Task Pickup (Optional)
+If `cortex_task_pickup` tool is available:
+`cortex_task_pickup()` — check for Conductor tasks assigned to you.
+If tasks exist → list them. Ask user which to work on, or continue with their request.
+If the tool is not available (e.g. in solo dev mode), skip this step.
+
+## Step 5: Working State Check
+Run `git status`. If uncommitted changes:
+- `cortex_detect_changes(scope: "all")` — analyze risk level
+- Report affected symbols and blast radius
+
+## Step 6: Situational Summary
+Print a concise report:
+
+```
+## Session Init Complete
+- **Last session**: <what was done, from memory/knowledge recall>
+- **Pending tasks**: <N tasks> or none
+- **Unseen changes**: <from other agents> or clean
+- **Working state**: clean / <N uncommitted files, risk level>
+- **Key context**: <relevant decisions or lessons>
+- Ready to start work.
+```
+
+## Step 7: Activate Workflow Intelligence
+For the REST of this session, use cortex tools naturally:
+
+### Before implementing a plan:
+1. Draft plan with steps + files to change
+2. `cortex_plan_quality(plan: "<your plan>")` → score 0-100
+3. If score < 60 → refine. If 60-80 → proceed with caution. If > 80 → execute.
+
+### Finding the code to change:
+**Start from what you know, not from a fixed ladder:**
+
+| You already know | Start with |
+|---|---|
+| A symbol name | `cortex_code_context(name)` — exact graph lookup, plus callers/callees/imports in one call |
+| Only the behaviour | `cortex_code_search(query, limit: 10)` — ranked hybrid search, one call |
+| An exact literal (env var, config key, error string) | `rg` / `grep` — this is not a ranking problem |
+| A relationship across files | `cortex_cypher` |
+
+**Search once, read all ten.** Measured on cortex-hub's own index (`benchmarks/retrieval_bench.ts`,
+n=15): the target file is in the top 10 for 15/15 queries but at rank 1 for only 8/15. So scan
+the whole result set, and never re-run a reworded version of the same query — recall@10 is
+already 1.000, so it returns the same set. Ask a different question or switch tool instead.
+
+**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
+at session start, then when something breaks — not before every lookup.
+
+`cortex_code_impact` before editing something exported or shared; `cortex_changes` before
+touching a file another agent may hold.
+
+### Cross-project lookup:
+```
+cortex_code_search(query: "...", repo: "my-backend")
+cortex_code_context(name: "...", repo: "my-backend")
+cortex_code_read(file: "...", repo: "my-backend")
+```
+
+### When hitting an error:
+1. `cortex_knowledge_search` → check if known
+2. `cortex_memory_search` → check if seen before
+3. Fix the error
+4. If non-obvious → `cortex_knowledge_store` to save for others
+
+### Before committing:
+1. `cortex_detect_changes(scope: "staged")` — verify blast radius
+2. Commit
+3. After push → `cortex_code_reindex(repo: "...", branch: "<branch>")`
+
+### Working on a Conductor task:
+1. `cortex_task_accept(taskId)` at start
+2. `cortex_task_update(taskId, status: "in_progress")` during work
+3. `cortex_task_update(taskId, status: "completed", result: {...})` when done
+
+---
+All cortex gates satisfied. Proceed with user tasks.
 '@ | Out-File -FilePath (Join-Path $cmdDir "cs.md") -Encoding utf8
+        $cmdPath = Join-Path $cmdDir "cs.md"
+        (Get-Content $cmdPath -Raw).Replace("__GIT_REPO__", $GitRepo) | Set-Content $cmdPath -Encoding utf8
 
         @'
-# /ce — Cortex End (session close + quality gates)
+# /ce — Cortex End v0.7.0
 
-Run these steps IN ORDER before ending.
+> Version: 0.7.0 | Updated: 2026-04-11
+> Changelog: v0.7.0 — unified versioning, session_end auto-saves memory, removed STATE.md, streamlined steps
+> Changelog: v2.0 — added detect_changes, tool stats, task completion, recipe capture check
 
-## Step 1: Quality Gates
-Run: pnpm build && pnpm typecheck && pnpm lint
+Run ALL steps IN ORDER before ending the session.
 
-## Step 2: Quality Report
-Call `cortex_quality_report` with results.
+## Step 1: Pre-commit Check
+If uncommitted changes exist:
+- `cortex_detect_changes(scope: "all")` — verify blast radius
+- If HIGH risk → warn user before proceeding
 
-## Step 3: Store Knowledge
-If you fixed bugs or made decisions, call `cortex_knowledge_store`.
+## Step 2: Quality Gates
+```bash
+pnpm build && pnpm typecheck && pnpm lint
+```
+Record pass/fail for each.
 
-## Step 4: Store Memory
-Call `cortex_memory_store` with session lessons.
+## Step 3: Quality Report
+```
+cortex_quality_report(
+  gate_name: "Session Quality",
+  passed: <true if all gates pass>,
+  score: <0-100>,
+  details: "<build/typecheck/lint results>"
+)
+```
 
-## Step 5: End Session
-Call `cortex_session_end` with sessionId and summary.
+## Step 4: Complete Conductor Tasks (Optional)
+If `cortex_task_list` and `cortex_task_update` tools are available:
+`cortex_task_list(status: "in_progress")` — find tasks worked on this session.
+For each: `cortex_task_update(taskId, status: "completed", result: { summary: "..." })`
+If the tools are not available, skip this step.
+
+## Step 5: Store Knowledge (if applicable)
+If this session involved any of these, call `cortex_knowledge_store`:
+- Bug fix with non-obvious root cause
+- Architecture decision or tradeoff
+- Workflow pattern that worked well
+- Error + solution that others might encounter
+
+## Step 6: Store Memory
+`cortex_memory_store` with:
+- What was done this session
+- Key decisions made
+- Context for resuming next session
+- Any user preferences discovered
+
+## Step 7: End Session
+```
+cortex_session_end(
+  sessionId: "<from session_start>",
+  summary: "<concise: what was done, what's next>"
+)
+```
+> The backend automatically saves this summary as searchable memory — a safety net even if Step 6 was skipped.
+
+## Step 8: Final Report
+```
+## Session Complete
+- **Work done**: <brief summary>
+- **Quality gates**: build pass/fail | typecheck pass/fail | lint pass/fail
+- **Knowledge stored**: <N docs> or none
+- **Tasks completed**: <list> or none
+- **Next steps**: <what should be done next session>
+```
 '@ | Out-File -FilePath (Join-Path $cmdDir "ce.md") -Encoding utf8
+        $cmdPath = Join-Path $cmdDir "ce.md"
+        (Get-Content $cmdPath -Raw).Replace("__GIT_REPO__", $GitRepo) | Set-Content $cmdPath -Encoding utf8
 
         Write-Ok "Commands: /cs and /ce slash commands installed"
     }
@@ -561,82 +978,318 @@ Call `cortex_session_end` with sessionId and summary.
 
         @'
 #!/bin/bash
-PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Cortex Session Init (v7.1) — Gemini variant.
+#
+# v3 wiped the gate markers on every SessionStart. Where the host distinguishes a resumed or
+# compacted session from a fresh one, re-arming the discovery gate mid-task is a bug: the agent
+# already did the recall, and it cannot prove it any more. v3 also never cleared changes-checked
+# or tasks-checked, so those markers survived for months and the checks silently stopped running.
+#
+# And it cleared session-started on every start, which is right — but the claude variant used to
+# create it here instead, making its whole session gate vacuous. Only the tracker writes it, from
+# a real cortex_session_start call.
+# An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
+# inside a worktree, and at whatever repo the tests happen to run from.
+PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 mkdir -p "$STATE_DIR"
-rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" "$STATE_DIR/session-ended" 2>/dev/null
-echo '{"systemMessage":"MANDATORY: Call cortex_session_start before any work."}'
+
+INPUT=$(cat 2>/dev/null || true)
+SOURCE=""
+if [ -n "$INPUT" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null || true)
+  elif command -v python3 >/dev/null 2>&1; then
+    SOURCE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("source",""))' 2>/dev/null || true)
+  fi
+fi
+
+case "$SOURCE" in
+  compact|resume)
+    echo '{"systemMessage":"Cortex: same session ('"$SOURCE"') — discovery state kept."}'
+    exit 0 ;;
+esac
+
+rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" \
+      "$STATE_DIR/gate-build" "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint" \
+      "$STATE_DIR/quality-reported" "$STATE_DIR/session-ended" \
+      "$STATE_DIR/discovery-used" "$STATE_DIR/knowledge-recalled" \
+      "$STATE_DIR/memory-recalled" "$STATE_DIR/changes-checked" \
+      "$STATE_DIR/tasks-checked" "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
+echo '{"systemMessage":"MANDATORY: call cortex_session_start, then cortex_knowledge_search + cortex_memory_search, before any edit. search_file_content and glob stay blocked until a cortex discovery tool has run."}'
 '@ | Out-File -FilePath "$geminiHooksDir\session-init.sh" -Encoding utf8 -NoNewline
 
         @'
 #!/bin/bash
-PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Cortex Session Enforcement (v6.1) — Gemini variant.
+#
+# v3 only checked that a session existed: once cortex_session_start had run, every tool was
+# allowed. So the discovery-first rule was documentation, not enforcement. This mirrors the
+# Claude hook — gate grep/glob until a cortex discovery tool has run, and gate writes until
+# knowledge and memory have been recalled — in Gemini's JSON decision protocol.
+# An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
+# inside a worktree, and at whatever repo the tests happen to run from.
+PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-[ -f "$STATE_DIR/session-started" ] && { echo '{"decision":"allow"}'; exit 0; }
+
+allow() { echo '{"decision":"allow"}'; exit 0; }
+deny()  { printf '{"decision":"deny","reason":%s}\n' "$(printf '%s' "$1" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))' 2>/dev/null || printf '"BLOCKED: cortex workflow step missing."')"; exit 0; }
+
 INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+TOOL_NAME=""
+COMMAND=""
+if command -v jq >/dev/null 2>&1; then
+  TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+  COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1; then
+  # v3 read the command with jq only, so on a machine without jq the commit and write gates
+  # quietly passed everything.
+  eval "$(printf '%s' "$INPUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
+print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
+" 2>/dev/null || true)"
+fi
+[ -z "$TOOL_NAME" ] && allow
+
+# Declared escape hatch: when the hub is unreachable the tools this gate points at cannot run.
+[ -s "$STATE_DIR/gate-off" ] && allow
+
+marker_ok() { [ -s "$STATE_DIR/$1" ] && grep -q '^tool=' "$STATE_DIR/$1" 2>/dev/null; }
+
+is_codebase_search() {
+  local cmd="${1%%<<*}"   # heredoc bodies are data being written, not commands being run
+  printf '%s' "$cmd" | grep -Eq '(^|[;&]{1,2}[[:space:]]*|\([[:space:]]*)[[:space:]]*(sudo[[:space:]]+)?(grep|egrep|fgrep|rg|ag|ack|find|fd)[[:space:]]' && return 0
+  printf '%s' "$cmd" | grep -Eq '(^|[;&]{1,2}[[:space:]]*)[[:space:]]*git[[:space:]]+grep[[:space:]]' && return 0
+  return 1
+}
+is_gate_off_write() {
+  printf '%s' "$1" | grep -Eq '>[[:space:]]*"?[^"[:space:]]*\.cortex/\.session-state/gate-off"?[[:space:]]*$'
+}
+is_file_write() {
+  printf '%s' "$1" | grep -Eq '(^|[;&|]{1,2}[[:space:]]*)[[:space:]]*(sed[[:space:]]+-i|tee[[:space:]]|dd[[:space:]]|truncate[[:space:]]|install[[:space:]]+-)' && return 0
+  local cmd
+  cmd=$(printf '%s' "$1" | sed -E 's/[0-9]*>>?[[:space:]]*&[0-9-]//g; s/[0-9]*>>?[[:space:]]*"?\/dev\/[a-zA-Z0-9]+"?//g')
+  printf '%s' "$cmd" | grep -Eq '>>?[[:space:]]*"?[^&|"[:space:]]' && return 0
+  return 1
+}
+
+HOW_OUT="If the Cortex hub is unreachable, say so and write the reason: echo 'hub unreachable' > .cortex/.session-state/gate-off"
+
+if [ -f "$STATE_DIR/session-started" ]; then
+  if ! marker_ok discovery-used; then
+    case "$TOOL_NAME" in
+      search_file_content|glob)
+        deny "BLOCKED: use cortex_code_search first — it is AST-aware and returns the target file inside the top 10 far more reliably than a pattern guess. $HOW_OUT" ;;
+      run_shell_command|shell)
+        is_codebase_search "$COMMAND" && deny "BLOCKED: use cortex_code_search first. find/grep/rg unlock once a cortex discovery tool has run — and stay the right choice for an exact literal (env var, config key, error string), not for a question about behaviour. $HOW_OUT" ;;
+    esac
+    WRITES_A_FILE=0
+    case "$TOOL_NAME" in
+      write_file|replace|edit_file|create_file|insert_text) WRITES_A_FILE=1 ;;
+      run_shell_command|shell) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
+    esac
+    if [ "$WRITES_A_FILE" = "1" ]; then
+      if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
+        deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. $HOW_OUT"
+      fi
+    fi
+  fi
+  allow
+fi
+
+# Session not started: block writes and codebase search, allow plain reads.
 case "$TOOL_NAME" in
-  write_file|edit_file|create_file|insert_text)
-    echo '{"decision":"deny","reason":"BLOCKED: Call cortex_session_start first."}'; exit 0 ;;
+  write_file|replace|edit_file|create_file|insert_text)
+    deny "BLOCKED: call cortex_session_start first. No edits without a session." ;;
+  glob|search_file_content)
+    deny "BLOCKED: call cortex_session_start first, then search with cortex_code_search. $HOW_OUT" ;;
   run_shell_command|shell)
-    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
-    if [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ ) ]]; then
-      echo '{"decision":"deny","reason":"BLOCKED: Call cortex_session_start first."}'; exit 0
-    fi ;;
+    is_codebase_search "$COMMAND" && deny "BLOCKED: call cortex_session_start first, then search with cortex_code_search. $HOW_OUT"
+    is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" \
+      && deny "BLOCKED: call cortex_session_start first. No file modifications without a session."
+    printf '%s' "$COMMAND" | grep -Eq '(git[[:space:]]+(add|commit|push|reset)|^rm[[:space:]]|^mv[[:space:]]|^cp[[:space:]]|^mkdir[[:space:]])' \
+      && deny "BLOCKED: call cortex_session_start first. No file modifications without a session." ;;
 esac
-echo '{"decision":"allow"}'
+allow
 '@ | Out-File -FilePath "$geminiHooksDir\enforce-session.sh" -Encoding utf8 -NoNewline
 
         @'
 #!/bin/bash
-PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Cortex Commit Enforcement (v5.0) — Gemini variant.
+#
+# v3 accepted quality-gates-passed, which the tracker wrote the moment cortex_quality_report was
+# called — so reporting a failure unlocked the commit just as well as passing. The marker now
+# comes only from build/typecheck/lint actually running green.
+# An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
+# inside a worktree, and at whatever repo the tests happen to run from.
+PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
-if [[ "$COMMAND" =~ ^git\ commit ]] && [ ! -f "$STATE_DIR/quality-gates-passed" ]; then
-  echo '{"decision":"deny","reason":"Quality gates not passed."}'; exit 0
+COMMAND=""
+if command -v jq >/dev/null 2>&1; then
+  COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1; then
+  COMMAND=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || true)
+fi
+[[ ! "$COMMAND" =~ ^git\ commit ]] && { echo '{"decision":"allow"}'; exit 0; }
+
+MISSING=""
+[ ! -f "$STATE_DIR/session-started" ]      && MISSING="${MISSING} cortex_session_start;"
+[ ! -s "$STATE_DIR/discovery-used" ]       && MISSING="${MISSING} discovery (cortex_code_search / code_context / knowledge_search);"
+[ ! -s "$STATE_DIR/quality-gates-passed" ] && MISSING="${MISSING} quality gates green (build, typecheck, lint — calling cortex_quality_report does not count);"
+if [ -n "$MISSING" ]; then
+  printf '{"decision":"deny","reason":"BLOCKED: cannot commit — missing Cortex workflow steps:%s"}\n' "$MISSING"
+  exit 0
 fi
 echo '{"decision":"allow"}'
 '@ | Out-File -FilePath "$geminiHooksDir\enforce-commit.sh" -Encoding utf8 -NoNewline
 
         @'
 #!/bin/bash
-PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Cortex Quality Tracker (v4.0) — Gemini variant.
+#
+# Two bugs from v3: cortex_quality_report touched quality-gates-passed, so reporting a failure
+# counted as passing; and every marker was an empty `touch`, which the enforcement hook could not
+# tell apart from a forged one. Markers now carry the tool and time that produced them, a gate is
+# only marked when the command output does not look like a failure, and the cortex session id is
+# captured so the session can actually be closed.
+# An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
+# inside a worktree, and at whatever repo the tests happen to run from.
+PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 mkdir -p "$STATE_DIR"
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
-[[ "$COMMAND" =~ (pnpm|npm|yarn)\ build ]]    && touch "$STATE_DIR/gate-build"
-[[ "$COMMAND" =~ (pnpm|npm|yarn)\ typecheck ]] && touch "$STATE_DIR/gate-typecheck"
-[[ "$COMMAND" =~ (pnpm|npm|yarn)\ lint ]]      && touch "$STATE_DIR/gate-lint"
-[ -f "$STATE_DIR/gate-build" ] && [ -f "$STATE_DIR/gate-typecheck" ] && [ -f "$STATE_DIR/gate-lint" ] && touch "$STATE_DIR/quality-gates-passed"
-[[ "$TOOL_NAME" =~ cortex_session_start ]]  && touch "$STATE_DIR/session-started"
-[[ "$TOOL_NAME" =~ cortex_session_end ]]    && touch "$STATE_DIR/session-ended"
-[[ "$TOOL_NAME" =~ cortex_quality_report ]] && touch "$STATE_DIR/quality-gates-passed"
+
+TOOL_NAME=""; COMMAND=""; OUTPUT=""
+if command -v jq >/dev/null 2>&1; then
+  TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+  COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+  OUTPUT=$(printf '%s' "$INPUT" | jq -r '[(.tool_response // .tool_output // empty)] | tostring' 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1; then
+  eval "$(printf '%s' "$INPUT" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
+print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
+print(f'OUTPUT={repr(json.dumps(d.get(\"tool_response\", d.get(\"tool_output\",\"\"))))}')
+" 2>/dev/null || true)"
+fi
+
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+record() { printf 'tool=%s at=%s\n' "${2:-$TOOL_NAME}" "$NOW" > "$STATE_DIR/$1"; }
+looks_failed() {
+  printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖|FAIL |Exit status [1-9]'
+}
+mark_gate() { looks_failed && return 0; record "$1" "$COMMAND"; }
+
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ .*build ]]     && mark_gate gate-build
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ .*typecheck ]] && mark_gate gate-typecheck
+[[ "$COMMAND" =~ (pnpm|npm|yarn)\ .*lint ]]      && mark_gate gate-lint
+if [ -s "$STATE_DIR/gate-build" ] && [ -s "$STATE_DIR/gate-typecheck" ] && [ -s "$STATE_DIR/gate-lint" ]; then
+  record quality-gates-passed "build+typecheck+lint"
+fi
+
+case "$TOOL_NAME" in
+  *cortex_session_start*)
+    record session-started
+    SESSION_ID=$(printf '%s' "$INPUT" | tr -d '\\' \
+      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+    [ -n "$SESSION_ID" ] && printf '%s\n' "$SESSION_ID" > "$STATE_DIR/session-id"
+    ;;
+  *cortex_session_end*)    record session-ended ;;
+  *cortex_quality_report*) record quality-reported ;;
+  *cortex_code_search*|*cortex_code_context*|*cortex_code_impact*|*cortex_cypher*)
+    record discovery-used ;;
+  *cortex_knowledge_search*) record discovery-used; record knowledge-recalled ;;
+  *cortex_memory_search*)    record discovery-used; record memory-recalled ;;
+  *cortex_task_pickup*)      record tasks-checked ;;
+  *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
+esac
 echo '{"decision":"allow"}'
 '@ | Out-File -FilePath "$geminiHooksDir\track-quality.sh" -Encoding utf8 -NoNewline
 
         @'
 #!/bin/bash
-PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Cortex Session End Check (v6) — Gemini variant.
+#
+# v3 only printed a warning, which nothing reads once the session is over, so every gemini
+# session stayed open forever on the hub. This closes it.
+# An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
+# inside a worktree, and at whatever repo the tests happen to run from.
+PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-if [ -f "$STATE_DIR/session-started" ] && [ ! -f "$STATE_DIR/session-ended" ]; then
-  echo '{"systemMessage":"WARNING: Call cortex_session_end before ending."}'
+
+[ -f "$STATE_DIR/session-started" ] || exit 0
+[ -f "$STATE_DIR/session-ended" ] && exit 0
+
+SESSION_ID=""
+[ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
+if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
+  echo '{"systemMessage":"WARNING: cortex session not closed — no session id was recorded. Call cortex_session_end."}'
+  exit 0
 fi
+
+API_URL="${CORTEX_HUB_API_URL:-http://localhost:4000}"
+ACTIONS=""
+[ -s "$STATE_DIR/knowledge-recalled" ]   && ACTIONS="${ACTIONS} knowledge-searched"
+[ -s "$STATE_DIR/memory-recalled" ]      && ACTIONS="${ACTIONS} memory-searched"
+[ -s "$STATE_DIR/discovery-used" ]       && ACTIONS="${ACTIONS} code-searched"
+[ -s "$STATE_DIR/changes-checked" ]      && ACTIONS="${ACTIONS} changes-checked"
+[ -s "$STATE_DIR/quality-gates-passed" ] && ACTIONS="${ACTIONS} quality-passed"
+[ -s "$STATE_DIR/quality-reported" ]     && ACTIONS="${ACTIONS} quality-reported"
+[ -s "$STATE_DIR/tasks-checked" ]        && ACTIONS="${ACTIONS} tasks-checked"
+
+SUMMARY="Session auto-closed (gemini, no cortex_session_end)."
+[ -n "$ACTIONS" ] && SUMMARY="Session auto-closed (gemini). Activity:${ACTIONS}."
+curl -X POST "${API_URL}/api/sessions/${SESSION_ID}/end" \
+  -H 'Content-Type: application/json' -d "{\"summary\":\"${SUMMARY}\"}" \
+  --connect-timeout 5 -s -o /dev/null || true
+touch "$STATE_DIR/session-ended"
+echo '{"systemMessage":"INFO: cortex session closed."}'
 '@ | Out-File -FilePath "$geminiHooksDir\session-end-check.sh" -Encoding utf8 -NoNewline
 
         # Gemini settings.json
         @'
 {
   "hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": ".gemini/hooks/session-init.sh", "name": "cortex_session_init"}]}],
-    "BeforeTool": [
-      {"matcher": "write_file|edit_file|create_file|insert_text|run_shell_command|shell", "hooks": [{"type": "command", "command": ".gemini/hooks/enforce-session.sh", "name": "cortex_enforce_session"}]},
-      {"matcher": "run_shell_command|shell", "hooks": [{"type": "command", "command": ".gemini/hooks/enforce-commit.sh", "name": "cortex_enforce_commit"}]}
+    "SessionStart": [
+      {
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/session-init.sh", "name": "cortex_session_init"}
+        ]
+      }
     ],
-    "AfterTool": [{"matcher": ".*", "hooks": [{"type": "command", "command": ".gemini/hooks/track-quality.sh", "name": "cortex_track_quality"}]}],
-    "SessionEnd": [{"hooks": [{"type": "command", "command": ".gemini/hooks/session-end-check.sh", "name": "cortex_session_end_check"}]}]
+    "BeforeTool": [
+      {
+        "matcher": "write_file|replace|edit_file|create_file|insert_text|glob|search_file_content|run_shell_command|shell",
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/enforce-session.sh", "name": "cortex_enforce_session"}
+        ]
+      },
+      {
+        "matcher": "run_shell_command|shell",
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/enforce-commit.sh", "name": "cortex_enforce_commit"}
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/track-quality.sh", "name": "cortex_track_quality"}
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {"type": "command", "command": ".gemini/hooks/session-end-check.sh", "name": "cortex_session_end_check"}
+        ]
+      }
+    ]
   }
 }
 '@ | Out-File -FilePath ".gemini\settings.json" -Encoding utf8
@@ -647,40 +1300,56 @@ fi
     # ── Instruction files for other IDEs ──
     $instructionContent = @'
 <!-- cortex-hub:auto-mcp -->
-## Cortex Hub - Auto MCP (MANDATORY)
+## Cortex Hub — Auto MCP (MANDATORY)
 
 At the START of every conversation:
-1. Call ``cortex_session_start`` with repo, agentId, mode: "development"
-2. If ``recentChanges.count > 0``, warn user and run ``git pull``
-3. Read ``STATE.md`` if it exists
+1. Call `cortex_session_start` with repo: "__GIT_REPO__", agentId: "__AGENT_ID__", mode: "development"
+2. If `recentChanges.count > 0`, warn user and run `git pull`
+3. `cortex_knowledge_search` + `cortex_memory_search` once — recall what the last session decided
+
+### Finding code — start from what you know, not from a fixed ladder
+| You already know | Start with |
+|---|---|
+| A symbol name | `cortex_code_context(name)` — exact graph lookup, plus callers/callees/imports in one call |
+| Only the behaviour | `cortex_code_search(query, limit: 10)` — ranked hybrid search, one call |
+| An exact literal (env var, config key, error string) | `rg` / `grep` — this is not a ranking problem |
+| A relationship across files | `cortex_cypher` |
+
+**Search once, read all ten.** On the cortex-hub index the target file is in the top 10 for
+15/15 queries but at rank 1 for only 8/15 — so scan the whole result set, and never re-run a
+reworded version of the same query. Ask a different question or switch tool instead.
+
+`cortex_code_impact` before editing something exported or shared. Knowledge and memory are
+for errors and decisions, not for locating code.
 
 ### Error Protocol
-1. ``cortex_knowledge_search`` first
-2. Fix the error
-3. Non-obvious fixes: ``cortex_knowledge_store``
+1. `cortex_knowledge_search` first — someone may have solved this
+2. `cortex_memory_search` — you may have seen it before
+3. Fix the error
+4. Non-obvious fixes: `cortex_knowledge_store`
 
 ### Quality Gates
-Run verify commands from ``.cortex/project-profile.json``, then ``cortex_quality_report``.
-End session: ``cortex_session_end`` with sessionId and summary.
+Run verify commands from `.cortex/project-profile.json`, then `cortex_quality_report`.
+After a push: `cortex_code_reindex`. End session: `cortex_session_end` with sessionId and summary.
 <!-- cortex-hub:auto-mcp -->
 '@
 
     if (Test-IDESelected "cursor") {
-        ($instructionContent -replace "__AGENT_ID__", "cursor") | Out-File -FilePath ".cursorrules" -Encoding utf8
+        (($instructionContent -replace "__AGENT_ID__", "cursor") -replace "__GIT_REPO__", $GitRepo) | Out-File -FilePath ".cursorrules" -Encoding utf8
         Write-Ok "Created .cursorrules (cursor)"
     }
     if (Test-IDESelected "windsurf") {
-        ($instructionContent -replace "__AGENT_ID__", "windsurf") | Out-File -FilePath ".windsurfrules" -Encoding utf8
+        (($instructionContent -replace "__AGENT_ID__", "windsurf") -replace "__GIT_REPO__", $GitRepo) | Out-File -FilePath ".windsurfrules" -Encoding utf8
         Write-Ok "Created .windsurfrules (windsurf)"
     }
     if (Test-IDESelected "vscode") {
         if (-not (Test-Path ".vscode")) { New-Item -ItemType Directory -Path ".vscode" -Force | Out-Null }
-        ($instructionContent -replace "__AGENT_ID__", "vscode-copilot") | Out-File -FilePath ".vscode\copilot-instructions.md" -Encoding utf8
+        (($instructionContent -replace "__AGENT_ID__", "vscode-copilot") -replace "__GIT_REPO__", $GitRepo) | Out-File -FilePath ".vscode\copilot-instructions.md" -Encoding utf8
         Write-Ok "Created .vscode\copilot-instructions.md (vscode-copilot)"
     }
     if (Test-IDESelected "codex") {
         if (-not (Test-Path ".codex")) { New-Item -ItemType Directory -Path ".codex" -Force | Out-Null }
-        ($instructionContent -replace "__AGENT_ID__", "codex") | Out-File -FilePath ".codex\instructions.md" -Encoding utf8
+        (($instructionContent -replace "__AGENT_ID__", "codex") -replace "__GIT_REPO__", $GitRepo) | Out-File -FilePath ".codex\instructions.md" -Encoding utf8
         Write-Ok "Created .codex\instructions.md (codex)"
     }
 
@@ -703,22 +1372,92 @@ if (-not (Test-Path "lefthook.yml")) {
 # ══════════════════════════════════════════════
 $cortexMarker = "<!-- cortex-hub:auto-mcp -->"
 $claudeMdBody = @'
-## Cortex Hub — MANDATORY (enforced by hooks)
+## Cortex Hub — MANDATORY (enforced by hooks — violations are BLOCKED)
 
-**YOUR FIRST ACTION in every conversation MUST be calling ``cortex_session_start``.**
+**YOUR FIRST ACTION in every conversation MUST be calling `cortex_session_start`.
 If you skip this, all Edit/Write/file-modifying Bash commands will return exit code 2 (BLOCKED).
+This is not optional — it is enforced by pre-tool hooks.**
 
-``cortex_session_start(repo: "__REPO__", mode: "development", agentId: "claude-code")``
+```
+cortex_session_start(repo: "__GIT_REPO__", mode: "development", agentId: "claude-code")
+```
 
 Then:
-- If ``recentChanges.count > 0`` - warn user and ``git pull``
-- Read ``STATE.md`` if it exists
+- If `recentChanges.count > 0` in the response, warn the user and run `git pull`
 
-### Quality gates (enforced - commit blocked without these)
-Run verify commands from ``.cortex/project-profile.json``.
-Call ``cortex_quality_report`` then ``cortex_session_end``.
+### Agent Identity (send with session_start if available)
+
+Read `.cortex/agent-identity.json` and pass identity fields:
+```
+cortex_session_start(
+  repo: "__GIT_REPO__",
+  mode: "development",
+  agentId: "claude-code",
+  hostname: "<from agent-identity.json>",
+  os: "<from agent-identity.json>",
+  ide: "claude-code-cli",
+  branch: "<current git branch>",
+  role: "<from agent-identity.json>",
+  capabilities: ["<from agent-identity.json>"]
+)
+```
+This helps Dashboard identify which agent you are across multiple IDEs/machines.
+
+### Finding code fast (MANDATORY — and a fixed ladder is the slow way)
+
+Start from what you already know. Grep and Glob are blocked by a hook until a cortex
+discovery tool has run in this session.
+
+| You already know | Start with | Why |
+|---|---|---|
+| A symbol name | `cortex_code_context(name)` | Exact graph lookup — no ranking to get wrong — and it answers callers, callees and imports in one call |
+| Only the behaviour | `cortex_code_search(query, limit: 10)` | Ranked hybrid search over the index. One call, then read the list |
+| An exact literal (env var, config key, error string) | `rg` / `grep` | Not a ranking problem. Lexical search alone ranks *worse* than vector on questions, but it is right for a string that either appears or does not |
+| A relationship across files | `cortex_cypher` | One graph query instead of N searches |
+
+**Search once, then read the whole set.** Measured on the cortex-hub index (n=15): the target
+file is in the top 10 for 15/15 queries, top 3 for 11/15, rank 1 for only 8/15. So scan all ten
+hits before choosing, and do not re-run a reworded version of the same query — recall@10 is
+already 1.000, so it returns the same set. Ask a different question or switch tool instead.
+
+`cortex_code_impact` before editing something exported or shared — not as a ritual on every file.
+
+**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
+at session start, then whenever something breaks.
+
+### Before editing shared files
+
+Call `cortex_changes` to check if another agent modified the same files.
+
+### When encountering an error or bug
+
+1. **FIRST** search `cortex_knowledge_search` — someone may have solved this already
+2. **THEN** `cortex_memory_search` — you may have seen this before
+3. Fix the error
+4. Non-obvious fixes: **YOU MUST** call `cortex_knowledge_store` to record the solution
+
+### After pushing code
+
+Call `cortex_code_reindex` to update code intelligence:
+```
+repo: "__GIT_REPO__"
+branch: "<current branch>"
+```
+
+### Quality gates (enforced — commit blocked without these)
+
+Every session must end with verification commands from `.cortex/project-profile.json`.
+Call `cortex_quality_report` with results. Call `cortex_session_end` to close the session.
+**Commits are BLOCKED by hooks until quality gates pass.**
+
+### Compliance Enforcement (Automated)
+
+Your tool usage is **automatically tracked and scored**:
+
+1. **Session Compliance Score** — `cortex_session_end` returns a grade (A/B/C/D) based on 5-category tool coverage.
+2. **MCP Response Hints** — Every tool response includes adaptive hints about what to use next.
 '@
-$claudeMdBody = $claudeMdBody -replace "__REPO__", $GitRepo
+$claudeMdBody = $claudeMdBody -replace "__GIT_REPO__", $GitRepo
 $claudeMdContent = "$cortexMarker`n$claudeMdBody`n$cortexMarker"
 
 if (-not (Test-Path "CLAUDE.md")) {
@@ -731,6 +1470,10 @@ if (-not (Test-Path "CLAUDE.md")) {
     $updated = [regex]::Replace($existing, $pattern, $claudeMdContent.Trim())
     $updated | Out-File -FilePath "CLAUDE.md" -Encoding utf8
     Write-Ok "CLAUDE.md: cortex section updated"
+} elseif (Select-String -Path "CLAUDE.md" -Pattern "cortex_session_start" -Quiet) {
+    # A hand-written cortex section with no marker. Appending would leave two MANDATORY
+    # sections giving different orders — worse than not touching the file at all.
+    Write-Warn "CLAUDE.md: already has cortex instructions but no marker - left untouched."
 } else {
     Add-Content -Path "CLAUDE.md" -Value "`n$claudeMdContent"
     Write-Ok "CLAUDE.md: cortex section appended"

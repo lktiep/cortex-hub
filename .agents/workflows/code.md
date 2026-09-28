@@ -14,16 +14,29 @@ description: Write code following project-specific quality gates from project-pr
 ### 1. Load Context
 - Read `.cortex/project-profile.json` → verify commands + patterns
 - Read `.cortex/code-conventions.md` → naming, imports, error handling
-- `cortex_memory_search` → recall past decisions or gotchas related to this topic
+- Session context (memory/knowledge) is recalled once by `/cs` — don't repeat it per lookup
 
-### 2. Research & Plan
+### 2. Locate the change, then plan
 
-Use cortex tools to understand the codebase before writing code:
-1. `cortex_code_search` → find where the relevant pattern exists
-2. `cortex_code_context` → understand callers/callees of symbols you'll change
-3. `cortex_code_impact` → check what breaks if you change these files
-4. `cortex_knowledge_search` → any documented patterns or known issues
-5. grep/find → fallback only if cortex returns nothing
+**Start from what you know, not from a fixed ladder:**
+
+| You already know | Start with |
+|---|---|
+| A symbol name | `cortex_code_context(name)` — exact graph lookup, plus callers/callees/imports in one call |
+| Only the behaviour | `cortex_code_search(query, limit: 10)` — ranked hybrid search, one call |
+| An exact literal (env var, config key, error string) | `rg` / `grep` — this is not a ranking problem |
+| A relationship across files | `cortex_cypher` |
+
+**Search once, read all ten.** Measured on cortex-hub's own index (`benchmarks/retrieval_bench.ts`,
+n=15): the target file is in the top 10 for 15/15 queries but at rank 1 for only 8/15. So scan
+the whole result set, and never re-run a reworded version of the same query — recall@10 is
+already 1.000, so it returns the same set. Ask a different question or switch tool instead.
+
+**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
+at session start, then when something breaks — not before every lookup.
+
+`cortex_code_impact` before editing something exported or shared; `cortex_changes` before
+touching a file another agent may hold.
 
 Then plan:
 - Identify files to create/modify

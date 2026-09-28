@@ -30,8 +30,25 @@ Use cortex tools as your primary workflow — they're faster, more focused, and 
 | Other agents' changes | `cortex_changes` | Check before editing shared files |
 | Tool effectiveness | `cortex_tool_stats` | Usage analytics and success rates |
 
-**Discovery order** (try in this order before falling back to grep):
-`memory_search` → `knowledge_search` → `code_search` → `code_context` → `code_impact` → grep/find
+**Start from what you know, not from a fixed ladder:**
+
+| You already know | Start with |
+|---|---|
+| A symbol name | `cortex_code_context(name)` — exact graph lookup, plus callers/callees/imports in one call |
+| Only the behaviour | `cortex_code_search(query, limit: 10)` — ranked hybrid search, one call |
+| An exact literal (env var, config key, error string) | `rg` / `grep` — this is not a ranking problem |
+| A relationship across files | `cortex_cypher` |
+
+**Search once, read all ten.** Measured on cortex-hub's own index (`benchmarks/retrieval_bench.ts`,
+n=15): the target file is in the top 10 for 15/15 queries but at rank 1 for only 8/15. So scan
+the whole result set, and never re-run a reworded version of the same query — recall@10 is
+already 1.000, so it returns the same set. Ask a different question or switch tool instead.
+
+**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
+at session start, then when something breaks — not before every lookup.
+
+`cortex_code_impact` before editing something exported or shared; `cortex_changes` before
+touching a file another agent may hold.
 
 **Bug protocol**: search knowledge/memory first → fix → store non-obvious fixes via `knowledge_store`.
 

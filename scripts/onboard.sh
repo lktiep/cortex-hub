@@ -395,245 +395,12 @@ for tool_key in "${SELECTED_TOOLS[@]}"; do
     done
 done
 
-# ── Step 4b: Generate IDE instruction files with correct agentId ──
-# Maps tool key → agentId used in cortex_session_start
-# Each IDE has its own instruction file format
-GIT_REPO_URL=$(git remote get-url origin 2>/dev/null || echo "unknown")
-CORTEX_MARKER="<!-- cortex-hub:auto-mcp -->"
-
-generate_cortex_instructions() {
-    local agent_id="$1"
-    cat <<INSTREOF
-$CORTEX_MARKER
-## Cortex Hub — Auto MCP (MANDATORY — every conversation)
-
-At the START of every conversation, before doing anything else:
-
-1. Call \`cortex_session_start\` with:
-   \`\`\`
-   repo: "$GIT_REPO_URL"
-   mode: "development"
-   agentId: "$agent_id"
-   \`\`\`
-   This returns project context AND unseen code changes from other agents.
-
-2. If \`recentChanges.count > 0\` in the response, warn the user and run \`git pull\` before editing any affected files.
-
-3. Read \`STATE.md\` for current task progress (if it exists).
-
-### Before editing shared files
-
-Call \`cortex_changes\` to check if another agent modified the same files:
-\`\`\`
-agentId: "$agent_id"
-projectId: "<from session_start response>"
-\`\`\`
-
-### When encountering an error or bug (MANDATORY)
-
-1. First search \`cortex_knowledge_search\` or \`cortex_memory_search\` for the error message.
-2. Fix the error.
-3. If the fix was non-obvious, **YOU MUST** use \`cortex_knowledge_store\` to record the problem and solution so you (and others) don't have to debug it again.
-
-### After pushing code
-
-Call \`cortex_code_reindex\` to update code intelligence:
-\`\`\`
-repo: "$GIT_REPO_URL"
-branch: "<current branch>"
-\`\`\`
-
-### Quality gates
-
-Every session must end with verification commands from \`.cortex/project-profile.json\`.
-Call \`cortex_quality_report\` with results.
-Call \`cortex_session_end\` to close the session.
-$CORTEX_MARKER
-INSTREOF
-}
-
-inject_instructions_to_file() {
-    local file="$1"
-    local agent_id="$2"
-    local label="$3"
-
-    if [ -f "$file" ] && grep -q "$CORTEX_MARKER" "$file" 2>/dev/null; then
-        # Already injected — update agentId in case tool changed
-        sed -i.bak "s/agentId: \"[^\"]*\"/agentId: \"$agent_id\"/g" "$file" && rm -f "${file}.bak"
-        echo -e "${GREEN}>>> $label already has Cortex instructions — updated agentId to '$agent_id'${NC}"
-    else
-        if [ -f "$file" ]; then
-            echo -e "${BLUE}>>> Appending Cortex Hub instructions to $label...${NC}"
-        else
-            echo -e "${BLUE}>>> Creating $label with Cortex Hub instructions...${NC}"
-        fi
-        echo "" >> "$file"
-        generate_cortex_instructions "$agent_id" >> "$file"
-        echo -e "${GREEN}>>> $label updated (agentId: $agent_id)${NC}"
-    fi
-}
-
-# Antigravity-specific: enriched AGENTS.md with full tool enforcement
-generate_antigravity_instructions() {
-    cat <<'ANTIGRAVITYEOF'
-
-<!-- cortex-hub:auto-mcp -->
-## Cortex Hub — Auto MCP (MANDATORY — every conversation)
-
-At the START of every conversation, before doing anything else:
-
-1. Call `cortex_session_start` with:
-   ```
-   repo: "$GIT_REPO_URL"
-   mode: "development"
-   agentId: "antigravity"
-   ```
-   This returns project context AND unseen code changes from other agents.
-
-2. If `recentChanges.count > 0` in the response, warn the user and run `git pull` before editing any affected files.
-
-3. Read `STATE.md` for current task progress (if it exists).
-
-### Before editing shared files
-
-Call `cortex_changes` to check if another agent modified the same files:
-```
-agentId: "antigravity"
-projectId: "<from session_start response>"
-```
-
-### When encountering an error or bug (MANDATORY)
-
-1. First search `cortex_knowledge_search` or `cortex_memory_search` for the error message.
-2. Fix the error.
-3. If the fix was non-obvious, **YOU MUST** use `cortex_knowledge_store` to record the problem and solution so you (and others) don't have to debug it again.
-
-### After pushing code
-
-Call `cortex_code_reindex` to update code intelligence:
-```
-repo: "$GIT_REPO_URL"
-branch: "<current branch>"
-```
-
-### Quality gates
-
-Every session must end with verification commands from `.cortex/project-profile.json`.
-Call `cortex_quality_report` with results.
-Call `cortex_session_end` to close the session.
-
----
-
-## ⚠️ Tool Usage Enforcement (MANDATORY)
-
-> **You MUST use Cortex tools throughout the session. Skipping them defeats the purpose of Cortex Hub.**
-> If any tool is missing or fails with `fetch failed`, immediately inform the user to refresh the MCP server connection.
-
-### Complete Tool Reference (18 tools)
-
-| # | Tool | When to Use | Required Args |
-|---|------|-------------|---------------|
-| 1 | `cortex_session_start` | Start of EVERY conversation | `repo`, `agentId`, `mode` |
-| 2 | `cortex_session_end` | End of EVERY session | `sessionId` |
-| 3 | `cortex_changes` | Before editing shared files | `agentId`, `projectId` |
-| 4 | `cortex_code_search` | **BEFORE** grep/find — use FIRST | `query` |
-| 5 | `cortex_code_context` | Get 360° view of a symbol | `name` |
-| 6 | `cortex_code_impact` | Before editing core code | `target` (function/class/file) |
-| 7 | `cortex_detect_changes` | Before committing — pre-commit risk analysis | `projectId` |
-| 8 | `cortex_cypher` | Advanced graph queries (find callers, trace deps) | `query` (Cypher syntax) |
-| 9 | `cortex_code_reindex` | After EVERY push | `repo`, `branch` |
-| 10 | `cortex_list_repos` | List all indexed repositories | (none) |
-| 11 | `cortex_memory_search` | Recall past decisions/findings | `query` |
-| 12 | `cortex_memory_store` | Store session findings | `content` |
-| 13 | `cortex_knowledge_search` | Search **FIRST** when encountering errors | `query` |
-| 14 | `cortex_knowledge_store` | **MANDATORY**: Contribute bug fixes & patterns | `title`, `content` |
-| 15 | `cortex_quality_report` | After running verify commands | `gate_name`, `results`, `agent_id` |
-| 16 | `cortex_plan_quality` | Assess plan against criteria | `plan`, `request` |
-| 17 | `cortex_tool_stats` | View token savings, tool usage analytics & effectiveness | `days` (optional) |
-| 18 | `cortex_health` | Check service health | (none) |
-
-### Tool Priority Order (MANDATORY — before grep/find)
-
-1. `cortex_memory_search` → check if you already know this
-2. `cortex_knowledge_search` → search shared knowledge base
-3. `cortex_code_search` → search indexed codebase (GitNexus AST)
-4. `cortex_code_context` → understand symbol callers/callees
-5. `cortex_code_impact` → check blast radius before editing
-6. `cortex_detect_changes` → pre-commit risk analysis
-7. `cortex_cypher` → advanced graph queries (Cypher syntax)
-8. `grep_search` / `find_by_name` → fallback ONLY if Cortex tools unavailable
-
-### Post-Push Checklist (NEVER skip)
-
-```
-1. pnpm build && pnpm typecheck && pnpm lint                    ← verify
-2. cortex_quality_report(gate_name, results, agent_id)          ← report (agent_id: "antigravity")
-3. cortex_code_reindex(repo, branch)                            ← update code intelligence
-4. cortex_memory_store(content, projectId)                      ← store findings
-5. cortex_session_end(sessionId)                                ← close session
-```
-
-### Tool Verification
-
-If you see fewer than 18 tools from `cortex-hub` MCP server, the connection may be stale.
-**Action:** Immediately inform the user: "MCP tools are incomplete. Please refresh the cortex-hub MCP server connection."
-<!-- cortex-hub:auto-mcp -->
-ANTIGRAVITYEOF
-}
-
-for tool_key in "${SELECTED_TOOLS[@]}"; do
-    case "$tool_key" in
-        claude)
-            inject_instructions_to_file "CLAUDE.md" "claude-code" "CLAUDE.md"
-            ;;
-        cursor)
-            inject_instructions_to_file ".cursorrules" "cursor" ".cursorrules"
-            ;;
-        windsurf)
-            inject_instructions_to_file ".windsurfrules" "windsurf" ".windsurfrules"
-            ;;
-        codex)
-            mkdir -p .codex
-            inject_instructions_to_file ".codex/instructions.md" "codex" ".codex/instructions.md"
-            ;;
-        vscode)
-            mkdir -p .vscode
-            inject_instructions_to_file ".vscode/copilot-instructions.md" "vscode-copilot" ".vscode/copilot-instructions.md"
-            ;;
-        antigravity)
-            # Antigravity gets enriched AGENTS.md with full tool enforcement
-            # Uses marker-based injection: replaces content between cortex markers,
-            # preserving any user content outside the markers.
-            echo -e "${BLUE}>>> Injecting enriched tool references into AGENTS.md...${NC}"
-            GEMINI_FILE="AGENTS.md"
-            ANTIGRAVITY_CONTENT=$(generate_antigravity_instructions)
-
-            if [ -f "$GEMINI_FILE" ] && grep -q "$CORTEX_MARKER" "$GEMINI_FILE" 2>/dev/null; then
-                # File exists with markers — replace content between markers
-                python3 -c "
-import re
-with open('$GEMINI_FILE', 'r', encoding='utf-8-sig') as f:
-    content = f.read()
-marker = '$CORTEX_MARKER'
-pattern = re.escape(marker) + r'.*?' + re.escape(marker)
-replacement = '''$ANTIGRAVITY_CONTENT'''
-new_content = re.sub(pattern, replacement.strip(), content, flags=re.DOTALL)
-with open('$GEMINI_FILE', 'w', encoding='utf-8') as f:
-    f.write(new_content)
-print('    Updated cortex section in AGENTS.md (preserved other content)')
-"
-            else
-                # File doesn't exist or no markers — append fresh to AGENTS.md
-                echo "$ANTIGRAVITY_CONTENT" >> "$GEMINI_FILE"
-                echo -e "    Appended to $GEMINI_FILE"
-            fi
-            echo -e "${GREEN}>>> AGENTS.md updated with full tool reference${NC}"
-            ;;
-        bot)
-            echo -e "${YELLOW}>>> Bot mode: agentId should be passed via API call${NC}"
-            ;;
-    esac
-done
+# ── Step 4b: IDE instruction files ──
+# Written by scripts/install.sh in Step 6b below, together with the enforcement hooks.
+# This script used to generate them here from its own copy of the text, and that copy went
+# three versions stale: it still told agents to read STATE.md (removed in v0.7.0) and taught
+# the old "memory → knowledge → code_search → …" ladder, which is measurably the slow way in.
+# One generator, one wording — install.sh owns both.
 
 # ── Step 4c: Verify Tool Count ──
 echo ""
@@ -881,393 +648,38 @@ else
     echo -e "${YELLOW}>>> No project-profile.json found. Skipping hook setup.${NC}"
 fi
 
-# ── Step 6b: Install Claude Code Enforcement Hooks ──
-# Claude Code is the ONLY IDE that supports runtime hooks (PreToolUse, PostToolUse, etc.)
-# For other IDEs, enforcement is instruction-based only + server-side validation.
-
-CLAUDE_DIR=".claude"
-CLAUDE_HOOKS_DIR="$CLAUDE_DIR/hooks"
-CLAUDE_SETTINGS="$CLAUDE_DIR/settings.json"
-
-# Check if Claude Code is one of the configured tools
-INSTALL_CLAUDE_HOOKS=false
+# ── Step 6b: Enforcement hooks + IDE rule files (delegated to install.sh) ──
+# Everything below used to be duplicated here: five claude hooks, five gemini hooks, both
+# settings.json files and every IDE's rule file. The copies here drifted badly — no discovery
+# gate, no knowledge/memory recall gate, and `cortex_quality_report` alone unlocking a commit
+# with no evidence that the build ever ran. install.sh is the one place that writes them.
+#
+# No --force: install.sh then keeps the project-profile.json this script just generated, and
+# still refreshes the hooks whenever .cortex/.hooks-version is behind.
+INSTALL_TOOLS=""
 for tool in "${SELECTED_TOOLS[@]}"; do
-    if [ "$tool" = "claude" ]; then
-        INSTALL_CLAUDE_HOOKS=true
-        break
-    fi
+    case "$tool" in
+        # install.sh calls the Gemini CLI / Antigravity family "gemini".
+        antigravity) mapped="gemini" ;;
+        bot)         continue ;;
+        *)           mapped="$tool" ;;
+    esac
+    INSTALL_TOOLS="${INSTALL_TOOLS:+$INSTALL_TOOLS,}$mapped"
 done
 
-if [ "$INSTALL_CLAUDE_HOOKS" = true ]; then
-    echo -e "${BLUE}>>> Installing Claude Code enforcement hooks...${NC}"
-    mkdir -p "$CLAUDE_HOOKS_DIR"
-
-    # ── Hook 1: session-init.sh — Inject mandatory session_start reminder ──
-    cat > "$CLAUDE_HOOKS_DIR/session-init.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Session Init — Injects mandatory reminder + resets session markers.
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-mkdir -p "$CORTEX_STATE_DIR"
-rm -f "$CORTEX_STATE_DIR/session-started" "$CORTEX_STATE_DIR/quality-gates-passed" \
-      "$CORTEX_STATE_DIR/session-ended" 2>/dev/null
-cat <<'MSG'
-MANDATORY SESSION PROTOCOL — You MUST complete these steps NOW before any other work:
-1. Call cortex_session_start with repo, mode: "development", agentId: "claude-code"
-2. If recentChanges.count > 0, warn user and run git pull
-3. Read STATE.md for current task progress
-DO NOT proceed with any code changes until step 1 is complete.
-MSG
-HOOKEOF
-
-    # ── Hook 2: enforce-commit.sh — Block git commit without quality gates ──
-    cat > "$CLAUDE_HOOKS_DIR/enforce-commit.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Commit Enforcement — Blocks git commit if quality gates haven't passed.
-INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-if [[ ! "$COMMAND" =~ ^git\ (commit|push) ]]; then exit 0; fi
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-if [[ "$COMMAND" =~ ^git\ commit ]]; then
-  if [ ! -f "$CORTEX_STATE_DIR/quality-gates-passed" ]; then
-    echo "Quality gates not passed! You MUST call cortex_quality_report before committing." >&2
-    exit 2
-  fi
-fi
-if [[ "$COMMAND" =~ ^git\ push ]]; then
-  echo "REMINDER: After push, call cortex_code_reindex to update code intelligence." >&2
-fi
-exit 0
-HOOKEOF
-
-    # ── Hook 3: track-quality.sh — Track quality gate passes + MCP calls ──
-    cat > "$CLAUDE_HOOKS_DIR/track-quality.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Quality Tracker — Marks gates as passed when quality is reported.
-INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-mkdir -p "$CORTEX_STATE_DIR"
-
-[[ "$TOOL_NAME" =~ cortex_quality_report ]] && touch "$CORTEX_STATE_DIR/quality-gates-passed"
-[[ "$TOOL_NAME" =~ cortex_session_start ]] && touch "$CORTEX_STATE_DIR/session-started"
-[[ "$TOOL_NAME" =~ cortex_session_end ]] && touch "$CORTEX_STATE_DIR/session-ended"
-exit 0
-HOOKEOF
-
-    # ── Hook 4: session-end-check.sh — Warn if session_end not called ──
-    cat > "$CLAUDE_HOOKS_DIR/session-end-check.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Session End Check — Warns if cortex_session_end not called.
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-if [ -f "$CORTEX_STATE_DIR/session-started" ] && [ ! -f "$CORTEX_STATE_DIR/session-ended" ]; then
-  echo "WARNING: cortex_session_end has not been called. Call it with sessionId and summary before ending."
-fi
-exit 0
-HOOKEOF
-
-    # ── Hook 5: enforce-session.sh — HARD BLOCK Edit/Write/Bash without session ──
-    cat > "$CLAUDE_HOOKS_DIR/enforce-session.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Session Enforcement — HARD BLOCK.
-# Blocks Edit, Write, Bash (file-modifying) if cortex_session_start hasn't been called.
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-if [ -f "$CORTEX_STATE_DIR/session-started" ]; then exit 0; fi
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
-case "$TOOL_NAME" in
-  Edit|Write|NotebookEdit)
-    echo "BLOCKED: Call cortex_session_start before editing files. Session not started." >&2
-    exit 2
-    ;;
-  Bash)
-    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-    if [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote)|pnpm\ (build|typecheck|lint|test)|curl|python3\ -m\ json) ]]; then
-      exit 0
+INSTALL_SH="$(dirname "${BASH_SOURCE[0]}")/install.sh"
+if [ -f "$INSTALL_SH" ] && [ -n "$INSTALL_TOOLS" ]; then
+    echo -e "${BLUE}>>> Installing enforcement hooks and rule files (install.sh --tools $INSTALL_TOOLS)...${NC}"
+    if bash "$INSTALL_SH" --skip-global --tools "$INSTALL_TOOLS"; then
+        echo -e "${GREEN}>>> Hooks and rule files installed${NC}"
+    else
+        echo -e "${RED}>>> install.sh failed — hooks and rule files were NOT installed.${NC}"
+        echo -e "${YELLOW}    Run it yourself: bash scripts/install.sh --tools $INSTALL_TOOLS${NC}"
     fi
-    if [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ |sed\ -i|">" ) ]]; then
-      echo "BLOCKED: Call cortex_session_start before modifying files. Session not started." >&2
-      exit 2
-    fi
-    exit 0
-    ;;
-esac
-exit 0
-HOOKEOF
-
-    chmod +x "$CLAUDE_HOOKS_DIR"/*.sh
-
-    # ── Generate .claude/settings.json with hooks (merge with existing if present) ──
-    python3 -c "
-import json, os
-
-settings_path = '$CLAUDE_SETTINGS'
-
-def get_sh_cmd(hook_file):
-    return f'bash -c \\'bash \\"$(git rev-parse --show-toplevel 2>/dev/null || echo \\".\\")\\"/.claude/hooks/{hook_file}\\''
-
-hooks_config = {
-    'hooks': {
-        'SessionStart': [{
-            'matcher': '',
-            'hooks': [{'type': 'command', 'command': get_sh_cmd('session-init.sh')}]
-        }],
-        'PreToolUse': [
-            {
-                'matcher': 'Edit|Write|NotebookEdit|Bash',
-                'hooks': [{'type': 'command', 'command': get_sh_cmd('enforce-session.sh')}]
-            },
-            {
-                'matcher': 'Bash',
-                'hooks': [{'type': 'command', 'command': get_sh_cmd('enforce-commit.sh')}]
-            }
-        ],
-        'PostToolUse': [{
-            'matcher': '',
-            'hooks': [{'type': 'command', 'command': get_sh_cmd('track-quality.sh')}]
-        }],
-        'Stop': [{
-            'matcher': '',
-            'hooks': [{'type': 'command', 'command': get_sh_cmd('session-end-check.sh')}]
-        }]
-    }
-}
-
-existing = {}
-if os.path.exists(settings_path):
-    try:
-        with open(settings_path, encoding='utf-8-sig') as f:
-            existing = json.load(f)
-    except (json.JSONDecodeError, IOError):
-        existing = {}
-
-existing['hooks'] = hooks_config['hooks']
-
-with open(settings_path, 'w', encoding='utf-8') as f:
-    json.dump(existing, f, indent=2)
-    f.write('\n')
-"
-
-    echo -e "${GREEN}    ✓ Claude Code hooks installed (5 enforcement hooks)${NC}"
-    echo -e "${GREEN}      SessionStart  → session-init.sh (inject reminder)${NC}"
-    echo -e "${GREEN}      PreToolUse    → enforce-session.sh (BLOCK edit/write without session)${NC}"
-    echo -e "${GREEN}      PreToolUse    → enforce-commit.sh (BLOCK commit without gates)${NC}"
-    echo -e "${GREEN}      PostToolUse   → track-quality.sh (track gate passes + MCP calls)${NC}"
-    echo -e "${GREEN}      Stop          → session-end-check.sh (session_end reminder)${NC}"
+elif [ -z "$INSTALL_TOOLS" ]; then
+    echo -e "${YELLOW}>>> No IDE selected — skipping hooks and rule files${NC}"
 else
-    echo -e "${YELLOW}>>> Claude Code not selected — skipping Claude hooks${NC}"
-fi
-
-# ── Step 6c: Install Gemini CLI Enforcement Hooks ──
-# Gemini CLI (v0.26+) supports hooks similar to Claude Code:
-#   BeforeTool (can block), AfterTool, SessionStart, SessionEnd, BeforeModel, etc.
-# Config: .gemini/settings.json (project-level)
-
-GEMINI_DIR=".gemini"
-GEMINI_HOOKS_DIR="$GEMINI_DIR/hooks"
-GEMINI_SETTINGS="$GEMINI_DIR/settings.json"
-
-INSTALL_GEMINI_HOOKS=false
-for tool in "${SELECTED_TOOLS[@]}"; do
-    if [ "$tool" = "antigravity" ]; then
-        INSTALL_GEMINI_HOOKS=true
-        break
-    fi
-done
-
-if [ "$INSTALL_GEMINI_HOOKS" = true ]; then
-    echo -e "${BLUE}>>> Installing Gemini CLI enforcement hooks...${NC}"
-    mkdir -p "$GEMINI_HOOKS_DIR"
-
-    # ── Hook 1: session-init.sh — Inject mandatory session_start reminder ──
-    cat > "$GEMINI_HOOKS_DIR/session-init.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Session Init (Gemini) — Resets session markers + injects reminder.
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-mkdir -p "$CORTEX_STATE_DIR"
-rm -f "$CORTEX_STATE_DIR/session-started" "$CORTEX_STATE_DIR/quality-gates-passed" \
-      "$CORTEX_STATE_DIR/session-ended" 2>/dev/null
-cat <<'MSG'
-{"systemMessage": "MANDATORY: Call cortex_session_start(repo, mode: 'development', agentId: 'antigravity') NOW before any work."}
-MSG
-HOOKEOF
-
-    # ── Hook 2: enforce-commit.sh — Block shell commands (git commit) without quality gates ──
-    cat > "$GEMINI_HOOKS_DIR/enforce-commit.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Commit Enforcement (Gemini) — Blocks git commit without quality gates.
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-
-# Only intercept shell commands
-if [[ "$TOOL_NAME" != "run_shell_command" ]] && [[ "$TOOL_NAME" != "shell" ]]; then
-  echo '{"decision":"allow"}'
-  exit 0
-fi
-
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-
-if [[ "$COMMAND" =~ ^git\ commit ]]; then
-  if [ ! -f "$CORTEX_STATE_DIR/quality-gates-passed" ]; then
-    echo '{"decision":"deny","reason":"Quality gates not passed! You MUST call cortex_quality_report before committing."}'
-    exit 0
-  fi
-fi
-
-echo '{"decision":"allow"}'
-exit 0
-HOOKEOF
-
-    # ── Hook 3: track-quality.sh — Track quality gate passes + MCP calls ──
-    cat > "$GEMINI_HOOKS_DIR/track-quality.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Quality Tracker (Gemini) — Marks gates as passed after successful quality report.
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-mkdir -p "$CORTEX_STATE_DIR"
-
-# Track MCP tool calls
-[[ "$TOOL_NAME" =~ cortex_quality_report ]] && touch "$CORTEX_STATE_DIR/quality-gates-passed"
-[[ "$TOOL_NAME" =~ cortex_session_start ]] && touch "$CORTEX_STATE_DIR/session-started"
-[[ "$TOOL_NAME" =~ cortex_session_end ]] && touch "$CORTEX_STATE_DIR/session-ended"
-
-echo '{}'
-exit 0
-HOOKEOF
-
-    # ── Hook 4: session-end-check.sh — Warn if session_end not called ──
-    cat > "$GEMINI_HOOKS_DIR/session-end-check.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Session End Check (Gemini) — Warns if session_end not called.
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-if [ -f "$CORTEX_STATE_DIR/session-started" ] && [ ! -f "$CORTEX_STATE_DIR/session-ended" ]; then
-  echo '{"systemMessage":"WARNING: cortex_session_end not called. Call it with sessionId and summary for grading."}'
-else
-  echo '{}'
-fi
-exit 0
-HOOKEOF
-
-    # ── Hook 5: enforce-session.sh — HARD BLOCK write_file/edit_file without session ──
-    cat > "$GEMINI_HOOKS_DIR/enforce-session.sh" <<'HOOKEOF'
-#!/bin/bash
-# Cortex Session Enforcement (Gemini) — HARD BLOCK.
-# Blocks write_file, edit_file, run_shell_command (modifying) without session.
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CORTEX_STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
-if [ -f "$CORTEX_STATE_DIR/session-started" ]; then
-  echo '{"decision":"allow"}'
-  exit 0
-fi
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
-case "$TOOL_NAME" in
-  write_file|edit_file|create_file|insert_text|multi_replace_file_content|replace_file_content)
-    echo '{"decision":"deny","reason":"BLOCKED: Call cortex_session_start before editing files. Session not started."}'
-    exit 0
-    ;;
-  run_shell_command|shell|run_command)
-    COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-    if [[ "$COMMAND" =~ (git\ (add|commit|push)|rm\ |mv\ |cp\ |mkdir\ ) ]]; then
-      echo '{"decision":"deny","reason":"BLOCKED: Call cortex_session_start before modifying files. Session not started."}'
-      exit 0
-    fi
-    ;;
-esac
-echo '{"decision":"allow"}'
-exit 0
-HOOKEOF
-
-    chmod +x "$GEMINI_HOOKS_DIR"/*.sh
-
-    # ── Generate .gemini/settings.json with hooks ──
-    python3 -c "
-import json, os
-
-settings_path = '$GEMINI_SETTINGS'
-
-def get_sh_cmd(hook_file):
-    return f'bash -c \\'bash \\"$(git rev-parse --show-toplevel 2>/dev/null || echo \\".\\")\\"/.gemini/hooks/{hook_file}\\''
-
-hooks_config = {
-    'hooks': {
-        'SessionStart': [{
-            'hooks': [{
-                'type': 'command',
-                'command': get_sh_cmd('session-init.sh'),
-                'name': 'cortex_session_init'
-            }]
-        }],
-        'BeforeTool': [
-            {
-                'matcher': 'write_file|edit_file|create_file|insert_text|run_shell_command|shell|multi_replace_file_content|replace_file_content|run_command',
-                'hooks': [{
-                    'type': 'command',
-                    'command': get_sh_cmd('enforce-session.sh'),
-                    'name': 'cortex_enforce_session'
-                }]
-            },
-            {
-                'matcher': 'run_shell_command|shell|run_command',
-                'hooks': [{
-                    'type': 'command',
-                    'command': get_sh_cmd('enforce-commit.sh'),
-                    'name': 'cortex_enforce_commit'
-                }]
-            }
-        ],
-        'AfterTool': [{
-            'matcher': '.*',
-            'hooks': [{
-                'type': 'command',
-                'command': get_sh_cmd('track-quality.sh'),
-                'name': 'cortex_track_quality'
-            }]
-        }],
-        'SessionEnd': [{
-            'hooks': [{
-                'type': 'command',
-                'command': get_sh_cmd('session-end-check.sh'),
-                'name': 'cortex_session_end_check'
-            }]
-        }]
-    }
-}
-
-existing = {}
-if os.path.exists(settings_path):
-    try:
-        with open(settings_path, encoding='utf-8-sig') as f:
-            existing = json.load(f)
-    except (json.JSONDecodeError, IOError):
-        existing = {}
-
-existing['hooks'] = hooks_config['hooks']
-
-with open(settings_path, 'w', encoding='utf-8') as f:
-    json.dump(existing, f, indent=2)
-    f.write('\n')
-"
-
-    echo -e "${GREEN}    ✓ Gemini CLI hooks installed (4 enforcement hooks)${NC}"
-    echo -e "${GREEN}      SessionStart  → session-init.sh (inject reminder)${NC}"
-    echo -e "${GREEN}      BeforeTool    → enforce-commit.sh (block commit without gates)${NC}"
-    echo -e "${GREEN}      AfterTool     → track-quality.sh (track gate passes)${NC}"
-    echo -e "${GREEN}      SessionEnd    → session-end-check.sh (session_end reminder)${NC}"
-else
-    echo -e "${YELLOW}>>> Gemini CLI not selected — skipping Gemini hooks${NC}"
+    echo -e "${RED}>>> scripts/install.sh not found — hooks and rule files were NOT installed.${NC}"
 fi
 
 # ── Step 7: Generate .cortex/agent-rules.md (Cortex-managed) ──
@@ -1275,7 +687,7 @@ fi
 # AGENTS.md is the PROJECT TEAM's file — we only append a reference line, never modify content.
 
 CORTEX_RULES_PATH="$CORTEX_DIR/agent-rules.md"
-CORTEX_RULES_VERSION="2"  # Bump when updating rules content
+CORTEX_RULES_VERSION="3"  # Bump when updating rules content
 CORTEX_RULES_REF='> 📋 **Cortex Hub rules:** See [.cortex/agent-rules.md](.cortex/agent-rules.md) for MCP tool usage guidelines.'
 CORTEX_REF_MARKER="<!-- cortex-hub:agent-rules -->"
 
@@ -1290,6 +702,29 @@ cat > "$CORTEX_RULES_PATH" <<'RULESEOF'
 
 ---
 
+## Finding the code to change — start from what you know
+
+A fixed ladder is the slow way in: it spends three calls before the first one that can
+actually locate code. Start from what you already have.
+
+| You already know | Start with | Why |
+|---|---|---|
+| A symbol name | `cortex_code_context(name)` | Exact graph lookup — nothing to rank wrong — and it answers callers, callees and imports in one call |
+| Only the behaviour | `cortex_code_search(query, limit: 10)` | Ranked hybrid search over the index. One call, then read the list |
+| An exact literal (env var, config key, error string) | `rg` / `grep` | Not a ranking problem. A literal either appears or it does not |
+| A relationship across files | `cortex_cypher` | One graph query instead of N searches |
+
+**Search once, read all ten.** Measured on the cortex-hub index (`benchmarks/retrieval_bench.ts`,
+n=15): the target file is in the top 10 for 15/15 queries, in the top 3 for 11/15, but at rank 1
+for only 8/15. So scan the whole result set before choosing, and never re-run a reworded version
+of the same query — recall@10 is already 1.000, so a paraphrase returns the same files. Ask a
+different question, or switch tool.
+
+**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
+at session start, and again when something breaks.
+
+---
+
 ## During Session — Cortex Tool Integration (MANDATORY)
 
 > ⚠️ **Agents MUST use Cortex tools throughout the session, not just at start/end.**
@@ -1297,21 +732,16 @@ cat > "$CORTEX_RULES_PATH" <<'RULESEOF'
 
 | When | Tool | What to Do |
 |------|------|------------|
-| **Searching code** | `cortex_code_search` | Use FIRST before grep/find. Queries GitNexus AST graph. Fall back to grep only if unavailable. |
-| **Before editing core code** | `cortex_code_impact` | Run blast radius analysis on the symbol/file you plan to change. |
-| **Searching shared knowledge** | `cortex_knowledge_search` | Search team knowledge base for patterns, solutions, documented decisions. Supports tag/project filtering. |
-| **Recalling past context** | `cortex_memory_search` | Search agent memories for past decisions, debugging findings. |
-| **Contributing knowledge** | `cortex_knowledge_store` | Store reusable patterns, resolved issues into shared knowledge base. Include tags. |
-| **Storing personal memory** | `cortex_memory_store` | Store session-specific findings and workarounds for future recall. |
-| **After pushing code** | `cortex_quality_report` | Report build/typecheck/lint results and a summary of changes. |
-
-### Tool Priority Order (before grep/find)
-
-1. `cortex_memory_search` → check if you or another agent already knows this
-2. `cortex_knowledge_search` → search shared knowledge base
-3. `cortex_code_search` → search indexed codebase (GitNexus AST graph)
-4. `cortex_code_impact` → check blast radius before editing
-5. `grep_search` / `find_by_name` → fallback only
+| **Locating code by behaviour** | `cortex_code_search` | One call with `limit: 10`, then read every hit. Use `rg`/`grep` for exact literals instead. |
+| **Understanding a symbol** | `cortex_code_context` | Callers, callees and imports in one call — before reading files by hand. |
+| **Before editing exported or shared code** | `cortex_code_impact` | Blast radius on the symbol/file you plan to change. Skip it for a local, unexported change. |
+| **Before touching a file others may hold** | `cortex_changes` | Check whether another agent has uncommitted work in the same files. |
+| **Searching shared knowledge** | `cortex_knowledge_search` | Team knowledge base: patterns, solutions, documented decisions. Supports tag/project filtering. |
+| **Recalling past context** | `cortex_memory_search` | Past decisions and debugging findings. Once at session start, then on an error. |
+| **Contributing knowledge** | `cortex_knowledge_store` | Store a non-obvious fix or reusable pattern. Include tags. |
+| **Storing personal memory** | `cortex_memory_store` | Session findings and workarounds, for the next session. |
+| **Before committing** | `cortex_detect_changes` | `scope: "staged"` — affected symbols and risk level. |
+| **After the verify commands** | `cortex_quality_report` | Report the real build/typecheck/lint output, not an intention. |
 
 ---
 
@@ -1319,15 +749,22 @@ cat > "$CORTEX_RULES_PATH" <<'RULESEOF'
 
 ### At Session Start
 1. Call `cortex_session_start` with repo URL, mode, AND your agentId (e.g., "claude-code", "cursor", "antigravity")
-2. Read `STATE.md` → current task & progress
+2. `cortex_knowledge_search` + `cortex_memory_search` once — what the last session decided and left open
 3. Read `.cortex/project-profile.json` → verify commands
+
+### On an error
+1. `cortex_knowledge_search` with the error message — someone may have solved it
+2. `cortex_memory_search` — you may have hit it before
+3. Fix it
+4. If the fix was non-obvious → `cortex_knowledge_store`
 
 ### At Session End
 1. Run verify commands from `project-profile.json`
-2. Call `cortex_quality_report` with gate results
-3. Call `cortex_memory_store` for any new knowledge learned
-4. Update `STATE.md` with progress
-5. Commit with conventional prefix: `feat:`, `fix:`, `docs:`, `chore:`
+2. Call `cortex_quality_report` with the gate results
+3. Call `cortex_memory_store` with what was done, the key decisions and the next step
+4. Commit with conventional prefix: `feat:`, `fix:`, `docs:`, `chore:`
+5. After a push → `cortex_code_reindex(repo, branch)`
+6. Call `cortex_session_end` with sessionId and summary
 RULESEOF
 
 # Replace version placeholder

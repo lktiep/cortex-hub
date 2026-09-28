@@ -61,11 +61,26 @@ For the REST of this session, use cortex tools naturally:
 2. `cortex_plan_quality(plan: "<your plan>")` → score 0-100
 3. If score < 60 → refine. If 60-80 → proceed with caution. If > 80 → execute.
 
-### Before editing a file:
-1. `cortex_code_search` → find relevant code
-2. `cortex_code_context` → understand callers/callees
-3. `cortex_code_impact` → blast radius check
-4. Only THEN edit
+### Finding the code to change:
+**Start from what you know, not from a fixed ladder:**
+
+| You already know | Start with |
+|---|---|
+| A symbol name | `cortex_code_context(name)` — exact graph lookup, plus callers/callees/imports in one call |
+| Only the behaviour | `cortex_code_search(query, limit: 10)` — ranked hybrid search, one call |
+| An exact literal (env var, config key, error string) | `rg` / `grep` — this is not a ranking problem |
+| A relationship across files | `cortex_cypher` |
+
+**Search once, read all ten.** Measured on cortex-hub's own index (`benchmarks/retrieval_bench.ts`,
+n=15): the target file is in the top 10 for 15/15 queries but at rank 1 for only 8/15. So scan
+the whole result set, and never re-run a reworded version of the same query — recall@10 is
+already 1.000, so it returns the same set. Ask a different question or switch tool instead.
+
+**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
+at session start, then when something breaks — not before every lookup.
+
+`cortex_code_impact` before editing something exported or shared; `cortex_changes` before
+touching a file another agent may hold.
 
 ### Cross-project lookup:
 ```
