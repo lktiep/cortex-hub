@@ -54,6 +54,15 @@
   margin: 0;
 }
 
+.moveHint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: var(--space-1) 0 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-tertiary);
+}
+
 .actionButtons {
   display: flex;
   gap: var(--space-2);
@@ -61,11 +70,38 @@
 
 /* Organization Section */
 .orgSection {
+  position: relative;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
   margin-bottom: var(--space-4);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+/* Drag and drop: every other organization shows it can take the project,
+   and the one under the pointer says so. */
+.dropReady {
+  border: 1px dashed var(--border-accent);
+}
+
+.dropOver {
+  border-color: var(--accent-primary);
+  background: var(--accent-glow);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.dropHint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--accent-glow);
+  color: var(--accent-tertiary);
+  font-size: 0.8125rem;
+  pointer-events: none;
 }
 
 .orgHeader {
@@ -126,6 +162,19 @@
   gap: var(--space-2);
 }
 
+.projectCard[draggable='true'] {
+  cursor: grab;
+}
+
+.projectCard[draggable='true']:active {
+  cursor: grabbing;
+}
+
+.dragging {
+  opacity: 0.45;
+  border-style: dashed;
+}
+
 .projectHeader {
   display: flex;
   justify-content: space-between;
@@ -154,6 +203,44 @@
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   color: var(--text-tertiary);
+}
+
+.projectHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* An icon button over a transparent native select: touch and keyboard get the real
+   control, pointer users get the icon. */
+.moveSelect {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  transition: all 0.15s;
+}
+
+.moveSelect:hover,
+.moveSelect:focus-within {
+  background: var(--accent-glow);
+  color: var(--accent-secondary);
+}
+
+.moveSelect:focus-within {
+  box-shadow: 0 0 0 2px var(--border-accent);
+}
+
+.moveSelect select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .deleteBtn {
@@ -349,6 +436,25 @@
   font-size: 0.875rem;
   color: var(--text-secondary);
   margin: 0 0 var(--space-4) 0;
+}
+
+.moveEffects {
+  margin: 0 0 var(--space-4) 0;
+  padding-left: var(--space-5);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.dialogError {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--status-error);
+  font-size: 0.8125rem;
 }
 
 .dialogField {

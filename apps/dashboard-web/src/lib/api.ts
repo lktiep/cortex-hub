@@ -382,6 +382,14 @@ export async function deleteProject(id: string) {
   return apiFetch<{ success: boolean }>(`/api/projects/${id}`, { method: 'DELETE' })
 }
 
+/** Moves a project to another organization — and with it, the scope of cross-repo search. */
+export async function moveProject(id: string, orgId: string) {
+  return apiFetch<{ success: boolean; moved: boolean; fromOrgId: string; toOrgId: string }>(
+    `/api/projects/${id}/move`,
+    { method: 'POST', body: { orgId } }
+  )
+}
+
 // ── Dashboard Stats ──
 export interface DashboardStats {
   activeKeys: number

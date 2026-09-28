@@ -333,6 +333,46 @@ projectsRouter.put('/:id', async (c) => {
 })
 
 
+// ── Move Project to another Organization ──
+// The org is the boundary of cross-repo search (routes/intel.ts). Nothing else stores it:
+// sessions, keys and indexes all reach the org through projects.org_id, so the move is
+// this one row and takes effect on the next call.
+projectsRouter.post('/:id/move', async (c) => {
+  const { id } = c.req.param()
+  try {
+    const { orgId } = (await c.req.json().catch(() => ({}))) as { orgId?: string }
+    if (!orgId) return c.json({ error: 'orgId is required' }, 400)
+
+    const project = db
+      .prepare('SELECT id, org_id, slug FROM projects WHERE id = ?')
+      .get(id) as { id: string; org_id: string; slug: string } | undefined
+    if (!project) return c.json({ error: 'Project not found' }, 404)
+
+    const target = db
+      .prepare('SELECT id, name FROM organizations WHERE id = ?')
+      .get(orgId) as { id: string; name: string } | undefined
+    if (!target) return c.json({ error: 'Organization not found' }, 404)
+
+    if (project.org_id === orgId) {
+      return c.json({ success: true, moved: false, fromOrgId: orgId, toOrgId: orgId })
+    }
+
+    // UNIQUE(org_id, slug) would reject it anyway; say which name is in the way.
+    const clash = db.prepare('SELECT id FROM projects WHERE org_id = ? AND slug = ?').get(orgId, project.slug)
+    if (clash) {
+      return c.json({ error: `${target.name} already has a project with the slug "${project.slug}". Rename one of them first.` }, 409)
+    }
+
+    db.prepare(
+      `UPDATE projects SET org_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
+    ).run(orgId, id)
+    return c.json({ success: true, moved: true, fromOrgId: project.org_id, toOrgId: orgId })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+
 // ── Delete Project ──
 projectsRouter.delete('/:id', (c) => {
   const { id } = c.req.param()

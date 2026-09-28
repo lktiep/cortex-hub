@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import Link from 'next/link'
 import DashboardLayout from '@/components/layout/DashboardLayout'
-import useSWR from 'swr'
+import useSWR, { useSWRConfig } from 'swr'
 import {
   getOrganizations,
   createOrganization,
@@ -11,12 +11,13 @@ import {
   getProjectsForOrg,
   createProject,
   deleteProject,
+  moveProject,
   getDashboardOverview,
   type Organization,
   type Project,
   type ProjectSummary,
 } from '@/lib/api'
-import { Cloud, Link as LinkIcon, Package, Search, Brain, BarChart3, AlertTriangle, Building2, Folder, type LucideIcon, ICON_INLINE } from '@/lib/icons'
+import { Cloud, Link as LinkIcon, Package, Search, Brain, BarChart3, AlertTriangle, Building2, Folder, ArrowLeftRight, type LucideIcon, ICON_INLINE } from '@/lib/icons'
 import { parseDateSafe, formatTimeAgo } from '@/lib/date'
 import styles from './page.module.css'
 
@@ -130,10 +131,21 @@ function ProjectCard({
   project,
   enriched,
   onDelete,
+  moveTargets,
+  isDragging,
+  onDragStart,
+  onDragEnd,
+  onMove,
 }: {
   project: Project
   enriched?: ProjectSummary
   onDelete: () => void
+  /** Every organization this project could move to; empty when there is only one. */
+  moveTargets: Organization[]
+  isDragging: boolean
+  onDragStart: () => void
+  onDragEnd: () => void
+  onMove: (target: Organization) => void
 }) {
   const [showConfirm, setShowConfirm] = useState(false)
 
@@ -142,26 +154,56 @@ function ProjectCard({
   const ProviderIcon = getProviderIcon(project.git_provider)
 
   return (
-    <div className={`card ${styles.projectCard}`}>
+    <div
+      className={`card ${styles.projectCard} ${isDragging ? styles.dragging : ''}`}
+      draggable={moveTargets.length > 0}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        // Firefox starts no drag without data; the project itself travels through page state.
+        e.dataTransfer.setData('text/plain', project.id)
+        onDragStart()
+      }}
+      onDragEnd={onDragEnd}
+    >
       <div className={styles.projectHeader}>
         <div className={styles.projectHeaderLeft}>
           <span className={styles.providerIcon}><Ico icon={ProviderIcon} /></span>
           <div>
             <h4 className={styles.projectName}>
-              <Link href={`/projects?id=${project.id}`} className={styles.projectLink}>
+              <Link href={`/projects?id=${project.id}`} className={styles.projectLink} draggable={false}>
                 {project.name}
               </Link>
             </h4>
             <code className={styles.projectSlug}>{project.slug}</code>
           </div>
         </div>
-        <button
-          className={styles.deleteBtn}
-          onClick={() => setShowConfirm(true)}
-          title="Delete project"
-        >
-          ×
-        </button>
+        <div className={styles.projectHeaderActions}>
+          {moveTargets.length > 0 && (
+            <label className={styles.moveSelect} title="Move to another organization">
+              <ArrowLeftRight {...ICON_INLINE} />
+              <select
+                aria-label={`Move ${project.name} to another organization`}
+                value=""
+                onChange={(e) => {
+                  const target = moveTargets.find((o) => o.id === e.target.value)
+                  if (target) onMove(target)
+                }}
+              >
+                <option value="" disabled>Move to…</option>
+                {moveTargets.map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <button
+            className={styles.deleteBtn}
+            onClick={() => setShowConfirm(true)}
+            title="Delete project"
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       {/* GitNexus + Mem9 + Knowledge Status */}
@@ -252,7 +294,80 @@ function ProjectCard({
   )
 }
 
-function OrgSection({ org, enrichedMap, onDeleted }: { org: Organization; enrichedMap: Map<string, ProjectSummary>; onDeleted: () => void }) {
+type PendingMove = { project: Project; from: Organization; to: Organization }
+
+function MoveDialog({ move, onDone, onCancel }: { move: PendingMove; onDone: () => void; onCancel: () => void }) {
+  const { project, from, to } = move
+  const [moving, setMoving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleMove() {
+    setMoving(true)
+    setError(null)
+    try {
+      await moveProject(project.id, to.id)
+      onDone()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Move failed')
+      setMoving(false)
+    }
+  }
+
+  return (
+    <div className={styles.dialogOverlay} onClick={moving ? undefined : onCancel}>
+      <div
+        className={styles.dialog}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="move-project-title"
+      >
+        <h3 id="move-project-title" className={styles.dialogTitle}>Move project</h3>
+        <p className={styles.dialogMessage}>
+          Move <strong>{project.name}</strong> from <strong>{from.name}</strong> to <strong>{to.name}</strong>?
+        </p>
+        <ul className={styles.moveEffects}>
+          <li>Searches across repos in <strong>{to.name}</strong> will include it, and <strong>{from.name}</strong> stops seeing it.</li>
+          <li>Sessions already open on this project search <strong>{to.name}</strong> from their next call.</li>
+          <li>Its index, knowledge, memory and git settings stay attached to it.</li>
+        </ul>
+        {error && (
+          <div className={styles.dialogError}>
+            <AlertTriangle {...ICON_INLINE} /> {error}
+          </div>
+        )}
+        <div className={styles.dialogActions}>
+          <button className="btn btn-secondary" onClick={onCancel} disabled={moving}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={handleMove} disabled={moving} autoFocus>
+            {moving ? 'Moving…' : `Move to ${to.name}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function OrgSection({
+  org,
+  allOrgs,
+  enrichedMap,
+  onDeleted,
+  dragging,
+  onDragStartProject,
+  onDragEnd,
+  onRequestMove,
+}: {
+  org: Organization
+  allOrgs: Organization[]
+  enrichedMap: Map<string, ProjectSummary>
+  onDeleted: () => void
+  dragging: Project | null
+  onDragStartProject: (project: Project) => void
+  onDragEnd: () => void
+  onRequestMove: (project: Project, target: Organization) => void
+}) {
   const { data: projectData, mutate: mutateProjects } = useSWR(
     `projects-${org.id}`,
     () => getProjectsForOrg(org.id),
@@ -260,8 +375,16 @@ function OrgSection({ org, enrichedMap, onDeleted }: { org: Organization; enrich
   )
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [isOver, setIsOver] = useState(false)
 
   const projects = projectData?.projects ?? []
+  const moveTargets = allOrgs.filter((o) => o.id !== org.id)
+  const canDrop = dragging !== null && dragging.org_id !== org.id
+
+  // A drag cancelled with Escape over this section never fires dragleave here.
+  useEffect(() => {
+    if (!canDrop) setIsOver(false)
+  }, [canDrop])
 
   const handleCreateProject = useCallback(
     async (data: Record<string, string>) => {
@@ -305,7 +428,32 @@ function OrgSection({ org, enrichedMap, onDeleted }: { org: Organization; enrich
   }, [org.id, onDeleted])
 
   return (
-    <div className={styles.orgSection}>
+    <div
+      className={[styles.orgSection, canDrop && styles.dropReady, canDrop && isOver && styles.dropOver]
+        .filter(Boolean)
+        .join(' ')}
+      onDragOver={(e) => {
+        if (!canDrop) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        if (!isOver) setIsOver(true)
+      }}
+      onDragLeave={(e) => {
+        // Crossing into a child card fires dragleave on the section too; only a real exit counts.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setIsOver(false)
+      }}
+      onDrop={(e) => {
+        if (!canDrop || !dragging) return
+        e.preventDefault()
+        setIsOver(false)
+        onRequestMove(dragging, org)
+      }}
+    >
+      {canDrop && dragging && (
+        <div className={styles.dropHint} aria-hidden="true">
+          <ArrowLeftRight {...ICON_INLINE} /> Drop to move <strong>{dragging.name}</strong> into {org.name}
+        </div>
+      )}
       <div className={styles.orgHeader}>
         <div className={styles.orgInfo}>
           <h2 className={styles.orgName}>
@@ -355,6 +503,11 @@ function OrgSection({ org, enrichedMap, onDeleted }: { org: Organization; enrich
               project={p}
               enriched={enrichedMap.get(p.id)}
               onDelete={() => handleDeleteProject(p.id)}
+              moveTargets={moveTargets}
+              isDragging={dragging?.id === p.id}
+              onDragStart={() => onDragStartProject(p)}
+              onDragEnd={onDragEnd}
+              onMove={(target) => onRequestMove(p, target)}
             />
           ))}
         </div>
@@ -422,8 +575,29 @@ export default function OrganizationsPage() {
     refreshInterval: 15000,
   })
   const [showCreateOrg, setShowCreateOrg] = useState(false)
+  const { mutate: revalidate } = useSWRConfig()
+  const [dragging, setDragging] = useState<Project | null>(null)
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null)
 
   const orgs = data?.organizations ?? []
+
+  const requestMove = useCallback(
+    (project: Project, to: Organization) => {
+      setDragging(null)
+      const from = orgs.find((o) => o.id === project.org_id)
+      if (from && from.id !== to.id) setPendingMove({ project, from, to })
+    },
+    [orgs]
+  )
+
+  const finishMove = useCallback(() => {
+    if (pendingMove) {
+      void revalidate(`projects-${pendingMove.from.id}`)
+      void revalidate(`projects-${pendingMove.to.id}`)
+    }
+    setPendingMove(null)
+    void mutate()
+  }, [pendingMove, revalidate, mutate])
 
   // Build project enrichment map from overview data
   const enrichedMap = new Map<string, ProjectSummary>()
@@ -473,7 +647,14 @@ export default function OrganizationsPage() {
 
       {/* Action Bar */}
       <div className={styles.actionBar}>
-        <h2 className={styles.sectionTitle}>All Organizations</h2>
+        <div>
+          <h2 className={styles.sectionTitle}>All Organizations</h2>
+          {orgs.length > 1 && (
+            <p className={styles.moveHint}>
+              Drag a project onto another organization to move it, or use <ArrowLeftRight {...ICON_INLINE} /> on its card.
+            </p>
+          )}
+        </div>
         <div className={styles.actionButtons}>
           <button
             className="btn btn-secondary btn-sm"
@@ -508,8 +689,22 @@ export default function OrganizationsPage() {
         </div>
       ) : (
         orgs.map((org) => (
-          <OrgSection key={org.id} org={org} enrichedMap={enrichedMap} onDeleted={() => mutate()} />
+          <OrgSection
+            key={org.id}
+            org={org}
+            allOrgs={orgs}
+            enrichedMap={enrichedMap}
+            onDeleted={() => mutate()}
+            dragging={dragging}
+            onDragStartProject={setDragging}
+            onDragEnd={() => setDragging(null)}
+            onRequestMove={requestMove}
+          />
         ))
+      )}
+
+      {pendingMove && (
+        <MoveDialog move={pendingMove} onDone={finishMove} onCancel={() => setPendingMove(null)} />
       )}
 
       {/* Create Org Dialog */}
