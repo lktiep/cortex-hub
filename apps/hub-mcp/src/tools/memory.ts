@@ -150,9 +150,16 @@ export function registerMemoryTools(server: McpServer, env: Env) {
           }
         }
 
+        // The field holding the body is `memory`, not `text`.
+        // `/api/mem9/search` returns Mem9Memory (packages/shared-mem9/src/types.ts:46)
+        // and builds its SQLite session rows the same way (mem9-proxy.ts). This
+        // interface declared a `text` field instead, which does not exist on that
+        // payload — so every recall rendered five headers with an empty body,
+        // indistinguishable from "this project has no memories". That is exactly how
+        // it read at session start, for as long as the mismatch shipped.
         interface MemoryItem {
           id: string
-          text: string
+          memory: string
           metadata?: Record<string, unknown>
           _scope?: string
         }
@@ -171,7 +178,10 @@ export function registerMemoryTools(server: McpServer, env: Env) {
 
         const formattedMemories = dataMemories.map((m, index) => {
           const scopeStr = m._scope ? ` [Scope: ${m._scope}]` : ''
-          return `### Memory ${index + 1} (ID: ${m.id})${scopeStr}\n\n${m.text || ''}`
+          // Say so when a body really is empty. Printing nothing is what let a
+          // field-name mismatch look like an empty project for as long as it did.
+          const body = (m.memory ?? '').trim() || '_(stored with an empty body)_'
+          return `### Memory ${index + 1} (ID: ${m.id})${scopeStr}\n\n${body}`
         }).join('\n\n---\n\n')
 
         return {

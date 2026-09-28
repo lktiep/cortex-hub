@@ -13,6 +13,9 @@ pre-commit:
     pnpm_lint:
       glob: "**/*.{ts,tsx,js,jsx,json,css,scss}"
       run: pnpm lint
+    python_syntax:
+      glob: "**/*.py"
+      run: python3 -m py_compile {staged_files}
 
 pre-push:
   parallel: true

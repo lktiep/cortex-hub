@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HOOKS_VERSION=7
-HOOKS_MINOR=1
+HOOKS_MINOR=2
 MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
@@ -366,7 +366,12 @@ if [ "$CHECK_ONLY" = "true" ]; then
   echo "  Gemini hooks:   $([ -f .gemini/hooks/enforce-session.sh ] && echo 'yes' || echo 'no')"
   echo "  Settings:       $([ -f .claude/settings.json ] && echo 'yes' || echo 'no')"
   echo "  Identity:       $([ -f .cortex/agent-identity.json ] && echo 'yes' || echo 'no')"
-  echo "  Lefthook:       $([ -f lefthook.yml ] && echo 'yes' || echo 'no')"
+  HP="$(git -C "$PROJECT_DIR" config --get core.hooksPath 2>/dev/null || true)"
+  if [ ! -f lefthook.yml ]; then LH="no"
+  elif [ -n "$HP" ]; then LH="yml only — core.hooksPath='$HP' overrides it, gate does NOT run"
+  elif grep -q lefthook "$PROJECT_DIR/.git/hooks/pre-commit" 2>/dev/null; then LH="yes (pre-commit gate live)"
+  else LH="yml only — no git hook installed"; fi
+  echo "  Lefthook:       $LH"
   echo "  CLAUDE.md:      $([ -f CLAUDE.md ] && echo 'yes' || echo 'no')"
   [ "$INSTALLED_VERSION" != "$LATEST_VERSION" ] && warn "Update available: $INSTALLED_VERSION → $LATEST_VERSION. Run /install --force"
   exit 0
@@ -465,7 +470,7 @@ if [ ! -f ".cortex/project-profile.json" ] || [ "$FORCE" = "true" ]; then
   fi
 
   # ── Scattered Python scripts (no manifest) ──
-  if ! printf '%s\n' "${DETECTED_STACKS[@]}" 2>/dev/null | grep -q "python" && find . -maxdepth 3 -name "*.py" 2>/dev/null | grep -q .; then
+  if ! printf '%s\n' ${DETECTED_STACKS[@]+"${DETECTED_STACKS[@]}"} 2>/dev/null | grep -q "python" && find . -maxdepth 3 -name "*.py" 2>/dev/null | grep -q .; then
     DETECTED_STACKS+=("python-scripts")
   fi
 
@@ -478,7 +483,7 @@ if [ ! -f ".cortex/project-profile.json" ] || [ "$FORCE" = "true" ]; then
   fi
 
   # Generate profile
-  STACKS_JSON=$(printf '"%s",' "${DETECTED_STACKS[@]}" | sed 's/,$//')
+  STACKS_JSON=$(printf '"%s",' ${DETECTED_STACKS[@]+"${DETECTED_STACKS[@]}"} | sed 's/,$//')
   if [ -z "$PRE_COMMIT_CMDS" ] && [ ${#DETECTED_STACKS[@]} -gt 0 ]; then
     # For non-node projects, leave verify empty — lefthook will use glob-based pipelines
     PRE_COMMIT_CMDS=""
@@ -1805,16 +1810,59 @@ POSTPUSH
 
   ok "Lefthook: smart pipelines generated ($HOOK_COUNT checks, glob-filtered)"
 
-  # Install lefthook if available
-  if command -v lefthook >/dev/null 2>&1; then
-    lefthook install 2>/dev/null && ok "Lefthook: git hooks installed" || warn "Lefthook: install failed (non-fatal)"
+  # ── Install the git hooks ──
+  #
+  # `lefthook install` refuses outright when core.hooksPath points elsewhere, and
+  # husky sets it to `.husky/_` from a `prepare` script — so every `pnpm install`
+  # re-arms the conflict. Up to v7.1 this branch swallowed the failure as
+  # "non-fatal": lefthook.yml existed, the summary said "configured", and no git
+  # hook ran at all. Verified on cortex-hub itself — `git hook run pre-commit`
+  # produced no output while lefthook's real hook sat unused in `.git/hooks/`.
+  # The commit gate this phase exists to create was simply absent.
+  #
+  # So name the conflict. Reset the path only when the directory it points at has
+  # no hooks of its own; otherwise say what to run and do not claim success.
+  HOOKS_PATH="$(git -C "$PROJECT_DIR" config --get core.hooksPath 2>/dev/null || true)"
+  if [ -n "$HOOKS_PATH" ]; then
+    # husky keeps its stubs in `<dir>/_` and the project's own hooks one level up,
+    # so that parent is where a real hook would live.
+    OWNER_DIR="$HOOKS_PATH"
+    [ "$(basename "$HOOKS_PATH")" = "_" ] && OWNER_DIR="$(dirname "$HOOKS_PATH")"
+    OWN_HOOKS=""
+    for h in pre-commit pre-push commit-msg prepare-commit-msg post-commit post-merge; do
+      [ -s "$PROJECT_DIR/$OWNER_DIR/$h" ] && OWN_HOOKS="${OWN_HOOKS:+$OWN_HOOKS }$h"
+    done
+    if [ -z "$OWN_HOOKS" ]; then
+      info "Lefthook: core.hooksPath='$HOOKS_PATH' has no hooks of its own — unsetting it"
+      git -C "$PROJECT_DIR" config --unset-all core.hooksPath 2>/dev/null || true
+    else
+      warn "Lefthook: core.hooksPath='$HOOKS_PATH' owns hooks ($OWN_HOOKS) — NOT installing over them."
+      warn "          The pre-commit quality gate will not run. To hand git hooks to lefthook:"
+      warn "            git config --unset-all core.hooksPath && lefthook install"
+    fi
+  fi
+
+  if [ -n "$(git -C "$PROJECT_DIR" config --get core.hooksPath 2>/dev/null || true)" ]; then
+    : # left in place on purpose above; nothing to install
+  elif command -v lefthook >/dev/null 2>&1; then
+    lefthook install >/dev/null 2>&1 && ok "Lefthook: git hooks installed" || warn "Lefthook: install failed"
   elif command -v npx >/dev/null 2>&1; then
-    npx lefthook install 2>/dev/null && ok "Lefthook: git hooks installed (via npx)" || warn "Lefthook: install skipped"
+    npx --yes lefthook install >/dev/null 2>&1 && ok "Lefthook: git hooks installed (via npx)" || warn "Lefthook: install skipped"
   else
     warn "Lefthook: not found. Install with: npm i -g lefthook"
   fi
 else
-  ok "Lefthook: already configured"
+  # lefthook.yml existing is not the same as the gate running: this is exactly the
+  # branch a repeat `install.sh` (no --force) took while core.hooksPath kept the
+  # hook dead. Check the hook, not the file.
+  if [ -n "$(git -C "$PROJECT_DIR" config --get core.hooksPath 2>/dev/null || true)" ]; then
+    warn "Lefthook: lefthook.yml present but core.hooksPath overrides git hooks — the pre-commit gate does NOT run."
+    warn "          Fix with: git config --unset-all core.hooksPath && lefthook install"
+  elif grep -q lefthook "$PROJECT_DIR/.git/hooks/pre-commit" 2>/dev/null; then
+    ok "Lefthook: already configured (pre-commit gate live)"
+  else
+    warn "Lefthook: lefthook.yml present but no git hook installed. Run: lefthook install"
+  fi
 fi
 
 # ══════════════════════════════════════════════
@@ -1979,11 +2027,26 @@ GITIGNORE_ENTRIES=(
   ".cursorrules"
 )
 
+# A generated file is only safe to ignore while git is not already tracking it.
+# In cortex-hub itself `.claude/`, `.codex/` and `.cursorrules` ARE the committed
+# source of truth — install.sh regenerates them byte-for-byte from its own
+# templates. Writing an ignore line for a tracked path does not untrack it, so
+# nothing breaks today; it breaks for the first person who removes and re-adds
+# the file, and it breaks silently. Ask git what it tracks and leave those alone.
+tracked_by_git() {
+  git -C "$PROJECT_DIR" ls-files --error-unmatch -- "$1" >/dev/null 2>&1
+}
+
 if [ -f ".gitignore" ]; then
   ADDED=0
+  SKIPPED=""
   for entry in "${GITIGNORE_ENTRIES[@]}"; do
     # Skip comments when checking existence
     [[ "$entry" == \#* ]] && continue
+    if tracked_by_git "$entry"; then
+      SKIPPED="${SKIPPED:+$SKIPPED }$entry"
+      continue
+    fi
     if ! grep -qxF "$entry" .gitignore 2>/dev/null; then
       # Add header comment before first entry
       if [ $ADDED -eq 0 ] && ! grep -qF "Cortex Hub" .gitignore 2>/dev/null; then
@@ -1995,9 +2058,18 @@ if [ -f ".gitignore" ]; then
     fi
   done
   [ $ADDED -gt 0 ] && ok ".gitignore: added $ADDED entries" || ok ".gitignore: already configured"
+  [ -n "$SKIPPED" ] && info ".gitignore: left tracked paths alone ($SKIPPED)"
 else
   # Create .gitignore with cortex entries
-  printf '%s\n' "${GITIGNORE_ENTRIES[@]}" > .gitignore
+  {
+    for entry in "${GITIGNORE_ENTRIES[@]}"; do
+      if [[ "$entry" == \#* ]]; then
+        echo "$entry"
+      elif ! tracked_by_git "$entry"; then
+        echo "$entry"
+      fi
+    done
+  } > .gitignore
   ok ".gitignore: created with cortex entries"
 fi
 
@@ -2016,7 +2088,14 @@ echo "  MCP:       $([ "$MCP_CONFIGURED" = "true" ] && echo "✓ configured" || 
 echo "  /install:  $([ -f "$HOME/.claude/skills/install/SKILL.md" ] && echo "✓ global skill active" || echo "- not installed")"
 echo "  IDEs:      ${SELECTED_IDES[*]}"
 echo "  Hooks:     v${HOOKS_VERSION}.${HOOKS_MINOR} (enforcement: $(ide_selected claude && echo 'claude ')$(ide_selected gemini && echo 'gemini '))"
-echo "  Lefthook:  $([ -f lefthook.yml ] && echo "✓ configured" || echo "⚠ not configured")"
+# "configured" used to mean "lefthook.yml exists", which was true in the exact
+# case where the gate did not run. Report the hook git will actually execute.
+lefthook_hook_live() {
+  [ -f lefthook.yml ] || return 1
+  [ -z "$(git -C "$PROJECT_DIR" config --get core.hooksPath 2>/dev/null || true)" ] || return 1
+  grep -q lefthook "$PROJECT_DIR/.git/hooks/pre-commit" 2>/dev/null
+}
+echo "  Lefthook:  $(lefthook_hook_live && echo "✓ pre-commit gate live" || { [ -f lefthook.yml ] && echo "⚠ lefthook.yml present but no git hook runs" || echo "⚠ not configured"; })"
 echo ""
 [ "$MCP_CONFIGURED" != "true" ] && echo -e "  ${YELLOW}→ Set HUB_API_KEY and re-run /install to configure MCP${NC}"
 echo -e "  ${CYAN}→ Restart IDE to pick up changes${NC}"

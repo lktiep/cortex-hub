@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $HOOKS_VERSION = 7
-$HOOKS_MINOR = 1
+$HOOKS_MINOR = 2
 $LATEST_VERSION = "$HOOKS_VERSION.$HOOKS_MINOR"
 $MCP_URL_DEFAULT = "http://localhost:8318/mcp"
 
@@ -1494,6 +1494,17 @@ $gitignoreEntries = @(
     ".windsurfrules"
     ".cursorrules"
 )
+
+# A generated file is only safe to ignore while git is not already tracking it.
+# In cortex-hub itself .claude/, .codex/ and .cursorrules ARE the committed source
+# of truth. An ignore line for a tracked path does not untrack it, so nothing
+# breaks today - it breaks silently for whoever removes and re-adds the file.
+function Test-TrackedByGit($path) {
+    git ls-files --error-unmatch -- $path 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
+$gitignoreEntries = @($gitignoreEntries | Where-Object { -not (Test-TrackedByGit $_) })
 
 if (Test-Path ".gitignore") {
     $content = Get-Content ".gitignore" -Raw -ErrorAction SilentlyContinue

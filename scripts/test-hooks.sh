@@ -251,6 +251,96 @@ for f in scripts/onboard.sh scripts/onboard.ps1 scripts/install.sh scripts/insta
   check "no old tool ladder in $f"         0 "$(grep -q 'Tool Priority' "$REPO/$f" && echo 1 || echo 0)"
 done
 
+echo "install.sh — the commit gate must actually be installed, not just configured"
+# Every case here was live on cortex-hub itself. `git hook run pre-commit` produced no
+# output while lefthook's real hook sat unused in .git/hooks/, because husky's `prepare`
+# script pointed core.hooksPath at .husky/_ and the installer swallowed lefthook's refusal
+# as "non-fatal". lefthook.yml existed, the summary said "configured", nothing gated.
+INSTALL_SH="$REPO/scripts/install.sh"
+
+# A stub keeps this offline and tests OUR logic — whether we call the installer at all and
+# whether we clear the path first — rather than lefthook's.
+lefthook_stub() {
+  mkdir -p "$1"
+  cat > "$1/lefthook" <<'STUB'
+#!/bin/sh
+mkdir -p .git/hooks
+printf '#!/bin/sh\n# lefthook stub\n' > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+STUB
+  chmod +x "$1/lefthook"
+}
+
+# $1 = extra setup run inside the fresh repo. Sets PROJ, OUT and RC as globals —
+# not via command substitution, which would run this in a subshell and throw them away.
+install_in_sandbox() {
+  PROJ=$(mktemp -d)
+  lefthook_stub "$PROJ/.bin"
+  OUT="$PROJ/install.out"
+  (
+    cd "$PROJ" || exit 1
+    git init -q . && git config user.email t@t && git config user.name t
+    eval "$1"
+    git add -A >/dev/null 2>&1; git commit -qm init >/dev/null 2>&1
+    PATH="$PROJ/.bin:$PATH" HOME="$PROJ" bash "$INSTALL_SH" --skip-global --tools cursor
+  ) > "$OUT" 2>&1
+  RC=$?
+}
+
+echo "  .gitignore must not claim to ignore a path git already tracks"
+# In cortex-hub .claude/, .codex/ and .cursorrules ARE the committed source of truth.
+# An ignore line for a tracked path changes nothing today, then silently drops the file
+# for whoever removes and re-adds it.
+install_in_sandbox "printf 'x\n' > .cursorrules; printf 'node_modules/\n' > .gitignore"
+check "installer exits clean"               0 "$RC"
+check "tracked .cursorrules not ignored"    0 "$(grep -qxF '.cursorrules' "$PROJ/.gitignore" && echo 1 || echo 0)"
+check "untracked .windsurfrules ignored"    0 "$(grep -qxF '.windsurfrules' "$PROJ/.gitignore" && echo 0 || echo 1)"
+check "and it says which it skipped"        0 "$(grep -q 'left tracked paths alone' "$OUT" && echo 0 || echo 1)"
+check ".cursorrules still tracked"          0 "$(git -C "$PROJ" ls-files --error-unmatch .cursorrules >/dev/null 2>&1 && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  a project with no recognised stack must still install"
+# `printf '%s\n' "${DETECTED_STACKS[@]}"` on an empty array aborts under bash 3.2 + set -u,
+# so install.sh died outright on any stack it did not know — a docs repo, C++, anything.
+install_in_sandbox "printf 'hi\n' > README.md"
+check "unknown stack does not abort"        0 "$RC"
+check "no unbound variable"                 0 "$(grep -q 'unbound variable' "$OUT" && echo 1 || echo 0)"
+check "profile still written"               0 "$([ -f "$PROJ/.cortex/project-profile.json" ] && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  core.hooksPath pointing at someone else's hooks must not be overwritten"
+install_in_sandbox "printf '{}' > package.json; mkdir -p .myhooks; printf '#!/bin/sh\necho mine\n' > .myhooks/pre-commit; chmod +x .myhooks/pre-commit; git config core.hooksPath .myhooks"
+check "installer exits clean"               0 "$RC"
+check "their hooksPath is left set"         0 "$([ "$(git -C "$PROJ" config --get core.hooksPath)" = ".myhooks" ] && echo 0 || echo 1)"
+check "their hook is not overwritten"       0 "$(grep -q 'echo mine' "$PROJ/.myhooks/pre-commit" && echo 0 || echo 1)"
+check "the dead gate is reported, not hidden" 0 "$(grep -q 'NOT installing over them' "$OUT" && echo 0 || echo 1)"
+check "summary does not claim configured"   0 "$(grep -q 'no git hook runs' "$OUT" && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  a husky hooksPath with no hooks of its own must be handed to lefthook"
+install_in_sandbox "printf '{}' > package.json; mkdir -p .husky/_; printf '#!/usr/bin/env sh\n. \"\$(dirname \"\$0\")/h\"\n' > .husky/_/pre-commit; chmod +x .husky/_/pre-commit; git config core.hooksPath .husky/_"
+check "installer exits clean"               0 "$RC"
+check "the shadowing hooksPath is cleared"  0 "$([ -z "$(git -C "$PROJ" config --get core.hooksPath)" ] && echo 0 || echo 1)"
+check "lefthook owns .git/hooks/pre-commit" 0 "$(grep -qi lefthook "$PROJ/.git/hooks/pre-commit" 2>/dev/null && echo 0 || echo 1)"
+check "and the gate is reported live"       0 "$(grep -q 'pre-commit gate live' "$OUT" && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  this repo must not re-introduce a hooksPath that shadows lefthook"
+# husky was a devDependency whose only effect was `prepare: husky` setting core.hooksPath.
+check "no husky in package.json"            0 "$(grep -q '"husky"' "$REPO/package.json" && echo 1 || echo 0)"
+check "no prepare script reinstating it"    0 "$(grep -q '"prepare"' "$REPO/package.json" && echo 1 || echo 0)"
+check "lefthook is a devDependency"         0 "$(grep -q '"lefthook"' "$REPO/package.json" && echo 0 || echo 1)"
+
+echo "memory recall must read the field the API actually returns"
+# /api/mem9/search returns Mem9Memory, whose body is `memory`. hub-mcp read `m.text`, which
+# does not exist on that payload, so every recall rendered headers with an empty body —
+# it read exactly like a project with no memories, for as long as it shipped.
+MEM="$REPO/apps/hub-mcp/src/tools/memory.ts"
+check "hub-mcp no longer reads m.text"      0 "$(grep -q 'm\.text' "$MEM" && echo 1 || echo 0)"
+check "hub-mcp reads m.memory"              0 "$(grep -q 'm\.memory' "$MEM" && echo 0 || echo 1)"
+check "and the shared type still says memory" 0 "$(grep -q '^  memory: string$' "$REPO/packages/shared-mem9/src/types.ts" && echo 0 || echo 1)"
+check "an empty body is named, not blank"   0 "$(grep -q 'stored with an empty body' "$MEM" && echo 0 || echo 1)"
+
 echo
 echo "passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]
