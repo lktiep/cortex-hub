@@ -101,9 +101,13 @@ Every session must pass before committing:
   *starts* a command are refused. A `grep` after a pipe (filtering another command's output)
   is fine.
 - Editing before `cortex_knowledge_search` **and** `cortex_memory_search` → refused. This
-  covers `cat > file` and `sed -i` too, not just the Edit tool.
+  covers `cat > file` and `sed -i` too, not just the Edit tool. Running a discovery call does
+  not retire this: the recalls are required for every write, all session.
 - `git commit` without discovery and without build/typecheck/lint passing → refused. Calling
   `cortex_quality_report` does not substitute for the gates.
+- A green build certifies the **tree**, not the session: any write after the gates pass
+  (`Edit`, `Write`, `sed -i`, `cat > file`) clears them, and the commit gate closes again
+  until build/typecheck/lint are re-run. So run the gates last, then commit.
 - Markers live in `.cortex/.session-state/` and must contain `tool=` evidence written by the
   PostToolUse hook — an empty file does not open a gate.
 - If the hub is genuinely unreachable, the gates have no path through them. Say so and

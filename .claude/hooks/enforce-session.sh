@@ -83,16 +83,22 @@ if [ -f "$STATE_DIR/session-started" ]; then
       echo "BLOCKED: use cortex_code_search first. find/grep/rg unlock once a cortex discovery tool has run — and stay the right choice for an exact literal (env var, config key, error string), not for a question about behaviour. $HOW_OUT" >&2
       exit 2
     fi
-    WRITES_A_FILE=0
-    case "$TOOL_NAME" in
-      Edit|Write|NotebookEdit) WRITES_A_FILE=1 ;;
-      Bash) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
-    esac
-    if [ "$WRITES_A_FILE" = "1" ]; then
-      if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-        echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
-        exit 2
-      fi
+  fi
+
+  # Recall is a precondition for writing, not a consolation prize for not having
+  # searched. This block used to live inside the `! marker_ok discovery-used`
+  # branch above, so a single cortex_code_search call retired the requirement for
+  # the rest of the session — while CLAUDE.md said editing without both recalls is
+  # refused, full stop.
+  WRITES_A_FILE=0
+  case "$TOOL_NAME" in
+    Edit|Write|NotebookEdit) WRITES_A_FILE=1 ;;
+    Bash) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
+  esac
+  if [ "$WRITES_A_FILE" = "1" ]; then
+    if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
+      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
+      exit 2
     fi
   fi
   exit 0

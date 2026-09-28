@@ -63,15 +63,18 @@ if [ -f "$STATE_DIR/session-started" ]; then
       run_shell_command|shell)
         is_codebase_search "$COMMAND" && deny "BLOCKED: use cortex_code_search first. find/grep/rg unlock once a cortex discovery tool has run — and stay the right choice for an exact literal (env var, config key, error string), not for a question about behaviour. $HOW_OUT" ;;
     esac
-    WRITES_A_FILE=0
-    case "$TOOL_NAME" in
-      write_file|replace|edit_file|create_file|insert_text) WRITES_A_FILE=1 ;;
-      run_shell_command|shell) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
-    esac
-    if [ "$WRITES_A_FILE" = "1" ]; then
-      if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-        deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. $HOW_OUT"
-      fi
+  fi
+
+  # Recall is a precondition for writing, not a consolation prize for not having
+  # searched — see the same fix in .claude/hooks/enforce-session.sh.
+  WRITES_A_FILE=0
+  case "$TOOL_NAME" in
+    write_file|replace|edit_file|create_file|insert_text) WRITES_A_FILE=1 ;;
+    run_shell_command|shell) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
+  esac
+  if [ "$WRITES_A_FILE" = "1" ]; then
+    if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
+      deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. $HOW_OUT"
     fi
   fi
   allow

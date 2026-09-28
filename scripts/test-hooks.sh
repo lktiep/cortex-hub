@@ -67,6 +67,20 @@ printf 'tool=cortex_memory_search at=now\n' > "$STATE/memory-recalled"
 check "knowledge + memory unlocks Edit"    0 "$(run enforce-session.sh "$(tool_payload Edit)")"
 teardown
 
+echo "enforce-session.sh — discovery must not retire the recall gate"
+# The recall check used to be nested inside `if ! marker_ok discovery-used`, so one
+# cortex_code_search call bought the whole session a pass on both recalls — while
+# CLAUDE.md said editing without them is refused, full stop.
+setup; touch "$STATE/session-started"; discovered
+check "Edit still blocked after discovery" 2 "$(run enforce-session.sh "$(tool_payload Edit)")"
+check "cat > file blocked too"             2 "$(run enforce-session.sh "$(bash_payload 'cat > f.ts <<EOF
+x
+EOF')")"
+printf 'tool=cortex_knowledge_search at=now\n' > "$STATE/knowledge-recalled"
+printf 'tool=cortex_memory_search at=now\n' > "$STATE/memory-recalled"
+check "both recalls unlock it"              0 "$(run enforce-session.sh "$(tool_payload Edit)")"
+teardown
+
 echo "enforce-session.sh — declared escape hatch"
 setup; touch "$STATE/session-started" "$STATE/gate-off"
 check "empty gate-off does nothing"        2 "$(run enforce-session.sh "$(tool_payload Grep)")"
@@ -170,6 +184,42 @@ printf '{"tool_name":"Bash","tool_input":{"command":"pnpm build || true"},"tool_
 check "a hidden build failure opens nothing" 0 "$([ ! -f "$STATE/gate-build" ] && echo 0 || echo 1)"
 teardown
 
+echo "track-quality.sh — a green build certifies a tree, not a session"
+# Gates passed, then one Edit, then `git commit`: the commit gate said yes to code that had
+# never been built. The certificate has to die the moment the tree changes under it.
+arm_gates() {
+  for c in build typecheck lint; do
+    printf '{"tool_name":"Bash","tool_input":{"command":"pnpm %s"},"tool_response":{"stdout":"Tasks: 12 successful","stderr":""}}' "$c" \
+      | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+  done
+}
+post() { printf '%s' "$1" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1; }
+
+setup; printf 'tool=cortex_session_start at=now\n' > "$STATE/session-started"; discovered
+arm_gates
+check "gates armed"                         0 "$([ -s "$STATE/quality-gates-passed" ] && echo 0 || echo 1)"
+check "commit allowed on a checked tree"    0 "$(run enforce-commit.sh "$(bash_payload 'git commit -m x')")"
+post '{"tool_name":"Edit","tool_input":{"file_path":"a.ts"},"tool_response":{}}'
+check "an Edit revokes the certificate"     0 "$([ ! -f "$STATE/quality-gates-passed" ] && echo 0 || echo 1)"
+check "and the three gates with it"         0 "$([ ! -f "$STATE/gate-build" ] && [ ! -f "$STATE/gate-typecheck" ] && [ ! -f "$STATE/gate-lint" ] && echo 0 || echo 1)"
+check "commit refused after the edit"       2 "$(run enforce-commit.sh "$(bash_payload 'git commit -m x')")"
+arm_gates
+check "re-running the gates re-opens it"    0 "$(run enforce-commit.sh "$(bash_payload 'git commit -m x')")"
+teardown
+
+setup; printf 'tool=cortex_session_start at=now\n' > "$STATE/session-started"
+arm_gates
+post '{"tool_name":"Bash","tool_input":{"command":"sed -i s/a/b/ src/x.ts"},"tool_response":{}}'
+check "sed -i revokes it too"               0 "$([ ! -f "$STATE/quality-gates-passed" ] && echo 0 || echo 1)"
+arm_gates
+post '{"tool_name":"Bash","tool_input":{"command":"ls -la 2>/dev/null"},"tool_response":{}}'
+check "a read leaves it alone"              0 "$([ -s "$STATE/quality-gates-passed" ] && echo 0 || echo 1)"
+# The gate command is the one thing that must not revoke its own marker.
+printf '{"tool_name":"Bash","tool_input":{"command":"pnpm lint > lint.log"},"tool_response":{"stdout":"Tasks: 12 successful"}}' \
+  | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "a gate logging to a file survives"   0 "$([ -s "$STATE/quality-gates-passed" ] && echo 0 || echo 1)"
+teardown
+
 # ── Gemini variants ──────────────────────────────────────────────────────────────────────
 # Same gates, different protocol: gemini reads {"decision":"deny"} from stdout and the hook
 # always exits 0. The variants shipped three versions behind and enforced almost none of this.
@@ -227,6 +277,20 @@ check "report does not pass the gates"     0 "$([ ! -f "$STATE/quality-gates-pas
 printf '{"tool_name":"run_shell_command","tool_input":{"command":"pnpm build"},"tool_response":{"stdout":"ELIFECYCLE Command failed"}}' \
   | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
 check "a hidden failure opens nothing"     0 "$([ ! -f "$STATE/gate-build" ] && echo 0 || echo 1)"
+teardown
+
+echo "gemini — both holes, same shape"
+setup; printf 'tool=cortex_session_start at=now\n' > "$STATE/session-started"; discovered
+check "write_file still denied after discovery" deny "$(gdecision enforce-session.sh "$(gpayload write_file)")"
+for c in build typecheck lint; do
+  printf '{"tool_name":"run_shell_command","tool_input":{"command":"pnpm %s"},"tool_response":{"stdout":"Tasks: 12 successful"}}' "$c" \
+    | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
+done
+check "gates armed"                        0 "$([ -s "$STATE/quality-gates-passed" ] && echo 0 || echo 1)"
+printf '{"tool_name":"replace","tool_input":{},"tool_response":{}}' \
+  | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
+check "replace revokes the certificate"    0 "$([ ! -f "$STATE/quality-gates-passed" ] && echo 0 || echo 1)"
+check "commit denied after the edit"       deny "$(gdecision enforce-commit.sh "$(gpayload run_shell_command 'git commit -m x')")"
 teardown
 
 echo "gemini session-init.sh — compaction must not re-arm the gate"

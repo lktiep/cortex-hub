@@ -33,7 +33,11 @@ record() { printf 'tool=%s at=%s\n' "${2:-$TOOL_NAME}" "$NOW" > "$STATE_DIR/$1";
 looks_failed() {
   printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖|FAIL |Exit status [1-9]'
 }
-mark_gate() { looks_failed && return 0; record "$1" "$COMMAND"; }
+# 1 = this command is not one of the quality gates. mark_gate flips it, and the
+# invalidation block at the bottom reads it, so `pnpm build | tee build.log` does not
+# revoke the very marker it just armed.
+GATE_COMMAND=1
+mark_gate() { GATE_COMMAND=0; looks_failed && return 0; record "$1" "$COMMAND"; }
 
 [[ "$COMMAND" =~ (pnpm|npm|yarn)\ .*build ]]     && mark_gate gate-build
 [[ "$COMMAND" =~ (pnpm|npm|yarn)\ .*typecheck ]] && mark_gate gate-typecheck
@@ -60,4 +64,36 @@ case "$TOOL_NAME" in
   *cortex_task_pickup*)      record tasks-checked ;;
   *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
 esac
+
+# ── A passing build certifies a tree, not a session ──
+#
+# The gate markers used to survive any edit made after them, so
+# "pnpm build && typecheck && lint" → edit one file → `git commit` passed the commit
+# gate with code that had never been checked. Reproduced in a sandbox: arming the
+# three gates, then feeding an a write_file, left quality-gates-passed armed and the commit
+# gate returned 0. A write invalidates the certificate — the gates have to run again
+# on the tree that is actually being committed.
+writes_a_file() {
+  printf '%s' "$1" | grep -Eq '(^|[;&|]{1,2}[[:space:]]*)[[:space:]]*(sed[[:space:]]+-i|tee[[:space:]]|dd[[:space:]]|truncate[[:space:]]|install[[:space:]]+-)' && return 0
+  local cmd
+  cmd=$(printf '%s' "$1" | sed -E 's/[0-9]*>>?[[:space:]]*&[0-9-]//g; s/[0-9]*>>?[[:space:]]*"?\/dev\/[a-zA-Z0-9]+"?//g')
+  printf '%s' "$cmd" | grep -Eq '>>?[[:space:]]*"?[^&|"[:space:]]' && return 0
+  printf '%s' "$1" | grep -Eq '(^|[;&|]{1,2}[[:space:]]*)[[:space:]]*(cp|mv|rm|mkdir|touch|patch|git[[:space:]]+apply)[[:space:]]' && return 0
+  return 1
+}
+INVALIDATES=0
+case "$TOOL_NAME" in
+  write_file|replace|edit_file|create_file|insert_text) INVALIDATES=1 ;;
+  run_shell_command|shell)
+    # Editing through a shell is still editing. But a gate command that pipes its own
+    # output to a file must not revoke the marker it just armed one screen above.
+    if [ "$GATE_COMMAND" = "1" ] && writes_a_file "$COMMAND"; then
+      INVALIDATES=1
+    fi
+    ;;
+esac
+if [ "$INVALIDATES" = "1" ]; then
+  rm -f "$STATE_DIR/quality-gates-passed" "$STATE_DIR/gate-build" \
+        "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint"
+fi
 echo '{"decision":"allow"}'

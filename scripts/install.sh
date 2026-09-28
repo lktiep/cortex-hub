@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HOOKS_VERSION=7
-HOOKS_MINOR=2
+HOOKS_MINOR=3
 MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
@@ -700,16 +700,22 @@ if [ -f "$STATE_DIR/session-started" ]; then
       echo "BLOCKED: use cortex_code_search first. find/grep/rg unlock once a cortex discovery tool has run — and stay the right choice for an exact literal (env var, config key, error string), not for a question about behaviour. $HOW_OUT" >&2
       exit 2
     fi
-    WRITES_A_FILE=0
-    case "$TOOL_NAME" in
-      Edit|Write|NotebookEdit) WRITES_A_FILE=1 ;;
-      Bash) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
-    esac
-    if [ "$WRITES_A_FILE" = "1" ]; then
-      if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-        echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
-        exit 2
-      fi
+  fi
+
+  # Recall is a precondition for writing, not a consolation prize for not having
+  # searched. This block used to live inside the `! marker_ok discovery-used`
+  # branch above, so a single cortex_code_search call retired the requirement for
+  # the rest of the session — while CLAUDE.md said editing without both recalls is
+  # refused, full stop.
+  WRITES_A_FILE=0
+  case "$TOOL_NAME" in
+    Edit|Write|NotebookEdit) WRITES_A_FILE=1 ;;
+    Bash) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
+  esac
+  if [ "$WRITES_A_FILE" = "1" ]; then
+    if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
+      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
+      exit 2
     fi
   fi
   exit 0
@@ -839,7 +845,12 @@ looks_failed() {
   printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖|FAIL |Exit status [1-9]'
 }
 
+# 1 = this command is not one of the quality gates. mark_gate flips it, and the
+# invalidation block at the bottom reads it, so `pnpm build | tee build.log` does not
+# revoke the very marker it just armed.
+GATE_COMMAND=1
 mark_gate() {
+  GATE_COMMAND=0
   looks_failed && return 0
   record "$1" "$COMMAND"
 }
@@ -885,6 +896,38 @@ case "$TOOL_NAME" in
   *cortex_task_pickup*)    record tasks-checked ;;
   *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
 esac
+
+# ── A passing build certifies a tree, not a session ──
+#
+# The gate markers used to survive any edit made after them, so
+# "pnpm build && typecheck && lint" → edit one file → `git commit` passed the commit
+# gate with code that had never been checked. Reproduced in a sandbox: arming the
+# three gates, then feeding an Edit, left quality-gates-passed armed and the commit
+# gate returned 0. A write invalidates the certificate — the gates have to run again
+# on the tree that is actually being committed.
+writes_a_file() {
+  printf '%s' "$1" | grep -Eq '(^|[;&|]{1,2}[[:space:]]*)[[:space:]]*(sed[[:space:]]+-i|tee[[:space:]]|dd[[:space:]]|truncate[[:space:]]|install[[:space:]]+-)' && return 0
+  local cmd
+  cmd=$(printf '%s' "$1" | sed -E 's/[0-9]*>>?[[:space:]]*&[0-9-]//g; s/[0-9]*>>?[[:space:]]*"?\/dev\/[a-zA-Z0-9]+"?//g')
+  printf '%s' "$cmd" | grep -Eq '>>?[[:space:]]*"?[^&|"[:space:]]' && return 0
+  printf '%s' "$1" | grep -Eq '(^|[;&|]{1,2}[[:space:]]*)[[:space:]]*(cp|mv|rm|mkdir|touch|patch|git[[:space:]]+apply)[[:space:]]' && return 0
+  return 1
+}
+INVALIDATES=0
+case "$TOOL_NAME" in
+  Edit|Write|NotebookEdit) INVALIDATES=1 ;;
+  Bash)
+    # Editing through a shell is still editing. But a gate command that pipes its own
+    # output to a file must not revoke the marker it just armed one screen above.
+    if [ "$GATE_COMMAND" = "1" ] && writes_a_file "$COMMAND"; then
+      INVALIDATES=1
+    fi
+    ;;
+esac
+if [ "$INVALIDATES" = "1" ]; then
+  rm -f "$STATE_DIR/quality-gates-passed" "$STATE_DIR/gate-build" \
+        "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint"
+fi
 exit 0
 HOOKEOF
 
@@ -1318,15 +1361,18 @@ if [ -f "$STATE_DIR/session-started" ]; then
       run_shell_command|shell)
         is_codebase_search "$COMMAND" && deny "BLOCKED: use cortex_code_search first. find/grep/rg unlock once a cortex discovery tool has run — and stay the right choice for an exact literal (env var, config key, error string), not for a question about behaviour. $HOW_OUT" ;;
     esac
-    WRITES_A_FILE=0
-    case "$TOOL_NAME" in
-      write_file|replace|edit_file|create_file|insert_text) WRITES_A_FILE=1 ;;
-      run_shell_command|shell) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
-    esac
-    if [ "$WRITES_A_FILE" = "1" ]; then
-      if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-        deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. $HOW_OUT"
-      fi
+  fi
+
+  # Recall is a precondition for writing, not a consolation prize for not having
+  # searched — see the same fix in .claude/hooks/enforce-session.sh.
+  WRITES_A_FILE=0
+  case "$TOOL_NAME" in
+    write_file|replace|edit_file|create_file|insert_text) WRITES_A_FILE=1 ;;
+    run_shell_command|shell) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
+  esac
+  if [ "$WRITES_A_FILE" = "1" ]; then
+    if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
+      deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. $HOW_OUT"
     fi
   fi
   allow
@@ -1415,7 +1461,11 @@ record() { printf 'tool=%s at=%s\n' "${2:-$TOOL_NAME}" "$NOW" > "$STATE_DIR/$1";
 looks_failed() {
   printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖|FAIL |Exit status [1-9]'
 }
-mark_gate() { looks_failed && return 0; record "$1" "$COMMAND"; }
+# 1 = this command is not one of the quality gates. mark_gate flips it, and the
+# invalidation block at the bottom reads it, so `pnpm build | tee build.log` does not
+# revoke the very marker it just armed.
+GATE_COMMAND=1
+mark_gate() { GATE_COMMAND=0; looks_failed && return 0; record "$1" "$COMMAND"; }
 
 [[ "$COMMAND" =~ (pnpm|npm|yarn)\ .*build ]]     && mark_gate gate-build
 [[ "$COMMAND" =~ (pnpm|npm|yarn)\ .*typecheck ]] && mark_gate gate-typecheck
@@ -1442,6 +1492,38 @@ case "$TOOL_NAME" in
   *cortex_task_pickup*)      record tasks-checked ;;
   *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
 esac
+
+# ── A passing build certifies a tree, not a session ──
+#
+# The gate markers used to survive any edit made after them, so
+# "pnpm build && typecheck && lint" → edit one file → `git commit` passed the commit
+# gate with code that had never been checked. Reproduced in a sandbox: arming the
+# three gates, then feeding an a write_file, left quality-gates-passed armed and the commit
+# gate returned 0. A write invalidates the certificate — the gates have to run again
+# on the tree that is actually being committed.
+writes_a_file() {
+  printf '%s' "$1" | grep -Eq '(^|[;&|]{1,2}[[:space:]]*)[[:space:]]*(sed[[:space:]]+-i|tee[[:space:]]|dd[[:space:]]|truncate[[:space:]]|install[[:space:]]+-)' && return 0
+  local cmd
+  cmd=$(printf '%s' "$1" | sed -E 's/[0-9]*>>?[[:space:]]*&[0-9-]//g; s/[0-9]*>>?[[:space:]]*"?\/dev\/[a-zA-Z0-9]+"?//g')
+  printf '%s' "$cmd" | grep -Eq '>>?[[:space:]]*"?[^&|"[:space:]]' && return 0
+  printf '%s' "$1" | grep -Eq '(^|[;&|]{1,2}[[:space:]]*)[[:space:]]*(cp|mv|rm|mkdir|touch|patch|git[[:space:]]+apply)[[:space:]]' && return 0
+  return 1
+}
+INVALIDATES=0
+case "$TOOL_NAME" in
+  write_file|replace|edit_file|create_file|insert_text) INVALIDATES=1 ;;
+  run_shell_command|shell)
+    # Editing through a shell is still editing. But a gate command that pipes its own
+    # output to a file must not revoke the marker it just armed one screen above.
+    if [ "$GATE_COMMAND" = "1" ] && writes_a_file "$COMMAND"; then
+      INVALIDATES=1
+    fi
+    ;;
+esac
+if [ "$INVALIDATES" = "1" ]; then
+  rm -f "$STATE_DIR/quality-gates-passed" "$STATE_DIR/gate-build" \
+        "$STATE_DIR/gate-typecheck" "$STATE_DIR/gate-lint"
+fi
 echo '{"decision":"allow"}'
 GHOOKEOF
 
