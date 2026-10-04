@@ -1,0 +1,4 @@
+{
+  "description": "cortex-bar hooks module",
+  "modules": ["./register.js"]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "cortex-hub",
+  "owner": { "name": "Cortex Hub" },
+  "metadata": {
+    "description": "Claude Code mods for working with Cortex Hub"
+  },
+  "plugins": [
+    {
+      "name": "cortex-bar",
+      "source": "./mods/cortex-bar",
+      "description": "Cortex Hub tool calls above the prompt as a stacked bar, one color per category, with /cs session progress, token savings and lookup hit@k."
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "cortex-bar",
+  "version": "0.9.0",
+  "description": "Shows Cortex Hub tool calls above the prompt as a stacked bar, one color per category, with /cs session progress, tokens in and saved, and hit@k for code lookups. Toggle with /cortex-bar, per-tool table and calls with /cortex-calls.",
+  "author": { "name": "Cortex Hub" },
+  "homepage": "https://github.com/lktiep/cortex-hub/tree/master/mods/cortex-bar"
+}
