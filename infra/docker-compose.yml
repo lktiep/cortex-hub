@@ -26,7 +26,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          # Every branch of a project holds its own copy of the project's
+          # points. Thirty branches of one repo came to ~350K points and kept
+          # this container at 85% of a 1G limit, hitting it hundreds of
+          # thousands of times. Raise it without editing this file.
+          memory: ${QDRANT_MEMORY_LIMIT:-2G}
     ulimits:
       nofile:
         soft: 65535
@@ -54,9 +58,17 @@ services:
     image: ollama/ollama:0.34.4
     container_name: cortex-ollama
     restart: unless-stopped
+    # The entrypoint pins each model's threads to the CPU limit below (see the
+    # script for why) and then execs `ollama serve`. init reaps its helper.
+    init: true
+    entrypoint: ["/bin/sh", "/cortex/ollama-entrypoint.sh"]
     volumes:
       - ollama-models:/root/.ollama
+      - ./ollama-entrypoint.sh:/cortex/ollama-entrypoint.sh:ro
     environment:
+      # Threads per model. Defaults to the CPU limit: llama.cpp otherwise runs
+      # one thread per host CPU and spends the quota being throttled.
+      CORTEX_OLLAMA_THREADS: ${OLLAMA_THREADS:-${OLLAMA_CPUS:-4}}
       # Two slots, matching EMBED_MAX_CONCURRENCY in the gateway. ollama
       # serialises embedding work internally — measured on this host, a search
       # that arrives while a 32-chunk batch is running waits out that batch
@@ -79,8 +91,9 @@ services:
           memory: ${OLLAMA_MEMORY_LIMIT:-4G}
           # Uncapped, a re-index of several branches held every core of the
           # host for hours and starved the API and Qdrant beside it. On four
-          # cores an 8-chunk index batch takes ~0.6s, which is also the longest
-          # a search waits behind one. Raise it on a host that does nothing else.
+          # cores, with threads pinned to match, an 8-chunk index batch takes
+          # ~0.3s, which is also the longest a search waits behind one. Raise it
+          # on a host that does nothing else.
           cpus: ${OLLAMA_CPUS:-4}
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
