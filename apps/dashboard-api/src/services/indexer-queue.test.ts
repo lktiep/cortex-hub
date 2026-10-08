@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 import Database from 'better-sqlite3'
 import { execFileSync } from 'child_process'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -23,14 +23,16 @@ const root = vi.hoisted(() => {
 
 const embedding = vi.hoisted(() => ({
   branches: [] as string[],
+  dirs: [] as string[],
   active: 0,
   maxActive: 0,
   hold: Promise.resolve() as Promise<void>,
 }))
 
 vi.mock('./mem9-embedder.js', () => ({
-  embedProject: vi.fn(async (_projectId: string, branch: string) => {
+  embedProject: vi.fn(async (_projectId: string, branch: string, _jobId: string, _onProgress: unknown, repoDir: string) => {
     embedding.branches.push(branch)
+    embedding.dirs.push(repoDir)
     embedding.active++
     embedding.maxActive = Math.max(embedding.maxActive, embedding.active)
     try {
@@ -60,6 +62,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const PROJECT = 'proj-queue'
 const remote = join(root, 'remote.git')
 const work = join(root, 'work')
+const defaultCheckout = join(root, 'repos', PROJECT)
+const branchCheckout = join(root, 'repos', '.branches', PROJECT)
 
 function createTestDb() {
   const db = new Database(':memory:')
@@ -115,10 +119,12 @@ beforeEach(() => {
   testDb = createTestDb()
   testDb.exec(`
     INSERT INTO organizations (id, name, slug) VALUES ('org-1', 'Org', 'org');
-    INSERT INTO projects (id, org_id, name, slug, git_repo_url) VALUES ('${PROJECT}', 'org-1', 'Queue', 'queue', 'file://${remote}');
+    INSERT INTO projects (id, org_id, name, slug, git_repo_url, default_branch)
+      VALUES ('${PROJECT}', 'org-1', 'Queue', 'queue', 'file://${remote}', 'main');
   `)
 
   embedding.branches = []
+  embedding.dirs = []
   embedding.active = 0
   embedding.maxActive = 0
   embedding.hold = Promise.resolve()
@@ -207,14 +213,58 @@ describe('index queue', () => {
     expect(embedding.branches).toEqual(['main', 'main'])
   })
 
-  it('clones a branch again after another branch took over the checkout', async () => {
-    push('main', 'one')
-    push('feat', 'two')
+  it('checks a feature branch out beside the default one, leaving it alone', async () => {
+    const mainHead = push('main', 'one')
+    const featHead = push('feat', 'two')
     for (const branch of ['main', 'feat', 'main']) {
       requestIndexing(PROJECT, branch, { triggeredBy: 'push' })
       await indexQueueIdle(PROJECT)
     }
-    expect(embedding.branches).toEqual(['main', 'feat', 'main'])
+    // main still has its own checkout at its commit, so the third request is a skip.
+    expect(embedding.branches).toEqual(['main', 'feat'])
+    expect(embedding.dirs).toEqual([defaultCheckout, branchCheckout])
+    expect(git(defaultCheckout, 'rev-parse', 'HEAD')).toBe(mainHead)
+    expect(git(branchCheckout, 'rev-parse', 'HEAD')).toBe(featHead)
+  })
+
+  it('checks a feature branch out again after another one took the shared checkout', async () => {
+    push('feat-a', 'one')
+    push('feat-b', 'two')
+    for (const branch of ['feat-a', 'feat-b', 'feat-a']) {
+      requestIndexing(PROJECT, branch, { triggeredBy: 'push' })
+      await indexQueueIdle(PROJECT)
+    }
+    expect(embedding.branches).toEqual(['feat-a', 'feat-b', 'feat-a'])
+    expect(git(branchCheckout, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('feat-a')
+  })
+
+  it('updates the default checkout in place, keeping the GitNexus graph', async () => {
+    push('main', 'one')
+    requestIndexing(PROJECT, 'main', { triggeredBy: 'push' })
+    await indexQueueIdle(PROJECT)
+    mkdirSync(join(defaultCheckout, '.gitnexus'))
+    writeFileSync(join(defaultCheckout, '.gitnexus', 'meta.json'), '{}')
+    writeFileSync(join(defaultCheckout, 'leftover.log'), 'build output')
+
+    const head = push('main', 'two')
+    const again = requestIndexing(PROJECT, 'main', { triggeredBy: 'push' })
+    await indexQueueIdle(PROJECT)
+    expect(job(again.jobId).status).toBe('done')
+    expect(git(defaultCheckout, 'rev-parse', 'HEAD')).toBe(head)
+    expect(readFileSync(join(defaultCheckout, 'index.ts'), 'utf-8')).toContain('two')
+    expect(existsSync(join(defaultCheckout, '.gitnexus', 'meta.json'))).toBe(true)
+    expect(existsSync(join(defaultCheckout, 'leftover.log'))).toBe(false)
+    expect(existsSync(join(root, 'repos', `${PROJECT}.cloning`))).toBe(false)
+  })
+
+  it('clones afresh when the checkout cannot be updated', async () => {
+    const head = push('main', 'one')
+    mkdirSync(join(defaultCheckout, '.git'), { recursive: true })
+    const run = requestIndexing(PROJECT, 'main', { triggeredBy: 'push' })
+    await indexQueueIdle(PROJECT)
+    expect(job(run.jobId).status).toBe('done')
+    expect(job(run.jobId).log).toContain('cloning it again')
+    expect(git(defaultCheckout, 'rev-parse', 'HEAD')).toBe(head)
   })
 
   it('does not skip a commit whose embedding failed', async () => {

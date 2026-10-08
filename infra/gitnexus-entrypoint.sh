@@ -1,9 +1,9 @@
 #!/bin/bash
 # GitNexus — Entrypoint Script
-# Ensures repos are indexed before starting eval-server.
 # 1. Bootstrap default repo if no indexed repos found.
-# 2. Auto-discover and analyze repos from shared /app/data/repos/ volume
-#    (cloned by cortex-api indexer).
+# 2. Watchdog: keep the graph of every checkout in the shared /app/data/repos/
+#    volume (written by the cortex-api indexer) at its current commit.
+# 3. Supervise eval-server.
 
 set -e
 
@@ -12,8 +12,16 @@ REPOS_DIR="/app/data/repos"
 PORT="${PORT:-4848}"
 
 # Cap Node.js heap to prevent OOM kills. GitNexus defaults to 8GB (HEAP_MB=8192)
-# which exceeds container memory limits. Set to 3GB to fit within 4GB container limit.
+# which exceeds container memory limits.
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=3072}"
+
+# eval-server keeps up to five repositories open, each with a LadybugDB buffer
+# pool that GitNexus sizes at min(2 GiB, 80% of the *host's* RAM) — it never
+# looks at the container limit, so on a 23 GiB host every open repo may grow to
+# 2 GiB. 512 MiB still holds the largest graph we serve (365 MB on disk) whole.
+# Only eval-server gets the cap: analyze sizes its own pool to the repository,
+# and its bulk load fails on large ones below ~256 MiB.
+SERVE_BUFFER_POOL="${GITNEXUS_SERVE_BUFFER_POOL_SIZE:-536870912}"
 
 # eval-server 1.6.12+ refuses `--host 0.0.0.0` without a bearer token, and other
 # containers can only reach us on a non-loopback bind. Honour an operator-supplied
@@ -100,73 +108,103 @@ else
     fi
 fi
 
-# ── Step 2: Auto-discover repos from shared volume ──
-# The cortex-api indexer clones repos to /app/data/repos/{projectId}
-# We scan for any git repos that aren't yet in the GitNexus registry.
-if [ -d "$REPOS_DIR" ]; then
-    echo "GitNexus: Scanning ${REPOS_DIR} for unregistered repos..."
-    ANALYZED=0
+# ── Step 2: Watchdog — keep every checkout's graph at its HEAD ──
+# cortex-api checks each project's default branch out at /app/data/repos/{projectId}
+# and updates it in place, leaving .gitnexus/ behind; other branches live under the
+# hidden .branches/, which the glob below does not match. A checkout is analysed
+# whenever its HEAD is not the commit last analysed — incrementally, one repo at a
+# time, in the background so eval-server keeps answering meanwhile.
+#
+# What used to go wrong here, and what stops it now:
+#   - Under `set -e` one failed analyze ended the loop, and every later analysis
+#     with it. The loop runs with `set +e`, inside a loop that restarts it.
+#   - A failing commit was retried every 10 seconds. A failure now waits
+#     ANALYZE_RETRY_BASE seconds, doubling per attempt up to ANALYZE_RETRY_MAX;
+#     a new commit is tried at once.
+#   - An analyze that ran the container out of memory could take eval-server down
+#     with it. analyze runs with the highest OOM score, so the kernel picks it.
+# Embeddings stay off: --embeddings corrupted the LadybugDB WAL on large repos
+# (C# repos >10K symbols). Enable them per repo by hand if needed:
+#   docker exec cortex-gitnexus bash -c 'cd /app/data/repos/<id> && gitnexus analyze --embeddings'
+WATCH_STATE_DIR="${GITNEXUS_DIR}/cortex-watchdog"
+ANALYZE_RETRY_BASE="${GITNEXUS_ANALYZE_RETRY_BASE:-300}"
+ANALYZE_RETRY_MAX="${GITNEXUS_ANALYZE_RETRY_MAX:-21600}"
+ANALYZE_TIMEOUT="${GITNEXUS_ANALYZE_TIMEOUT:-3600}"
 
-    for repo_dir in "$REPOS_DIR"/*/; do
-        [ -d "$repo_dir/.git" ] || continue
-        
-        repo_name=$(basename "$repo_dir")
-        
-        # Check if already registered by looking for .gitnexus dir in repo
-        if [ -d "$repo_dir/.gitnexus" ]; then
-            echo "  ✓ ${repo_name} — already indexed"
-            continue
-        fi
-
-        # Check if cloning is currently in progress
-        if [ -f "${REPOS_DIR}/${repo_name}.cloning" ]; then
-            echo "  → ${repo_name} — cloning in progress (skipping)"
-            continue
-        fi
-
-        echo "  → Analyzing ${repo_name}..."
-        # Note: --embeddings omitted for auto-discovery to avoid LadybugDB WAL
-        # corruption on large repos (observed with C# repos >10K symbols).
-        # Embeddings can be enabled per-repo manually:
-        #   docker exec cortex-gitnexus bash -c 'cd /app/data/repos/<id> && gitnexus analyze --embeddings'
-        cd "$repo_dir" && gitnexus analyze --force 2>&1 && {
-            ANALYZED=$((ANALYZED + 1))
-            echo "  ✓ ${repo_name} — indexed successfully"
-        } || {
-            echo "  ✗ ${repo_name} — analyze failed (skipping)"
-        }
+# Seconds to wait before retrying a commit that failed $1 times.
+retry_delay() {
+    local delay=$ANALYZE_RETRY_BASE attempt=1
+    while [ "$attempt" -lt "$1" ] && [ "$delay" -lt "$ANALYZE_RETRY_MAX" ]; do
+        delay=$((delay * 2))
+        attempt=$((attempt + 1))
     done
+    [ "$delay" -gt "$ANALYZE_RETRY_MAX" ] && delay=$ANALYZE_RETRY_MAX
+    echo "$delay"
+}
 
-    TOTAL=$(count_registered_repos)
-    echo "GitNexus: Auto-discovery complete. ${ANALYZED} new repos analyzed. Total registered: ${TOTAL}"
-fi
+analyze_if_stale() {
+    local repo_dir="${1%/}" repo_name head failed_file failed_head failures failed_at delay
+    repo_name=$(basename "$repo_dir")
+    [ -d "$repo_dir/.git" ] || return 0
+    # cortex-api is changing this checkout right now.
+    [ -f "${REPOS_DIR}/${repo_name}.cloning" ] && return 0
 
-# Run background watchdog daemon to index new/re-indexed repos.
-# Started BEFORE eval-server so it can pick up repos the dashboard clones while
+    head=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null) || return 0
+    if [ -d "$repo_dir/.gitnexus" ] && [ "$(cat "${WATCH_STATE_DIR}/${repo_name}.analyzed" 2>/dev/null)" = "$head" ]; then
+        return 0
+    fi
+
+    failed_file="${WATCH_STATE_DIR}/${repo_name}.failed"
+    failures=0
+    if [ -f "$failed_file" ]; then
+        read -r failed_head failures failed_at < "$failed_file"
+        case "$failures" in ''|*[!0-9]*) failures=1 ;; esac
+        case "$failed_at" in ''|*[!0-9]*) failed_at=0 ;; esac
+        if [ "$failed_head" = "$head" ]; then
+            [ $(( $(date +%s) - failed_at )) -lt "$(retry_delay "$failures")" ] && return 0
+        else
+            failures=0
+        fi
+    fi
+
+    echo "GitNexus watchdog: analyzing ${repo_name} at ${head:0:12}..."
+    if (
+        cd "$repo_dir" || exit 1
+        { echo 1000 > /proc/self/oom_score_adj; } 2>/dev/null
+        # Without --force, analyze only redoes what changed since the last run.
+        # --index-only keeps AGENTS.md, CLAUDE.md and skills out of the checkout.
+        exec timeout --kill-after=60 "$ANALYZE_TIMEOUT" gitnexus analyze --index-only
+    ) 2>&1; then
+        printf '%s\n' "$head" > "${WATCH_STATE_DIR}/${repo_name}.analyzed"
+        rm -f "$failed_file"
+        echo "GitNexus watchdog: ${repo_name} analyzed."
+    else
+        failures=$((failures + 1))
+        printf '%s %s %s\n' "$head" "$failures" "$(date +%s)" > "$failed_file"
+        delay=$(retry_delay "$failures")
+        echo "GitNexus watchdog: analyze of ${repo_name} failed (attempt ${failures}) — retrying in ${delay}s, or on a new commit."
+    fi
+}
+
+watch_repos() {
+    mkdir -p "$WATCH_STATE_DIR"
+    while true; do
+        for repo_dir in "$REPOS_DIR"/*/; do
+            [ -d "$repo_dir" ] && analyze_if_stale "$repo_dir"
+        done
+        sleep 10
+    done
+}
+
+# Started before eval-server so it can pick up repos the dashboard clones while
 # the registry is still empty.
 (
+    set +e
     echo "GitNexus: Starting watchdog daemon..."
     while true; do
-        sleep 10
-        if [ -d "$REPOS_DIR" ]; then
-            for repo_dir in "$REPOS_DIR"/*/; do
-                [ -d "$repo_dir/.git" ] || continue
-                repo_name=$(basename "$repo_dir")
-                
-                # Check if cloning is currently in progress
-                if [ -f "${REPOS_DIR}/${repo_name}.cloning" ]; then
-                    echo "GitNexus watchdog: Repo ${repo_name} is currently cloning. Skipping."
-                    continue
-                fi
-                
-                if [ ! -d "$repo_dir/.gitnexus" ]; then
-                    echo "GitNexus watchdog: New or re-indexed repo detected: ${repo_name}."
-                    echo "GitNexus watchdog: Analyzing ${repo_name}..."
-                    cd "$repo_dir" && gitnexus analyze --force 2>&1
-                    echo "GitNexus watchdog: ${repo_name} analyzed successfully."
-                fi
-            done
-        fi
+        ( watch_repos )
+        echo "GitNexus watchdog: stopped unexpectedly — restarting in 30s."
+        sleep 30
     done
 ) &
 WATCHDOG_PID=$!
@@ -203,7 +241,8 @@ while true; do
     fi
 
     echo "GitNexus: Starting eval-server on port $PORT..."
-    gitnexus eval-server --port "$PORT" --host 0.0.0.0 --idle-timeout 0 &
+    GITNEXUS_LBUG_BUFFER_POOL_SIZE="$SERVE_BUFFER_POOL" \
+        gitnexus eval-server --port "$PORT" --host 0.0.0.0 --idle-timeout 0 &
     EVAL_PID=$!
     wait "$EVAL_PID" || true
     echo "GitNexus: eval-server exited — restarting in 10s."

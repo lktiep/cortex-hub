@@ -261,6 +261,7 @@ export async function embedProject(
   branch: string,
   jobId: string,
   onProgress?: (progress: number, successChunks: number, totalChunks: number) => void,
+  repoDir: string = join(REPOS_DIR, projectId),
 ): Promise<EmbedResult> {
   // First pass: count chunks to calculate dynamic timeout
   // The actual embedding happens in embedProjectInternal
@@ -275,7 +276,7 @@ export async function embedProject(
     }, MAX_TIMEOUT_MS)
   })
 
-  const embedPromise = embedProjectInternal(projectId, branch, jobId, onProgress, (chunkCount) => {
+  const embedPromise = embedProjectInternal(projectId, branch, jobId, repoDir, onProgress, (chunkCount) => {
     // Callback: adjust timeout based on actual chunk count
     if (timer) {
       clearTimeout(timer)
@@ -299,10 +300,10 @@ async function embedProjectInternal(
   projectId: string,
   branch: string,
   jobId: string,
+  repoDir: string,
   onProgress?: (progress: number, successChunks: number, totalChunks: number) => void,
   onChunkCount?: (count: number) => void,
 ): Promise<EmbedResult> {
-  const repoDir = join(REPOS_DIR, projectId)
   const collectionName = `cortex-project-${projectId}`
   const errors: string[] = []
 

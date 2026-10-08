@@ -162,10 +162,21 @@ services:
       # this empty and the entrypoint generates one onto the shared api-data
       # volume, where dashboard-api picks it up.
       GITNEXUS_AUTH_TOKEN: ${GITNEXUS_AUTH_TOKEN:-}
+      # LadybugDB buffer pool per repository eval-server holds open (it keeps up to
+      # five). Unset, GitNexus sizes it from the host's RAM, not this container's.
+      GITNEXUS_SERVE_BUFFER_POOL_SIZE: ${GITNEXUS_SERVE_BUFFER_POOL_SIZE:-536870912}
+      # Watchdog: seconds before a failed analyze is retried (doubling per attempt,
+      # up to the max), and how long one analyze may run.
+      GITNEXUS_ANALYZE_RETRY_BASE: ${GITNEXUS_ANALYZE_RETRY_BASE:-300}
+      GITNEXUS_ANALYZE_RETRY_MAX: ${GITNEXUS_ANALYZE_RETRY_MAX:-21600}
+      GITNEXUS_ANALYZE_TIMEOUT: ${GITNEXUS_ANALYZE_TIMEOUT:-3600}
     deploy:
       resources:
         limits:
-          memory: 4G
+          # eval-server (five pools of the size above plus its Node heap) and one
+          # analyze at a time (a 3 GiB heap plus a pool sized to the repository).
+          # 4G ran out on 2026-09-28 and took the watchdog down with it.
+          memory: ${GITNEXUS_MEMORY_LIMIT:-6G}
     healthcheck:
       # The bearer token is enforced on /health too, so the probe must carry it.
       # It lives in a file because the entrypoint may have generated it at runtime.

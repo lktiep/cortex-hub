@@ -17,6 +17,13 @@ const runningJobs = new Map<string, ChildProcess>()
 
 const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 
+/**
+ * Where every branch but the default one is checked out, a directory per
+ * project. Hidden, so the GitNexus watchdog — which analyses each directory
+ * directly under REPOS_DIR — never picks it up.
+ */
+const BRANCH_CHECKOUTS_DIR = join(REPOS_DIR, '.branches')
+
 const execFileAsync = promisify(execFile)
 
 /** Hand the event loop back so requests waiting on this process get answered. */
@@ -274,13 +281,13 @@ function runCommand(cmd: string, args: string[], cwd: string, jobId: string): Pr
     child.stdout?.on('data', (data: Buffer) => {
       const text = data.toString()
       stdout += text
-      appendLog(jobId, text.trim())
+      appendLog(jobId, redactCredentials(text.trim()))
     })
 
     child.stderr?.on('data', (data: Buffer) => {
       const text = data.toString()
       stderr += text
-      appendLog(jobId, `[stderr] ${text.trim()}`)
+      appendLog(jobId, `[stderr] ${redactCredentials(text.trim())}`)
     })
 
     child.on('close', (code) => {
@@ -443,13 +450,67 @@ async function checkoutHead(repoDir: string): Promise<string | null> {
 }
 
 /**
+ * Where a branch of the project is checked out.
+ *
+ * The default branch keeps the project's own directory: the one GitNexus builds
+ * the code graph from and file reads resolve to. Every other branch shares a
+ * second directory, so indexing a feature branch leaves the graph on the
+ * default branch instead of dragging it to whichever branch was pushed last.
+ */
+async function checkoutFor(projectId: string, branch: string): Promise<{ repoDir: string; isDefault: boolean }> {
+  const isDefault = branch === (await resolveDefaultBranch(projectId))
+  return { repoDir: join(isDefault ? REPOS_DIR : BRANCH_CHECKOUTS_DIR, projectId), isDefault }
+}
+
+/**
+ * Bring a checkout to the head of `branch`, updating it in place when it exists.
+ *
+ * Cloning afresh deleted the directory and the `.gitnexus/` graph inside it, so
+ * every push cost GitNexus a full analysis — the kind that ran it out of
+ * memory. A shallow fetch into the existing checkout keeps the graph, and the
+ * analysis that follows only has to cover what changed. A fresh clone is left
+ * for a directory that is missing or that git cannot update.
+ */
+async function syncCheckout(repoDir: string, branch: string, authUrl: string, jobId: string): Promise<boolean> {
+  if (existsSync(join(repoDir, '.git'))) {
+    const steps = [
+      // The project's credentials may have changed since the clone.
+      ['remote', 'set-url', 'origin', authUrl],
+      ['fetch', '--depth', '1', '--no-tags', 'origin', `refs/heads/${branch}`],
+      ['checkout', '--force', '-B', branch, 'FETCH_HEAD'],
+      // Leftovers of the previous commit go; the graph stays.
+      ['clean', '-ffdx', '-e', '.gitnexus'],
+    ]
+    // Named outright: with a broken .git, git would look for a repository in
+    // the parent directories and clean that one instead.
+    const pinned = [`--git-dir=${join(repoDir, '.git')}`, `--work-tree=${repoDir}`]
+    let updated = true
+    for (const args of steps) {
+      if ((await runCommand('git', [...pinned, ...args], repoDir, jobId)).code !== 0) {
+        updated = false
+        break
+      }
+    }
+    if (updated) return true
+    appendLog(jobId, '[warn] Could not update the checkout in place — cloning it again')
+  }
+
+  await rm(repoDir, { recursive: true, force: true })
+  mkdirSync(repoDir, { recursive: true })
+  const clone = await runCommand('git', [
+    'clone', '--branch', branch, '--depth', '1', '--single-branch', authUrl, '.',
+  ], repoDir, jobId)
+  return clone.code === 0
+}
+
+/**
  * The job that already indexed what the remote holds for this branch, if any.
  *
  * Three things have to agree: the branch's last job that ran finished both
  * stages, the remote still points at the commit that job indexed, and the
- * checkout is still on that commit. The checkout is one directory shared by
- * every branch of the project, so indexing another branch in between means
- * this one has to be cloned again even though its vectors are current.
+ * checkout is still on that commit. Every branch but the default one shares a
+ * checkout, so indexing another of them in between means this one has to be
+ * checked out again even though its vectors are current.
  */
 async function findIndexedCommit(
   projectId: string, jobId: string, branch: string, authUrl: string, repoDir: string,
@@ -482,12 +543,12 @@ async function indexBranch(projectId: string, jobId: string, branch: string, for
     return
   }
 
-  const repoDir = join(REPOS_DIR, projectId)
   const cloningSentinel = join(REPOS_DIR, `${projectId}.cloning`)
   const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
 
   try {
     updateJob(jobId, { status: 'cloning', progress: 5, started_at: new Date().toISOString() })
+    const { repoDir, isDefault } = await checkoutFor(projectId, branch)
 
     // ── Step 0: Nothing new to index ──
     if (!force) {
@@ -514,35 +575,23 @@ async function indexBranch(projectId: string, jobId: string, branch: string, for
       }
     }
 
-    // ── Step 1: Clone ──
-    logger.info(`[${jobId}] Cloning ${redactCredentials(project.git_repo_url)} branch=${branch}`)
+    // ── Step 1: Check out ──
+    logger.info(`[${jobId}] Checking out ${redactCredentials(project.git_repo_url)} branch=${branch}`)
 
+    mkdirSync(REPOS_DIR, { recursive: true })
+    // Keeps the GitNexus watchdog off the default checkout while it changes.
+    if (isDefault) writeFileSync(cloningSentinel, '')
     try {
-      // Clean previous clone
-      if (existsSync(repoDir)) {
-        await rm(repoDir, { recursive: true, force: true })
-      }
-      mkdirSync(repoDir, { recursive: true })
-
-      // Create a sentinel file to signal to the GitNexus watchdog daemon that clone is in progress
-      writeFileSync(cloningSentinel, '')
-
-      const cloneResult = await runCommand('git', [
-        'clone', '--branch', branch, '--depth', '1', '--single-branch', authUrl, '.'
-      ], repoDir, jobId)
-
-      if (cloneResult.code !== 0) {
-        updateJob(jobId, { status: 'error', error: `git clone failed (exit ${cloneResult.code})`, progress: 5, completed_at: new Date().toISOString() })
+      if (!(await syncCheckout(repoDir, branch, authUrl, jobId))) {
+        updateJob(jobId, { status: 'error', error: `git could not check out ${branch}`, progress: 5, completed_at: new Date().toISOString() })
         return
       }
     } finally {
-      if (existsSync(cloningSentinel)) {
-        rmSync(cloningSentinel, { force: true })
-      }
+      if (isDefault) rmSync(cloningSentinel, { force: true })
     }
 
     updateJob(jobId, { progress: 25 })
-    logger.info(`[${jobId}] Clone complete`)
+    logger.info(`[${jobId}] Checkout complete`)
 
     // ── Step 1b: Extract commit info from HEAD ──
     try {
@@ -642,7 +691,7 @@ async function embedAndBuildDocs(projectId: string, jobId: string, branch: strin
     const result = await embedProject(projectId, branch, jobId, (progress, chunks, totalChunks) => {
       db.prepare('UPDATE index_jobs SET mem9_chunks = ?, mem9_progress = ?, mem9_total_chunks = ? WHERE id = ?')
         .run(chunks, progress, totalChunks, jobId)
-    })
+    }, repoDir)
     updateJob(jobId, { mem9_status: result.status, mem9_chunks: result.chunks })
     appendLog(
       jobId,
