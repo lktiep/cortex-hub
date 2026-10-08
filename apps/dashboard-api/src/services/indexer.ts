@@ -407,6 +407,30 @@ export function indexQueueIdle(projectId: string): Promise<void> {
   return queues.get(projectId)?.idle ?? Promise.resolve()
 }
 
+/**
+ * Run `work` in the project's queue as if it were a job, when the queue is idle.
+ *
+ * For work that must not overlap an index of the project — deleting a branch's
+ * vectors while an embedding of that branch scrolls and writes them leaves the
+ * job 'done' over points that are gone. A request that arrives meanwhile waits
+ * behind `label` as it would behind a job, and runs once `work` settles.
+ * Resolves to null without running `work` when a job is running or waiting.
+ */
+export async function runWhenQueueIdle<T>(projectId: string, label: string, work: () => Promise<T>): Promise<T | null> {
+  if (queues.has(projectId)) return null
+
+  const queue: ProjectQueue = { running: { jobId: label, branch: 'maintenance', force: false }, waiting: [], idle: Promise.resolve() }
+  queues.set(projectId, queue)
+  const result = Promise.resolve().then(work)
+  const release = () => {
+    queue.running = null
+    if (queue.waiting.length > 0) return drain(projectId, queue)
+    queues.delete(projectId)
+  }
+  queue.idle = result.then(release, release)
+  return result
+}
+
 // ── Already indexed? ──
 
 interface IndexedJobRow {

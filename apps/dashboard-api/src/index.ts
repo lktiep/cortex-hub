@@ -38,6 +38,7 @@ import { knowledgeRouter } from './routes/knowledge.js'
 import { conductorRouter } from './routes/conductor.js'
 import { settingsRouter } from './routes/settings.js'
 import { recoverInterruptedJobs } from './services/indexer.js'
+import { scheduleBranchSweep } from './services/branch-retention.js'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
@@ -333,6 +334,7 @@ const port = Number(process.env.PORT) || 4000
 
 // Index jobs queue in memory; close the ones the last process was running.
 recoverInterruptedJobs()
+scheduleBranchSweep()
 
 const server = serve({ fetch: app.fetch, port }, () => {
   logger.info(`Dashboard API listening on http://localhost:${port}`)

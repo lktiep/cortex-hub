@@ -4,6 +4,7 @@ import { join } from 'path'
 import { db } from '../db/client.js'
 import { requestIndexing, cancelJob, buildAuthUrl, resolveDefaultBranch } from '../services/indexer.js'
 import { buildKnowledgeFromDocs } from '../services/docs-knowledge-builder.js'
+import { sweepProjectBranchesWhenIdle } from '../services/branch-retention.js'
 
 const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 
@@ -336,6 +337,22 @@ indexingRouter.get('/:id/index/branches', (c) => {
     return c.json({ branches: jobs })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
+  }
+})
+
+// ── Drop branches gone from the remote or idle past BRANCH_RETENTION_DAYS ──
+// The same sweep runs every six hours; this runs it now, or with
+// { "dryRun": true } reports what it would drop.
+indexingRouter.post('/:id/index/branches/sweep', async (c) => {
+  const projectId = c.req.param('id')
+  const body = (await c.req.json().catch(() => ({}))) as { dryRun?: unknown }
+
+  try {
+    const result = await sweepProjectBranchesWhenIdle(projectId, { dryRun: body.dryRun === true })
+    if (!result) return c.json({ error: 'The project is indexing; try again when it finishes' }, 409)
+    return c.json({ dryRun: body.dryRun === true, ...result })
+  } catch (error) {
+    return c.json({ error: String(error).slice(0, 300) }, 500)
   }
 })
 
