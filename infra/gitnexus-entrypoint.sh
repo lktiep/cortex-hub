@@ -12,7 +12,8 @@ REPOS_DIR="/app/data/repos"
 PORT="${PORT:-4848}"
 
 # Cap Node.js heap to prevent OOM kills. GitNexus defaults to 8GB (HEAP_MB=8192)
-# which exceeds container memory limits.
+# which exceeds container memory limits. analyze replaces this cap with its own;
+# the watchdog below gives it one it keeps.
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=3072}"
 
 # eval-server keeps up to five repositories open, each with a LadybugDB buffer
@@ -130,6 +131,13 @@ WATCH_STATE_DIR="${GITNEXUS_DIR}/cortex-watchdog"
 ANALYZE_RETRY_BASE="${GITNEXUS_ANALYZE_RETRY_BASE:-300}"
 ANALYZE_RETRY_MAX="${GITNEXUS_ANALYZE_RETRY_MAX:-21600}"
 ANALYZE_TIMEOUT="${GITNEXUS_ANALYZE_TIMEOUT:-3600}"
+# analyze shares this container with eval-server, but sizes itself as if it had
+# it alone: a heap of 0.75x the container's memory — replacing any smaller cap in
+# NODE_OPTIONS — and a parse worker per core but one. On 2026-10-09 that went
+# past the limit within 20 seconds on a 2,500-file repo. Only a heap flag given
+# to node itself is kept, and two workers parse the same repo within budget.
+ANALYZE_HEAP_MB="${GITNEXUS_ANALYZE_HEAP_MB:-3072}"
+ANALYZE_WORKERS="${GITNEXUS_ANALYZE_WORKERS:-2}"
 
 # Seconds to wait before retrying a commit that failed $1 times.
 retry_delay() {
@@ -173,7 +181,9 @@ analyze_if_stale() {
         { echo 1000 > /proc/self/oom_score_adj; } 2>/dev/null
         # Without --force, analyze only redoes what changed since the last run.
         # --index-only keeps AGENTS.md, CLAUDE.md and skills out of the checkout.
-        exec timeout --kill-after=60 "$ANALYZE_TIMEOUT" gitnexus analyze --index-only
+        exec timeout --kill-after=60 "$ANALYZE_TIMEOUT" \
+            node --max-old-space-size="$ANALYZE_HEAP_MB" "$(command -v gitnexus)" \
+            analyze --index-only --workers "$ANALYZE_WORKERS"
     ) 2>&1; then
         printf '%s\n' "$head" > "${WATCH_STATE_DIR}/${repo_name}.analyzed"
         rm -f "$failed_file"

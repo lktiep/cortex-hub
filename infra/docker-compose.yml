@@ -170,6 +170,9 @@ services:
       GITNEXUS_ANALYZE_RETRY_BASE: ${GITNEXUS_ANALYZE_RETRY_BASE:-300}
       GITNEXUS_ANALYZE_RETRY_MAX: ${GITNEXUS_ANALYZE_RETRY_MAX:-21600}
       GITNEXUS_ANALYZE_TIMEOUT: ${GITNEXUS_ANALYZE_TIMEOUT:-3600}
+      # analyze's heap and parse workers, kept within what eval-server leaves.
+      GITNEXUS_ANALYZE_HEAP_MB: ${GITNEXUS_ANALYZE_HEAP_MB:-3072}
+      GITNEXUS_ANALYZE_WORKERS: ${GITNEXUS_ANALYZE_WORKERS:-2}
     deploy:
       resources:
         limits:
