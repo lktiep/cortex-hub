@@ -187,7 +187,7 @@ export async function buildKnowledgeFromDocs(
 
   // 4. Setup embedder (respects EMBEDDING_PROVIDER env var)
   const { createEmbedder } = await import('../lib/embedder-factory.js')
-  const embedder = createEmbedder()
+  const embedder = createEmbedder({ priority: 'background' })
 
   const vectorStoreConfig: VectorStoreConfig = {
     url: QDRANT_URL,

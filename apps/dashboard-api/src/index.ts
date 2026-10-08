@@ -37,6 +37,7 @@ import { tasksRouter } from './routes/tasks.js'
 import { knowledgeRouter } from './routes/knowledge.js'
 import { conductorRouter } from './routes/conductor.js'
 import { settingsRouter } from './routes/settings.js'
+import { recoverInterruptedJobs } from './services/indexer.js'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
@@ -329,6 +330,9 @@ app.get('*', async (c, next) => {
 })
 
 const port = Number(process.env.PORT) || 4000
+
+// Index jobs queue in memory; close the ones the last process was running.
+recoverInterruptedJobs()
 
 const server = serve({ fetch: app.fetch, port }, () => {
   logger.info(`Dashboard API listening on http://localhost:${port}`)

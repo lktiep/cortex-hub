@@ -361,6 +361,103 @@ export class VectorStore {
     }))
   }
 
+  /**
+   * Every point matching a filter, following Qdrant's pages to the end.
+   *
+   * `list` stops at one page, which is right for a listing and wrong for "which
+   * points does this branch have". `vector: true` brings the dense vector along —
+   * only that one: asking for `['']`, the unnamed vector's name, leaves a sparse
+   * vector behind and returns a plain array whichever kind of collection this is.
+   */
+  async scrollAll(
+    filter: Record<string, unknown> | undefined,
+    opts: { payload?: boolean | string[]; vector?: boolean; pageSize?: number } = {},
+  ): Promise<Array<{ id: string; payload: Record<string, unknown>; vector?: number[] }>> {
+    const { payload = false, vector = false, pageSize = 1000 } = opts
+    const points: Array<{ id: string; payload: Record<string, unknown>; vector?: number[] }> = []
+    let offset: string | number | null = null
+
+    do {
+      const res = await fetch(`${this.baseUrl}/collections/${this.collection}/points/scroll`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter,
+          limit: pageSize,
+          ...(offset !== null ? { offset } : {}),
+          with_payload: payload,
+          with_vector: vector ? [''] : false,
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.text()
+        throw new Error(`Qdrant scroll failed (${res.status}): ${err}`)
+      }
+
+      const data = (await res.json()) as {
+        result: {
+          points: Array<{
+            id: string | number
+            payload?: Record<string, unknown> | null
+            vector?: number[] | Record<string, unknown> | null
+          }>
+          next_page_offset?: string | number | null
+        }
+      }
+
+      for (const p of data.result.points) {
+        // A Qdrant that ignores the vector selector answers with the named form.
+        const dense = Array.isArray(p.vector) ? p.vector : p.vector?.['']
+        points.push({
+          id: String(p.id),
+          payload: p.payload ?? {},
+          ...(Array.isArray(dense) ? { vector: dense as number[] } : {}),
+        })
+      }
+      offset = data.result.next_page_offset ?? null
+    } while (offset !== null)
+
+    return points
+  }
+
+  /** Delete points by id, a thousand per request. */
+  async deletePoints(ids: string[]): Promise<void> {
+    for (let i = 0; i < ids.length; i += 1000) {
+      const res = await fetch(
+        `${this.baseUrl}/collections/${this.collection}/points/delete?wait=true`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ points: ids.slice(i, i + 1000) }),
+        },
+      )
+
+      if (!res.ok) {
+        const err = await res.text()
+        throw new Error(`Qdrant delete failed (${res.status}): ${err}`)
+      }
+    }
+  }
+
+  /**
+   * Index a payload field so a filter on it is a lookup rather than a scan.
+   * Qdrant answers an index that already exists with success, so this is safe to
+   * call on every run.
+   */
+  async ensurePayloadIndex(field: string, schema: 'keyword' | 'integer' = 'keyword'): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/collections/${this.collection}/index?wait=true`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ field_name: field, field_schema: schema }),
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Qdrant payload index on '${field}' failed (${res.status}): ${err}`)
+    }
+  }
+
   /** Delete a point by ID */
   async delete(id: string): Promise<void> {
     const res = await fetch(

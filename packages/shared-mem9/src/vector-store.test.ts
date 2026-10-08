@@ -75,3 +75,82 @@ describe('VectorStore.ensureCollection', () => {
     expect(collection).toEqual({ size: 1024, points: 0 })
   })
 })
+
+describe('VectorStore.scrollAll', () => {
+  let bodies: Array<Record<string, unknown>>
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  function serve(pages: Array<{ points: unknown[]; next: string | number | null }>) {
+    bodies = []
+    let page = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        bodies.push(JSON.parse(init?.body ?? '{}') as Record<string, unknown>)
+        const { points, next } = pages[page++] ?? { points: [], next: null }
+        return Response.json({ result: { points, next_page_offset: next } })
+      }),
+    )
+  }
+
+  it('follows next_page_offset to the last page', async () => {
+    serve([
+      { points: [{ id: 'a' }, { id: 'b' }], next: 'c' },
+      { points: [{ id: 'c' }], next: null },
+    ])
+    const points = await store().scrollAll({ must: [] }, { pageSize: 2 })
+    expect(points.map((p) => p.id)).toEqual(['a', 'b', 'c'])
+    expect(bodies[0]).not.toHaveProperty('offset')
+    expect(bodies[1]).toMatchObject({ offset: 'c', limit: 2 })
+  })
+
+  it('asks for the dense vector only, and reads either response shape', async () => {
+    serve([
+      {
+        points: [
+          { id: 1, payload: { content_hash: 'h1' }, vector: [0.1, 0.2] },
+          { id: 2, payload: { content_hash: 'h2' }, vector: { '': [0.3, 0.4], text: { indices: [1], values: [1] } } },
+          { id: 3, payload: null },
+        ],
+        next: null,
+      },
+    ])
+    const points = await store().scrollAll(undefined, { vector: true, payload: ['content_hash'] })
+    expect(bodies[0]).toMatchObject({ with_vector: [''], with_payload: ['content_hash'] })
+    expect(points).toEqual([
+      { id: '1', payload: { content_hash: 'h1' }, vector: [0.1, 0.2] },
+      { id: '2', payload: { content_hash: 'h2' }, vector: [0.3, 0.4] },
+      { id: '3', payload: {} },
+    ])
+  })
+
+  it('throws on a failed page instead of returning a partial list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('boom', { status: 500 })))
+    await expect(store().scrollAll(undefined)).rejects.toThrow(/scroll failed \(500\)/)
+  })
+})
+
+describe('VectorStore.deletePoints', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('deletes in slices of a thousand ids', async () => {
+    const sizes: number[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        sizes.push((JSON.parse(init?.body ?? '{}') as { points: string[] }).points.length)
+        return Response.json({ result: { status: 'completed' } })
+      }),
+    )
+    await store().deletePoints(Array.from({ length: 2500 }, (_, i) => `id-${i}`))
+    expect(sizes).toEqual([1000, 1000, 500])
+  })
+
+  it('sends nothing for no ids', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await store().deletePoints([])
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})

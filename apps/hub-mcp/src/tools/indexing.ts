@@ -87,16 +87,25 @@ export function registerIndexingTools(server: McpServer, env: Env) {
           }
         }
 
+        // The hub runs one job per project at a time: a request while another
+        // runs waits, and one for a branch already waiting joins that job.
+        const status = indexData.coalesced ? 'coalesced' : indexData.queued ? 'queued' : 'started'
+        const message = {
+          started: 'Re-indexing started. Code intelligence will be updated when complete.',
+          queued: 'Re-index queued behind another job of this project; it runs when that one finishes.',
+          coalesced: 'A re-index of this branch is already waiting; this request joined it.',
+        }[status]
+
         return {
           content: [
             {
               type: 'text' as const,
               text: JSON.stringify({
-                status: 'started',
+                status,
                 projectId,
                 jobId: indexData.jobId,
                 branch: indexData.branch ?? branch ?? 'main',
-                message: 'Re-indexing started. Code intelligence will be updated when complete.',
+                message: `${message} A commit that is already indexed is skipped.`,
               }, null, 2),
             },
           ],

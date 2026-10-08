@@ -18,8 +18,11 @@ import type { EmbedderConfig } from '@cortex/shared-mem9'
 /**
  * Build an Embedder routing through LLM Gateway to respect database model routing.
  * The gateway resolves the active provider from model_routing at request time.
+ *
+ * Pass `priority: 'background'` for bulk work such as indexing: the gateway
+ * serves query embeddings ahead of it, so search stays fast during a re-index.
  */
-export function createEmbedder(): Embedder {
+export function createEmbedder(opts: { priority?: 'query' | 'background' } = {}): Embedder {
   const config: EmbedderConfig = {
     provider: 'gemini' as const, // Dummy provider — actual routing is done by the gateway
     apiKey: '',
@@ -30,6 +33,7 @@ export function createEmbedder(): Embedder {
     maxRetries: 2,
     retryDelayMs: 2000,
     gatewayUrl,
+    priority: opts.priority,
   })
 }
 

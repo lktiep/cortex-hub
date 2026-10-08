@@ -1,5 +1,8 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
+import { createEmbedGate, laneOf } from '../lib/embed-gate.js'
+import type { EmbedLane } from '../lib/embed-gate.js'
+import { EMBED_PRIORITY_HEADER } from '@cortex/shared-mem9'
 import {
   analyzeComplexity,
   reorderChainByTier,
@@ -392,30 +395,14 @@ async function chatViaOpenAI(
  * therefore did not go faster — the 30s/60s aborts below fired while the
  * request was still waiting in ollama's queue, and the caller lost the batch.
  * A gate in front turns that invisible queue into ordinary waiting: the fetch
- * timeout only starts once a slot is free.
+ * timeout only starts once a slot is free. Indexing asks for the background
+ * lane (see lib/embed-gate.ts), so a search never waits behind it.
  *
  * Two by default, because one request already saturates a CPU-only ollama.
  * Raise EMBED_MAX_CONCURRENCY for a provider that fans out server-side.
  */
 const EMBED_CONCURRENCY = Math.max(1, Number(process.env['EMBED_MAX_CONCURRENCY']) || 2)
-let embedInFlight = 0
-const embedWaiters: Array<() => void> = []
-
-async function withEmbedSlot<T>(fn: () => Promise<T>): Promise<T> {
-  if (embedInFlight < EMBED_CONCURRENCY) {
-    embedInFlight++
-  } else {
-    // The releasing call hands the slot over, so the count stays owned throughout.
-    await new Promise<void>((resolve) => embedWaiters.push(resolve))
-    embedInFlight++
-  }
-  try {
-    return await fn()
-  } finally {
-    embedInFlight--
-    embedWaiters.shift()?.()
-  }
-}
+const embedGate = createEmbedGate(EMBED_CONCURRENCY)
 
 /**
  * Embed every text on one slot, one request where the provider allows it.
@@ -427,16 +414,17 @@ async function withEmbedSlot<T>(fn: () => Promise<T>): Promise<T> {
  * wrong slot is worse than a slow index, because nothing downstream can detect it.
  */
 async function embedAll(
-  texts: string[], slot: ProviderSlot
+  texts: string[], slot: ProviderSlot, lane: EmbedLane
 ): Promise<{ vectors: number[][]; tokens: number }> {
   const gemini = isGeminiProvider(slot)
 
   if (texts.length > 1) {
     try {
-      const batch = await withEmbedSlot(() =>
+      const batch = await embedGate.run(() =>
         gemini
           ? embedBatchViaGemini(texts, slot.apiKey, slot.model, slot.apiBase)
-          : embedBatchViaOpenAI(texts, slot.apiKey, slot.model, slot.apiBase)
+          : embedBatchViaOpenAI(texts, slot.apiKey, slot.model, slot.apiBase),
+        lane,
       )
 
       const complete =
@@ -460,10 +448,11 @@ async function embedAll(
 
   const results = await Promise.all(
     texts.map((text) =>
-      withEmbedSlot(() =>
+      embedGate.run(() =>
         gemini
           ? embedViaGemini(text, slot.apiKey, slot.model, slot.apiBase)
-          : embedViaOpenAI(text, slot.apiKey, slot.model, slot.apiBase)
+          : embedViaOpenAI(text, slot.apiKey, slot.model, slot.apiBase),
+        lane,
       )
     )
   )
@@ -500,6 +489,7 @@ llmRouter.post('/v1/embeddings', async (c) => {
 
   const agentId = body.agent_id ?? 'internal'
   const projectId = body.project_id
+  const lane = laneOf(c.req.header(EMBED_PRIORITY_HEADER))
 
   const chain = resolveChain('embedding')
   if (chain.length === 0) {
@@ -516,7 +506,7 @@ llmRouter.post('/v1/embeddings', async (c) => {
   for (const slot of orderedChain) {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
-        const result = await embedAll(inputs, slot)
+        const result = await embedAll(inputs, slot, lane)
 
         logUsage({
           agentId,

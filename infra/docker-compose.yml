@@ -58,10 +58,12 @@ services:
       - ollama-models:/root/.ollama
     environment:
       # Two slots, matching EMBED_MAX_CONCURRENCY in the gateway. ollama
-      # serialises embedding work internally — measured on this host, a batch of
-      # 32 takes the same ~250ms whether it arrives alone or alongside three
-      # others — so extra slots buy no throughput and each one costs context
-      # memory on a container already at its ceiling.
+      # serialises embedding work internally — measured on this host, a search
+      # that arrives while a 32-chunk batch is running waits out that batch
+      # (~2.3s on four cores) — so extra slots buy no throughput and each one
+      # costs context memory on a container already at its ceiling. What keeps
+      # searches fast during an index is the gateway's query lane and small
+      # index batches (MEM9_BATCH_SIZE, 8 by default), not more slots here.
       OLLAMA_NUM_PARALLEL: 2
       # Embedding models are small; keep them resident instead of paying the
       # load cost on every mem9 run.
@@ -75,6 +77,11 @@ services:
         limits:
           # Raise on a host with spare RAM without editing this file.
           memory: ${OLLAMA_MEMORY_LIMIT:-4G}
+          # Uncapped, a re-index of several branches held every core of the
+          # host for hours and starved the API and Qdrant beside it. On four
+          # cores an 8-chunk index batch takes ~0.6s, which is also the longest
+          # a search waits behind one. Raise it on a host that does nothing else.
+          cpus: ${OLLAMA_CPUS:-4}
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 30s

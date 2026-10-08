@@ -1,10 +1,8 @@
 import { Hono } from 'hono'
-import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { db } from '../db/client.js'
-import { startIndexing, cancelJob, buildAuthUrl, resolveDefaultBranch } from '../services/indexer.js'
-import { embedProject } from '../services/mem9-embedder.js'
+import { requestIndexing, cancelJob, buildAuthUrl, resolveDefaultBranch } from '../services/indexer.js'
 import { buildKnowledgeFromDocs } from '../services/docs-knowledge-builder.js'
 
 const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
@@ -43,40 +41,27 @@ indexingRouter.post('/:id/index', async (c) => {
     if (!project) return c.json({ error: 'Project not found' }, 404)
     if (!project.git_repo_url) return c.json({ error: 'Project has no git repository URL configured' }, 400)
 
-    // Check if there's already a running job
-    const activeJob = db.prepare(
-      `SELECT id FROM index_jobs WHERE project_id = ? AND status IN ('pending', 'cloning', 'analyzing', 'ingesting')`
-    ).get(projectId) as { id: string } | undefined
-
-    if (activeJob) {
-      return c.json({ error: 'An indexing job is already running', jobId: activeJob.id }, 409)
-    }
-
     // Parse branch from body — when the caller does not name one, ask the
     // remote rather than assuming 'main'.
     let branch: string | null = null
     let triggeredBy = 'manual'
+    let force: boolean | undefined
     try {
       const body = await c.req.json()
       if (body.branch) branch = body.branch
       if (body.triggeredBy) triggeredBy = body.triggeredBy
+      if (typeof body.force === 'boolean') force = body.force
     } catch {
       // No body is OK
     }
     if (!branch) branch = await resolveDefaultBranch(projectId)
 
-    // Create job record
-    const jobId = `idx-${randomUUID().slice(0, 12)}`
-    db.prepare(
-      `INSERT INTO index_jobs (id, project_id, branch, status, progress, triggered_by, created_at) VALUES (?, ?, ?, 'pending', 0, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
-    ).run(jobId, projectId, branch, triggeredBy)
+    // Never a 409: a request while another job runs waits its turn, and one for
+    // a branch already waiting joins that job. A person pressing the button wants
+    // the work done; automated triggers skip a commit that is already indexed.
+    const request = requestIndexing(projectId, branch, { triggeredBy, force: force ?? triggeredBy === 'manual' })
 
-    // Fire and forget — run indexing in background
-    startIndexing(projectId, jobId, branch).catch(() => {
-      // Error is already logged by indexer.ts
-    })
-
-    return c.json({ jobId, status: 'pending', branch }, 201)
+    return c.json({ ...request, status: 'pending' }, 201)
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -354,54 +339,31 @@ indexingRouter.get('/:id/index/branches', (c) => {
   }
 })
 
-// ── Trigger Mem9 Embedding (standalone, per-branch) ──
+// ── Trigger Mem9 Embedding (per-branch) ──
 indexingRouter.post('/:id/index/mem9', async (c) => {
   const projectId = c.req.param('id')
-  const targetBranch = c.req.query('branch')
 
   try {
-    // Find the target job: specific branch or latest completed
-    const query = targetBranch
-      ? `SELECT id, branch, status, mem9_status FROM index_jobs 
-         WHERE project_id = ? AND branch = ? AND status = 'done' 
-         ORDER BY completed_at DESC LIMIT 1`
-      : `SELECT id, branch, status, mem9_status FROM index_jobs 
-         WHERE project_id = ? AND status = 'done' 
-         ORDER BY completed_at DESC LIMIT 1`
-
-    const params = targetBranch ? [projectId, targetBranch] : [projectId]
-    const latestJob = db.prepare(query).get(...params) as {
-      id: string; branch: string; status: string; mem9_status: string
+    const project = db.prepare('SELECT id, git_repo_url FROM projects WHERE id = ?').get(projectId) as {
+      id: string
+      git_repo_url: string | null
     } | undefined
 
-    if (!latestJob) {
-      return c.json({ error: 'No completed indexing job found. Run GitNexus indexing first.' }, 400)
-    }
+    if (!project) return c.json({ error: 'Project not found' }, 404)
+    if (!project.git_repo_url) return c.json({ error: 'Project has no git repository URL configured' }, 400)
 
-    // Check if mem9 is already running
-    if (latestJob.mem9_status === 'embedding') {
-      return c.json({ error: 'Mem9 embedding is already running for this branch.' }, 409)
-    }
+    const latest = db.prepare(
+      `SELECT branch FROM index_jobs WHERE project_id = ? AND status = 'done' ORDER BY completed_at DESC LIMIT 1`
+    ).get(projectId) as { branch: string } | undefined
+    const branch = c.req.query('branch') || latest?.branch || (await resolveDefaultBranch(projectId))
 
-    const jobId = latestJob.id
-    const branch = latestJob.branch
+    // The checkout is one directory for every branch of the project, so
+    // embedding it as it stands could file one branch's code under another's
+    // name. Run the branch's job instead, in the project's queue: embedding is
+    // incremental, so the chunks already stored cost nothing.
+    const request = requestIndexing(projectId, branch, { triggeredBy: 'mem9', force: true })
 
-    // Mark as embedding
-    db.prepare("UPDATE index_jobs SET mem9_status = 'embedding', mem9_chunks = 0 WHERE id = ?").run(jobId)
-
-    // Fire and forget — run embedding in background
-    embedProject(projectId, branch, jobId, (progress, chunks, totalChunks) => {
-      db.prepare('UPDATE index_jobs SET mem9_chunks = ?, mem9_progress = ?, mem9_total_chunks = ? WHERE id = ?')
-        .run(chunks, progress, totalChunks, jobId)
-    }).then((result) => {
-      db.prepare('UPDATE index_jobs SET mem9_status = ?, mem9_chunks = ? WHERE id = ?')
-        .run(result.status, result.chunks, jobId)
-    }).catch((err) => {
-      db.prepare("UPDATE index_jobs SET mem9_status = 'error' WHERE id = ?").run(jobId)
-      console.error('[mem9] Embedding failed:', err)
-    })
-
-    return c.json({ success: true, jobId, branch, status: 'embedding' }, 201)
+    return c.json({ success: true, ...request, status: 'pending' }, 201)
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }

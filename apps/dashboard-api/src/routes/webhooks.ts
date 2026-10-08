@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { randomUUID } from 'crypto'
 import { db } from '../db/client.js'
-import { startIndexing } from '../services/indexer.js'
+import { requestIndexing } from '../services/indexer.js'
 import { createLogger } from '@cortex/shared-utils'
 
 const logger = createLogger('webhooks')
@@ -62,22 +62,20 @@ webhooksRouter.post('/push', async (c) => {
 
     logger.info(`Change event ${eventId}: ${(filesChanged ?? []).length} files on ${branch} by ${agentId ?? 'local'}`)
 
-    // Auto-trigger reindex
-    const activeJob = db.prepare(
-      `SELECT id FROM index_jobs WHERE project_id = ? AND status IN ('pending', 'cloning', 'analyzing', 'ingesting')`
-    ).get(project.id) as { id: string } | undefined
+    // Auto-trigger reindex. A push while another job runs used to be dropped,
+    // leaving the index on an older commit; now it waits in the project's
+    // queue, and pushes to a branch already waiting fold into that one job.
+    const reindex = requestIndexing(project.id, branch, { triggeredBy: 'push' })
 
-    let reindexStarted = false
-    if (!activeJob) {
-      const jobId = `idx-${randomUUID().slice(0, 12)}`
-      db.prepare(
-        `INSERT INTO index_jobs (id, project_id, branch, status, progress, created_at) VALUES (?, ?, ?, 'pending', 0, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
-      ).run(jobId, project.id, branch)
-      startIndexing(project.id, jobId, branch).catch(() => {})
-      reindexStarted = true
-    }
-
-    return c.json({ received: true, eventId, projectId: project.id, reindexStarted })
+    return c.json({
+      received: true,
+      eventId,
+      projectId: project.id,
+      reindexStarted: true,
+      jobId: reindex.jobId,
+      queued: reindex.queued,
+      coalesced: reindex.coalesced,
+    })
   } catch (error) {
     logger.error(`Push event error: ${error}`)
     return c.json({ error: String(error) }, 500)

@@ -9,6 +9,13 @@ import type { EmbedderConfig, ModelSlot } from './types.js'
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
+/**
+ * Header that tells the gateway an embedding request is bulk indexing work.
+ * The gateway serves interactive queries first and keeps a slot free for them,
+ * so a search does not queue behind a re-index.
+ */
+export const EMBED_PRIORITY_HEADER = 'X-Embed-Priority'
+
 /** HTTP status codes that trigger retry */
 const RETRYABLE_CODES = new Set([429, 502, 503, 504])
 
@@ -35,17 +42,26 @@ export class Embedder {
   private readonly maxRetries: number
   private readonly baseDelay: number
   private readonly gatewayUrl?: string
+  private readonly gatewayHeaders: Record<string, string>
 
   constructor(
     config: EmbedderConfig,
     chain?: ModelSlot[],
-    opts?: { maxRetries?: number; retryDelayMs?: number; gatewayUrl?: string }
+    opts?: {
+      maxRetries?: number
+      retryDelayMs?: number
+      gatewayUrl?: string
+      /** 'background' for bulk indexing; the gateway lets queries go first. */
+      priority?: 'query' | 'background'
+    }
   ) {
     this.config = config
     this.chain = chain ?? []
     this.maxRetries = opts?.maxRetries ?? 2
     this.baseDelay = opts?.retryDelayMs ?? 1000
     this.gatewayUrl = config.gatewayUrl || opts?.gatewayUrl
+    this.gatewayHeaders = { 'Content-Type': 'application/json' }
+    if (opts?.priority === 'background') this.gatewayHeaders[EMBED_PRIORITY_HEADER] = 'background'
   }
 
   /** Embed a single text string → float vector */
@@ -75,7 +91,7 @@ export class Embedder {
 
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.gatewayHeaders,
       body: JSON.stringify({ input: text, model: 'auto' }),
       signal: AbortSignal.timeout(120000),
     })
@@ -122,7 +138,7 @@ export class Embedder {
 
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.gatewayHeaders,
       body: JSON.stringify({ input: texts, model: 'auto' }),
       signal: AbortSignal.timeout(180000),
     })

@@ -4,11 +4,16 @@
  * Reads source files from a cloned repo, chunks them,
  * embeds using shared-mem9 Embedder (with fallback chain),
  * and stores vectors in Qdrant via VectorStore.
+ *
+ * Incremental: a chunk's point id is derived from where it sits and what it
+ * says, so a re-index embeds only the chunks whose id is not stored yet, takes
+ * the vector of identical text from any branch of the project before asking
+ * the model, and deletes the ids the tree no longer produces.
  */
 
 import { readdirSync, readFileSync, statSync } from 'fs'
 import { join, extname, relative } from 'path'
-import { randomUUID } from 'crypto'
+import { createHash } from 'crypto'
 import {
   Embedder,
   VectorStore,
@@ -22,6 +27,11 @@ import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
 
 const logger = createLogger('mem9-embedder')
+
+/** Synchronous work between two turns of the event loop: files read, chunks hashed. */
+const YIELD_EVERY_FILES = 50
+const YIELD_EVERY_CHUNKS = 500
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve))
 
 const QDRANT_URL = process.env.QDRANT_URL ?? 'http://qdrant:6333'
 const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
@@ -78,6 +88,60 @@ interface AccountRow {
   api_base: string
   api_key: string | null
   type: string
+}
+
+export interface EmbedResult {
+  status: string
+  /** Points this branch holds after the run: unchanged ones plus those written. */
+  chunks: number
+  errors: string[]
+  /** Distinct texts sent to the embedding model. */
+  embedded?: number
+  /** Chunks whose vector was copied from a point with the same text. */
+  reused?: number
+  /** Chunks already stored under the same id, left alone. */
+  unchanged?: number
+  /** Points of this branch the tree no longer produces, deleted. */
+  removed?: number
+}
+
+// ── Point identity ──
+
+/** What a chunk says, hashed: the key a vector can be reused under. */
+export function chunkContentHash(content: string): string {
+  return createHash('sha256').update(content).digest('hex').slice(0, 32)
+}
+
+/**
+ * Which model wrote a vector. Copying a vector between points is only sound
+ * when both were embedded the same way, and the id carries this too, so a
+ * switch of embedding model re-embeds every chunk instead of mixing spaces.
+ * The model names come from the routing chain the gateway also follows; a
+ * fallback slot answering for the first is not visible here.
+ */
+export function embeddingFingerprint(models: string[], vectorSize: number): string {
+  return `${models.length > 0 ? models.join('>') : 'auto'}@${vectorSize}`
+}
+
+/**
+ * A chunk's point id: the same chunk of the same file on the same branch,
+ * embedded the same way, always lands on the same id, and any change to it
+ * lands on another. Formatted as an RFC 4122 UUID (version 5 layout) because
+ * that is what Qdrant takes as a string id.
+ */
+export function chunkPointId(parts: {
+  projectId: string
+  branch: string
+  filePath: string
+  chunkIndex: number
+  contentHash: string
+  embedFp: string
+}): string {
+  const h = createHash('sha256')
+    .update([parts.projectId, parts.branch, parts.filePath, String(parts.chunkIndex), parts.contentHash, parts.embedFp].join('\0'))
+    .digest('hex')
+  const variant = ((parseInt(h.charAt(16), 16) & 0x3) | 0x8).toString(16)
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`
 }
 
 // ── Text Chunking ──
@@ -197,13 +261,13 @@ export async function embedProject(
   branch: string,
   jobId: string,
   onProgress?: (progress: number, successChunks: number, totalChunks: number) => void,
-): Promise<{ status: string; chunks: number; errors: string[] }> {
+): Promise<EmbedResult> {
   // First pass: count chunks to calculate dynamic timeout
   // The actual embedding happens in embedProjectInternal
   // We use a clearable timer so it doesn't fire after success
   let timer: ReturnType<typeof setTimeout> | null = null
 
-  const timeoutPromise = new Promise<{ status: string; chunks: number; errors: string[] }>((resolve) => {
+  const timeoutPromise = new Promise<EmbedResult>((resolve) => {
     // Start with max timeout; embedProjectInternal will adjust it after counting chunks
     timer = setTimeout(() => {
       logger.warn(`[${jobId}] mem9 embedding timed out after ${MAX_TIMEOUT_MS / 1000}s (max)`)
@@ -237,7 +301,7 @@ async function embedProjectInternal(
   jobId: string,
   onProgress?: (progress: number, successChunks: number, totalChunks: number) => void,
   onChunkCount?: (count: number) => void,
-): Promise<{ status: string; chunks: number; errors: string[] }> {
+): Promise<EmbedResult> {
   const repoDir = join(REPOS_DIR, projectId)
   const collectionName = `cortex-project-${projectId}`
   const errors: string[] = []
@@ -253,8 +317,13 @@ async function embedProjectInternal(
   }
 
   // 2. Chunk all files
+  //
+  // Reading and chunking a large tree is synchronous work on the thread that
+  // also answers every search; hand the event loop back every few files so a
+  // query that arrives mid-index waits milliseconds, not the whole walk.
   const allChunks: ChunkResult[] = []
-  for (const file of sourceFiles) {
+  for (const [fileIdx, file] of sourceFiles.entries()) {
+    if (fileIdx % YIELD_EVERY_FILES === YIELD_EVERY_FILES - 1) await yieldToEventLoop()
     try {
       const content = readFileSync(file.path, 'utf-8')
       // Prepend file path as context
@@ -274,9 +343,6 @@ async function embedProjectInternal(
 
   logger.info(`[${jobId}] Created ${allChunks.length} chunks from ${sourceFiles.length} files`)
 
-  // Notify parent to adjust dynamic timeout
-  onChunkCount?.(allChunks.length)
-
   // 3. Build embedder with fallback chain, routed through LLM gateway
   const { config: embedConfig, chain } = buildEmbeddingChain()
   const GATEWAY_URL = process.env.LLM_GATEWAY_URL ?? 'http://localhost:4000/api/llm'
@@ -284,6 +350,7 @@ async function embedProjectInternal(
     maxRetries: 2,
     retryDelayMs: 2000,
     gatewayUrl: GATEWAY_URL,
+    priority: 'background',
   })
 
   // 4. Setup Qdrant collection
@@ -335,72 +402,143 @@ async function embedProjectInternal(
     )
   }
 
+  // The two lookups below filter on these. Without an index Qdrant scans every
+  // point of every branch for each of them; a failure only costs that speed.
+  for (const field of ['branch', 'content_hash']) {
+    await vectorStore.ensurePayloadIndex(field).catch((err: unknown) => {
+      logger.warn(`[${jobId}] Payload index on '${field}' not created: ${String(err).slice(0, 200)}`)
+    })
+  }
+
   // BM25 measures a document against the average length of the corpus it lives
   // in, so the average has to be the one for this project, computed before the
-  // first point is written.
+  // first point is written. Unchanged points keep the sparse vector written
+  // against the average of their own run; one commit moves it by a fraction of
+  // a percent, which shifts no ranking worth re-writing every point for.
   const averageLength = sparseVectorEnabled
     ? averageTokenLength(allChunks.map((chunk) => chunk.content))
     : 0
 
-  // Drop this project+branch's previous points before writing new ones. Point
-  // ids are random UUIDs, so without this every re-index appended a second full
-  // copy of every chunk (search returned each hit twice) and chunks belonging to
-  // files that have since been deleted or renamed stayed in the index forever.
-  // Runs only after the test embed succeeded, so a dead embedding provider can
-  // never wipe a good index.
-  try {
-    await vectorStore.deleteByFilter({
-      must: [
-        { key: 'project_id', match: { value: projectId } },
-        { key: 'branch', match: { value: branch } },
-      ],
+  // 5. Work out what changed
+  //
+  // Every chunk gets the id it would be stored under. An id this branch already
+  // holds is the same text at the same place, embedded the same way: nothing to
+  // do. The ids it holds that no chunk produces any more — edited, moved or
+  // deleted code, and points written before ids were derived — are stale.
+  const embedFp = embeddingFingerprint(chain.map((slot) => slot.model), vectorSize)
+  const wanted: Array<ChunkResult & { contentHash: string; id: string }> = []
+  for (const [chunkIdx, chunk] of allChunks.entries()) {
+    if (chunkIdx % YIELD_EVERY_CHUNKS === YIELD_EVERY_CHUNKS - 1) await yieldToEventLoop()
+    const contentHash = chunkContentHash(chunk.content)
+    wanted.push({
+      ...chunk,
+      contentHash,
+      id: chunkPointId({ projectId, branch, filePath: chunk.filePath, chunkIndex: chunk.chunkIndex, contentHash, embedFp }),
     })
-    logger.info(`[${jobId}] Cleared previous points for ${projectId}@${branch}`)
+  }
+
+  const branchFilter = {
+    must: [
+      { key: 'project_id', match: { value: projectId } },
+      { key: 'branch', match: { value: branch } },
+    ],
+  }
+  let storedIds: Set<string>
+  try {
+    storedIds = new Set((await vectorStore.scrollAll(branchFilter)).map((p) => p.id))
   } catch (err) {
-    const msg = `Failed to clear previous points: ${String(err).slice(0, 200)}`
+    const msg = `Failed to list stored points: ${String(err).slice(0, 200)}`
     logger.error(`[${jobId}] ${msg}`)
     return { status: 'error', chunks: 0, errors: [msg] }
   }
 
-  // 5. Embed and store in batches
+  const wantedIds = new Set(wanted.map((chunk) => chunk.id))
+  const todo = wanted.filter((chunk) => !storedIds.has(chunk.id))
+  const stale = [...storedIds].filter((id) => !wantedIds.has(id))
+  const unchanged = wanted.length - todo.length
+
+  logger.info(
+    `[${jobId}] ${unchanged} chunks unchanged, ${todo.length} to write, ${stale.length} stale (${embedFp})`,
+  )
+
+  // Notify parent to adjust dynamic timeout: only the chunks to write cost time.
+  onChunkCount?.(todo.length)
+
+  // 6. Write the chunks that are not stored yet, in batches
   //
-  // One batch is now one embedding request and one Qdrant upsert, where it used
-  // to be BATCH_SIZE of each: five parallel HTTP calls to the gateway and five
-  // more to Qdrant, then a flat 200ms sleep. That sleep existed to keep a remote
-  // API's rate limiter happy, but it is priced per request, and batching already
-  // cuts the request count by the batch size — 1256 chunks went from 502
-  // requests to 40. So the sleep is gone and the batch is wider.
+  // One batch is one lookup of reusable vectors, at most one embedding request
+  // and one Qdrant upsert. A vector is reused when a point with the same text,
+  // embedded the same way, exists on any branch of the project — a worktree
+  // branch shares nearly all of its text with the branch it came from, and a
+  // moved file shares all of its own. Only the rest goes to the model.
   //
-  // Override with MEM9_BATCH_SIZE / MEM9_BATCH_DELAY_MS if a provider needs it.
-  let successCount = 0
-  const BATCH_SIZE = Math.max(1, Number(process.env['MEM9_BATCH_SIZE']) || 32)
+  // Eight per batch because ollama embeds one request at a time: a search that
+  // arrives mid-batch waits for the whole batch. Measured on the hub (4 CPUs,
+  // all-minilm, 1500-char chunks), a batch of 32 took 2.2-4.6s and held a query
+  // for 2.3s; a batch of 8 took 0.6s and held it for 0.36s, at no loss of
+  // throughput. Override with MEM9_BATCH_SIZE / MEM9_BATCH_DELAY_MS.
+  let written = 0
+  let embedded = 0
+  let reused = 0
+  const BATCH_SIZE = Math.max(1, Number(process.env['MEM9_BATCH_SIZE']) || 8)
   const BATCH_DELAY_MS = Math.max(0, Number(process.env['MEM9_BATCH_DELAY_MS']) || 0)
-  const totalBatches = Math.ceil(allChunks.length / BATCH_SIZE)
+  const totalBatches = Math.ceil(todo.length / BATCH_SIZE)
 
   for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
-    const batch = allChunks.slice(batchIdx * BATCH_SIZE, (batchIdx + 1) * BATCH_SIZE)
+    const batch = todo.slice(batchIdx * BATCH_SIZE, (batchIdx + 1) * BATCH_SIZE)
+    const vectorsByHash = new Map<string, number[]>()
 
-    let vectors: number[][]
     try {
-      vectors = await embedder.embedBatch(batch.map((chunk) => chunk.content))
-    } catch (err) {
-      // A whole batch failing must not cost the attribution of which chunks
-      // failed, nor the 31 chunks that had nothing wrong with them.
-      const msg = String(err).slice(0, 100)
-      for (const chunk of batch) {
-        errors.push(`${chunk.filePath}#${chunk.chunkIndex}: ${msg}`)
+      const found = await vectorStore.scrollAll(
+        {
+          must: [
+            { key: 'project_id', match: { value: projectId } },
+            { key: 'embed_fp', match: { value: embedFp } },
+            { key: 'content_hash', match: { any: [...new Set(batch.map((chunk) => chunk.contentHash))] } },
+          ],
+        },
+        { payload: ['content_hash'], vector: true },
+      )
+      for (const point of found) {
+        const hash = point.payload['content_hash']
+        if (typeof hash === 'string' && point.vector?.length === vectorSize) vectorsByHash.set(hash, point.vector)
       }
-      continue
+    } catch (err) {
+      // Reuse saves work; it is never a reason to fail. Embed the batch instead.
+      logger.warn(`[${jobId}] Vector reuse lookup failed: ${String(err).slice(0, 200)}`)
     }
 
-    const points = batch.flatMap((chunk, i) => {
-      const vector = vectors[i]
+    const reusedHashes = new Set(vectorsByHash.keys())
+
+    // Identical text twice in one batch (license headers, generated code) is
+    // embedded once.
+    const toEmbed = [...new Map(
+      batch.filter((chunk) => !reusedHashes.has(chunk.contentHash)).map((chunk) => [chunk.contentHash, chunk.content]),
+    )]
+    // A whole request failing must not cost the attribution of which chunks
+    // failed, nor the chunks whose vector was found without the model.
+    let embedError = 'embedder returned no vector'
+    if (toEmbed.length > 0) {
+      try {
+        const vectors = await embedder.embedBatch(toEmbed.map(([, content]) => content))
+        toEmbed.forEach(([hash], i) => {
+          const vector = vectors[i]
+          if (vector?.length) vectorsByHash.set(hash, vector)
+        })
+        embedded += toEmbed.length
+      } catch (err) {
+        embedError = String(err).slice(0, 100)
+      }
+    }
+
+    const points = batch.flatMap((chunk) => {
+      const vector = vectorsByHash.get(chunk.contentHash)
       if (!vector?.length) {
-        errors.push(`${chunk.filePath}#${chunk.chunkIndex}: embedder returned no vector`)
+        errors.push(`${chunk.filePath}#${chunk.chunkIndex}: ${embedError}`)
         return []
       }
       return [{
-        id: randomUUID(),
+        id: chunk.id,
         vector,
         sparseVector: sparseVectorEnabled
           ? documentSparseVector(chunk.content, averageLength)
@@ -411,6 +549,8 @@ async function embedProjectInternal(
           file_path: chunk.filePath,
           chunk_index: chunk.chunkIndex,
           content: chunk.content.slice(0, 2000), // Store first 2KB for retrieval
+          content_hash: chunk.contentHash,
+          embed_fp: embedFp,
           indexed_at: new Date().toISOString(),
         },
       }]
@@ -418,24 +558,45 @@ async function embedProjectInternal(
 
     try {
       await vectorStore.upsertBatch(points, sparseVectorEnabled ? SPARSE_VECTOR_NAME : undefined)
-      successCount += points.length
+      written += points.length
+      reused += batch.filter((chunk) => reusedHashes.has(chunk.contentHash)).length
     } catch (err) {
       const msg = String(err).slice(0, 100)
-      for (const chunk of batch) {
-        errors.push(`${chunk.filePath}#${chunk.chunkIndex}: ${msg}`)
+      for (const point of points) {
+        errors.push(`${point.payload.file_path}#${point.payload.chunk_index}: ${msg}`)
       }
     }
 
-    // Report progress
+    // Report progress over the whole branch: unchanged chunks are already done.
     const progress = Math.round(((batchIdx + 1) / totalBatches) * 100)
-    onProgress?.(progress, successCount, allChunks.length)
+    onProgress?.(progress, unchanged + written, wanted.length)
 
     if (BATCH_DELAY_MS > 0 && batchIdx < totalBatches - 1) {
       await new Promise<void>((r) => setTimeout(r, BATCH_DELAY_MS))
     }
   }
 
-  logger.info(`[${jobId}] Embedding complete: ${successCount}/${allChunks.length} chunks stored`)
+  if (totalBatches === 0) onProgress?.(100, unchanged, wanted.length)
+
+  // 7. Drop the stale points, after the new ones are in: search never sees the
+  // branch half-empty. When a chunk failed, its old point is the best this
+  // branch has, so leave every stale point for the next run to clear.
+  let removed = 0
+  if (stale.length > 0 && errors.length === 0) {
+    try {
+      await vectorStore.deletePoints(stale)
+      removed = stale.length
+    } catch (err) {
+      errors.push(`Failed to delete ${stale.length} stale points: ${String(err).slice(0, 100)}`)
+    }
+  } else if (stale.length > 0) {
+    logger.warn(`[${jobId}] Kept ${stale.length} stale points: ${errors.length} chunks failed, the next run clears them`)
+  }
+
+  logger.info(
+    `[${jobId}] Embedding complete: ${unchanged + written}/${wanted.length} chunks stored ` +
+      `(${unchanged} unchanged, ${reused} reused, ${embedded} embedded, ${removed} removed)`,
+  )
   // Usage is logged automatically by the LLM gateway
 
   if (errors.length > 10) {
@@ -446,8 +607,12 @@ async function embedProjectInternal(
   }
 
   return {
-    status: errors.length > 0 && successCount === 0 ? 'error' : 'done',
-    chunks: successCount,
+    status: errors.length > 0 && written === 0 && todo.length > 0 ? 'error' : 'done',
+    chunks: unchanged + written,
     errors,
+    embedded,
+    reused,
+    unchanged,
+    removed,
   }
 }

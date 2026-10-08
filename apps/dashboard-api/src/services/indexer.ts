@@ -1,7 +1,10 @@
 import type { ChildProcess } from 'child_process';
-import { spawn } from 'child_process'
+import { execFile, spawn } from 'child_process'
+import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync, rmSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
+import { rm } from 'fs/promises'
 import { join, extname } from 'path'
+import { promisify } from 'util'
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
 import { embedProject } from './mem9-embedder.js'
@@ -13,6 +16,14 @@ const logger = createLogger('indexer')
 const runningJobs = new Map<string, ChildProcess>()
 
 const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
+
+const execFileAsync = promisify(execFile)
+
+/** Hand the event loop back so requests waiting on this process get answered. */
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+/** Strip the credentials buildAuthUrl puts into a URL before anything is logged. */
+const redactCredentials = (text: string) => text.replace(/\/\/[^@]+@/g, '//<redacted>@')
 
 interface ProjectRow {
   id: string
@@ -65,12 +76,11 @@ export async function resolveDefaultBranch(projectId: string): Promise<string> {
   if (!project?.git_repo_url) return 'main'
 
   try {
-    const { execFileSync } = await import('child_process')
     const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
-    const output = execFileSync('git', ['ls-remote', '--symref', authUrl, 'HEAD'], {
+    // Asynchronous: a slow remote must not stall every other request on this process.
+    const { stdout: output } = await execFileAsync('git', ['ls-remote', '--symref', authUrl, 'HEAD'], {
       timeout: 15000,
       encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
     })
     const match = output.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m)
     if (match?.[1]) {
@@ -81,7 +91,7 @@ export async function resolveDefaultBranch(projectId: string): Promise<string> {
   } catch (err) {
     // A credential or network problem is the clone's business to report, not
     // this helper's: fall through to the old default so nothing new breaks.
-    const msg = String(err).replace(/\/\/[^@]+@/g, '//<redacted>@')
+    const msg = redactCredentials(String(err))
     logger.warn(`Could not resolve default branch for ${projectId}: ${msg.slice(0, 200)}`)
   }
 
@@ -185,12 +195,16 @@ const MAX_FILE_SIZE = 512 * 1024 // 512KB
 /**
  * Walk directory recursively and extract symbols from source files.
  * Pure JS — no native dependencies.
+ *
+ * It reads and scans every file synchronously on the thread that serves the
+ * API, so it hands the event loop back every few files: a search arriving
+ * mid-index waits for one slice of the walk, not all of it.
  */
-function extractSymbolsFromDir(dir: string): { totalFiles: number; symbolsFound: number; symbolNames: string[] } {
+async function extractSymbolsFromDir(dir: string): Promise<{ totalFiles: number; symbolsFound: number; symbolNames: string[] }> {
   let totalFiles = 0
   const allSymbols: string[] = []
 
-  function walk(currentDir: string) {
+  async function walk(currentDir: string): Promise<void> {
     let entries: string[]
     try {
       entries = readdirSync(currentDir)
@@ -210,13 +224,14 @@ function extractSymbolsFromDir(dir: string): { totalFiles: number; symbolsFound:
       }
 
       if (stat.isDirectory()) {
-        walk(fullPath)
+        await walk(fullPath)
       } else if (stat.isFile()) {
         const ext = extname(entry).toLowerCase()
         if (!ALL_SOURCE_EXTENSIONS.has(ext)) continue
         if (stat.size > MAX_FILE_SIZE) continue
 
         totalFiles++
+        if (totalFiles % 50 === 0) await yieldToEventLoop()
 
         // Only extract symbols from code files (not config/docs)
         const patterns = SYMBOL_PATTERNS[ext]
@@ -241,7 +256,7 @@ function extractSymbolsFromDir(dir: string): { totalFiles: number; symbolsFound:
     }
   }
 
-  walk(dir)
+  await walk(dir)
   return { totalFiles, symbolsFound: allSymbols.length, symbolNames: allSymbols }
 }
 
@@ -280,10 +295,185 @@ function runCommand(cmd: string, args: string[], cwd: string, jobId: string): Pr
   })
 }
 
+
+// ── Job queue ──
+//
+// Every push used to start its own pipeline. Agents in worktrees push several
+// branches of one project within minutes, and each pipeline re-cloned into the
+// same directory and re-embedded the whole tree: the job row said 'done' before
+// its embedding started, so nothing stopped the next one from stacking on top.
+// Now each project runs one job at a time, through embedding and docs, and a
+// branch waiting in line absorbs any further request for it.
+
+interface QueuedJob {
+  jobId: string
+  branch: string
+  force: boolean
+}
+
+interface ProjectQueue {
+  running: QueuedJob | null
+  waiting: QueuedJob[]
+  idle: Promise<void>
+}
+
+const queues = new Map<string, ProjectQueue>()
+
+export interface IndexRequest {
+  jobId: string
+  branch: string
+  /** Waiting behind another job of the same project. */
+  queued: boolean
+  /** Folded into a job already waiting for this branch; no new row was made. */
+  coalesced: boolean
+}
+
 /**
- * Main indexing pipeline — runs async (fire-and-forget from API).
+ * Ask for a branch to be indexed.
+ *
+ * Without `force`, a job that finds the branch already indexed at the remote's
+ * commit — and the checkout still on it — finishes at once without cloning or
+ * embedding. Pass `force` when a person asked for the work to be done again.
  */
-export async function startIndexing(projectId: string, jobId: string, branch: string): Promise<void> {
+export function requestIndexing(
+  projectId: string,
+  branch: string,
+  opts: { triggeredBy?: string; force?: boolean } = {},
+): IndexRequest {
+  const triggeredBy = opts.triggeredBy ?? 'manual'
+  let queue = queues.get(projectId)
+
+  // A job for this branch has not started yet: when it does it clones the
+  // branch as it is then, which already includes whatever this request is for.
+  const waiting = queue?.waiting.find((job) => job.branch === branch)
+  if (waiting) {
+    if (opts.force) waiting.force = true
+    appendLog(waiting.jobId, `↪ A ${triggeredBy} request for ${branch} joined this job`)
+    return { jobId: waiting.jobId, branch, queued: true, coalesced: true }
+  }
+
+  const jobId = `idx-${randomUUID().slice(0, 12)}`
+  db.prepare(
+    `INSERT INTO index_jobs (id, project_id, branch, status, progress, triggered_by, created_at) VALUES (?, ?, ?, 'pending', 0, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
+  ).run(jobId, projectId, branch, triggeredBy)
+
+  if (!queue) {
+    queue = { running: null, waiting: [], idle: Promise.resolve() }
+    queues.set(projectId, queue)
+  }
+  queue.waiting.push({ jobId, branch, force: opts.force ?? false })
+
+  const queued = queue.running !== null
+  if (queued) {
+    appendLog(jobId, `⏳ Queued behind ${queue.running?.jobId} (${queue.running?.branch})`)
+  } else {
+    queue.idle = drain(projectId, queue)
+  }
+  return { jobId, branch, queued, coalesced: false }
+}
+
+/**
+ * Run a project's jobs one after another until none is left.
+ *
+ * `running` is set before the first await, so a request arriving while this
+ * starts sees the queue busy and only joins it.
+ */
+async function drain(projectId: string, queue: ProjectQueue): Promise<void> {
+  let job: QueuedJob | undefined
+  while ((job = queue.waiting.shift())) {
+    queue.running = job
+    try {
+      const row = db.prepare('SELECT status FROM index_jobs WHERE id = ?').get(job.jobId) as { status: string } | undefined
+      // Gone with its project, or cancelled while it waited.
+      if (row?.status === 'pending') await indexBranch(projectId, job.jobId, job.branch, job.force)
+    } catch (err) {
+      logger.error(`[${job.jobId}] Index job crashed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      queue.running = null
+    }
+  }
+  queues.delete(projectId)
+}
+
+/** Resolves once the project has no job running or waiting. */
+export function indexQueueIdle(projectId: string): Promise<void> {
+  return queues.get(projectId)?.idle ?? Promise.resolve()
+}
+
+// ── Already indexed? ──
+
+interface IndexedJobRow {
+  id: string
+  status: string
+  mem9_status: string | null
+  commit_hash: string | null
+  commit_message: string | null
+  symbols_found: number
+  total_files: number
+  mem9_chunks: number
+  mem9_total_chunks: number
+  docs_knowledge_status: string | null
+  docs_knowledge_count: number
+}
+
+/** The commit a branch points at on the remote, or null if the remote cannot say. */
+async function remoteBranchHead(authUrl: string, branch: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('git', ['ls-remote', authUrl, `refs/heads/${branch}`], {
+      timeout: 15000,
+      encoding: 'utf-8',
+    })
+    const sha = stdout.split(/\s/, 1)[0] ?? ''
+    return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null
+  } catch (err) {
+    logger.warn(`ls-remote for ${branch} failed: ${redactCredentials(String(err)).slice(0, 200)}`)
+    return null
+  }
+}
+
+/** The commit the project's checkout is on, or null without one. */
+async function checkoutHead(repoDir: string): Promise<string | null> {
+  if (!existsSync(join(repoDir, '.git'))) return null
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, timeout: 5000, encoding: 'utf-8' })
+    return stdout.trim()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The job that already indexed what the remote holds for this branch, if any.
+ *
+ * Three things have to agree: the branch's last job that ran finished both
+ * stages, the remote still points at the commit that job indexed, and the
+ * checkout is still on that commit. The checkout is one directory shared by
+ * every branch of the project, so indexing another branch in between means
+ * this one has to be cloned again even though its vectors are current.
+ */
+async function findIndexedCommit(
+  projectId: string, jobId: string, branch: string, authUrl: string, repoDir: string,
+): Promise<IndexedJobRow | null> {
+  const last = db.prepare(
+    `SELECT id, status, mem9_status, commit_hash, commit_message, symbols_found, total_files,
+            mem9_chunks, mem9_total_chunks, docs_knowledge_status, docs_knowledge_count
+     FROM index_jobs
+     WHERE project_id = ? AND branch = ? AND id != ? AND started_at IS NOT NULL
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`
+  ).get(projectId, branch, jobId) as IndexedJobRow | undefined
+
+  if (last?.status !== 'done' || last.mem9_status !== 'done' || !last.commit_hash) return null
+
+  const remote = await remoteBranchHead(authUrl, branch)
+  if (!remote?.startsWith(last.commit_hash)) return null
+  if ((await checkoutHead(repoDir)) !== remote) return null
+  return last
+}
+
+/**
+ * Main indexing pipeline for one job; the queue runs it.
+ */
+async function indexBranch(projectId: string, jobId: string, branch: string, force: boolean): Promise<void> {
   const project = db.prepare('SELECT id, git_repo_url, git_provider, git_username, git_token FROM projects WHERE id = ?')
     .get(projectId) as ProjectRow | undefined
 
@@ -294,23 +484,49 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
 
   const repoDir = join(REPOS_DIR, projectId)
   const cloningSentinel = join(REPOS_DIR, `${projectId}.cloning`)
+  const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
 
   try {
-    // ── Step 1: Clone ──
     updateJob(jobId, { status: 'cloning', progress: 5, started_at: new Date().toISOString() })
-    logger.info(`[${jobId}] Cloning ${project.git_repo_url} branch=${branch}`)
+
+    // ── Step 0: Nothing new to index ──
+    if (!force) {
+      const indexed = await findIndexedCommit(projectId, jobId, branch, authUrl, repoDir)
+      if (indexed) {
+        updateJob(jobId, {
+          status: 'done',
+          progress: 100,
+          completed_at: new Date().toISOString(),
+          commit_hash: indexed.commit_hash,
+          commit_message: indexed.commit_message,
+          symbols_found: indexed.symbols_found,
+          total_files: indexed.total_files,
+          mem9_status: 'done',
+          mem9_progress: 100,
+          mem9_chunks: indexed.mem9_chunks,
+          mem9_total_chunks: indexed.mem9_total_chunks,
+          docs_knowledge_status: indexed.docs_knowledge_status,
+          docs_knowledge_count: indexed.docs_knowledge_count,
+        })
+        appendLog(jobId, `⏭ ${branch} is already indexed at ${indexed.commit_hash} (job ${indexed.id}) — nothing to do`)
+        logger.info(`[${jobId}] ${branch} already indexed at ${indexed.commit_hash}, skipped`)
+        return
+      }
+    }
+
+    // ── Step 1: Clone ──
+    logger.info(`[${jobId}] Cloning ${redactCredentials(project.git_repo_url)} branch=${branch}`)
 
     try {
       // Clean previous clone
       if (existsSync(repoDir)) {
-        rmSync(repoDir, { recursive: true, force: true })
+        await rm(repoDir, { recursive: true, force: true })
       }
       mkdirSync(repoDir, { recursive: true })
 
       // Create a sentinel file to signal to the GitNexus watchdog daemon that clone is in progress
       writeFileSync(cloningSentinel, '')
 
-      const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
       const cloneResult = await runCommand('git', [
         'clone', '--branch', branch, '--depth', '1', '--single-branch', authUrl, '.'
       ], repoDir, jobId)
@@ -330,13 +546,10 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
 
     // ── Step 1b: Extract commit info from HEAD ──
     try {
-      const { execFileSync } = await import('child_process')
-      const commitHash = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
-        cwd: repoDir, encoding: 'utf-8', timeout: 5000,
-      }).trim()
-      const commitMessage = execFileSync('git', ['log', '-1', '--format=%s'], {
-        cwd: repoDir, encoding: 'utf-8', timeout: 5000,
-      }).trim()
+      const git = (args: string[]) =>
+        execFileAsync('git', args, { cwd: repoDir, encoding: 'utf-8', timeout: 5000 }).then((r) => r.stdout.trim())
+      const commitHash = await git(['rev-parse', '--short', 'HEAD'])
+      const commitMessage = await git(['log', '-1', '--format=%s'])
       updateJob(jobId, { commit_hash: commitHash, commit_message: commitMessage.slice(0, 200) })
       appendLog(jobId, `📌 Commit: ${commitHash} — ${commitMessage.slice(0, 100)}`)
       logger.info(`[${jobId}] HEAD commit: ${commitHash} — ${commitMessage.slice(0, 60)}`)
@@ -347,7 +560,7 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
 
     // ── Step 2: GitNexus Analyze ──
     // Try CLI first (only works if gitnexus is installed in this container),
-    // then try HTTP API to the gitnexus container, then pure JS fallback.
+    // then the pure JS fallback.
     updateJob(jobId, { status: 'analyzing', progress: 30 })
     logger.info(`[${jobId}] Running gitnexus analyze`)
 
@@ -380,7 +593,7 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
       appendLog(jobId, `[info] Using pure JS symbol extraction (gitnexus CLI not available)`)
       logger.info(`[${jobId}] Using pure JS fallback extraction`)
 
-      const fallback = extractSymbolsFromDir(repoDir)
+      const fallback = await extractSymbolsFromDir(repoDir)
       totalFiles = fallback.totalFiles
       symbolsFound = fallback.symbolsFound
       symbolNames = fallback.symbolNames
@@ -391,12 +604,10 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
       appendLog(jobId, `Sample symbols: ${symbolNames.slice(0, 20).join(', ')}`)
     }
 
-    updateJob(jobId, { progress: 70, symbols_found: symbolsFound, total_files: totalFiles })
+    updateJob(jobId, { progress: 90, symbols_found: symbolsFound, total_files: totalFiles })
     logger.info(`[${jobId}] Analysis complete: ${symbolsFound} symbols, ${totalFiles} files`)
 
-    updateJob(jobId, { progress: 90 })
-
-    // ── Step 4: Update Project ──
+    // ── Step 3: Update Project ──
     db.prepare(
       `UPDATE projects SET indexed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), indexed_symbols = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
     ).run(symbolsFound, projectId)
@@ -409,46 +620,9 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
 
     logger.info(`[${jobId}] Indexing complete!`)
 
-    // ── Step 5: Auto-trigger mem9 embedding (fire-and-forget) ──
-    try {
-      updateJob(jobId, { mem9_status: 'embedding' })
-      appendLog(jobId, '🧠 Auto-starting mem9 embedding...')
-
-      embedProject(projectId, branch, jobId, (progress, chunks, totalChunks) => {
-        db.prepare('UPDATE index_jobs SET mem9_chunks = ?, mem9_progress = ?, mem9_total_chunks = ? WHERE id = ?')
-          .run(chunks, progress, totalChunks, jobId)
-      }).then((result) => {
-        updateJob(jobId, { mem9_status: result.status, mem9_chunks: result.chunks })
-        appendLog(jobId, `✅ mem9 done: ${result.chunks} chunks embedded`)
-        if (result.errors.length > 0) {
-          appendLog(jobId, `⚠️ mem9 errors: ${result.errors.slice(0, 3).join('; ')}`)
-        }
-        logger.info(`[${jobId}] mem9 complete: ${result.chunks} chunks`)
-
-        // ── Step 6: Auto-build knowledge from docs (fire-and-forget) ──
-        updateJob(jobId, { docs_knowledge_status: 'building' })
-        appendLog(jobId, '📚 Auto-building knowledge from documentation...')
-        buildKnowledgeFromDocs(projectId, jobId, repoDir).then((docsResult) => {
-          updateJob(jobId, {
-            docs_knowledge_status: 'done',
-            docs_knowledge_count: docsResult.docsProcessed,
-          })
-          appendLog(jobId, `📚 Docs knowledge: ${docsResult.docsProcessed}/${docsResult.docsFound} docs → ${docsResult.chunksCreated} chunks`)
-          logger.info(`[${jobId}] Docs knowledge complete: ${docsResult.docsProcessed} docs processed`)
-        }).catch((err) => {
-          updateJob(jobId, { docs_knowledge_status: 'error' })
-          appendLog(jobId, `⚠️ Docs knowledge failed (non-fatal): ${err}`)
-          logger.warn(`[${jobId}] Docs knowledge failed: ${err}`)
-        })
-      }).catch((err) => {
-        updateJob(jobId, { mem9_status: 'error' })
-        appendLog(jobId, `❌ mem9 failed: ${err}`)
-        logger.warn(`[${jobId}] mem9 failed (non-fatal): ${err}`)
-      })
-    } catch (err) {
-      logger.warn(`[${jobId}] mem9 auto-trigger failed: ${err}`)
-    }
-
+    // ── Steps 4-5: Embed, then learn from the docs ──
+    // Awaited: the next job of this project must not start on top of them.
+    await embedAndBuildDocs(projectId, jobId, branch, repoDir)
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
     logger.error(`[${jobId}] Indexing failed: ${errorMsg}`)
@@ -460,10 +634,64 @@ export async function startIndexing(projectId: string, jobId: string, branch: st
   }
 }
 
+async function embedAndBuildDocs(projectId: string, jobId: string, branch: string, repoDir: string): Promise<void> {
+  updateJob(jobId, { mem9_status: 'embedding' })
+  appendLog(jobId, '🧠 Starting mem9 embedding...')
+
+  try {
+    const result = await embedProject(projectId, branch, jobId, (progress, chunks, totalChunks) => {
+      db.prepare('UPDATE index_jobs SET mem9_chunks = ?, mem9_progress = ?, mem9_total_chunks = ? WHERE id = ?')
+        .run(chunks, progress, totalChunks, jobId)
+    })
+    updateJob(jobId, { mem9_status: result.status, mem9_chunks: result.chunks })
+    appendLog(
+      jobId,
+      `${result.status === 'done' ? '✅' : '⚠️'} mem9 ${result.status}: ${result.chunks} chunks — ` +
+        `${result.embedded ?? 0} embedded, ${result.reused ?? 0} reused, ` +
+        `${result.unchanged ?? 0} unchanged, ${result.removed ?? 0} removed`,
+    )
+    if (result.errors.length > 0) {
+      appendLog(jobId, `⚠️ mem9 errors: ${result.errors.slice(0, 3).join('; ')}`)
+    }
+    logger.info(`[${jobId}] mem9 ${result.status}: ${result.chunks} chunks, ${result.embedded ?? 0} embedded`)
+  } catch (err) {
+    updateJob(jobId, { mem9_status: 'error' })
+    appendLog(jobId, `❌ mem9 failed: ${err}`)
+    logger.warn(`[${jobId}] mem9 failed (non-fatal): ${err}`)
+    return
+  }
+
+  updateJob(jobId, { docs_knowledge_status: 'building' })
+  appendLog(jobId, '📚 Building knowledge from documentation...')
+  try {
+    const docsResult = await buildKnowledgeFromDocs(projectId, jobId, repoDir)
+    updateJob(jobId, {
+      docs_knowledge_status: 'done',
+      docs_knowledge_count: docsResult.docsProcessed,
+    })
+    appendLog(jobId, `📚 Docs knowledge: ${docsResult.docsProcessed}/${docsResult.docsFound} docs → ${docsResult.chunksCreated} chunks`)
+    logger.info(`[${jobId}] Docs knowledge complete: ${docsResult.docsProcessed} docs processed`)
+  } catch (err) {
+    updateJob(jobId, { docs_knowledge_status: 'error' })
+    appendLog(jobId, `⚠️ Docs knowledge failed (non-fatal): ${err}`)
+    logger.warn(`[${jobId}] Docs knowledge failed: ${err}`)
+  }
+}
+
 /**
- * Cancel a running indexing job.
+ * Cancel an indexing job: drop it from its queue if it has not started, or
+ * stop the process it is running.
  */
 export function cancelJob(jobId: string): boolean {
+  for (const queue of queues.values()) {
+    const at = queue.waiting.findIndex((job) => job.jobId === jobId)
+    if (at >= 0) {
+      queue.waiting.splice(at, 1)
+      updateJob(jobId, { status: 'error', error: 'Cancelled by user', completed_at: new Date().toISOString() })
+      return true
+    }
+  }
+
   const child = runningJobs.get(jobId)
   if (child) {
     child.kill('SIGTERM')
@@ -476,4 +704,30 @@ export function cancelJob(jobId: string): boolean {
     return true
   }
   return false
+}
+
+/**
+ * Close the jobs a previous process left open.
+ *
+ * The queue lives in memory, so a restart forgets it. Without this a job that
+ * was running or waiting stays 'pending' or 'embedding' forever and the
+ * dashboard shows it busy. Call once at startup, before taking requests. Not
+ * re-run automatically: a job that took the process down would do it again.
+ */
+export function recoverInterruptedJobs(): { jobs: number; embeddings: number; docs: number } {
+  const jobs = db.prepare(
+    `UPDATE index_jobs SET status = 'error', error = 'Interrupted by restart', completed_at = ?
+     WHERE status IN ('pending', 'cloning', 'analyzing', 'ingesting')`
+  ).run(new Date().toISOString()).changes
+  const embeddings = db.prepare(
+    `UPDATE index_jobs SET mem9_status = 'error' WHERE mem9_status = 'embedding'`
+  ).run().changes
+  const docs = db.prepare(
+    `UPDATE index_jobs SET docs_knowledge_status = 'error' WHERE docs_knowledge_status = 'building'`
+  ).run().changes
+
+  if (jobs + embeddings + docs > 0) {
+    logger.warn(`Closed work interrupted by a restart: ${jobs} jobs, ${embeddings} embeddings, ${docs} docs builds`)
+  }
+  return { jobs, embeddings, docs }
 }

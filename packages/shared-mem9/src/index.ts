@@ -8,7 +8,7 @@
  */
 
 export { Mem9 } from './memory.js'
-export { Embedder } from './embedder.js'
+export { Embedder, EMBED_PRIORITY_HEADER } from './embedder.js'
 export { VectorStore } from './vector-store.js'
 export { LlmClient } from './llm.js'
 export { HistoryStore } from './history.js'
