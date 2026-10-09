@@ -262,6 +262,9 @@ services:
       # this many days are dropped every six hours; the default branch never is.
       # 0 keeps every branch.
       BRANCH_RETENTION_DAYS: ${BRANCH_RETENTION_DAYS:-14}
+      # Sessions nobody closed (/ce never ran, the Stop hook missed the hub) are
+      # marked expired once they have had no tool call for this many hours. 0 = never.
+      SESSION_IDLE_HOURS: ${SESSION_IDLE_HOURS:-72}
       # Reranking (optional). With no key, every search path keeps its current
       # pure-vector behaviour; with one, /api/intel/code-search over-fetches
       # candidates and reorders them with a TypeSafe Jev relevance decision.

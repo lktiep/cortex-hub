@@ -500,6 +500,8 @@ sessionsRouter.get('/all', (c) => {
     //   1. Stop hook auto-close (session-end-check.sh)
     //   2. /cs reuses existing active session for same agent+project
     //   3. last_activity updated on each tool call for staleness detection
+    //   4. services/session-expiry.ts marks sessions idle for SESSION_IDLE_HOURS
+    //      (72 by default) as expired, hourly, outside any request
 
     const limit = Number(c.req.query('limit') || '50')
     const status = c.req.query('status')

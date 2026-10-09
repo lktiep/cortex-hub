@@ -32,7 +32,7 @@ function StatusBadge({ status }: { status: string }) {
         ? 'healthy'
         : status === 'claimed'
           ? 'warning'
-          : status === 'pending'
+          : status === 'pending' || status === 'expired'
             ? 'warning'
             : 'error'
   return <span className={`badge badge-${variant}`}>{status}</span>
