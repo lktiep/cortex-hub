@@ -149,15 +149,27 @@ export function registerSessionTools(server: McpServer, env: Env) {
     {
       sessionId: z.string().describe('The session ID from cortex_session_start'),
       summary: z.string().describe('Brief summary of work done in this session'),
+      auto: z.boolean().optional().describe(
+        'Set only by the client exit hook: closes an active session as abandoned and keeps its summary out of memory. Agents leave this unset.'
+      ),
     },
-    async ({ sessionId, summary }) => {
+    async ({ sessionId, summary, auto }) => {
       try {
         const response = await apiCall(env, `/api/sessions/${encodeURIComponent(sessionId)}/end`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ summary }),
+          body: JSON.stringify(auto ? { summary, auto: true } : { summary }),
           signal: AbortSignal.timeout(10000),
         })
+
+        // The exit hook marks the session closed on any successful answer, so an automatic
+        // close gets the truth, not the best-effort fallback below that reports "closed" anyway.
+        if (auto && !response.ok) {
+          return {
+            content: [{ type: 'text' as const, text: `Session end failed: HTTP ${response.status}` }],
+            isError: true,
+          }
+        }
 
         if (response.ok) {
           const data = await response.json() as { session?: { id: string; status: string; duration?: number } }

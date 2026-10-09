@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Quality Tracker (v4.0) — Gemini variant.
+# Cortex Quality Tracker (v4.1) — Gemini variant.
 #
 # Two bugs from v3: cortex_quality_report touched quality-gates-passed, so reporting a failure
 # counted as passing; and every marker was an empty `touch`, which the enforcement hook could not
@@ -49,9 +49,15 @@ fi
 case "$TOOL_NAME" in
   *cortex_session_start*)
     record session-started
+    # Only a hub id: every hook payload opens with the IDE's own "session_id" (a conversation
+    # uuid), and `head -1` used to take that one, so the exit hook tried to close a session
+    # the hub had never heard of. The hub mints nothing but sess_… ids.
     SESSION_ID=$(printf '%s' "$INPUT" | tr -d '\\' \
-      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"sess_[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "$SESSION_ID" ] && printf '%s\n' "$SESSION_ID" > "$STATE_DIR/session-id"
+    # A new hub session is open, so an earlier one's "ended" no longer applies — left in
+    # place it made the exit hook skip this session too.
+    rm -f "$STATE_DIR/session-ended"
     ;;
   *cortex_session_end*)    record session-ended ;;
   *cortex_quality_report*) record quality-reported ;;

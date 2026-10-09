@@ -494,10 +494,10 @@ sessionsRouter.post('/start', async (c) => {
 
 sessionsRouter.get('/all', (c) => {
   try {
-    // Sessions stay active until explicitly closed by /ce, Stop hook, or new /cs.
+    // Sessions stay active until explicitly closed by /ce, the exit hook, or new /cs.
     // Previously auto-closed sessions >2h on every page load — this killed
     // overnight sessions and lost context. Removed in favor of:
-    //   1. Stop hook auto-close (session-end-check.sh)
+    //   1. the SessionEnd hook (session-end-check.sh) closing it as abandoned on exit
     //   2. /cs reuses existing active session for same agent+project
     //   3. last_activity updated on each tool call for staleness detection
     //   4. services/session-expiry.ts marks sessions idle for SESSION_IDLE_HOURS
@@ -551,7 +551,7 @@ sessionsRouter.post('/:id/end', async (c) => {
   const { id } = c.req.param()
   try {
     const body = await c.req.json().catch(() => ({}))
-    const { summary } = body as { summary?: string }
+    const { summary, auto } = body as { summary?: string; auto?: boolean }
 
     const existing = db.prepare('SELECT id, status, created_at FROM session_handoffs WHERE id = ?').get(id) as
       { id: string; status: string; created_at: string } | undefined
@@ -560,6 +560,25 @@ sessionsRouter.post('/:id/end', async (c) => {
     const durationMs = existing.created_at
       ? Date.now() - new Date(existing.created_at).getTime()
       : null
+
+    // `auto` is the client's exit hook closing a session the agent never ended. Its summary
+    // is a list of markers, not an account of the work, so it must not read like one:
+    //   - 'abandoned', not 'completed' — /cs recall reads completed summaries as "what was
+    //     done last time";
+    //   - no auto-memory and no recipe capture, for the same reason;
+    //   - only an active session — the hook runs after /ce too, and must not downgrade it.
+    if (auto === true) {
+      db.prepare(
+        `UPDATE session_handoffs
+         SET status = 'abandoned', task_summary = COALESCE(?, task_summary)
+         WHERE id = ? AND status = 'active'`
+      ).run(summary ?? null, id)
+      const { status } = db.prepare('SELECT status FROM session_handoffs WHERE id = ?').get(id) as { status: string }
+      return c.json({
+        success: true,
+        session: { id, status, duration: durationMs ? Math.round(durationMs / 1000) : null },
+      })
+    }
 
     // Get session details before closing (for recipe capture)
     const session = db.prepare('SELECT from_agent, project_id, project FROM session_handoffs WHERE id = ?')

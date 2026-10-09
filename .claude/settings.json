@@ -48,7 +48,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-end-check.sh\""
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-end-check.sh\"",
+            "timeout": 15
           }
         ]
       }

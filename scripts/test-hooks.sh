@@ -157,10 +157,144 @@ teardown
 
 echo "track-quality.sh — session id comes from tool_response"
 setup
-POST='{"tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{},"tool_response":{"content":[{"type":"text","text":"{\"session_id\":\"sess-42\",\"projectId\":\"proj-1\"}"}]}}'
+POST='{"tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{},"tool_response":{"content":[{"type":"text","text":"{\"session_id\":\"sess_42\",\"projectId\":\"proj-1\"}"}]}}'
 printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
-check "session id captured"                0 "$([ "$(cat "$STATE/session-id" 2>/dev/null)" = "sess-42" ] && echo 0 || echo 1)"
+check "session id captured"                0 "$([ "$(cat "$STATE/session-id" 2>/dev/null)" = "sess_42" ] && echo 0 || echo 1)"
 teardown
+
+echo "track-quality.sh — the hub's session id, not the IDE's"
+# A real PostToolUse payload opens with Claude Code's own "session_id" — the conversation
+# uuid — and the tracker took that one, so the exit hook asked the hub to close a session
+# it had never heard of. The hub's id only appears inside tool_response.
+setup; printf 'tool=session-end-check at=old\n' > "$STATE/session-ended"
+POST='{"session_id":"2d30fc59-4abd-480a-8ebc-9ae418357563","transcript_path":"/t.jsonl","hook_event_name":"PostToolUse","tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{"repo":"r"},"tool_response":[{"type":"text","text":"{\"session_id\":\"sess_1791036137558_s8k8w\",\"projectId\":\"proj-1\"}"}]}'
+printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "hub id wins over the conversation id" 0 "$([ "$(cat "$STATE/session-id" 2>/dev/null)" = "sess_1791036137558_s8k8w" ] && echo 0 || echo 1)"
+# A marker from an earlier session made the exit hook skip this one.
+check "a new session clears session-ended"  0 "$([ ! -f "$STATE/session-ended" ] && echo 0 || echo 1)"
+POST='{"session_id":"2d30fc59-4abd-480a-8ebc-9ae418357563","tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{},"tool_response":[{"type":"text","text":"hub unreachable"}]}'
+printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "no hub id, the old one stays"        0 "$([ "$(cat "$STATE/session-id" 2>/dev/null)" = "sess_1791036137558_s8k8w" ] && echo 0 || echo 1)"
+teardown
+
+# ── session-end-check.sh against a stand-in hub ──
+# v6 posted to localhost:4000, which nothing listens on outside the hub machine, and wrote
+# session-ended anyway. These run the hook against a local stub that records what it got.
+# $1 = ok | error | 500. Sets STUB_URL and STUB_LOG; stop_stub kills it.
+start_stub() {
+  STUB_LOG=$(mktemp); local portfile; portfile=$(mktemp)
+  python3 - "$1" "$STUB_LOG" "$portfile" <<'PY' >/dev/null 2>&1 &
+import http.server, json, sys
+mode, log, portfile = sys.argv[1:4]
+class Hub(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
+        with open(log, 'a') as f:
+            f.write(json.dumps({'path': self.path, 'auth': self.headers.get('Authorization'),
+                                'accept': self.headers.get('Accept'), 'body': json.loads(body or b'null')}) + '\n')
+        result = {'content': [{'type': 'text', 'text': '{}'}]}
+        if mode == 'error':
+            result['isError'] = True
+        out = json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': result}).encode()
+        self.send_response(500 if mode == '500' else 200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+    def log_message(self, *args):
+        pass
+srv = http.server.HTTPServer(('127.0.0.1', 0), Hub)
+open(portfile, 'w').write(str(srv.server_address[1]))
+srv.serve_forever()
+PY
+  STUB_PID=$!
+  for _ in $(seq 50); do [ -s "$portfile" ] && break; sleep 0.1; done
+  STUB_URL="http://127.0.0.1:$(cat "$portfile")"; rm -f "$portfile"
+}
+stop_stub() { kill "$STUB_PID" 2>/dev/null; wait "$STUB_PID" 2>/dev/null; rm -f "$STUB_LOG"; }
+# What the stub received, as one field of its first request.
+got() { python3 -c 'import json,sys
+reqs=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+v=eval(sys.argv[2], {}, {"r": reqs[0]}) if reqs else "<no request>"
+print(v)' "$STUB_LOG" "$1" 2>/dev/null; }
+requests() { wc -l < "$STUB_LOG" | tr -d ' '; }
+# A session that ran /cs and nothing else, on a machine whose only MCP config is $1 (a path
+# under the fake HOME) holding $2. Nothing from the real environment may leak in.
+armed() {
+  setup; mkdir -p "$SANDBOX/home"
+  printf 'tool=cortex_session_start at=now\n' > "$STATE/session-started"
+  printf 'sess_42\n' > "$STATE/session-id"
+  if [ -n "${1:-}" ]; then mkdir -p "$(dirname "$SANDBOX/home/$1")"; printf '%s' "$2" > "$SANDBOX/home/$1"; fi
+}
+end_hook() {  # $1 = hooks dir; extra env as further args
+  local dir=$1; shift
+  printf '{"session_id":"2d30fc59","hook_event_name":"SessionEnd","reason":"exit"}' \
+    | env -u CORTEX_HUB_API_URL -u HUB_API_KEY -u HUB_MCP_URL -u CORTEX_MCP_URL \
+        HOME="$SANDBOX/home" CLAUDE_PROJECT_DIR="$SANDBOX" CORTEX_PROJECT_DIR="$SANDBOX" "$@" \
+        bash "$dir/session-end-check.sh" 2>&1
+}
+ended() { [ -f "$STATE/session-ended" ] && echo 0 || echo 1; }
+
+echo "session-end-check.sh — closes through the hub's MCP endpoint"
+start_stub ok
+armed .claude.json "{\"mcpServers\":{\"cortex-hub\":{\"type\":\"http\",\"url\":\"$STUB_URL/mcp\",\"headers\":{\"Authorization\":\"Bearer test-key\"}}}}"
+OUT=$(end_hook "$HOOKS_DIR")
+check "posts to the configured MCP url"     /mcp "$(got 'r["path"]')"
+check "as a tools/call"                     tools/call "$(got 'r["body"]["method"]')"
+check "of cortex_session_end"               cortex_session_end "$(got 'r["body"]["params"]["name"]')"
+check "for the recorded session"            sess_42 "$(got 'r["body"]["params"]["arguments"]["sessionId"]')"
+check "marked automatic"                    True "$(got 'r["body"]["params"]["arguments"]["auto"]')"
+check "with the configured key"             "Bearer test-key" "$(got 'r["auth"]')"
+check "accepting both MCP reply types"      "application/json, text/event-stream" "$(got 'r["accept"]')"
+check "records the close"                   0 "$(ended)"
+check "and never prints the key"            0 "$(printf '%s' "$OUT" | grep -q test-key && echo 1 || echo 0)"
+OUT=$(end_hook "$HOOKS_DIR")
+check "closes once"                         1 "$(requests)"
+teardown; stop_stub
+
+echo "session-end-check.sh — finds the key wherever the installer put it"
+# The mcp-remote bridge: the url is an argument and the header comes from an env var.
+start_stub ok
+armed .claude.json "{\"projects\":{\"__DIR__\":{\"mcpServers\":{\"cortex-hub\":{\"command\":\"npx\",\"args\":[\"-y\",\"mcp-remote\",\"$STUB_URL/mcp\",\"--header\",\"Authorization:\${AUTH_HEADER}\"],\"env\":{\"AUTH_HEADER\":\"Bearer bridge-key\"}}}}}}"
+sed -i.bak "s|__DIR__|$SANDBOX|" "$SANDBOX/home/.claude.json"
+end_hook "$HOOKS_DIR" >/dev/null
+check "mcp-remote args in projects[dir]"   "Bearer bridge-key" "$(got 'r["auth"]')"
+check "records the close"                   0 "$(ended)"
+teardown; stop_stub
+
+start_stub ok; armed
+end_hook "$HOOKS_DIR" HUB_MCP_URL="$STUB_URL/mcp" HUB_API_KEY=env-key >/dev/null
+check "HUB_MCP_URL + HUB_API_KEY"          "Bearer env-key" "$(got 'r["auth"]')"
+teardown; stop_stub
+
+echo "session-end-check.sh — only a confirmed close counts"
+armed
+OUT=$(end_hook "$HOOKS_DIR")
+check "no MCP config: not recorded"         1 "$(ended)"
+check "and says why"                        0 "$(printf '%s' "$OUT" | grep -q 'not closed' && echo 0 || echo 1)"
+check "and exits 0"                         0 "$(end_hook "$HOOKS_DIR" >/dev/null; echo $?)"
+teardown
+for mode in 500 error; do
+  start_stub "$mode"
+  armed .claude.json "{\"mcpServers\":{\"cortex-hub\":{\"url\":\"$STUB_URL/mcp\",\"headers\":{\"Authorization\":\"Bearer test-key\"}}}}"
+  end_hook "$HOOKS_DIR" >/dev/null
+  check "hub answers $mode: not recorded"    1 "$(ended)"
+  teardown; stop_stub
+done
+start_stub ok
+armed .claude.json "{\"mcpServers\":{\"cortex-hub\":{\"url\":\"$STUB_URL/mcp\",\"headers\":{\"Authorization\":\"Bearer test-key\"}}}}"
+printf 'tool=cortex_session_end at=now\n' > "$STATE/session-ended"
+end_hook "$HOOKS_DIR" >/dev/null
+check "after /ce: nothing sent"             0 "$(requests)"
+teardown; stop_stub
+
+echo "session-end-check.sh — CORTEX_HUB_API_URL keeps the direct route"
+start_stub ok; armed
+end_hook "$HOOKS_DIR" CORTEX_HUB_API_URL="$STUB_URL/" >/dev/null
+check "posts to /api/sessions/:id/end"      /api/sessions/sess_42/end "$(got 'r["path"]')"
+check "marked automatic"                    True "$(got 'r["body"]["auto"]')"
+check "records the close"                   0 "$(ended)"
+teardown; stop_stub
 
 echo "track-quality.sh — quality gates need the commands, not a report"
 setup
@@ -291,6 +425,24 @@ printf '{"tool_name":"replace","tool_input":{},"tool_response":{}}' \
   | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
 check "replace revokes the certificate"    0 "$([ ! -f "$STATE/quality-gates-passed" ] && echo 0 || echo 1)"
 check "commit denied after the edit"       deny "$(gdecision enforce-commit.sh "$(gpayload run_shell_command 'git commit -m x')")"
+teardown
+
+echo "gemini session-end-check.sh — closes through the hub's MCP endpoint"
+setup
+POST='{"session_id":"g-uuid","tool_name":"mcp_cortex-hub_cortex_session_start","tool_input":{},"tool_response":{"llmContent":"{\"session_id\":\"sess_77\"}"}}'
+printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
+check "tracker takes the hub id"            sess_77 "$(cat "$STATE/session-id" 2>/dev/null)"
+teardown
+start_stub ok
+armed .gemini/antigravity/mcp_config.json "{\"mcpServers\":{\"cortex-hub\":{\"serverUrl\":\"$STUB_URL/mcp\",\"headers\":{\"Authorization\":\"Bearer gem-key\"}}}}"
+OUT=$(end_hook "$GHOOKS")
+check "antigravity serverUrl config"        "Bearer gem-key" "$(got 'r["auth"]')"
+check "marked automatic"                    True "$(got 'r["body"]["params"]["arguments"]["auto"]')"
+check "records the close"                   0 "$(ended)"
+check "speaks gemini's protocol"            0 "$(printf '%s' "$OUT" | python3 -c 'import json,sys;json.load(sys.stdin)["systemMessage"]' 2>/dev/null && echo 0 || echo 1)"
+teardown; stop_stub
+armed
+check "no config: not recorded"             1 "$(end_hook "$GHOOKS" >/dev/null; ended)"
 teardown
 
 echo "gemini session-init.sh — compaction must not re-arm the gate"

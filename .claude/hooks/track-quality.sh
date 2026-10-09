@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Quality Tracker (v4.0) — records what actually happened, as evidence.
+# Cortex Quality Tracker (v4.1) — records what actually happened, as evidence.
 #
 # Two things changed from v3, both of them bugs found by reading a real hook payload:
 #   1. The field is `tool_response`, not `tool_output`. v3 read `tool_output`, so the
@@ -86,9 +86,15 @@ case "$TOOL_NAME" in
     record session-started
     # The id arrives inside an MCP text block, so the JSON is escaped one level deep —
     # dropping the backslashes first is what makes one pattern work for both shapes.
+    # Only a hub id: every hook payload opens with the IDE's own "session_id" (a conversation
+    # uuid), and `head -1` used to take that one, so the exit hook tried to close a session
+    # the hub had never heard of. The hub mints nothing but sess_… ids.
     SESSION_ID=$(printf '%s' "$INPUT" | tr -d '\\' \
-      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"sess_[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "$SESSION_ID" ] && printf '%s\n' "$SESSION_ID" > "$STATE_DIR/session-id"
+    # A new hub session is open, so an earlier one's "ended" no longer applies — left in
+    # place it made the exit hook skip this session too.
+    rm -f "$STATE_DIR/session-ended"
     ;;
   *cortex_session_end*)    record session-ended ;;
   *cortex_quality_report*) record quality-reported ;;

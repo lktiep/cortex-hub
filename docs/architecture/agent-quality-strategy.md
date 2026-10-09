@@ -65,7 +65,7 @@ bash scripts/onboard.sh --tool claude
 #     SessionStart  → session-init.sh (inject reminder)
 #     PreToolUse    → enforce-commit.sh (block commit without gates)
 #     PostToolUse   → track-quality.sh (track gate passes)
-#     Stop          → session-end-check.sh (session_end reminder)
+#     SessionEnd    → session-end-check.sh (closes the session on exit)
 ```
 
 ### Claude Code Hooks (`.claude/settings.json`)
@@ -74,7 +74,7 @@ bash scripts/onboard.sh --tool claude
 SessionStart  →  session-init.sh      Inject mandatory session_start reminder
 PreToolUse    →  enforce-commit.sh     Block git commit without quality gates
 PostToolUse   →  track-quality.sh      Track build/typecheck/lint pass + MCP calls
-Stop          →  session-end-check.sh  Warn if session_end not called
+SessionEnd    →  session-end-check.sh  Close the session as abandoned if session_end never ran
 ```
 
 **Flow:**
@@ -96,7 +96,8 @@ Session Start
 │
 ├─ [AGENT] calls cortex_session_end
 │
-└─ [HOOK] session-end-check.sh → warns if session_end missing
+└─ [HOOK] session-end-check.sh → on exit, closes it as `abandoned` through the hub's
+                                   MCP endpoint if session_end never ran
 ```
 
 ---

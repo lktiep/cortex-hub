@@ -794,7 +794,7 @@ HOOKEOF
   # ── track-quality.sh ──
   cat > .claude/hooks/track-quality.sh << 'HOOKEOF'
 #!/bin/bash
-# Cortex Quality Tracker (v4.0) — records what actually happened, as evidence.
+# Cortex Quality Tracker (v4.1) — records what actually happened, as evidence.
 #
 # Two things changed from v3, both of them bugs found by reading a real hook payload:
 #   1. The field is `tool_response`, not `tool_output`. v3 read `tool_output`, so the
@@ -881,9 +881,15 @@ case "$TOOL_NAME" in
     record session-started
     # The id arrives inside an MCP text block, so the JSON is escaped one level deep —
     # dropping the backslashes first is what makes one pattern work for both shapes.
+    # Only a hub id: every hook payload opens with the IDE's own "session_id" (a conversation
+    # uuid), and `head -1` used to take that one, so the exit hook tried to close a session
+    # the hub had never heard of. The hub mints nothing but sess_… ids.
     SESSION_ID=$(printf '%s' "$INPUT" | tr -d '\\' \
-      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"sess_[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "$SESSION_ID" ] && printf '%s\n' "$SESSION_ID" > "$STATE_DIR/session-id"
+    # A new hub session is open, so an earlier one's "ended" no longer applies — left in
+    # place it made the exit hook skip this session too.
+    rm -f "$STATE_DIR/session-ended"
     ;;
   *cortex_session_end*)    record session-ended ;;
   *cortex_quality_report*) record quality-reported ;;
@@ -934,27 +940,35 @@ HOOKEOF
   # ── session-end-check.sh ──
   cat > .claude/hooks/session-end-check.sh << 'HOOKEOF'
 #!/bin/bash
-# Cortex Session End Check (v6) — closes the cortex session when the session really ends.
+# Cortex Session End Check (v7) — closes the cortex session when the session really ends.
 #
-# v5 was wired to the Stop event, which fires every time the agent finishes a turn. Had the
-# session id ever been captured (it was not — v3 of the tracker read the wrong JSON field),
-# this would have closed the session after the first answer and left the rest of the
-# conversation running outside it. It belongs on SessionEnd.
+# v6 posted to ${CORTEX_HUB_API_URL:-http://localhost:4000}. Nothing sets that variable, so on
+# every machine but the hub itself the close went to a port nobody listens on; curl's failure
+# was swallowed and `session-ended` was written anyway. Sessions were never closed, and the
+# hook said they were. v7 goes where the agent's own cortex calls go — the hub's MCP endpoint,
+# with the key from the IDE's MCP config — and only records a close the hub confirmed.
+#
+# The close is sent with auto:true: the hub records it as 'abandoned', keeps it out of memory
+# and /cs recall, and leaves a session that /ce already completed alone.
+#
+# Claude Code gives a SessionEnd hook 1.5s unless it declares a timeout; settings.json gives
+# this one 15s, and the requests below stop well inside that.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 
 [ -f "$STATE_DIR/session-started" ] || exit 0
 [ -f "$STATE_DIR/session-ended" ] && exit 0
 
+say() { echo "$1"; }
+
 SESSION_ID=""
 [ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
 
 if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
-  echo "WARNING: cortex session not closed — no session id was recorded. Run /ce next time."
+  say "WARNING: cortex session not closed — no session id was recorded. Run /ce next time."
   exit 0
 fi
 
-API_URL="${CORTEX_HUB_API_URL:-http://localhost:4000}"
 ACTIONS=""
 [ -s "$STATE_DIR/knowledge-recalled" ]   && ACTIONS="${ACTIONS} knowledge-searched"
 [ -s "$STATE_DIR/memory-recalled" ]      && ACTIONS="${ACTIONS} memory-searched"
@@ -963,18 +977,146 @@ ACTIONS=""
 [ -s "$STATE_DIR/quality-gates-passed" ] && ACTIONS="${ACTIONS} quality-passed"
 [ -s "$STATE_DIR/quality-reported" ]     && ACTIONS="${ACTIONS} quality-reported"
 [ -s "$STATE_DIR/tasks-checked" ]        && ACTIONS="${ACTIONS} tasks-checked"
-[ -s "$STATE_DIR/gate-off" ]             && ACTIONS="${ACTIONS} gate-off($(head -c 80 "$STATE_DIR/gate-off" | tr -d '"\n'))"
+[ -s "$STATE_DIR/gate-off" ]             && ACTIONS="${ACTIONS} gate-off($(head -c 80 "$STATE_DIR/gate-off" | tr -d '"\\\n'))"
 
 SUMMARY="Session auto-closed (no /ce)."
 [ -n "$ACTIONS" ] && SUMMARY="Session auto-closed. Activity:${ACTIONS}."
 
-curl -X POST "${API_URL}/api/sessions/${SESSION_ID}/end" \
-  -H 'Content-Type: application/json' \
-  -d "{\"summary\":\"${SUMMARY}\"}" \
-  --connect-timeout 5 -s -o /dev/null || true
+if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+  say "WARNING: cortex session $SESSION_ID not closed — needs python3 and curl. Run /ce next time."
+  exit 0
+fi
 
-touch "$STATE_DIR/session-ended"
-echo "INFO: cortex session $SESSION_ID auto-closed.${ACTIONS:+ Activity:${ACTIONS}}"
+# The hub's MCP endpoint and Authorization header, one per line, from the environment or the
+# cortex-hub entry of whichever MCP config this machine has. Both shapes the installer writes
+# are read: {url, headers} and the mcp-remote bridge {args: [url, --header, ...], env}.
+hub_endpoint() {
+  python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import json, os, re, sys
+project, home = sys.argv[1], os.path.expanduser('~')
+
+def emit(url, auth):
+    if url and auth:
+        print(url)
+        print(auth if auth.lower().startswith('bearer ') else 'Bearer ' + auth)
+        sys.exit(0)
+
+emit(os.environ.get('CORTEX_MCP_URL') or os.environ.get('HUB_MCP_URL'), os.environ.get('HUB_API_KEY'))
+
+def load(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def servers(doc):
+    out = {}
+    for key in ('mcpServers', 'servers'):
+        if isinstance(doc.get(key), dict):
+            out.update(doc[key])
+    return out
+
+def entry(found):
+    if 'cortex-hub' in found:
+        return found['cortex-hub']
+    return next((v for k, v in found.items() if 'cortex' in k.lower()), None)
+
+def expand(value, env):
+    return re.sub(r'\$\{(\w+)\}', lambda m: env.get(m.group(1)) or os.environ.get(m.group(1), ''), value)
+
+def resolve(e):
+    if not isinstance(e, dict):
+        return
+    env = e.get('env') if isinstance(e.get('env'), dict) else {}
+    headers = e.get('headers') if isinstance(e.get('headers'), dict) else {}
+    args = [a for a in e.get('args') or [] if isinstance(a, str)]
+    url = e.get('url') or e.get('httpUrl') or e.get('serverUrl') or next((a for a in args if a.startswith('http')), None)
+    auth = headers.get('Authorization') or headers.get('authorization')
+    for i, a in enumerate(args[:-1]):
+        if a == '--header' and args[i + 1].lower().startswith('authorization:'):
+            auth = auth or args[i + 1].split(':', 1)[1]
+    emit(url, expand(auth or '', env).strip())
+
+claude = load(os.path.join(home, '.claude.json'))
+for found in (
+    servers(load(os.path.join(project, '.mcp.json'))),
+    servers((claude.get('projects') or {}).get(project) or {}),
+    servers(claude),
+    servers(load(os.path.join(project, '.gemini', 'settings.json'))),
+    servers(load(os.path.join(home, '.gemini', 'settings.json'))),
+    servers(load(os.path.join(home, '.gemini', 'antigravity', 'mcp_config.json'))),
+    servers(load(os.path.join(home, '.cursor', 'mcp.json'))),
+    servers(load(os.path.join(home, '.codeium', 'windsurf', 'mcp_config.json'))),
+    servers(load(os.path.join(project, '.vscode', 'mcp.json'))),
+):
+    resolve(entry(found))
+PY
+}
+
+# A JSON body for the close. $1 = "mcp" for a tools/call, anything else for the REST route.
+close_body() {
+  python3 - "$1" "$SESSION_ID" "$SUMMARY" <<'PY'
+import json, sys
+kind, sid, summary = sys.argv[1:4]
+args = {'sessionId': sid, 'summary': summary, 'auto': True}
+if kind == 'mcp':
+    print(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                      'params': {'name': 'cortex_session_end', 'arguments': args}}))
+else:
+    print(json.dumps({'summary': summary, 'auto': True}))
+PY
+}
+
+# Did the tools/call succeed? The reply is JSON, or the same JSON as SSE `data:` lines.
+mcp_ok() {
+  python3 -c '
+import json, sys
+raw = sys.stdin.read()
+lines = [l[5:].strip() for l in raw.splitlines() if l.startswith("data:")] or [raw]
+for line in lines:
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    if isinstance(msg, dict) and isinstance(msg.get("result"), dict) and not msg["result"].get("isError"):
+        sys.exit(0)
+sys.exit(1)'
+}
+
+CLOSED=1
+WHY=""
+if [ -n "${CORTEX_HUB_API_URL:-}" ]; then
+  # An explicit API URL (a self-hosted hub on this machine) keeps the direct route.
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 4 -m 10 \
+    -X POST "${CORTEX_HUB_API_URL%/}/api/sessions/${SESSION_ID}/end" \
+    -H 'Content-Type: application/json' -d "$(close_body rest)" 2>/dev/null)
+  case "$CODE" in 2??) CLOSED=0 ;; *) WHY="${CORTEX_HUB_API_URL} answered ${CODE:-nothing}" ;; esac
+else
+  ENDPOINT=$(hub_endpoint)
+  MCP_URL=$(printf '%s\n' "$ENDPOINT" | sed -n 1p)
+  MCP_AUTH=$(printf '%s\n' "$ENDPOINT" | sed -n 2p)
+  if [ -z "$MCP_URL" ] || [ -z "$MCP_AUTH" ]; then
+    WHY="no cortex-hub MCP server with an Authorization header in this machine's MCP config"
+  else
+    # The key goes in on stdin, never on the command line, where `ps` would show it.
+    if printf 'Authorization: %s\n' "$MCP_AUTH" \
+        | curl -sf --connect-timeout 4 -m 10 -X POST "$MCP_URL" -H @- \
+            -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+            -d "$(close_body mcp)" 2>/dev/null | mcp_ok; then
+      CLOSED=0
+    else
+      WHY="the hub at ${MCP_URL%%\?*} did not confirm it"
+    fi
+  fi
+fi
+
+if [ "$CLOSED" = "0" ]; then
+  printf 'tool=session-end-check at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/session-ended"
+  say "INFO: cortex session $SESSION_ID closed as abandoned.${ACTIONS:+ Activity:${ACTIONS}}"
+else
+  say "WARNING: cortex session $SESSION_ID not closed — ${WHY}. Run /ce next time."
+fi
 exit 0
 HOOKEOF
 
@@ -1037,7 +1179,8 @@ HOOKEOF
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-end-check.sh\""
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-end-check.sh\"",
+            "timeout": 15
           }
         ]
       }
@@ -1434,7 +1577,7 @@ GHOOKEOF
 
     cat > .gemini/hooks/track-quality.sh << 'GHOOKEOF'
 #!/bin/bash
-# Cortex Quality Tracker (v4.0) — Gemini variant.
+# Cortex Quality Tracker (v4.1) — Gemini variant.
 #
 # Two bugs from v3: cortex_quality_report touched quality-gates-passed, so reporting a failure
 # counted as passing; and every marker was an empty `touch`, which the enforcement hook could not
@@ -1484,9 +1627,15 @@ fi
 case "$TOOL_NAME" in
   *cortex_session_start*)
     record session-started
+    # Only a hub id: every hook payload opens with the IDE's own "session_id" (a conversation
+    # uuid), and `head -1` used to take that one, so the exit hook tried to close a session
+    # the hub had never heard of. The hub mints nothing but sess_… ids.
     SESSION_ID=$(printf '%s' "$INPUT" | tr -d '\\' \
-      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+      | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"sess_[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "$SESSION_ID" ] && printf '%s\n' "$SESSION_ID" > "$STATE_DIR/session-id"
+    # A new hub session is open, so an earlier one's "ended" no longer applies — left in
+    # place it made the exit hook skip this session too.
+    rm -f "$STATE_DIR/session-ended"
     ;;
   *cortex_session_end*)    record session-ended ;;
   *cortex_quality_report*) record quality-reported ;;
@@ -1536,10 +1685,17 @@ GHOOKEOF
 
     cat > .gemini/hooks/session-end-check.sh << 'GHOOKEOF'
 #!/bin/bash
-# Cortex Session End Check (v6) — Gemini variant.
+# Cortex Session End Check (v7) — Gemini variant.
 #
-# v3 only printed a warning, which nothing reads once the session is over, so every gemini
-# session stayed open forever on the hub. This closes it.
+# v6 posted to ${CORTEX_HUB_API_URL:-http://localhost:4000}. Nothing sets that variable, so on
+# every machine but the hub itself the close went to a port nobody listens on; curl's failure
+# was swallowed and `session-ended` was written anyway. Sessions were never closed, and the
+# hook said they were. v7 goes where the agent's own cortex calls go — the hub's MCP endpoint,
+# with the key from the IDE's MCP config — and only records a close the hub confirmed.
+#
+# The close is sent with auto:true: the hub records it as 'abandoned', keeps it out of memory
+# and /cs recall, and leaves a session that /ce already completed alone.
+#
 # An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
 # inside a worktree, and at whatever repo the tests happen to run from.
 PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
@@ -1548,14 +1704,17 @@ STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 [ -f "$STATE_DIR/session-started" ] || exit 0
 [ -f "$STATE_DIR/session-ended" ] && exit 0
 
+# Gemini shows a hook's systemMessage; plain stdout is not read.
+say() { printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
+
 SESSION_ID=""
 [ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
+
 if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
-  echo '{"systemMessage":"WARNING: cortex session not closed — no session id was recorded. Call cortex_session_end."}'
+  say "WARNING: cortex session not closed — no session id was recorded. Call cortex_session_end next time."
   exit 0
 fi
 
-API_URL="${CORTEX_HUB_API_URL:-http://localhost:4000}"
 ACTIONS=""
 [ -s "$STATE_DIR/knowledge-recalled" ]   && ACTIONS="${ACTIONS} knowledge-searched"
 [ -s "$STATE_DIR/memory-recalled" ]      && ACTIONS="${ACTIONS} memory-searched"
@@ -1564,14 +1723,147 @@ ACTIONS=""
 [ -s "$STATE_DIR/quality-gates-passed" ] && ACTIONS="${ACTIONS} quality-passed"
 [ -s "$STATE_DIR/quality-reported" ]     && ACTIONS="${ACTIONS} quality-reported"
 [ -s "$STATE_DIR/tasks-checked" ]        && ACTIONS="${ACTIONS} tasks-checked"
+[ -s "$STATE_DIR/gate-off" ]             && ACTIONS="${ACTIONS} gate-off($(head -c 80 "$STATE_DIR/gate-off" | tr -d '"\\\n'))"
 
 SUMMARY="Session auto-closed (gemini, no cortex_session_end)."
 [ -n "$ACTIONS" ] && SUMMARY="Session auto-closed (gemini). Activity:${ACTIONS}."
-curl -X POST "${API_URL}/api/sessions/${SESSION_ID}/end" \
-  -H 'Content-Type: application/json' -d "{\"summary\":\"${SUMMARY}\"}" \
-  --connect-timeout 5 -s -o /dev/null || true
-touch "$STATE_DIR/session-ended"
-echo '{"systemMessage":"INFO: cortex session closed."}'
+
+if ! command -v python3 >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+  say "WARNING: cortex session $SESSION_ID not closed — needs python3 and curl. Call cortex_session_end next time."
+  exit 0
+fi
+
+# The hub's MCP endpoint and Authorization header, one per line, from the environment or the
+# cortex-hub entry of whichever MCP config this machine has. Both shapes the installer writes
+# are read: {url, headers} and the mcp-remote bridge {args: [url, --header, ...], env}.
+hub_endpoint() {
+  python3 - "$PROJECT_DIR" <<'PY' 2>/dev/null
+import json, os, re, sys
+project, home = sys.argv[1], os.path.expanduser('~')
+
+def emit(url, auth):
+    if url and auth:
+        print(url)
+        print(auth if auth.lower().startswith('bearer ') else 'Bearer ' + auth)
+        sys.exit(0)
+
+emit(os.environ.get('CORTEX_MCP_URL') or os.environ.get('HUB_MCP_URL'), os.environ.get('HUB_API_KEY'))
+
+def load(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def servers(doc):
+    out = {}
+    for key in ('mcpServers', 'servers'):
+        if isinstance(doc.get(key), dict):
+            out.update(doc[key])
+    return out
+
+def entry(found):
+    if 'cortex-hub' in found:
+        return found['cortex-hub']
+    return next((v for k, v in found.items() if 'cortex' in k.lower()), None)
+
+def expand(value, env):
+    return re.sub(r'\$\{(\w+)\}', lambda m: env.get(m.group(1)) or os.environ.get(m.group(1), ''), value)
+
+def resolve(e):
+    if not isinstance(e, dict):
+        return
+    env = e.get('env') if isinstance(e.get('env'), dict) else {}
+    headers = e.get('headers') if isinstance(e.get('headers'), dict) else {}
+    args = [a for a in e.get('args') or [] if isinstance(a, str)]
+    url = e.get('url') or e.get('httpUrl') or e.get('serverUrl') or next((a for a in args if a.startswith('http')), None)
+    auth = headers.get('Authorization') or headers.get('authorization')
+    for i, a in enumerate(args[:-1]):
+        if a == '--header' and args[i + 1].lower().startswith('authorization:'):
+            auth = auth or args[i + 1].split(':', 1)[1]
+    emit(url, expand(auth or '', env).strip())
+
+claude = load(os.path.join(home, '.claude.json'))
+for found in (
+    servers(load(os.path.join(project, '.mcp.json'))),
+    servers((claude.get('projects') or {}).get(project) or {}),
+    servers(claude),
+    servers(load(os.path.join(project, '.gemini', 'settings.json'))),
+    servers(load(os.path.join(home, '.gemini', 'settings.json'))),
+    servers(load(os.path.join(home, '.gemini', 'antigravity', 'mcp_config.json'))),
+    servers(load(os.path.join(home, '.cursor', 'mcp.json'))),
+    servers(load(os.path.join(home, '.codeium', 'windsurf', 'mcp_config.json'))),
+    servers(load(os.path.join(project, '.vscode', 'mcp.json'))),
+):
+    resolve(entry(found))
+PY
+}
+
+# A JSON body for the close. $1 = "mcp" for a tools/call, anything else for the REST route.
+close_body() {
+  python3 - "$1" "$SESSION_ID" "$SUMMARY" <<'PY'
+import json, sys
+kind, sid, summary = sys.argv[1:4]
+args = {'sessionId': sid, 'summary': summary, 'auto': True}
+if kind == 'mcp':
+    print(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                      'params': {'name': 'cortex_session_end', 'arguments': args}}))
+else:
+    print(json.dumps({'summary': summary, 'auto': True}))
+PY
+}
+
+# Did the tools/call succeed? The reply is JSON, or the same JSON as SSE `data:` lines.
+mcp_ok() {
+  python3 -c '
+import json, sys
+raw = sys.stdin.read()
+lines = [l[5:].strip() for l in raw.splitlines() if l.startswith("data:")] or [raw]
+for line in lines:
+    try:
+        msg = json.loads(line)
+    except Exception:
+        continue
+    if isinstance(msg, dict) and isinstance(msg.get("result"), dict) and not msg["result"].get("isError"):
+        sys.exit(0)
+sys.exit(1)'
+}
+
+CLOSED=1
+WHY=""
+if [ -n "${CORTEX_HUB_API_URL:-}" ]; then
+  # An explicit API URL (a self-hosted hub on this machine) keeps the direct route.
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 4 -m 10 \
+    -X POST "${CORTEX_HUB_API_URL%/}/api/sessions/${SESSION_ID}/end" \
+    -H 'Content-Type: application/json' -d "$(close_body rest)" 2>/dev/null)
+  case "$CODE" in 2??) CLOSED=0 ;; *) WHY="${CORTEX_HUB_API_URL} answered ${CODE:-nothing}" ;; esac
+else
+  ENDPOINT=$(hub_endpoint)
+  MCP_URL=$(printf '%s\n' "$ENDPOINT" | sed -n 1p)
+  MCP_AUTH=$(printf '%s\n' "$ENDPOINT" | sed -n 2p)
+  if [ -z "$MCP_URL" ] || [ -z "$MCP_AUTH" ]; then
+    WHY="no cortex-hub MCP server with an Authorization header in this machine's MCP config"
+  else
+    # The key goes in on stdin, never on the command line, where `ps` would show it.
+    if printf 'Authorization: %s\n' "$MCP_AUTH" \
+        | curl -sf --connect-timeout 4 -m 10 -X POST "$MCP_URL" -H @- \
+            -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+            -d "$(close_body mcp)" 2>/dev/null | mcp_ok; then
+      CLOSED=0
+    else
+      WHY="the hub at ${MCP_URL%%\?*} did not confirm it"
+    fi
+  fi
+fi
+
+if [ "$CLOSED" = "0" ]; then
+  printf 'tool=session-end-check at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/session-ended"
+  say "INFO: cortex session $SESSION_ID closed as abandoned.${ACTIONS:+ Activity:${ACTIONS}}"
+else
+  say "WARNING: cortex session $SESSION_ID not closed — ${WHY}. Call cortex_session_end next time."
+fi
+exit 0
 GHOOKEOF
 
     chmod +x .gemini/hooks/*.sh
