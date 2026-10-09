@@ -1,6 +1,7 @@
 import { execFile } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
-import { rm } from 'fs/promises'
+import { mkdtemp, rm } from 'fs/promises'
+import { tmpdir } from 'os'
 import { join } from 'path'
 import { promisify } from 'util'
 import { VectorStore } from '@cortex/shared-mem9'
@@ -14,8 +15,9 @@ import { buildAuthUrl, runWhenQueueIdle } from './indexer.js'
 // ids include the branch, so thirty feature branches of one repository came to
 // ~350K points and pinned Qdrant at its memory limit. Nothing ever removed a
 // branch, merged and deleted or not. The sweep below drops the vectors and the
-// job history of a branch that is gone from the remote, or that nothing has
-// asked to index for BRANCH_RETENTION_DAYS. Indexing it again brings it back.
+// job history of a branch that is gone from the remote, whose work is already in
+// the default branch, or that nothing has asked to index for
+// BRANCH_RETENTION_DAYS. Indexing it again brings it back.
 
 const logger = createLogger('branch-retention')
 const execFileAsync = promisify(execFile)
@@ -44,18 +46,20 @@ export interface IndexedBranch {
   lastIndexedAt: string
 }
 
-export type PruneReason = 'deleted' | 'stale'
+export type PruneReason = 'deleted' | 'merged' | 'stale'
 
 /**
  * Which indexed branches to drop.
  *
  * `remoteHeads` null means the remote could not be listed, or listed something
  * that cannot be this repository — then only age counts, never absence.
+ * `merged` holds the branches whose work is already in the default branch.
  */
 export function branchesToPrune(input: {
   indexed: IndexedBranch[]
   protectedBranches: ReadonlySet<string>
   remoteHeads: ReadonlySet<string> | null
+  merged: ReadonlySet<string>
   now: number
   retentionDays: number
 }): Array<{ branch: string; reason: PruneReason }> {
@@ -66,6 +70,10 @@ export function branchesToPrune(input: {
     if (input.protectedBranches.has(branch)) continue
     if (input.remoteHeads && !input.remoteHeads.has(branch)) {
       pruned.push({ branch, reason: 'deleted' })
+      continue
+    }
+    if (input.merged.has(branch)) {
+      pruned.push({ branch, reason: 'merged' })
       continue
     }
     const last = Date.parse(lastIndexedAt)
@@ -93,6 +101,76 @@ async function listRemoteHeads(authUrl: string): Promise<Set<string> | null> {
     logger.warn(`ls-remote failed: ${redactCredentials(String(err)).slice(0, 200)}`)
     return null
   }
+}
+
+/** Blob of each of `files` in `rev`; a file the commit does not have is absent. */
+async function blobsAt(git: (...args: string[]) => Promise<string>, rev: string, files: ReadonlySet<string>) {
+  const blobs = new Map<string, string>()
+  for (const line of (await git('ls-tree', '-r', rev)).split('\n')) {
+    const [meta, path] = line.split('\t')
+    if (meta && path !== undefined && files.has(path)) blobs.set(path, meta.split(' ')[2] ?? '')
+  }
+  return blobs
+}
+
+const sameBlobs = (a: Map<string, string>, b: Map<string, string>, files: ReadonlySet<string>) =>
+  [...files].every((file) => a.get(file) === b.get(file))
+
+/**
+ * Which of `branches` have nothing the default branch lacks.
+ *
+ * Merged with a merge commit or fast-forwarded, a branch's head is in the
+ * default branch's history. Squashed or rebased, it is not, but at some commit
+ * of the default branch every file the branch changed reads as it does at the
+ * branch's head. A branch still at the default branch's tip has not started
+ * yet and is kept. The project's own checkouts are shallow, so the history
+ * comes from a fetch of its own: commits and trees, no file contents.
+ */
+async function mergedBranches(authUrl: string, defaultBranch: string, branches: string[]): Promise<Set<string>> {
+  const merged = new Set<string>()
+  if (branches.length === 0) return merged
+  let dir: string | undefined
+  try {
+    const cwd = (dir = await mkdtemp(join(tmpdir(), 'cortex-sweep-')))
+    const git = async (...args: string[]) =>
+      (await execFileAsync('git', ['-C', cwd, ...args], { timeout: 120000, encoding: 'utf-8', maxBuffer: 256 * 1024 * 1024 })).stdout
+    await git('init', '--quiet', '--bare')
+    const refspecs = [defaultBranch, ...branches].map((b) => `+refs/heads/${b}:refs/heads/${b}`)
+    await git('fetch', '--quiet', '--no-tags', '--filter=blob:none', authUrl, ...refspecs)
+    const tip = (await git('rev-parse', `refs/heads/${defaultBranch}`)).trim()
+
+    for (const branch of branches) {
+      const head = (await git('rev-parse', `refs/heads/${branch}`)).trim()
+      if (head === tip) continue
+      const base = (await git('merge-base', tip, head)).trim()
+      if (base === head) {
+        merged.add(branch)
+        continue
+      }
+      const files = new Set((await git('diff', '--no-renames', '--name-only', base, head)).split('\n').filter(Boolean))
+      const want = await blobsAt(git, head, files)
+      const current = await blobsAt(git, base, files)
+      // Replay the default branch's changes to those files, one commit at a time.
+      const log = await git('log', '--first-parent', '--reverse', '--diff-merges=first-parent', '--raw', '--no-abbrev', '--no-renames', '--format=', `${base}..${tip}`)
+      for (const line of log.split('\n')) {
+        const [, blob, status, file] = /^:\S+ \S+ \S+ (\S+) (\S)\t(.+)$/.exec(line) ?? []
+        if (!blob || !file || !files.has(file)) continue
+        if (status === 'D') current.delete(file)
+        else current.set(file, blob)
+        if (sameBlobs(current, want, files)) {
+          merged.add(branch)
+          break
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn(`merge check failed: ${redactCredentials(String(err)).slice(0, 200)}`)
+    merged.clear()
+  } finally {
+    // It holds the authenticated URL in FETCH_HEAD.
+    if (dir) await rm(dir, { recursive: true, force: true })
+  }
+  return merged
 }
 
 /** The branch the project's own checkout is on, from .git/HEAD. */
@@ -135,7 +213,8 @@ export interface SweepResult {
 }
 
 /**
- * Drop the project's branches that are gone from the remote or idle too long.
+ * Drop the project's branches that are gone from the remote, merged into the
+ * default branch, or idle too long.
  *
  * The default branch is never touched, nor the branch the project's own
  * checkout is on. A project whose default branch was never resolved is left
@@ -171,14 +250,27 @@ export async function sweepProjectBranches(
 
   // Only ask the remote when there is something it could rule on.
   let remoteHeads: Set<string> | null = null
+  let merged = new Set<string>()
   if (project.git_repo_url && indexed.some(({ branch }) => !protectedBranches.has(branch))) {
-    remoteHeads = await listRemoteHeads(buildAuthUrl(project.git_repo_url, project.git_username, project.git_token))
+    const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
+    const heads = await listRemoteHeads(authUrl)
     // A listing without the default branch is an empty repository, a moved URL
     // or an answer from something else; absence from it proves nothing.
-    if (remoteHeads && !remoteHeads.has(defaultBranch)) remoteHeads = null
+    if (heads?.has(defaultBranch)) {
+      remoteHeads = heads
+      const onRemote = indexed.map(({ branch }) => branch).filter((b) => !protectedBranches.has(b) && heads.has(b))
+      merged = await mergedBranches(authUrl, defaultBranch, onRemote)
+    }
   }
 
-  const candidates = branchesToPrune({ indexed, protectedBranches, remoteHeads, now: opts.now ?? Date.now(), retentionDays: days })
+  const candidates = branchesToPrune({
+    indexed,
+    protectedBranches,
+    remoteHeads,
+    merged,
+    now: opts.now ?? Date.now(),
+    retentionDays: days,
+  })
   if (candidates.length === 0) return result
 
   const store = new VectorStore({ url: QDRANT_URL, collection: `cortex-project-${projectId}` })
@@ -231,6 +323,12 @@ export function sweepProjectBranchesWhenIdle(
   return runWhenQueueIdle(projectId, 'branch-sweep', () => sweepProjectBranches(projectId, opts))
 }
 
+const REASON_TEXT: Record<PruneReason, string> = {
+  deleted: 'gone from the remote',
+  merged: 'merged into the default branch',
+  stale: 'idle',
+}
+
 /** Sweep every project with a repository, one after another. */
 export async function sweepAllBranches(): Promise<SweepResult[]> {
   const projects = db.prepare('SELECT id FROM projects WHERE git_repo_url IS NOT NULL').all() as Array<{ id: string }>
@@ -244,7 +342,7 @@ export async function sweepAllBranches(): Promise<SweepResult[]> {
       }
       results.push(result)
       for (const p of result.pruned) {
-        logger.info(`Branch sweep: ${id} dropped ${p.branch} (${p.reason === 'deleted' ? 'gone from the remote' : 'idle'}), ${p.points} points`)
+        logger.info(`Branch sweep: ${id} dropped ${p.branch} (${REASON_TEXT[p.reason]}), ${p.points} points`)
       }
       for (const f of result.failed) logger.warn(`Branch sweep: ${id} could not drop ${f.branch}: ${f.error}`)
       if (result.checkoutRemoved) logger.info(`Branch sweep: ${id} has no feature branch left, checkout removed`)
@@ -262,7 +360,7 @@ export function scheduleBranchSweep(): void {
     logger.info('Branch sweep off (BRANCH_RETENTION_DAYS=0)')
     return
   }
-  logger.info(`Branch sweep on: branches gone from the remote or idle for ${days} days are dropped`)
+  logger.info(`Branch sweep on: branches gone from the remote, merged, or idle for ${days} days are dropped`)
   const run = () => void sweepAllBranches().catch((err) => logger.warn(`Branch sweep failed: ${String(err).slice(0, 200)}`))
   setTimeout(run, FIRST_SWEEP_DELAY_MS).unref()
   setInterval(run, SWEEP_INTERVAL_MS).unref()

@@ -109,6 +109,13 @@ function push(branch: string) {
   git(work, 'push', '-f', 'origin', branch)
 }
 
+/** Commit `content` to `file` on the work tree's current branch. */
+function commit(file: string, content: string) {
+  writeFileSync(join(work, file), content)
+  git(work, 'add', '.')
+  git(work, 'commit', '-m', `${file}: ${content}`)
+}
+
 /** An index job for `branch` created at `at`, and `points` points for it. */
 function indexed(branch: string, at: string, points = 2) {
   testDb.prepare(
@@ -154,6 +161,7 @@ describe('branchesToPrune', () => {
   const base = {
     protectedBranches: new Set(['main']),
     remoteHeads: new Set(['main', 'live']) as ReadonlySet<string> | null,
+    merged: new Set<string>(),
     now: NOW,
     retentionDays: 14,
   }
@@ -193,8 +201,30 @@ describe('branchesToPrune', () => {
     })).toEqual([{ branch: 'old', reason: 'stale' }])
   })
 
+  it('drops a merged branch however recent, and calls a gone one gone', () => {
+    expect(branchesToPrune({
+      ...base,
+      remoteHeads: new Set(['main', 'live', 'done']),
+      merged: new Set(['done', 'gone', 'main']),
+      indexed: [
+        { branch: 'live', lastIndexedAt: RECENT },
+        { branch: 'done', lastIndexedAt: RECENT },
+        { branch: 'gone', lastIndexedAt: RECENT },
+        { branch: 'main', lastIndexedAt: RECENT },
+      ],
+    })).toEqual([
+      { branch: 'done', reason: 'merged' },
+      { branch: 'gone', reason: 'deleted' },
+    ])
+  })
+
   it('drops nothing with a retention of 0', () => {
-    expect(branchesToPrune({ ...base, retentionDays: 0, indexed: [{ branch: 'gone', lastIndexedAt: OLD }] })).toEqual([])
+    expect(branchesToPrune({
+      ...base,
+      retentionDays: 0,
+      merged: new Set(['live']),
+      indexed: [{ branch: 'gone', lastIndexedAt: OLD }, { branch: 'live', lastIndexedAt: RECENT }],
+    })).toEqual([])
   })
 })
 
@@ -229,6 +259,55 @@ describe('sweepProjectBranches', () => {
     })
     expect(branchesWithJobs()).toEqual(['feat-live', 'main'])
     expect(branchesWithPoints()).toEqual(['feat-live', 'main'])
+  })
+
+  describe('with branches already in main', () => {
+    beforeEach(() => {
+      // Merged with a merge commit, and still on the remote.
+      git(work, 'switch', '-C', 'feat-merged', 'origin/main')
+      commit('merged.ts', 'merged')
+      // Two commits, squashed into one on main.
+      git(work, 'switch', '-C', 'feat-squashed', 'origin/main')
+      commit('squashed.ts', 'draft')
+      commit('squashed.ts', 'final')
+      // Two files, only one of which main took.
+      git(work, 'switch', '-C', 'feat-partial', 'origin/main')
+      commit('partial-a.ts', 'a')
+      commit('partial-b.ts', 'b')
+      git(work, 'push', '-f', 'origin', 'feat-merged', 'feat-squashed', 'feat-partial')
+
+      git(work, 'switch', 'main')
+      git(work, 'merge', '--no-ff', '-m', 'Merge feat-merged', 'feat-merged')
+      git(work, 'merge', '--squash', 'feat-squashed')
+      git(work, 'commit', '-m', 'feat-squashed, squashed')
+      commit('partial-a.ts', 'a')
+      git(work, 'push', 'origin', 'main', 'main:refs/heads/feat-fresh')
+
+      for (const branch of ['feat-merged', 'feat-squashed', 'feat-partial', 'feat-fresh']) indexed(branch, RECENT)
+    })
+
+    it('drops them however recent, and keeps one not started yet or only partly in main', async () => {
+      const result = await sweepProjectBranches(PROJECT, { now: NOW })
+      expect(result.pruned.map((p) => [p.branch, p.reason, p.points])).toEqual([
+        ['feat-gone', 'deleted', 3],
+        ['feat-merged', 'merged', 2],
+        ['feat-old', 'stale', 2],
+        ['feat-squashed', 'merged', 2],
+      ])
+      expect(result.failed).toEqual([])
+      expect(branchesWithJobs()).toEqual(['feat-fresh', 'feat-live', 'feat-partial', 'main'])
+    })
+
+    it('goes by absence and age alone when the history cannot be fetched', async () => {
+      const tmp = process.env.TMPDIR
+      process.env.TMPDIR = join(root, 'no-such-dir')
+      try {
+        const result = await sweepProjectBranches(PROJECT, { now: NOW })
+        expect(result.pruned.map((p) => [p.branch, p.reason])).toEqual([['feat-gone', 'deleted'], ['feat-old', 'stale']])
+      } finally {
+        process.env.TMPDIR = tmp
+      }
+    })
   })
 
   it('changes nothing on a dry run', async () => {
