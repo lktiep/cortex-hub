@@ -450,13 +450,33 @@ statsRouter.post('/query-log', async (c) => {
       computeModel || null
     )
 
-    // Keep session alive: update last_activity for this agent's active session.
-    // This prevents premature session expiry and enables overnight resume.
+    // Keep the calling session alive, and only that one. agentId here is the API key's
+    // name, and the agents all call themselves "claude-code": matching from_agent touched
+    // every active session on every machine (and other keys' sessions too) on each call,
+    // so last_activity could not tell a live session from one abandoned days ago.
+    // hub-mcp is stateless and sends no session id, so the caller's session is the one
+    // the call names (cortex_session_end), else the key's newest active session —
+    // preferring one in the project the call is about. Same rule as intel.ts uses to
+    // find the caller's session; rows from before api_key_name fall back to from_agent.
     try {
-      db.prepare(
-        `UPDATE session_handoffs SET last_activity = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-         WHERE from_agent = ? AND status = 'active'`
-      ).run(resolvedAgent)
+      const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : null
+      if (sessionId) {
+        db.prepare(
+          `UPDATE session_handoffs SET last_activity = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+           WHERE id = ? AND status = 'active'`
+        ).run(sessionId)
+      } else {
+        db.prepare(
+          `UPDATE session_handoffs SET last_activity = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+           WHERE id = (
+             SELECT id FROM session_handoffs
+              WHERE status = 'active'
+                AND (api_key_name = ? OR (api_key_name IS NULL AND from_agent = ?))
+              ORDER BY (project_id = ?) DESC, created_at DESC
+              LIMIT 1
+           )`
+        ).run(resolvedAgent, resolvedAgent, resolvedProjectId)
+      }
     } catch { /* non-critical */ }
 
     // Bridge backend LLM cost to the unified billing table
