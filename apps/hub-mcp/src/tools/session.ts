@@ -24,8 +24,11 @@ export function registerSessionTools(server: McpServer, env: Env) {
       branch: z.string().optional().describe('Current git branch'),
       capabilities: z.array(z.string()).optional().describe('Agent capabilities'),
       role: z.string().optional().describe('Agent role from agent-identity.json'),
+      clientSessionId: z.string().max(128).optional().describe(
+        'This conversation\'s id as the IDE\'s SessionStart hook printed it (clientSessionId: …). Keeps two conversations in one checkout on separate sessions.'
+      ),
     },
-    async ({ repo, mode, agentId, hostname, os, ide, branch, capabilities, role }) => {
+    async ({ repo, mode, agentId, hostname, os, ide, branch, capabilities, role, clientSessionId }) => {
       // Extract project name from repo URL for context
       const projectName = repo
         ? repo.replace(/\.git$/, '').replace(/\/$/, '').split('/').pop() ?? 'unknown'
@@ -50,6 +53,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
             branch,
             capabilities,
             role,
+            clientSessionId,
           }),
           signal: AbortSignal.timeout(10000),
         })
@@ -130,6 +134,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
                 branch: branch ?? null,
                 capabilities: capabilities ?? [],
                 role: role ?? null,
+                clientSessionId: clientSessionId ?? null,
               },
               // orgId is the boundary of a cross-repo search: code tools called without
               // `repo:` search every repo in this organization and nothing outside it.

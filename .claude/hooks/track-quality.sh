@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Quality Tracker (v4.1) — records what actually happened, as evidence.
+# Cortex Quality Tracker (v4.2) — records what actually happened, as evidence.
 #
 # Two things changed from v3, both of them bugs found by reading a real hook payload:
 #   1. The field is `tool_response`, not `tool_output`. v3 read `tool_output`, so the
@@ -12,6 +12,10 @@
 # Note on exit codes: PostToolUse does not fire at all when a Bash command exits non-zero,
 # so a failing `pnpm build` cannot mark its gate. What it can still do is hide the failure
 # behind `|| true` or a pipe, which is why the output is scanned for failure signatures.
+#
+# v4.2 also files the hub session under the conversation that opened it, in
+# conversations/<IDE session id>: the rest of this directory is shared by every conversation
+# in the checkout, so the exit hook had no way to tell whose session `session-id` was.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
@@ -21,11 +25,13 @@ INPUT=$(cat)
 COMMAND=""
 TOOL_NAME=""
 OUTPUT=""
+CLIENT_ID=""
 
 if command -v jq >/dev/null 2>&1; then
   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
   TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
   OUTPUT=$(printf '%s' "$INPUT" | jq -r '[(.tool_response // .tool_output // empty)] | tostring' 2>/dev/null || true)
+  CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 elif command -v python3 >/dev/null 2>&1; then
   eval "$(printf '%s' "$INPUT" | python3 -c "
 import sys,json
@@ -34,10 +40,13 @@ r=d.get('tool_response', d.get('tool_output',''))
 print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
 print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
 print(f'OUTPUT={repr(json.dumps(r) if not isinstance(r,str) else r)}')
+print(f'CLIENT_ID={repr(str(d.get(\"session_id\",\"\")))}')
 " 2>/dev/null || true)"
 fi
 
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# The IDE's id for this conversation, made safe to use as a file name.
+CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
 
 # Evidence, not existence: the enforcement hook only accepts a marker that says who wrote it.
 record() {
@@ -92,11 +101,19 @@ case "$TOOL_NAME" in
     SESSION_ID=$(printf '%s' "$INPUT" | tr -d '\\' \
       | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"sess_[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "$SESSION_ID" ] && printf '%s\n' "$SESSION_ID" > "$STATE_DIR/session-id"
+    if [ -n "$SESSION_ID" ] && [ -n "$CLIENT_ID" ]; then
+      mkdir -p "$STATE_DIR/conversations"
+      printf '%s\n' "$SESSION_ID" > "$STATE_DIR/conversations/$CLIENT_ID"
+    fi
     # A new hub session is open, so an earlier one's "ended" no longer applies — left in
     # place it made the exit hook skip this session too.
     rm -f "$STATE_DIR/session-ended"
     ;;
-  *cortex_session_end*)    record session-ended ;;
+  *cortex_session_end*)
+    record session-ended
+    # This conversation closed its own session; the exit hook has nothing left to do for it.
+    [ -n "$CLIENT_ID" ] && rm -f "$STATE_DIR/conversations/$CLIENT_ID"
+    ;;
   *cortex_quality_report*) record quality-reported ;;
   *cortex_code_search*|*cortex_code_context*|*cortex_code_impact*|*cortex_cypher*)
     record discovery-used ;;

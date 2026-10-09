@@ -325,8 +325,11 @@ sessionsRouter.post('/start', async (c) => {
   try {
     const body = await c.req.json()
     // Accept both 'repo' (new) and 'project' (legacy) field names
-    const { repo: bodyRepo, project: bodyProject, mode, agentId: bodyAgentId, hostname, os, ide, branch, capabilities, role } = body as Record<string, unknown>
+    const { repo: bodyRepo, project: bodyProject, mode, agentId: bodyAgentId, hostname, os, ide, branch, capabilities, role, clientSessionId: bodyClientSessionId } = body as Record<string, unknown>
     const repo = (bodyRepo ?? bodyProject) as string | undefined
+    const clientSessionId = typeof bodyClientSessionId === 'string' && bodyClientSessionId.length > 0 && bodyClientSessionId.length <= 128
+      ? bodyClientSessionId
+      : null
 
     // Identity resolution: keep self-reported agentId, API key name tracked separately
     const agentId = bodyAgentId as string | undefined
@@ -390,13 +393,16 @@ sessionsRouter.post('/start', async (c) => {
     // found one, so every /cs added a row and active sessions piled up by the hundred.
     // The key, machine, IDE and branch are part of the match: parallel worktree agents
     // share the agent name and project, and folding them into one session would let the
-    // first /ce close it under the others.
+    // first /ce close it under the others. So is the IDE's conversation id, for two
+    // conversations in the same checkout; an agent that sends none matches the rows that
+    // have none, as before.
     let sessionId: string
     const existingSession = db.prepare(
       `SELECT id FROM session_handoffs
        WHERE from_agent = ? AND status = 'active'
          AND (project_id = ? OR (? IS NULL AND project_id IS NULL AND project = ?))
          AND api_key_name IS ? AND hostname IS ? AND ide IS ? AND branch IS ?
+         AND client_session_id IS ?
        ORDER BY created_at DESC LIMIT 1`
     ).get(
       agentId,
@@ -406,7 +412,8 @@ sessionsRouter.post('/start', async (c) => {
       apiKeyName,
       hostname ?? null,
       ide ?? null,
-      branch ?? null
+      branch ?? null,
+      clientSessionId
     ) as { id: string } | undefined
 
     if (existingSession) {
@@ -443,7 +450,7 @@ sessionsRouter.post('/start', async (c) => {
 
     if (!existingSession) {
       const insertStmt = db.prepare(
-        'INSERT INTO session_handoffs (id, from_agent, project, project_id, task_summary, context, status, api_key_name, hostname, os, ide, branch, capabilities, role, last_activity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'), strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'))'
+        'INSERT INTO session_handoffs (id, from_agent, project, project_id, task_summary, context, status, api_key_name, hostname, os, ide, branch, capabilities, role, client_session_id, last_activity, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'), strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\'))'
       )
       insertStmt.run(
         sessionId,
@@ -459,7 +466,8 @@ sessionsRouter.post('/start', async (c) => {
         ide ?? null,
         branch ?? null,
         JSON.stringify(capabilities ?? []),
-        role ?? null
+        role ?? null,
+        clientSessionId
       )
     }
 

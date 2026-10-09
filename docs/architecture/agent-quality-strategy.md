@@ -100,6 +100,16 @@ Session Start
                                    MCP endpoint if session_end never ran
 ```
 
+**One hub session per conversation.** Two conversations in one checkout send the hub the
+same key, machine, IDE and branch, so `/cs` in the second used to reuse the first one's
+session, and whichever exited first closed it under the other. `session-init.sh` now prints
+the IDE's conversation id, `/cs` passes it to `cortex_session_start` as `clientSessionId`,
+and the hub reuses a session only within that conversation. `track-quality.sh` files the hub
+id under `.cortex/.session-state/conversations/<conversation id>`, and the exit hook closes
+that one. Known limits: the heartbeat still touches the key's newest active session, a
+resumed conversation that gets a new id leaves the old session to idle expiry, and the gate
+markers stay per checkout.
+
 ---
 
 ## 2. 4-Dimension Quality Scoring

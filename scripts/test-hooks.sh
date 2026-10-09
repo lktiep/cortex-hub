@@ -122,6 +122,24 @@ printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/s
 check "startup clears discovery"           0 "$([ ! -f "$STATE/discovery-used" ] && echo 0 || echo 1)"
 teardown
 
+echo "session-init.sh — names the conversation for /cs"
+# Two conversations in one checkout send the hub the same key, machine, IDE and branch; the
+# conversation id is the only thing that tells their sessions apart, and only this hook has it.
+setup
+mkdir -p "$STATE/conversations"
+printf 'sess_old\n' > "$STATE/conversations/gone"; touch -t 202001010000 "$STATE/conversations/gone"
+printf 'sess_b\n' > "$STATE/conversations/conv-b"
+OUT=$(printf '{"source":"startup","session_id":"conv-a"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" 2>&1)
+check "startup prints clientSessionId"      0 "$(printf '%s' "$OUT" | grep -q 'clientSessionId is conv-a' && echo 0 || echo 1)"
+check "another conversation's record stays" sess_b "$(cat "$STATE/conversations/conv-b" 2>/dev/null)"
+check "a week-old record is dropped"        0 "$([ ! -f "$STATE/conversations/gone" ] && echo 0 || echo 1)"
+OUT=$(printf '{"source":"compact","session_id":"conv-a"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" 2>&1)
+check "and again after compaction"          0 "$(printf '%s' "$OUT" | grep -q 'clientSessionId is conv-a' && echo 0 || echo 1)"
+OUT=$(printf '{"source":"startup","session_id":"../../x y"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" 2>&1)
+check "only file-name-safe characters"      0 "$(printf '%s' "$OUT" | grep -q 'clientSessionId is xy ' && echo 0 || echo 1)"
+check "exits 0 with no id at all"           0 "$(printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" >/dev/null 2>&1; echo $?)"
+teardown
+
 echo "session-init.sh — the session gate must not arm itself"
 setup; printf 'tool=cortex_session_start at=old\n' > "$STATE/session-started"
 printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" >/dev/null 2>&1
@@ -177,6 +195,24 @@ printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quali
 check "no hub id, the old one stays"        0 "$([ "$(cat "$STATE/session-id" 2>/dev/null)" = "sess_1791036137558_s8k8w" ] && echo 0 || echo 1)"
 teardown
 
+echo "track-quality.sh — each conversation's session filed under that conversation"
+setup
+track() {  # $1 = conversation id, $2 = tool, $3 = hub id in the reply (optional)
+  printf '{"session_id":"%s","tool_name":"mcp__cortex-hub__%s","tool_input":{},"tool_response":[{"type":"text","text":"{\\"session_id\\":\\"%s\\"}"}]}' "$1" "$2" "${3:-}" \
+    | CLAUDE_PROJECT_DIR="$SANDBOX" bash "${TRACKER_DIR:-$HOOKS_DIR}/track-quality.sh" >/dev/null 2>&1
+}
+track conv-a cortex_session_start sess_a
+track conv-b cortex_session_start sess_b
+check "conversation a's session"            sess_a "$(cat "$STATE/conversations/conv-a" 2>/dev/null)"
+check "conversation b's session"            sess_b "$(cat "$STATE/conversations/conv-b" 2>/dev/null)"
+check "session-id is still the latest"      sess_b "$(cat "$STATE/session-id" 2>/dev/null)"
+track conv-a cortex_session_end
+check "a's /ce drops a's record"            0 "$([ ! -f "$STATE/conversations/conv-a" ] && echo 0 || echo 1)"
+check "and leaves b's"                      sess_b "$(cat "$STATE/conversations/conv-b" 2>/dev/null)"
+track '../../evil' cortex_session_start sess_e
+check "a hostile id stays inside"           sess_e "$(cat "$STATE/conversations/evil" 2>/dev/null)"
+teardown
+
 # ── session-end-check.sh against a stand-in hub ──
 # v6 posted to localhost:4000, which nothing listens on outside the hub machine, and wrote
 # session-ended anyway. These run the hook against a local stub that records what it got.
@@ -217,6 +253,11 @@ got() { python3 -c 'import json,sys
 reqs=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 v=eval(sys.argv[2], {}, {"r": reqs[0]}) if reqs else "<no request>"
 print(v)' "$STUB_LOG" "$1" 2>/dev/null; }
+# The same, of the request numbered $2 (1-based).
+got_at() { python3 -c 'import json,sys
+reqs=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+n=int(sys.argv[3])
+print(eval(sys.argv[2], {}, {"r": reqs[n-1]}) if len(reqs) >= n else "<no request>")' "$STUB_LOG" "$1" "$2" 2>/dev/null; }
 requests() { wc -l < "$STUB_LOG" | tr -d ' '; }
 # A session that ran /cs and nothing else, on a machine whose only MCP config is $1 (a path
 # under the fake HOME) holding $2. Nothing from the real environment may leak in.
@@ -228,7 +269,7 @@ armed() {
 }
 end_hook() {  # $1 = hooks dir; extra env as further args
   local dir=$1; shift
-  printf '{"session_id":"2d30fc59","hook_event_name":"SessionEnd","reason":"exit"}' \
+  printf '{"session_id":"%s","hook_event_name":"SessionEnd","reason":"exit"}' "${END_CLIENT:-2d30fc59}" \
     | env -u CORTEX_HUB_API_URL -u HUB_API_KEY -u HUB_MCP_URL -u CORTEX_MCP_URL \
         HOME="$SANDBOX/home" CLAUDE_PROJECT_DIR="$SANDBOX" CORTEX_PROJECT_DIR="$SANDBOX" "$@" \
         bash "$dir/session-end-check.sh" 2>&1
@@ -294,6 +335,47 @@ end_hook "$HOOKS_DIR" CORTEX_HUB_API_URL="$STUB_URL/" >/dev/null
 check "posts to /api/sessions/:id/end"      /api/sessions/sess_42/end "$(got 'r["path"]')"
 check "marked automatic"                    True "$(got 'r["body"]["auto"]')"
 check "records the close"                   0 "$(ended)"
+teardown; stop_stub
+
+echo "session-end-check.sh — a conversation closes its own session, not its neighbour's"
+# Two conversations in one checkout: b ran /cs last, so session-id is b's. v7 closed b's
+# session when a exited, and left a's open.
+two_conversations() {  # $1 = stub mode, ok by default
+  start_stub "${1:-ok}"
+  armed .claude.json "{\"mcpServers\":{\"cortex-hub\":{\"url\":\"$STUB_URL/mcp\",\"headers\":{\"Authorization\":\"Bearer test-key\"}}}}"
+  mkdir -p "$STATE/conversations"
+  printf 'sess_a\n' > "$STATE/conversations/conv-a"
+  printf 'sess_b\n' > "$STATE/conversations/conv-b"
+  printf 'sess_b\n' > "$STATE/session-id"
+}
+two_conversations
+END_CLIENT=conv-a end_hook "$HOOKS_DIR" >/dev/null
+check "a's exit closes a's session"         sess_a "$(got 'r["body"]["params"]["arguments"]["sessionId"]')"
+check "and drops a's record"                0 "$([ ! -f "$STATE/conversations/conv-a" ] && echo 0 || echo 1)"
+check "b's record is untouched"             sess_b "$(cat "$STATE/conversations/conv-b" 2>/dev/null)"
+check "session-ended stays b's to write"    1 "$(ended)"
+END_CLIENT=conv-b end_hook "$HOOKS_DIR" >/dev/null
+check "b's exit closes b's session"         sess_b "$(got_at 'r["body"]["params"]["arguments"]["sessionId"]' 2)"
+check "and records the checkout's close"    0 "$(ended)"
+END_CLIENT=conv-a end_hook "$HOOKS_DIR" >/dev/null
+check "a second exit sends nothing more"    2 "$(requests)"
+teardown; stop_stub
+
+two_conversations
+END_CLIENT=conv-c end_hook "$HOOKS_DIR" >/dev/null
+check "a conversation that never ran /cs closes nothing" 0 "$(requests)"
+teardown; stop_stub
+
+two_conversations
+# A third conversation starting up wipes the checkout's markers; a's session is still a's.
+rm -f "$STATE/session-started" "$STATE/session-id"
+END_CLIENT=conv-a end_hook "$HOOKS_DIR" >/dev/null
+check "a still closes after a neighbour's startup" sess_a "$(got 'r["body"]["params"]["arguments"]["sessionId"]')"
+teardown; stop_stub
+
+two_conversations 500
+END_CLIENT=conv-a end_hook "$HOOKS_DIR" >/dev/null
+check "an unconfirmed close keeps the record" sess_a "$(cat "$STATE/conversations/conv-a" 2>/dev/null)"
 teardown; stop_stub
 
 echo "track-quality.sh — quality gates need the commands, not a report"
@@ -453,6 +535,39 @@ printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/sess
 check "startup clears discovery"           0 "$([ ! -f "$STATE/discovery-used" ] && echo 0 || echo 1)"
 check "and does not arm the session"       0 "$([ ! -f "$STATE/session-started" ] && echo 0 || echo 1)"
 teardown
+
+echo "gemini — one session per conversation, same shape"
+setup
+mkdir -p "$STATE/conversations"
+printf 'sess_old\n' > "$STATE/conversations/gone"; touch -t 202001010000 "$STATE/conversations/gone"
+gmessage() { python3 -c 'import json,sys;print(json.load(sys.stdin)["systemMessage"])' 2>/dev/null; }
+OUT=$(printf '{"source":"startup","session_id":"g-a"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/session-init.sh" 2>/dev/null)
+check "startup names the conversation"      0 "$(printf '%s' "$OUT" | gmessage | grep -q 'clientSessionId is g-a' && echo 0 || echo 1)"
+check "a week-old record is dropped"        0 "$([ ! -f "$STATE/conversations/gone" ] && echo 0 || echo 1)"
+OUT=$(printf '{"source":"compact","session_id":"g-a"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/session-init.sh" 2>/dev/null)
+check "and again after compaction"          0 "$(printf '%s' "$OUT" | gmessage | grep -q 'clientSessionId is g-a' && echo 0 || echo 1)"
+gtrack() {  # $1 = conversation id, $2 = tool, $3 = hub id in the reply (optional)
+  printf '{"session_id":"%s","tool_name":"mcp_cortex-hub_%s","tool_input":{},"tool_response":{"llmContent":"{\\"session_id\\":\\"%s\\"}"}}' "$1" "$2" "${3:-}" \
+    | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
+}
+gtrack g-a cortex_session_start sess_ga
+gtrack g-b cortex_session_start sess_gb
+check "tracker files a's session"           sess_ga "$(cat "$STATE/conversations/g-a" 2>/dev/null)"
+gtrack g-b cortex_session_end
+check "b's /ce drops only b's record"       0 "$([ ! -f "$STATE/conversations/g-b" ] && [ -s "$STATE/conversations/g-a" ] && echo 0 || echo 1)"
+teardown
+start_stub ok
+armed .gemini/antigravity/mcp_config.json "{\"mcpServers\":{\"cortex-hub\":{\"serverUrl\":\"$STUB_URL/mcp\",\"headers\":{\"Authorization\":\"Bearer gem-key\"}}}}"
+mkdir -p "$STATE/conversations"
+printf 'sess_ga\n' > "$STATE/conversations/g-a"; printf 'sess_gb\n' > "$STATE/conversations/g-b"
+printf 'sess_gb\n' > "$STATE/session-id"
+OUT=$(END_CLIENT=g-a end_hook "$GHOOKS")
+check "a's exit closes a's session"         sess_ga "$(got 'r["body"]["params"]["arguments"]["sessionId"]')"
+check "b's record is untouched"             sess_gb "$(cat "$STATE/conversations/g-b" 2>/dev/null)"
+check "still speaks gemini's protocol"      0 "$(printf '%s' "$OUT" | gmessage >/dev/null && echo 0 || echo 1)"
+END_CLIENT=g-c end_hook "$GHOOKS" >/dev/null
+check "no /cs in that conversation: nothing sent" 1 "$(requests)"
+teardown; stop_stub
 
 echo "onboarding scripts must not carry their own copy of the hooks or the rules"
 # scripts/onboard.sh is what the public "Member" path runs (install.sh at the repo root and

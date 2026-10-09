@@ -16,7 +16,7 @@ type Handler = (args: Record<string, unknown>) => Promise<Result>
 const realFetch = globalThis.fetch
 let calls: Array<{ url: string; body: unknown }>
 
-function sessionEnd(endStatus: number): Handler {
+function register(endStatus = 200): Record<string, Handler> {
   calls = []
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
@@ -28,10 +28,16 @@ function sessionEnd(endStatus: number): Handler {
   const tools: Record<string, Handler> = {}
   const server = { tool: (name: string, _d: string, _s: unknown, handler: Handler) => { tools[name] = handler } }
   registerSessionTools(server as unknown as McpServer, { DASHBOARD_API_URL: 'http://api' } as Env)
-  const handler = tools.cortex_session_end
-  if (!handler) throw new Error('cortex_session_end was not registered')
+  return tools
+}
+
+function tool(name: string, endStatus?: number): Handler {
+  const handler = register(endStatus)[name]
+  if (!handler) throw new Error(`${name} was not registered`)
   return handler
 }
+
+const sessionEnd = (endStatus: number) => tool('cortex_session_end', endStatus)
 
 describe('cortex_session_end', () => {
   beforeEach(() => { calls = [] })
@@ -52,5 +58,21 @@ describe('cortex_session_end', () => {
     const res = await sessionEnd(500)({ sessionId: 's1', summary: 'auto-closed', auto: true })
     expect(res.isError).toBe(true)
     expect(calls.map((c) => c.url)).toEqual(['http://api/api/sessions/s1/end'])
+  })
+})
+
+describe('cortex_session_start', () => {
+  afterEach(() => { globalThis.fetch = realFetch })
+
+  const startBody = () => calls.find((c) => c.url.endsWith('/api/sessions/start'))?.body as Record<string, unknown>
+
+  it('passes the conversation id on, so the hub keeps parallel conversations apart', async () => {
+    await tool('cortex_session_start')({ repo: 'r', clientSessionId: 'conv-a' })
+    expect(startBody().clientSessionId).toBe('conv-a')
+  })
+
+  it('sends none when the agent has none', async () => {
+    await tool('cortex_session_start')({ repo: 'r' })
+    expect(startBody()).not.toHaveProperty('clientSessionId')
   })
 })

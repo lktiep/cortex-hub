@@ -24,6 +24,7 @@ function createTestDb() {
     ALTER TABLE session_handoffs ADD COLUMN capabilities TEXT DEFAULT '[]';
     ALTER TABLE session_handoffs ADD COLUMN role TEXT;
     ALTER TABLE session_handoffs ADD COLUMN last_activity TEXT;
+    ALTER TABLE session_handoffs ADD COLUMN client_session_id TEXT;
   `)
   return db
 }
@@ -134,6 +135,34 @@ describe('POST /api/sessions/start session reuse', () => {
     expect(row).toEqual({ project: 'scratch', project_id: null })
 
     expect(await start()).not.toBe(first)
+  })
+
+  it('gives each conversation in the same workspace a session of its own', async () => {
+    const a = await start({ body: { clientSessionId: 'conv-a' } })
+    const b = await start({ body: { clientSessionId: 'conv-b' } })
+    expect(b).not.toBe(a)
+    expect(activeCount()).toBe(2)
+
+    // A second /cs in the same conversation comes back to that conversation's session.
+    expect(await start({ body: { clientSessionId: 'conv-a' } })).toBe(a)
+    expect(await start({ body: { clientSessionId: 'conv-b' } })).toBe(b)
+    expect(activeCount()).toBe(2)
+
+    const row = testDb.prepare('SELECT client_session_id FROM session_handoffs WHERE id = ?').get(a)
+    expect(row).toEqual({ client_session_id: 'conv-a' })
+  })
+
+  it('keeps reusing as before for an agent that sends no conversation id', async () => {
+    const first = await start()
+    expect(await start()).toBe(first)
+    // ...and never hands that session to a conversation that does send one.
+    expect(await start({ body: { clientSessionId: 'conv-a' } })).not.toBe(first)
+  })
+
+  it('ignores a conversation id that is not a short string', async () => {
+    const first = await start()
+    expect(await start({ body: { clientSessionId: 'x'.repeat(129) } })).toBe(first)
+    expect(await start({ body: { clientSessionId: 42 } })).toBe(first)
   })
 
   it('matches a workspace that leaves fields out, and keeps it apart from one that sends them', async () => {

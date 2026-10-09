@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Session Init (v7.1) — Gemini variant.
+# Cortex Session Init (v7.2) — Gemini variant.
 #
 # v3 wiped the gate markers on every SessionStart. Where the host distinguishes a resumed or
 # compacted session from a fresh one, re-arming the discovery gate mid-task is a bug: the agent
@@ -9,6 +9,8 @@
 # And it cleared session-started on every start, which is right — but the claude variant used to
 # create it here instead, making its whole session gate vacuous. Only the tracker writes it, from
 # a real cortex_session_start call.
+# v7.2 names this conversation's id for cortex_session_start's clientSessionId, so two
+# conversations in one checkout get a hub session each instead of sharing one.
 # An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
 # inside a worktree, and at whatever repo the tests happen to run from.
 PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
@@ -17,17 +19,24 @@ mkdir -p "$STATE_DIR"
 
 INPUT=$(cat 2>/dev/null || true)
 SOURCE=""
+CLIENT_ID=""
 if [ -n "$INPUT" ]; then
   if command -v jq >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null || true)
+    CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
   elif command -v python3 >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("source",""))' 2>/dev/null || true)
+    CLIENT_ID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || true)
   fi
 fi
+SOURCE=$(printf '%s' "$SOURCE" | tr -cd 'A-Za-z0-9_-')
+CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+CONVERSATION=""
+[ -n "$CLIENT_ID" ] && CONVERSATION=" This conversation's clientSessionId is ${CLIENT_ID} — pass it to cortex_session_start."
 
 case "$SOURCE" in
   compact|resume)
-    echo '{"systemMessage":"Cortex: same session ('"$SOURCE"') — discovery state kept."}'
+    echo '{"systemMessage":"Cortex: same session ('"$SOURCE"') — discovery state kept.'"$CONVERSATION"'"}'
     exit 0 ;;
 esac
 
@@ -37,4 +46,7 @@ rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" \
       "$STATE_DIR/discovery-used" "$STATE_DIR/knowledge-recalled" \
       "$STATE_DIR/memory-recalled" "$STATE_DIR/changes-checked" \
       "$STATE_DIR/tasks-checked" "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
-echo '{"systemMessage":"MANDATORY: call cortex_session_start, then cortex_knowledge_search + cortex_memory_search, before any edit. search_file_content and glob stay blocked until a cortex discovery tool has run."}'
+# Other conversations' sessions stay theirs to close; only week-old records are dropped.
+[ -d "$STATE_DIR/conversations" ] && find "$STATE_DIR/conversations" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
+echo '{"systemMessage":"MANDATORY: call cortex_session_start, then cortex_knowledge_search + cortex_memory_search, before any edit. search_file_content and glob stay blocked until a cortex discovery tool has run.'"$CONVERSATION"'"}'
+exit 0

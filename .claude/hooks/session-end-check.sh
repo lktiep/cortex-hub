@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Session End Check (v7) — closes the cortex session when the session really ends.
+# Cortex Session End Check (v7.1) — closes the cortex session when the session really ends.
 #
 # v6 posted to ${CORTEX_HUB_API_URL:-http://localhost:4000}. Nothing sets that variable, so on
 # every machine but the hub itself the close went to a port nobody listens on; curl's failure
@@ -12,16 +12,40 @@
 #
 # Claude Code gives a SessionEnd hook 1.5s unless it declares a timeout; settings.json gives
 # this one 15s, and the requests below stop well inside that.
+#
+# v7.1: every conversation in a checkout shares this state directory, so `session-id` is
+# whichever one ran /cs last — one conversation's exit closed another's session, and one that
+# never ran /cs closed somebody else's. The tracker now files each session under the IDE's id
+# for the conversation that opened it, and this hook closes that one and nothing else. With no
+# such record (an older tracker, an IDE that sends no id) it falls back to `session-id`.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 
-[ -f "$STATE_DIR/session-started" ] || exit 0
-[ -f "$STATE_DIR/session-ended" ] && exit 0
-
 say() { echo "$1"; }
 
+INPUT=$(cat 2>/dev/null || true)
+CLIENT_ID=""
+if [ -n "$INPUT" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+  elif command -v python3 >/dev/null 2>&1; then
+    CLIENT_ID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || true)
+  fi
+fi
+CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+
 SESSION_ID=""
-[ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
+OWN=""
+if [ -n "$CLIENT_ID" ] && [ -d "$STATE_DIR/conversations" ]; then
+  # Nothing filed under this conversation: it never opened a session, or /ce closed it.
+  OWN="$STATE_DIR/conversations/$CLIENT_ID"
+  [ -s "$OWN" ] || exit 0
+  SESSION_ID=$(head -1 "$OWN" 2>/dev/null || true)
+else
+  [ -f "$STATE_DIR/session-started" ] || exit 0
+  [ -f "$STATE_DIR/session-ended" ] && exit 0
+  [ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
+fi
 
 if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
   say "WARNING: cortex session not closed — no session id was recorded. Run /ce next time."
@@ -171,7 +195,11 @@ else
 fi
 
 if [ "$CLOSED" = "0" ]; then
-  printf 'tool=session-end-check at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/session-ended"
+  [ -n "$OWN" ] && rm -f "$OWN"
+  # session-ended speaks for the checkout's current session, so only that one may write it.
+  if [ -z "$OWN" ] || [ "$SESSION_ID" = "$(cat "$STATE_DIR/session-id" 2>/dev/null)" ]; then
+    printf 'tool=session-end-check at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/session-ended"
+  fi
   say "INFO: cortex session $SESSION_ID closed as abandoned.${ACTIONS:+ Activity:${ACTIONS}}"
 else
   say "WARNING: cortex session $SESSION_ID not closed — ${WHY}. Run /ce next time."

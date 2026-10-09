@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HOOKS_VERSION=7
-HOOKS_MINOR=7
+HOOKS_MINOR=8
 MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
@@ -569,7 +569,7 @@ if [ "$NEEDS_UPDATE" = "true" ]; then
   # ── session-init.sh ──
   cat > .claude/hooks/session-init.sh << 'HOOKEOF'
 #!/bin/bash
-# Cortex Session Init (v7.1) — arms the gates; keeps discovery state across compaction.
+# Cortex Session Init (v7.2) — arms the gates; keeps discovery state across compaction.
 #
 # SessionStart fires on four different things: startup, resume, clear and compact.
 # Wiping the discovery markers on all four is why a long task suddenly finds Grep and
@@ -580,23 +580,36 @@ if [ "$NEEDS_UPDATE" = "true" ]; then
 # marker existed before cortex_session_start had ever been called, so the "no session yet"
 # branch of enforce-session.sh was dead code and enforce-commit.sh's session check always
 # passed. Only the tracker writes that marker now, from a real cortex_session_start call.
+#
+# v7.2 prints this conversation's id for /cs to pass as clientSessionId. Everything else the
+# hub matches a session on is the same for two conversations in one checkout, so without it
+# they shared one session, and the first to finish closed it under the other.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 mkdir -p "$STATE_DIR"
 
 INPUT=$(cat 2>/dev/null || true)
 SOURCE=""
+CLIENT_ID=""
 if [ -n "$INPUT" ]; then
   if command -v jq >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null || true)
+    CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
   elif command -v python3 >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("source",""))' 2>/dev/null || true)
+    CLIENT_ID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || true)
   fi
 fi
+# The same id the tracker and the exit hook file this conversation's session under.
+CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+conversation_line() {
+  [ -n "$CLIENT_ID" ] && echo "Cortex: this conversation's clientSessionId is ${CLIENT_ID} — pass it to cortex_session_start."
+}
 
 case "$SOURCE" in
   compact|resume)
     echo "Cortex: same session (${SOURCE}) — discovery state kept, gates stay as they were."
+    conversation_line
     exit 0 ;;
 esac
 
@@ -610,7 +623,12 @@ rm -f "$STATE_DIR/session-started" \
       "$STATE_DIR/knowledge-recalled" "$STATE_DIR/memory-recalled" \
       "$STATE_DIR/changes-checked" "$STATE_DIR/tasks-checked" \
       "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
+# Other conversations' sessions stay theirs to close; only records a week old are dropped,
+# left by a conversation that ended without the exit hook getting through.
+[ -d "$STATE_DIR/conversations" ] && find "$STATE_DIR/conversations" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
 echo "Run /cs first: cortex_session_start, then knowledge+memory recall. Until then edits are BLOCKED, and Grep/Glob stay blocked until a cortex discovery tool has run."
+conversation_line
+exit 0
 HOOKEOF
 
   # ── enforce-session.sh ──
@@ -794,7 +812,7 @@ HOOKEOF
   # ── track-quality.sh ──
   cat > .claude/hooks/track-quality.sh << 'HOOKEOF'
 #!/bin/bash
-# Cortex Quality Tracker (v4.1) — records what actually happened, as evidence.
+# Cortex Quality Tracker (v4.2) — records what actually happened, as evidence.
 #
 # Two things changed from v3, both of them bugs found by reading a real hook payload:
 #   1. The field is `tool_response`, not `tool_output`. v3 read `tool_output`, so the
@@ -807,6 +825,10 @@ HOOKEOF
 # Note on exit codes: PostToolUse does not fire at all when a Bash command exits non-zero,
 # so a failing `pnpm build` cannot mark its gate. What it can still do is hide the failure
 # behind `|| true` or a pipe, which is why the output is scanned for failure signatures.
+#
+# v4.2 also files the hub session under the conversation that opened it, in
+# conversations/<IDE session id>: the rest of this directory is shared by every conversation
+# in the checkout, so the exit hook had no way to tell whose session `session-id` was.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
@@ -816,11 +838,13 @@ INPUT=$(cat)
 COMMAND=""
 TOOL_NAME=""
 OUTPUT=""
+CLIENT_ID=""
 
 if command -v jq >/dev/null 2>&1; then
   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
   TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
   OUTPUT=$(printf '%s' "$INPUT" | jq -r '[(.tool_response // .tool_output // empty)] | tostring' 2>/dev/null || true)
+  CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 elif command -v python3 >/dev/null 2>&1; then
   eval "$(printf '%s' "$INPUT" | python3 -c "
 import sys,json
@@ -829,10 +853,13 @@ r=d.get('tool_response', d.get('tool_output',''))
 print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
 print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
 print(f'OUTPUT={repr(json.dumps(r) if not isinstance(r,str) else r)}')
+print(f'CLIENT_ID={repr(str(d.get(\"session_id\",\"\")))}')
 " 2>/dev/null || true)"
 fi
 
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# The IDE's id for this conversation, made safe to use as a file name.
+CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
 
 # Evidence, not existence: the enforcement hook only accepts a marker that says who wrote it.
 record() {
@@ -887,11 +914,19 @@ case "$TOOL_NAME" in
     SESSION_ID=$(printf '%s' "$INPUT" | tr -d '\\' \
       | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"sess_[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "$SESSION_ID" ] && printf '%s\n' "$SESSION_ID" > "$STATE_DIR/session-id"
+    if [ -n "$SESSION_ID" ] && [ -n "$CLIENT_ID" ]; then
+      mkdir -p "$STATE_DIR/conversations"
+      printf '%s\n' "$SESSION_ID" > "$STATE_DIR/conversations/$CLIENT_ID"
+    fi
     # A new hub session is open, so an earlier one's "ended" no longer applies — left in
     # place it made the exit hook skip this session too.
     rm -f "$STATE_DIR/session-ended"
     ;;
-  *cortex_session_end*)    record session-ended ;;
+  *cortex_session_end*)
+    record session-ended
+    # This conversation closed its own session; the exit hook has nothing left to do for it.
+    [ -n "$CLIENT_ID" ] && rm -f "$STATE_DIR/conversations/$CLIENT_ID"
+    ;;
   *cortex_quality_report*) record quality-reported ;;
   *cortex_code_search*|*cortex_code_context*|*cortex_code_impact*|*cortex_cypher*)
     record discovery-used ;;
@@ -940,7 +975,7 @@ HOOKEOF
   # ── session-end-check.sh ──
   cat > .claude/hooks/session-end-check.sh << 'HOOKEOF'
 #!/bin/bash
-# Cortex Session End Check (v7) — closes the cortex session when the session really ends.
+# Cortex Session End Check (v7.1) — closes the cortex session when the session really ends.
 #
 # v6 posted to ${CORTEX_HUB_API_URL:-http://localhost:4000}. Nothing sets that variable, so on
 # every machine but the hub itself the close went to a port nobody listens on; curl's failure
@@ -953,16 +988,40 @@ HOOKEOF
 #
 # Claude Code gives a SessionEnd hook 1.5s unless it declares a timeout; settings.json gives
 # this one 15s, and the requests below stop well inside that.
+#
+# v7.1: every conversation in a checkout shares this state directory, so `session-id` is
+# whichever one ran /cs last — one conversation's exit closed another's session, and one that
+# never ran /cs closed somebody else's. The tracker now files each session under the IDE's id
+# for the conversation that opened it, and this hook closes that one and nothing else. With no
+# such record (an older tracker, an IDE that sends no id) it falls back to `session-id`.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 
-[ -f "$STATE_DIR/session-started" ] || exit 0
-[ -f "$STATE_DIR/session-ended" ] && exit 0
-
 say() { echo "$1"; }
 
+INPUT=$(cat 2>/dev/null || true)
+CLIENT_ID=""
+if [ -n "$INPUT" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+  elif command -v python3 >/dev/null 2>&1; then
+    CLIENT_ID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || true)
+  fi
+fi
+CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+
 SESSION_ID=""
-[ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
+OWN=""
+if [ -n "$CLIENT_ID" ] && [ -d "$STATE_DIR/conversations" ]; then
+  # Nothing filed under this conversation: it never opened a session, or /ce closed it.
+  OWN="$STATE_DIR/conversations/$CLIENT_ID"
+  [ -s "$OWN" ] || exit 0
+  SESSION_ID=$(head -1 "$OWN" 2>/dev/null || true)
+else
+  [ -f "$STATE_DIR/session-started" ] || exit 0
+  [ -f "$STATE_DIR/session-ended" ] && exit 0
+  [ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
+fi
 
 if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
   say "WARNING: cortex session not closed — no session id was recorded. Run /ce next time."
@@ -1112,7 +1171,11 @@ else
 fi
 
 if [ "$CLOSED" = "0" ]; then
-  printf 'tool=session-end-check at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/session-ended"
+  [ -n "$OWN" ] && rm -f "$OWN"
+  # session-ended speaks for the checkout's current session, so only that one may write it.
+  if [ -z "$OWN" ] || [ "$SESSION_ID" = "$(cat "$STATE_DIR/session-id" 2>/dev/null)" ]; then
+    printf 'tool=session-end-check at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/session-ended"
+  fi
   say "INFO: cortex session $SESSION_ID closed as abandoned.${ACTIONS:+ Activity:${ACTIONS}}"
 else
   say "WARNING: cortex session $SESSION_ID not closed — ${WHY}. Run /ce next time."
@@ -1206,9 +1269,10 @@ with open('$USER_SETTINGS','w') as f: json.dump(d, f, indent=2)
   # ── Slash commands (/cs, /ce) ──
   mkdir -p .claude/commands
   cat > .claude/commands/cs.md << 'CMDEOF'
-# /cs — Cortex Start v0.9.0
+# /cs — Cortex Start v0.9.1
 
-> Version: 0.9.0 | Updated: 2026-09-28
+> Version: 0.9.1 | Updated: 2026-10-09
+> Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
 > Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
 > Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
 > Changelog: v0.7.0 — unified versioning, removed STATE.md, streamlined tool guidance, auto-memory safety net
@@ -1225,7 +1289,10 @@ mode: "development"
 agentId: "claude-code"
 ide: "<your IDE>"
 branch: "<current git branch>"
+clientSessionId: "<the id from the SessionStart hook's 'clientSessionId is …' line>"
 ```
+Leave `clientSessionId` out only if no hook printed one. Without it, two conversations in this
+checkout share one hub session, and the first to end closes it under the other.
 Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
 If `recentChanges.count > 0` → warn user and `git pull` before any edits.
 
@@ -1404,7 +1471,7 @@ CMDEOF
     # Gemini hooks use JSON response format: {"decision":"allow"} or {"decision":"deny","reason":"..."}
     cat > .gemini/hooks/session-init.sh << 'GHOOKEOF'
 #!/bin/bash
-# Cortex Session Init (v7.1) — Gemini variant.
+# Cortex Session Init (v7.2) — Gemini variant.
 #
 # v3 wiped the gate markers on every SessionStart. Where the host distinguishes a resumed or
 # compacted session from a fresh one, re-arming the discovery gate mid-task is a bug: the agent
@@ -1414,6 +1481,8 @@ CMDEOF
 # And it cleared session-started on every start, which is right — but the claude variant used to
 # create it here instead, making its whole session gate vacuous. Only the tracker writes it, from
 # a real cortex_session_start call.
+# v7.2 names this conversation's id for cortex_session_start's clientSessionId, so two
+# conversations in one checkout get a hub session each instead of sharing one.
 # An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
 # inside a worktree, and at whatever repo the tests happen to run from.
 PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
@@ -1422,17 +1491,24 @@ mkdir -p "$STATE_DIR"
 
 INPUT=$(cat 2>/dev/null || true)
 SOURCE=""
+CLIENT_ID=""
 if [ -n "$INPUT" ]; then
   if command -v jq >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null || true)
+    CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
   elif command -v python3 >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("source",""))' 2>/dev/null || true)
+    CLIENT_ID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || true)
   fi
 fi
+SOURCE=$(printf '%s' "$SOURCE" | tr -cd 'A-Za-z0-9_-')
+CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+CONVERSATION=""
+[ -n "$CLIENT_ID" ] && CONVERSATION=" This conversation's clientSessionId is ${CLIENT_ID} — pass it to cortex_session_start."
 
 case "$SOURCE" in
   compact|resume)
-    echo '{"systemMessage":"Cortex: same session ('"$SOURCE"') — discovery state kept."}'
+    echo '{"systemMessage":"Cortex: same session ('"$SOURCE"') — discovery state kept.'"$CONVERSATION"'"}'
     exit 0 ;;
 esac
 
@@ -1442,7 +1518,10 @@ rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" \
       "$STATE_DIR/discovery-used" "$STATE_DIR/knowledge-recalled" \
       "$STATE_DIR/memory-recalled" "$STATE_DIR/changes-checked" \
       "$STATE_DIR/tasks-checked" "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
-echo '{"systemMessage":"MANDATORY: call cortex_session_start, then cortex_knowledge_search + cortex_memory_search, before any edit. search_file_content and glob stay blocked until a cortex discovery tool has run."}'
+# Other conversations' sessions stay theirs to close; only week-old records are dropped.
+[ -d "$STATE_DIR/conversations" ] && find "$STATE_DIR/conversations" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
+echo '{"systemMessage":"MANDATORY: call cortex_session_start, then cortex_knowledge_search + cortex_memory_search, before any edit. search_file_content and glob stay blocked until a cortex discovery tool has run.'"$CONVERSATION"'"}'
+exit 0
 GHOOKEOF
 
     cat > .gemini/hooks/enforce-session.sh << 'GHOOKEOF'
@@ -1577,13 +1656,15 @@ GHOOKEOF
 
     cat > .gemini/hooks/track-quality.sh << 'GHOOKEOF'
 #!/bin/bash
-# Cortex Quality Tracker (v4.1) — Gemini variant.
+# Cortex Quality Tracker (v4.2) — Gemini variant.
 #
 # Two bugs from v3: cortex_quality_report touched quality-gates-passed, so reporting a failure
 # counted as passing; and every marker was an empty `touch`, which the enforcement hook could not
 # tell apart from a forged one. Markers now carry the tool and time that produced them, a gate is
 # only marked when the command output does not look like a failure, and the cortex session id is
 # captured so the session can actually be closed.
+# v4.2 files that session under the conversation that opened it (conversations/<session_id>),
+# so the exit hook closes this conversation's session and not another's in the same checkout.
 # An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
 # inside a worktree, and at whatever repo the tests happen to run from.
 PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
@@ -1591,11 +1672,12 @@ STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 mkdir -p "$STATE_DIR"
 INPUT=$(cat)
 
-TOOL_NAME=""; COMMAND=""; OUTPUT=""
+TOOL_NAME=""; COMMAND=""; OUTPUT=""; CLIENT_ID=""
 if command -v jq >/dev/null 2>&1; then
   TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
   OUTPUT=$(printf '%s' "$INPUT" | jq -r '[(.tool_response // .tool_output // empty)] | tostring' 2>/dev/null || true)
+  CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 elif command -v python3 >/dev/null 2>&1; then
   eval "$(printf '%s' "$INPUT" | python3 -c "
 import sys,json
@@ -1603,10 +1685,12 @@ d=json.load(sys.stdin)
 print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
 print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
 print(f'OUTPUT={repr(json.dumps(d.get(\"tool_response\", d.get(\"tool_output\",\"\"))))}')
+print(f'CLIENT_ID={repr(str(d.get(\"session_id\",\"\")))}')
 " 2>/dev/null || true)"
 fi
 
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
 record() { printf 'tool=%s at=%s\n' "${2:-$TOOL_NAME}" "$NOW" > "$STATE_DIR/$1"; }
 looks_failed() {
   printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖|FAIL |Exit status [1-9]'
@@ -1633,11 +1717,18 @@ case "$TOOL_NAME" in
     SESSION_ID=$(printf '%s' "$INPUT" | tr -d '\\' \
       | grep -Eo '"session_?[iI]d"[[:space:]]*:[[:space:]]*"sess_[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "$SESSION_ID" ] && printf '%s\n' "$SESSION_ID" > "$STATE_DIR/session-id"
+    if [ -n "$SESSION_ID" ] && [ -n "$CLIENT_ID" ]; then
+      mkdir -p "$STATE_DIR/conversations"
+      printf '%s\n' "$SESSION_ID" > "$STATE_DIR/conversations/$CLIENT_ID"
+    fi
     # A new hub session is open, so an earlier one's "ended" no longer applies — left in
     # place it made the exit hook skip this session too.
     rm -f "$STATE_DIR/session-ended"
     ;;
-  *cortex_session_end*)    record session-ended ;;
+  *cortex_session_end*)
+    record session-ended
+    [ -n "$CLIENT_ID" ] && rm -f "$STATE_DIR/conversations/$CLIENT_ID"
+    ;;
   *cortex_quality_report*) record quality-reported ;;
   *cortex_code_search*|*cortex_code_context*|*cortex_code_impact*|*cortex_cypher*)
     record discovery-used ;;
@@ -1685,7 +1776,7 @@ GHOOKEOF
 
     cat > .gemini/hooks/session-end-check.sh << 'GHOOKEOF'
 #!/bin/bash
-# Cortex Session End Check (v7) — Gemini variant.
+# Cortex Session End Check (v7.1) — Gemini variant.
 #
 # v6 posted to ${CORTEX_HUB_API_URL:-http://localhost:4000}. Nothing sets that variable, so on
 # every machine but the hub itself the close went to a port nobody listens on; curl's failure
@@ -1696,19 +1787,42 @@ GHOOKEOF
 # The close is sent with auto:true: the hub records it as 'abandoned', keeps it out of memory
 # and /cs recall, and leaves a session that /ce already completed alone.
 #
+# v7.1: every conversation in a checkout shares this state directory, so `session-id` is
+# whichever one ran cortex_session_start last. The tracker files each session under the
+# conversation that opened it, and this hook closes that one and nothing else; with no such
+# record it falls back to `session-id`.
+#
 # An explicit project dir beats guessing: `git rev-parse` points at the main checkout from
 # inside a worktree, and at whatever repo the tests happen to run from.
 PROJECT_DIR="${CORTEX_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 
-[ -f "$STATE_DIR/session-started" ] || exit 0
-[ -f "$STATE_DIR/session-ended" ] && exit 0
-
 # Gemini shows a hook's systemMessage; plain stdout is not read.
 say() { printf '{"systemMessage":"%s"}\n' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"; }
 
+INPUT=$(cat 2>/dev/null || true)
+CLIENT_ID=""
+if [ -n "$INPUT" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+  elif command -v python3 >/dev/null 2>&1; then
+    CLIENT_ID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || true)
+  fi
+fi
+CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+
 SESSION_ID=""
-[ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
+OWN=""
+if [ -n "$CLIENT_ID" ] && [ -d "$STATE_DIR/conversations" ]; then
+  # Nothing filed under this conversation: it never opened a session, or closed it itself.
+  OWN="$STATE_DIR/conversations/$CLIENT_ID"
+  [ -s "$OWN" ] || exit 0
+  SESSION_ID=$(head -1 "$OWN" 2>/dev/null || true)
+else
+  [ -f "$STATE_DIR/session-started" ] || exit 0
+  [ -f "$STATE_DIR/session-ended" ] && exit 0
+  [ -s "$STATE_DIR/session-id" ] && SESSION_ID=$(cat "$STATE_DIR/session-id" 2>/dev/null || true)
+fi
 
 if [ -z "$SESSION_ID" ] || [ "$SESSION_ID" = "null" ]; then
   say "WARNING: cortex session not closed — no session id was recorded. Call cortex_session_end next time."
@@ -1858,7 +1972,11 @@ else
 fi
 
 if [ "$CLOSED" = "0" ]; then
-  printf 'tool=session-end-check at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/session-ended"
+  [ -n "$OWN" ] && rm -f "$OWN"
+  # session-ended speaks for the checkout's current session, so only that one may write it.
+  if [ -z "$OWN" ] || [ "$SESSION_ID" = "$(cat "$STATE_DIR/session-id" 2>/dev/null)" ]; then
+    printf 'tool=session-end-check at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATE_DIR/session-ended"
+  fi
   say "INFO: cortex session $SESSION_ID closed as abandoned.${ACTIONS:+ Activity:${ACTIONS}}"
 else
   say "WARNING: cortex session $SESSION_ID not closed — ${WHY}. Call cortex_session_end next time."

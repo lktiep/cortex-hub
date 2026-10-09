@@ -55,6 +55,8 @@ const sessionIdentityCols = [
   'ALTER TABLE session_handoffs ADD COLUMN capabilities TEXT DEFAULT \'[]\'',
   'ALTER TABLE session_handoffs ADD COLUMN role TEXT',
   "ALTER TABLE session_handoffs ADD COLUMN last_activity TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+  // The IDE's own conversation id: two conversations in one checkout share every other field.
+  'ALTER TABLE session_handoffs ADD COLUMN client_session_id TEXT',
 ]
 for (const sql of sessionIdentityCols) {
   try { db.exec(sql) } catch { /* ignore if column exists */ }
