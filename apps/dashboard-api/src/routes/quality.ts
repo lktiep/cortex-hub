@@ -374,23 +374,48 @@ sessionsRouter.post('/start', async (c) => {
       }
     }
 
+    const projectName = (project?.name as string) ?? 'Unknown Project'
+    const projectDesc = (project?.description as string) ?? ''
+    const orgId = (project?.org_id as string) ?? ''
+
+    // Resolve project display name: use DB project name if found, otherwise extract from repo URL
+    const resolvedProject = projectName !== 'Unknown Project'
+      ? projectName
+      : normalizedRepo !== 'unknown'
+        ? normalizedRepo.split('/').pop() ?? normalizedRepo
+        : 'unknown'
+
+    // Reuse the session this same workspace already has open. The row stores the
+    // project's id and display name, never the repo URL — matching on the URL never
+    // found one, so every /cs added a row and active sessions piled up by the hundred.
+    // The key, machine, IDE and branch are part of the match: parallel worktree agents
+    // share the agent name and project, and folding them into one session would let the
+    // first /ce close it under the others.
     let sessionId: string
     const existingSession = db.prepare(
       `SELECT id FROM session_handoffs
-       WHERE from_agent = ? AND project IN (?, ?, ?, ?) AND status = 'active'
+       WHERE from_agent = ? AND status = 'active'
+         AND (project_id = ? OR (? IS NULL AND project_id IS NULL AND project = ?))
+         AND api_key_name IS ? AND hostname IS ? AND ide IS ? AND branch IS ?
        ORDER BY created_at DESC LIMIT 1`
     ).get(
       agentId,
-      normalizedRepo,
-      `${normalizedRepo}.git`,
-      `${normalizedRepo}/`,
-      repo ?? 'unknown'
+      project?.id ?? null,
+      project?.id ?? null,
+      resolvedProject,
+      apiKeyName,
+      hostname ?? null,
+      ide ?? null,
+      branch ?? null
     ) as { id: string } | undefined
 
     if (existingSession) {
       sessionId = existingSession.id
       db.prepare(
-        `UPDATE session_handoffs SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`
+        `UPDATE session_handoffs
+            SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                last_activity = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+          WHERE id = ?`
       ).run(sessionId)
     } else {
       sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
@@ -415,17 +440,6 @@ sessionsRouter.post('/start', async (c) => {
       : db.prepare(
           'SELECT id, task_summary, created_at FROM session_handoffs ORDER BY created_at DESC LIMIT 3'
         ).all()
-
-    const projectName = (project?.name as string) ?? 'Unknown Project'
-    const projectDesc = (project?.description as string) ?? ''
-    const orgId = (project?.org_id as string) ?? ''
-
-    // Resolve project display name: use DB project name if found, otherwise extract from repo URL
-    const resolvedProject = projectName !== 'Unknown Project'
-      ? projectName
-      : normalizedRepo !== 'unknown'
-        ? normalizedRepo.split('/').pop() ?? normalizedRepo
-        : 'unknown'
 
     if (!existingSession) {
       const insertStmt = db.prepare(
