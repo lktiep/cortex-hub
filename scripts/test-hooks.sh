@@ -482,6 +482,50 @@ printf 'tool=build+typecheck+lint at=now\n' > "$STATE/quality-gates-passed"
 check "commit allowed once gates pass"     allow "$(gdecision enforce-commit.sh "$(gpayload run_shell_command 'git commit -m x')")"
 teardown
 
+echo "enforce-commit.sh — the repo's own git hooks are not the agent's to skip"
+# install.sh leaves a repo that checks from git hooks to those hooks, so --no-verify skips
+# the checks themselves. Every case below has a green session behind it: what blocks is
+# the skip, not a missing gate.
+setup; printf 'tool=cortex_session_start at=now\n' > "$STATE/session-started"; discovered
+printf 'tool=build+typecheck+lint at=now\n' > "$STATE/quality-gates-passed"
+HEREDOC_MSG=$(printf "git commit -q -F - <<'EOF'\nfeat: block --no-verify\n\nLEFTHOOK=0 and git commit -n too\nEOF")
+check "commit --no-verify blocked"           2 "$(run enforce-commit.sh "$(bash_payload 'git commit --no-verify -m x')")"
+check "cd && commit -n blocked"              2 "$(run enforce-commit.sh "$(bash_payload 'cd apps && git commit -n -m x')")"
+check "-n inside a flag cluster blocked"     2 "$(run enforce-commit.sh "$(bash_payload 'git commit -anm x')")"
+check "abbreviated --no-veri blocked"        2 "$(run enforce-commit.sh "$(bash_payload 'git commit --no-veri -m x')")"
+check "git -C dir commit -n blocked"         2 "$(run enforce-commit.sh "$(bash_payload 'git -C repo commit -n')")"
+check "push --no-verify blocked"             2 "$(run enforce-commit.sh "$(bash_payload 'git push origin HEAD --no-verify')")"
+check "LEFTHOOK=0 git push blocked"          2 "$(run enforce-commit.sh "$(bash_payload 'LEFTHOOK=0 git push')")"
+check "LEFTHOOK=false blocked"               2 "$(run enforce-commit.sh "$(bash_payload 'LEFTHOOK=false git commit -m x')")"
+check "export LEFTHOOK=0 blocked"            2 "$(run enforce-commit.sh "$(bash_payload 'export LEFTHOOK=0; git commit -m x')")"
+check "env LEFTHOOK=\"0\" blocked"           2 "$(run enforce-commit.sh "$(bash_payload 'env LEFTHOOK="0" git push')")"
+check "a continued line blocked"             2 "$(run enforce-commit.sh "$(bash_payload "$(printf 'git commit \\\n  --no-verify -m x')")")"
+check "after a heredoc blocked"              2 "$(run enforce-commit.sh "$(bash_payload "$(printf '%s\ngit push --no-verify' "$HEREDOC_MSG")")")"
+check "push -n is a dry run, allowed"        0 "$(run enforce-commit.sh "$(bash_payload 'git push -n origin main')")"
+check "a message naming the flag allowed"    0 "$(run enforce-commit.sh "$(bash_payload 'git commit -m "mentions --no-verify and LEFTHOOK=0"')")"
+check "a heredoc message naming it allowed"  0 "$(run enforce-commit.sh "$(bash_payload "$HEREDOC_MSG")")"
+check "-mnew is -m new, allowed"             0 "$(run enforce-commit.sh "$(bash_payload 'git commit -mnew')")"
+check "git log -n allowed"                   0 "$(run enforce-commit.sh "$(bash_payload 'git log -n 3')")"
+check "LEFTHOOK=1 allowed"                   0 "$(run enforce-commit.sh "$(bash_payload 'LEFTHOOK=1 git push')")"
+check "a PR body naming it allowed"          0 "$(run enforce-commit.sh "$(bash_payload 'gh pr create --title x --body "never git commit --no-verify"')")"
+teardown
+setup
+check "blocked with no session at all"       2 "$(run enforce-commit.sh "$(bash_payload 'git push --no-verify')")"
+check "and the reason is the skip" 0 "$(printf '%s' "$(bash_payload 'git push --no-verify')" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/enforce-commit.sh" 2>&1 >/dev/null | grep -q "skips the repo's git hooks" && echo 0 || echo 1)"
+teardown
+
+echo "gemini enforce-commit.sh — the same skips, denied"
+setup; printf 'tool=cortex_session_start at=now\n' > "$STATE/session-started"; discovered
+printf 'tool=build+typecheck+lint at=now\n' > "$STATE/quality-gates-passed"
+check "commit --no-verify denied"            deny "$(gdecision enforce-commit.sh "$(gpayload run_shell_command 'git commit --no-verify -m x')")"
+check "push --no-verify denied"              deny "$(gdecision enforce-commit.sh "$(gpayload run_shell_command 'git push --no-verify')")"
+check "cd && commit -n denied"               deny "$(gdecision enforce-commit.sh "$(gpayload run_shell_command 'cd a && git commit -n -m x')")"
+check "LEFTHOOK=0 denied"                    deny "$(gdecision enforce-commit.sh "$(gpayload run_shell_command 'LEFTHOOK=0 git commit -m x')")"
+check "push -n allowed"                      allow "$(gdecision enforce-commit.sh "$(gpayload run_shell_command 'git push -n')")"
+check "a heredoc message allowed"            allow "$(gdecision enforce-commit.sh "$(gpayload run_shell_command "$HEREDOC_MSG")")"
+check "the deny is valid JSON" 0 "$(gpayload run_shell_command 'git push --no-verify' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/enforce-commit.sh" 2>/dev/null | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["decision"]=="deny" else 1)' && echo 0 || echo 1)"
+teardown
+
 echo "gemini track-quality.sh — evidence, not touches"
 setup
 POST='{"tool_name":"mcp__cortex-hub__cortex_code_search","tool_input":{},"tool_response":{"content":[{"type":"text","text":"3 results"}]}}'
