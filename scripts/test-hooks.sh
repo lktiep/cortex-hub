@@ -701,12 +701,83 @@ check "verify:ci is not verify"             0 "$([ "$(profile_verify full)" = '[
 rm -rf "$PROJ"
 
 echo "  core.hooksPath pointing at someone else's hooks must not be overwritten"
-install_in_sandbox "printf '{}' > package.json; mkdir -p .myhooks; printf '#!/bin/sh\necho mine\n' > .myhooks/pre-commit; chmod +x .myhooks/pre-commit; git config core.hooksPath .myhooks"
+# Untracked: one developer's hooks, not the repo's. cortex still sets up its gate and says
+# plainly that it cannot run.
+install_in_sandbox "printf '{}' > package.json; mkdir -p .myhooks; printf '#!/bin/sh\necho mine\n' > .myhooks/pre-commit; chmod +x .myhooks/pre-commit; printf '.myhooks/\n' >> .git/info/exclude; git config core.hooksPath .myhooks"
 check "installer exits clean"               0 "$RC"
 check "their hooksPath is left set"         0 "$([ "$(git -C "$PROJ" config --get core.hooksPath)" = ".myhooks" ] && echo 0 || echo 1)"
 check "their hook is not overwritten"       0 "$(grep -q 'echo mine' "$PROJ/.myhooks/pre-commit" && echo 0 || echo 1)"
 check "the dead gate is reported, not hidden" 0 "$(grep -q 'NOT installing over them' "$OUT" && echo 0 || echo 1)"
 check "summary does not claim configured"   0 "$(grep -q 'no git hook runs' "$OUT" && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  a repo whose git hooks are its own keeps them — even with --force"
+# A repo that runs its checks from git hooks has said what runs on commit and push. cortex
+# used to overwrite its lefthook.yml with --force and add a second pre-commit/pre-push next
+# to husky's. Its only addition now is the post-push, in lefthook-local.yml, which lefthook
+# merges into the repo's config instead of replacing it.
+OWN_LH="printf 'pre-commit:\n  commands:\n    mine:\n      run: echo mine\n' > lefthook.yml; printf '{}' > package.json"
+install_in_sandbox "$OWN_LH" --force
+check "installer exits clean"               0 "$RC"
+check "their lefthook.yml is untouched"     0 "$(git -C "$PROJ" diff --quiet -- lefthook.yml && echo 0 || echo 1)"
+check "post-push goes to lefthook-local.yml" 0 "$(grep -q 'notify_cortex' "$PROJ/lefthook-local.yml" 2>/dev/null && echo 0 || echo 1)"
+check "which is a developer file: ignored"  0 "$(grep -qxF 'lefthook-local.yml' "$PROJ/.gitignore" && echo 0 || echo 1)"
+check "lefthook installs their hooks"       0 "$([ -f "$PROJ/.git/hooks/pre-commit" ] && echo 0 || echo 1)"
+check "summary names the owner"             0 "$(grep -q 'repo-owned hooks (lefthook (lefthook.yml))' "$OUT" && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  lefthook-local.yml is the developer's: cortex swaps its own block, nothing else"
+reinstall_in_sandbox() {
+  ( cd "$PROJ" && PATH="$PROJ/.bin:$PATH" HOME="$PROJ" bash "$INSTALL_SH" --skip-global --tools cursor "$@" ) > "$OUT" 2>&1
+  RC=$?
+}
+install_in_sandbox "$OWN_LH; printf 'lefthook-local.yml\n' >> .git/info/exclude; printf 'pre-commit:\n  commands:\n    local_only:\n      run: echo local\n' > lefthook-local.yml"
+reinstall_in_sandbox --force
+check "second install exits clean"          0 "$RC"
+check "their own lines are kept"            0 "$(grep -q 'local_only' "$PROJ/lefthook-local.yml" && echo 0 || echo 1)"
+check "exactly one cortex block"            1 "$(grep -c '^post-push:' "$PROJ/lefthook-local.yml")"
+check "exactly one start marker"            1 "$(grep -c '^# >>> cortex post-push' "$PROJ/lefthook-local.yml")"
+rm -rf "$PROJ"
+install_in_sandbox "$OWN_LH; printf 'lefthook-local.yml\n' >> .git/info/exclude; printf 'post-push:\n  commands:\n    theirs:\n      run: echo theirs\n' > lefthook-local.yml"
+check "a file with its own post-push"       0 "$RC"
+check "is left exactly as it was"           0 "$([ "$(cat "$PROJ/lefthook-local.yml")" = "$(printf 'post-push:\n  commands:\n    theirs:\n      run: echo theirs')" ] && echo 0 || echo 1)"
+check "and that is said"                    0 "$(grep -q 'has its own post-push' "$OUT" && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  husky, pre-commit, a committed hooksPath or a verify script: cortex writes no git hooks"
+# Without the repo's own lefthook config there is nothing for lefthook-local.yml to merge
+# into, and `lefthook install` would take the git hooks over from what runs them now.
+no_cortex_hooks() {
+  check "$1: exits clean"                   0 "$RC"
+  check "$1: no lefthook.yml"               0 "$([ -e "$PROJ/lefthook.yml" ] && echo 1 || echo 0)"
+  check "$1: no lefthook-local.yml"         0 "$([ -e "$PROJ/lefthook-local.yml" ] && echo 1 || echo 0)"
+  check "$1: owner reported"                0 "$(grep -q "repo-owned hooks ($2)" "$OUT" && echo 0 || echo 1)"
+}
+install_in_sandbox "printf '{}' > package.json; mkdir -p .husky; printf 'pnpm verify\n' > .husky/pre-commit" --force
+no_cortex_hooks husky "husky (.husky/pre-commit)"
+check "husky: no hook installed over it"    0 "$([ -e "$PROJ/.git/hooks/pre-commit" ] && echo 1 || echo 0)"
+rm -rf "$PROJ"
+install_in_sandbox "printf 'repos: []\n' > .pre-commit-config.yaml"
+no_cortex_hooks pre-commit "pre-commit (.pre-commit-config.yaml)"
+rm -rf "$PROJ"
+install_in_sandbox "printf '{\"scripts\":{\"build\":\"x\",\"verify\":\"x\"}}' > package.json; : > pnpm-lock.yaml"
+no_cortex_hooks verify "package.json verify script"
+check "verify: no hook installed"           0 "$([ -e "$PROJ/.git/hooks/pre-commit" ] && echo 1 || echo 0)"
+rm -rf "$PROJ"
+install_in_sandbox "printf '{}' > package.json; mkdir -p .myhooks; printf '#!/bin/sh\necho mine\n' > .myhooks/pre-commit; chmod +x .myhooks/pre-commit; git config core.hooksPath .myhooks"
+no_cortex_hooks hooksPath "core.hooksPath=.myhooks"
+check "hooksPath: path is kept"             0 "$([ "$(git -C "$PROJ" config --get core.hooksPath)" = ".myhooks" ] && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  a lefthook.yml cortex generated is cortex's, not the repo's"
+# cortex-hub itself commits the one install.sh generates; --force must still regenerate it.
+install_in_sandbox "printf '{}' > package.json; printf '# Auto-generated by cortex install.sh — per-stack pipelines\npre-commit:\n' > lefthook.yml" --force
+check "installer exits clean"               0 "$RC"
+check "regenerated with the post-push"      0 "$(grep -q 'notify_cortex' "$PROJ/lefthook.yml" && echo 0 || echo 1)"
+check "no lefthook-local.yml"               0 "$([ -e "$PROJ/lefthook-local.yml" ] && echo 1 || echo 0)"
+rm -rf "$PROJ"
+install_in_sandbox "printf '{\"scripts\":{\"verify\":\"x\"}}' > package.json; printf '# Auto-generated by cortex install.sh — per-stack pipelines\npre-commit:\n' > lefthook.yml"
+check "a leftover next to repo checks"      0 "$(grep -q 'generated by an earlier cortex install' "$OUT" && echo 0 || echo 1)"
 rm -rf "$PROJ"
 
 echo "  a husky hooksPath with no hooks of its own must be handed to lefthook"

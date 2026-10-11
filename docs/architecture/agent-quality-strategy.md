@@ -258,6 +258,30 @@ project-profile.json          lefthook.yml
                               └──────────────────────────┘
 ```
 
+### Repos that own their git hooks
+
+A repo that already runs its checks from git hooks keeps them. `install.sh` generates no
+`pre-commit`/`pre-push` when it finds, committed to the repo, a lefthook config of the repo's
+own (any name lefthook reads, other than the one `install.sh` itself generated), a `.husky/`
+hook, a `.pre-commit-config.yaml`, or hooks in the directory `core.hooksPath` points at; nor
+when `package.json` has a `verify` script. This holds with `--force` too: it used to
+overwrite the repo's own `lefthook.yml`.
+
+- **The repo uses lefthook:** cortex's `post-push` goes into `lefthook-local.yml`, between
+  `# >>> cortex post-push` / `# <<< cortex post-push` markers. lefthook merges that file into
+  the repo's config rather than replacing it, a re-install swaps only the marked block, and
+  the file is added to `.gitignore`. A `lefthook-local.yml` that is committed, or that has a
+  `post-push` of its own, is left alone.
+- **Anything else** (husky, pre-commit, a hooks dir, a `verify` script alone): cortex writes
+  no git hooks. `lefthook-local.yml` would have nothing to merge into, and `lefthook install`
+  would take the hooks over from what runs them now.
+- **A `verify` script** also becomes the profile's `verify.full` (`pnpm verify`,
+  `npm run verify`): the repo has already said what "fully checked" means.
+
+Skipping those hooks is blocked on the agent side: `enforce-commit.sh` refuses
+`--no-verify`, `git commit -n` and `LEFTHOOK=0`. The rule lives in the hook cortex
+generates, not in the repo, because cortex rewrites that file on every install.
+
 ---
 
 ## 6. MCP Tool: `cortex_quality_report`
