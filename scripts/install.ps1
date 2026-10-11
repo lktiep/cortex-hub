@@ -277,6 +277,11 @@ if (-not (Test-Path ".cortex\project-profile.json") -or $Force) {
             }
         }
         if ($scripts -match "\btest\b") { $FullCmds += "`"$PkgManager test`"" }
+        # A repo with its own `verify` script has already said what "fully checked" means.
+        # An exact name: "\bverify\b" would take `verify:ci` for it.
+        if (($scripts -split ' ') -contains "verify") {
+            $FullCmds = @(if ($PkgManager -eq "npm") { "`"npm run verify`"" } else { "`"$PkgManager verify`"" })
+        }
     }
     # Go
     if (Test-Path "go.mod") {

@@ -646,8 +646,9 @@ STUB
   chmod +x "$1/lefthook"
 }
 
-# $1 = extra setup run inside the fresh repo. Sets PROJ, OUT and RC as globals —
-# not via command substitution, which would run this in a subshell and throw them away.
+# $1 = extra setup run inside the fresh repo, the rest = extra installer args. Sets PROJ,
+# OUT and RC as globals — not via command substitution, which would run this in a
+# subshell and throw them away.
 install_in_sandbox() {
   PROJ=$(mktemp -d)
   lefthook_stub "$PROJ/.bin"
@@ -657,7 +658,7 @@ install_in_sandbox() {
     git init -q . && git config user.email t@t && git config user.name t
     eval "$1"
     git add -A >/dev/null 2>&1; git commit -qm init >/dev/null 2>&1
-    PATH="$PROJ/.bin:$PATH" HOME="$PROJ" bash "$INSTALL_SH" --skip-global --tools cursor
+    PATH="$PROJ/.bin:$PATH" HOME="$PROJ" bash "$INSTALL_SH" --skip-global --tools cursor "${@:2}"
   ) > "$OUT" 2>&1
   RC=$?
 }
@@ -681,6 +682,22 @@ install_in_sandbox "printf 'hi\n' > README.md"
 check "unknown stack does not abort"        0 "$RC"
 check "no unbound variable"                 0 "$(grep -q 'unbound variable' "$OUT" && echo 1 || echo 0)"
 check "profile still written"               0 "$([ -f "$PROJ/.cortex/project-profile.json" ] && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  a package.json verify script is the full check"
+# The repo already said what "fully checked" means; build/typecheck/lint/test picked one by
+# one would second-guess it.
+profile_verify() { python3 -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1]))["verify"][sys.argv[2]]))' "$PROJ/.cortex/project-profile.json" "$1" 2>/dev/null; }
+install_in_sandbox "printf '{\"scripts\":{\"build\":\"x\",\"lint\":\"x\",\"test\":\"x\",\"verify\":\"x\"}}' > package.json; : > pnpm-lock.yaml"
+check "installer exits clean"               0 "$RC"
+check "full is pnpm verify"                 0 "$([ "$(profile_verify full)" = '["pnpm verify"]' ] && echo 0 || echo 1)"
+check "pre_commit is left as it was"        0 "$([ "$(profile_verify pre_commit)" = '["pnpm build", "pnpm lint"]' ] && echo 0 || echo 1)"
+rm -rf "$PROJ"
+install_in_sandbox "printf '{\"scripts\":{\"verify\":\"x\"}}' > package.json"
+check "npm runs it, verify-only keeps it"   0 "$([ "$(profile_verify full)" = '["npm run verify"]' ] && echo 0 || echo 1)"
+rm -rf "$PROJ"
+install_in_sandbox "printf '{\"scripts\":{\"build\":\"x\",\"verify:ci\":\"x\"}}' > package.json; : > pnpm-lock.yaml"
+check "verify:ci is not verify"             0 "$([ "$(profile_verify full)" = '["pnpm build"]' ] && echo 0 || echo 1)"
 rm -rf "$PROJ"
 
 echo "  core.hooksPath pointing at someone else's hooks must not be overwritten"

@@ -403,6 +403,7 @@ if [ ! -f ".cortex/project-profile.json" ] || [ "$FORCE" = "true" ]; then
   PKG_MANAGER="unknown"
   PRE_COMMIT_CMDS=""
   FULL_CMDS=""
+  HAS_VERIFY=""
 
   # ── Node.js ──
   if [ -f "package.json" ]; then
@@ -431,6 +432,15 @@ if [ ! -f ".cortex/project-profile.json" ] || [ "$FORCE" = "true" ]; then
       fi
     done
     echo "$SCRIPTS" | grep -qw "test" && FULL+=("\"$PKG_MANAGER test\"")
+    # A repo with its own `verify` script has already said what "fully checked" means;
+    # build/typecheck/lint/test picked one by one would second-guess it. An exact name:
+    # `grep -w` would take `verify:ci` for it.
+    case " $SCRIPTS " in
+      *" verify "*)
+        HAS_VERIFY=1
+        if [ "$PKG_MANAGER" = "npm" ]; then FULL=("\"npm run verify\""); else FULL=("\"$PKG_MANAGER verify\""); fi
+        ;;
+    esac
     PRE_COMMIT_CMDS=$(IFS=,; echo "${PRE_COMMIT[*]+"${PRE_COMMIT[*]}"}")
     FULL_CMDS=$(IFS=,; echo "${FULL[*]+"${FULL[*]}"}")
   fi
@@ -484,7 +494,7 @@ if [ ! -f ".cortex/project-profile.json" ] || [ "$FORCE" = "true" ]; then
 
   # Generate profile
   STACKS_JSON=$(printf '"%s",' ${DETECTED_STACKS[@]+"${DETECTED_STACKS[@]}"} | sed 's/,$//')
-  if [ -z "$PRE_COMMIT_CMDS" ] && [ ${#DETECTED_STACKS[@]} -gt 0 ]; then
+  if [ -z "$PRE_COMMIT_CMDS" ] && [ -z "$HAS_VERIFY" ] && [ ${#DETECTED_STACKS[@]} -gt 0 ]; then
     # For non-node projects, leave verify empty — lefthook will use glob-based pipelines
     PRE_COMMIT_CMDS=""
     FULL_CMDS=""
