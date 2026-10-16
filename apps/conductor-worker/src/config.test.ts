@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  detectHubBase,
   detectHubConfig,
   entryFromServer,
   hubBaseFromUrl,
@@ -206,5 +207,50 @@ describe('detectHubConfig', () => {
     const home = fakeHome({});
     const r = detectHubConfig({ homeDir: home, repoPath: '/r', flags: {}, env: {} });
     expect(r).toEqual({ error: expect.stringContaining('--hub') });
+  });
+});
+
+describe('detectHubBase', () => {
+  it('flags beat env beat config, and names where the URL came from', () => {
+    const home = fakeHome({ '.claude.json': 'claude.json' });
+    const base = { homeDir: home, repoPath: '/r' };
+    expect(detectHubBase({ ...base, flags: {}, env: {} })).toEqual({
+      hubBase: 'https://h.example',
+      source: '~/.claude.json mcpServers',
+    });
+    const env = { CORTEX_HUB_URL: 'https://e.example/mcp/' };
+    expect(detectHubBase({ ...base, flags: {}, env })).toEqual({
+      hubBase: 'https://e.example',
+      source: 'env CORTEX_HUB_URL',
+    });
+    expect(detectHubBase({ ...base, flags: { hub: 'https://f.example/mcp' }, env })).toEqual({
+      hubBase: 'https://f.example',
+      source: '--hub',
+    });
+  });
+
+  it('needs no key: a configured URL without one still resolves', () => {
+    const home = fakeHome({
+      '.cursor/mcp.json': 'raw:{"mcpServers":{"cortex-hub":{"url":"https://k.example/mcp"}}}',
+    });
+    const input = { homeDir: home, repoPath: '/r', flags: {}, env: {} };
+    expect(detectHubBase(input)).toEqual({ hubBase: 'https://k.example', source: '~/.cursor/mcp.json mcpServers' });
+    expect(detectHubConfig(input)).toEqual({ error: expect.stringMatching(/api key/i) });
+  });
+
+  it('agrees with detectHubConfig on the hub and its source', () => {
+    const home = fakeHome({ '.codex/config.toml': 'codex-url.toml', '.cursor/mcp.json': 'cursor.json' });
+    const input = { homeDir: home, repoPath: '/r', flags: {}, env: {} };
+    const hub = detectHubBase(input);
+    const full = detectHubConfig(input);
+    expect(full).toMatchObject({ hubBase: (hub as { hubBase: string }).hubBase });
+    expect((full as { source: { hub: string } }).source.hub).toBe((hub as { source: string }).source);
+  });
+
+  it('returns the --hub error when nothing is configured', () => {
+    const home = fakeHome({});
+    expect(detectHubBase({ homeDir: home, repoPath: '/r', flags: {}, env: {} })).toEqual({
+      error: expect.stringContaining('--hub'),
+    });
   });
 });

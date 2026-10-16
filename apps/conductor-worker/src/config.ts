@@ -146,9 +146,9 @@ export function readMcpJson(file: string, env: NodeJS.ProcessEnv, source: string
   return entryFromServer(serverIn(readJson(file), 'mcpServers'), env, source);
 }
 
-export function detectHubConfig(input: DetectInput): HubConfig | { error: string } {
-  const { flags, env, homeDir, repoPath } = input;
-
+/** The cortex-hub entries in the agent configs, read once and only when first asked for. */
+function mcpEntries(input: DetectInput): () => McpEntry[] {
+  const { env, homeDir, repoPath } = input;
   const readers: Array<() => McpEntry | null> = [
     () => readClaudeJson(path.join(homeDir, '.claude.json'), repoPath, env),
     () => readCodexToml(path.join(homeDir, '.codex', 'config.toml'), env),
@@ -161,24 +161,41 @@ export function detectHubConfig(input: DetectInput): HubConfig | { error: string
     () => readMcpJson(path.join(homeDir, '.cursor', 'mcp.json'), env, '~/.cursor/mcp.json mcpServers'),
   ];
   let cache: McpEntry[] | null = null;
-  const entries = (): McpEntry[] => {
+  return () => {
     cache ??= readers.map((r) => r()).filter((e): e is McpEntry => e !== null);
     return cache;
   };
+}
 
+function hubBaseOf(input: DetectInput, entries: () => McpEntry[]): { hubBase: string; source: string } | { error: string } {
+  const { flags, env } = input;
   let hubUrl: string | null;
-  let hubSource: string;
-  if ((hubUrl = str(flags.hub)) !== null) hubSource = '--hub';
-  else if ((hubUrl = str(env['CORTEX_HUB_URL'])) !== null) hubSource = 'env CORTEX_HUB_URL';
+  let source: string;
+  if ((hubUrl = str(flags.hub)) !== null) source = '--hub';
+  else if ((hubUrl = str(env['CORTEX_HUB_URL'])) !== null) source = 'env CORTEX_HUB_URL';
   else {
     const first = entries()[0];
     hubUrl = first?.url ?? null;
-    hubSource = first?.source ?? '';
+    source = first?.source ?? '';
   }
   if (hubUrl === null) {
     return { error: 'No hub URL found. Pass --hub <url>, set CORTEX_HUB_URL, or configure the cortex-hub MCP server.' };
   }
-  const hubBase = hubBaseFromUrl(hubUrl);
+  return { hubBase: hubBaseFromUrl(hubUrl), source };
+}
+
+/** The hub base URL alone (flags, env, then agent configs); needs no api key. */
+export function detectHubBase(input: DetectInput): { hubBase: string; source: string } | { error: string } {
+  return hubBaseOf(input, mcpEntries(input));
+}
+
+export function detectHubConfig(input: DetectInput): HubConfig | { error: string } {
+  const { flags, env } = input;
+  const entries = mcpEntries(input);
+
+  const hub = hubBaseOf(input, entries);
+  if ('error' in hub) return hub;
+  const { hubBase, source: hubSource } = hub;
 
   let apiKey: string | null;
   let keySource: string;
