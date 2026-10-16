@@ -381,7 +381,7 @@ curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/ru
 
 ```powershell
 # Windows
-$env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; & $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host>
+$env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host>
 ```
 
 ### One-Command Project Setup

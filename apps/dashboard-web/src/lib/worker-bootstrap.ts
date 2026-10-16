@@ -17,6 +17,6 @@ export function workerBootstrap(mcpUrl: string | null): WorkerBootstrap {
   return {
     hubBase,
     unix: `curl -fsSL ${RUN_AGENT_RAW}/run-agent.sh | CORTEX_API_KEY=<worker-api-key> bash -s -- start --daemon --hub ${hub}`,
-    windows: `$env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb ${RUN_AGENT_RAW}/run-agent.ps1 -OutFile $env:TEMP\\run-agent.ps1; & $env:TEMP\\run-agent.ps1 start --daemon --hub ${hub}`,
+    windows: `$env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb ${RUN_AGENT_RAW}/run-agent.ps1 -OutFile $env:TEMP\\run-agent.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\\run-agent.ps1 start --daemon --hub ${hub}`,
   };
 }

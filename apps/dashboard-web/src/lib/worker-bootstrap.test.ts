@@ -39,6 +39,12 @@ describe('workerBootstrap', () => {
     }
   });
 
+  it('runs the Windows script with a per-process execution policy bypass', () => {
+    expect(workerBootstrap(null).windows).toContain(
+      'powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\\run-agent.ps1 start --daemon',
+    );
+  });
+
   it('strips exactly one /mcp', () => {
     expect(workerBootstrap('https://x.example.com/mcp/mcp').hubBase).toBe('https://x.example.com/mcp');
   });

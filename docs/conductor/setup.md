@@ -219,6 +219,14 @@ it finds in `~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/antigravity/mcp
 and `~/.cursor/mcp.json`, in that order. The key comes from `--api-key`, then `CORTEX_API_KEY`,
 then the entry for the same hub in those files.
 
+#### VS Code extension
+
+The Cortex extension finds the hub in this order: the `cortexHub.hubUrl` setting (empty by
+default), then the `CORTEX_HUB_WS_URL` or `CORTEX_HUB_URL` env var, then the MCP config it
+detects (Claude Code, `.mcp.json`, Gemini, Antigravity, Cursor, Windsurf, VS Code). It does not
+read `~/.codex/config.toml`. At activation it logs `hubSource` (`setting`, `env:<NAME>`, a config
+path or `default`) so you can see which one won. It never logs the key.
+
 ## 6. Install a worker
 
 Run this inside a clone of the project. It downloads the worker to
@@ -233,11 +241,11 @@ curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/ru
 #### Windows
 
 ```powershell
-$env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; & $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host>
+$env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host>
 ```
 
-Or copy these from Dashboard, Settings, "Run a worker". It fills in your hub from
-`EXTERNAL_MCP_URL`.
+The Windows line runs the script with `-ExecutionPolicy Bypass`, which applies to that one
+process only. Your machine's policy is not changed.
 
 Options (add them after `start`):
 
@@ -246,7 +254,7 @@ Options (add them after `start`):
 | `--agent-id <id>` | Worker name. Default: `CORTEX_AGENT_ID`, else `<host>-<repo folder>`. Use a different one for each worker on a machine. |
 | `--repo <path>` | The clone to work in. Default: the current directory. |
 | `--engines claude,agy` | Engines to look for, in order. Default: `agy,claude,codex,gemini`. |
-| `--capabilities a,b` | Tags the hub can match tasks on. |
+| `--capabilities a,b` | Tags the hub can match tasks on. Use ids from the hub's `.cortex/capability-templates.json` (`plan, orchestrate, backend, frontend, design, review, godot, resources, game-logic, server, build-game, database, devops, security, testing, docker, deploy`). Unknown tags are dropped, with a warning on the hub. |
 | `--hub <url>`, `--api-key <key>` | Override the detected hub and key. |
 
 There is no `cortex-worker` command on your PATH. After the first run, call the worker with node:
@@ -281,7 +289,7 @@ with a fix under each failure. A required check that fails makes the exit code 1
 | `hub config` | A hub URL and key were found | Pass `--hub` and `--api-key`, or set `CORTEX_HUB_URL` and `CORTEX_API_KEY`. |
 | `hub health` | `<hub>/health` answers 200 | Check the hub URL and your network, and that the hub is running. |
 | `worker version` (optional) | Same version as the hub serves | `node ~/.cortex/worker/cortex-worker.mjs update`. |
-| `handshake` | The hub accepts the key and sends its welcome | Check the key in `--api-key`, `CORTEX_API_KEY` or the MCP config. A 401 means a rejected key. |
+| `handshake` | The hub accepts the key and sends its welcome | Check the key in `--api-key`, `CORTEX_API_KEY` or the MCP config. `closed 4001` or `closed 4003` (or a 401 from a proxy) means a rejected key; see section 10. |
 | `origin` | The repo has a remote named `origin` | Run doctor inside a clone, or pass `--repo <path>`. |
 | `project mapping` (optional) | Shows the project the hub mapped this repo to | Reads "unknown until first start" before the worker has connected once. |
 | `engine MCP configs` (optional) | No engine's MCP entry points at a different hub | Edit the file it names so the `cortex-hub` URL is the worker's hub. |
@@ -321,7 +329,7 @@ Close codes from the hub:
 | Code | Meaning |
 |---|---|
 | 4001 | No key was sent (also sent when `agentId` is missing). |
-| 4003 | The key is wrong. |
+| 4003 | The key is wrong, or it is scoped to a different project than this repo. |
 | 4000 | Replaced by a newer connection from the same host with the same agent id. |
 | 4009 | That agent id is in use by another host. Pass `--agent-id <id>`. |
 
@@ -331,7 +339,7 @@ Why a task waits (shown on the dashboard):
 
 | Reason | Meaning |
 |---|---|
-| `capacity` | Every matching worker is busy. |
+| `capacity` | Every route that could run the task is out of quota until the reset time shown. Wait, or reroute it to a model with quota (`cortex_task_route`). |
 | `no_worker` | No connected worker can take it. Start one, or check its engines. |
 | `lock` | Another task holds a lock on the same files. |
 

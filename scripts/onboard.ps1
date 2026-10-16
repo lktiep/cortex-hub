@@ -240,8 +240,8 @@ if tool_key in ('claude', 'vscode'):
 else:
     entry = {
         'command': 'npx',
-        'args': ['-y', 'mcp-remote', mcp_url, '--header', 'Authorization: Bearer ' + api_key],
-        'env': {'HUB_API_KEY': api_key}
+        'args': ['-y', 'mcp-remote', mcp_url, '--header', 'Authorization:`${AUTH_HEADER}'],
+        'env': {'AUTH_HEADER': 'Bearer ' + api_key}
     }
 
 target['cortex-hub'] = entry

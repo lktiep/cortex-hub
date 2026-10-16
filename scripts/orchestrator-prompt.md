@@ -31,7 +31,9 @@ that root's key as its `parentKey`. Without the root, the dashboard shows N one-
 - Pick only executor and model pairs that `cortex_agents` lists.
 - Leave `executor` null when any engine will do.
 - Order `fallback` from first choice to last. To try another agy model before leaving agy, list it
-  first. `null` means the project default (Opus); `[]` means no fallback.
+  first. Each item is `{executor, model, effort}`. In `cortex_task_tree_create`, omit `fallback`
+  for the project default (Opus) and pass `[]` for no fallback. `null` is for `cortex_task_route`
+  only, where it resets `fallback` to the project default.
 - Use `pinnedAgent` only for machine-bound work, such as a Windows build or local assets.
 
 ## 5. Files and locks

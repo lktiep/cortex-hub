@@ -40,7 +40,7 @@ check nobody has run yet; the Evidence column names that check. 📋 means plann
 | Engines: claude, codex, gemini | 🔄 | Quota patterns are best effort; checked only against fixtures, no live quota hit yet |
 | Dashboard plan view | ✅ | `apps/dashboard-web/src/lib/conductor-plan/*.test.ts` |
 | Extension URL detection | ✅ | `apps/cortex-extension/src/mcp-config.test.ts` |
-| Setup guide | 🔄 | [`conductor/setup.md`](conductor/setup.md) is written; no machine has followed it end to end yet |
+| Setup guide | 🔄 | [`conductor/setup.md`](conductor/setup.md) is written; no machine has followed it end to end yet. Two spec section 8 dashboard items wait for the dashboard page update: the copyable worker bootstrap block and the `"type": "http"` Claude Code snippet |
 | Per-task cost tracking | 📋 | Planned |
 | Autostart on boot | 📋 | Planned |
 | Semantic capability matching | 📋 | Planned |
@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/ru
 ```
 
 ```powershell
-$env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; & $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host>
+$env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host>
 ```
 
 ### 2. Create a plan (from Claude Code or any MCP client)
@@ -68,7 +68,7 @@ cortex_task_tree_create(
   tasks: [
     { key: "JWT", title: "JWT refresh token rotation", kind: "group" },
     { key: "API", title: "Add rotation endpoint", parentKey: "JWT",
-      files: ["apps/api/src/auth.ts"], requiredCapabilities: ["backend"], priority: "high" },
+      files: ["apps/api/src/auth.ts"], priority: "high" },
     { key: "TESTS", title: "Test the rotation endpoint", parentKey: "JWT",
       files: ["apps/api/src/auth.test.ts"], dependsOn: ["API"] },
     { key: "OK", title: "Approve before merge", parentKey: "JWT",

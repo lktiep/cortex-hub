@@ -1,5 +1,5 @@
 # Cortex Hub worker bootstrap: downloads the TypeScript worker from the hub and runs it.
-# Usage: irm https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile run-agent.ps1; .\run-agent.ps1 start --hub https://<your-mcp-host>
+# Usage: irm https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile run-agent.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File .\run-agent.ps1 start --hub https://<your-mcp-host>
 $ErrorActionPreference = 'Stop'
 function Die($m) { [Console]::Error.WriteLine("[cortex] $m"); exit 1 }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Die 'git not found; install git: https://git-scm.com/downloads' }
