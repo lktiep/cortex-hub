@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   UnsafeShellArgError,
+  buildWin32ShellLine,
   killTree,
   lastLines,
   needsShell,
@@ -58,9 +59,17 @@ describe('resolveCommand', () => {
   });
 
   it('splits PATH with the platform delimiter and returns null when missing', () => {
+    const second = path.join(dir, 'b');
     mkdirSync(path.join(dir, 'a'));
-    const sep = ';';
-    expect(resolveCommand('nope', 'win32', { PATH: `${dir}${sep}${path.join(dir, 'a')}`, PATHEXT: '.EXE' })).toBeNull();
+    mkdirSync(second);
+    writeFileSync(path.join(second, 'tool'), '#!/bin/sh\n', { mode: 0o755 });
+    writeFileSync(path.join(second, 'wtool.EXE'), '');
+    const first = path.join(dir, 'a');
+    expect(resolveCommand('tool', 'linux', { PATH: `${first}:${second}` })).toBe(path.join(second, 'tool'));
+    expect(resolveCommand('wtool', 'win32', { PATH: `${first};${second}`, PATHEXT: '.EXE' })).toBe(
+      path.join(second, 'wtool.EXE'),
+    );
+    expect(resolveCommand('nope', 'win32', { PATH: `${first};${second}`, PATHEXT: '.EXE' })).toBeNull();
     expect(resolveCommand('nope', 'linux', { PATH: dir })).toBeNull();
   });
 });
@@ -92,6 +101,14 @@ describe('spawnTracked', () => {
     expect(() =>
       spawnTracked('C:\\%APPDATA%\\codex.cmd', [], { cwd: dir, platform: 'win32' }),
     ).toThrow(UnsafeShellArgError);
+  });
+
+  it('builds a quoted command line for win32 shell mode', () => {
+    expect(buildWin32ShellLine('C:\\Users\\a b\\codex.cmd', ['exec', '--x=1'])).toBe(
+      '"C:\\Users\\a b\\codex.cmd" exec --x=1',
+    );
+    expect(buildWin32ShellLine('C:\\npm\\codex.cmd', [])).toBe('"C:\\npm\\codex.cmd"');
+    expect(() => buildWin32ShellLine('C:\\a"b.cmd', [])).toThrow(UnsafeShellArgError);
   });
 
   it('passes stdin and captures stdout', async () => {
@@ -179,6 +196,49 @@ describe('runShell', () => {
     expect(r.timedOut).toBe(true);
     expect(r.exitCode).toBe(124);
     expect(Date.now() - started).toBeLessThan(20000);
+  });
+
+  it.skipIf(process.platform === 'win32')('kills a backgrounded grandchild on timeout', async () => {
+    let grandPid = 0;
+    try {
+      const r = await runShell('sleep 30 & echo $!; wait', dir, { timeoutMs: 400 });
+      grandPid = Number(/^(\d+)/.exec(r.output)?.[1]);
+      expect(r.timedOut).toBe(true);
+      expect(grandPid).toBeGreaterThan(0);
+      expect(await waitDead(grandPid, 5000)).toBe(true);
+    } finally {
+      if (grandPid && alive(grandPid)) process.kill(grandPid, 'SIGKILL');
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('abort mid-run gives 143 and timedOut false', async () => {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 200);
+    const r = await runShell('sleep 30', dir, { signal: ac.signal });
+    expect(r.exitCode).toBe(143);
+    expect(r.timedOut).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('returns promptly when a grandchild holds the pipe, then reaps it', async () => {
+    let grandPid = 0;
+    try {
+      const started = Date.now();
+      const r = await runShell('sleep 30 & echo hi; echo $! 1>&2', dir);
+      grandPid = Number(/(\d+)\s*$/.exec(r.output.trim())?.[1]);
+      expect(Date.now() - started).toBeLessThan(5000);
+      expect(r.output).toContain('hi');
+      expect(r.exitCode).toBe(0);
+      expect(grandPid).toBeGreaterThan(0);
+      expect(await waitDead(grandPid, 5000)).toBe(true);
+    } finally {
+      if (grandPid && alive(grandPid)) process.kill(grandPid, 'SIGKILL');
+    }
+  });
+
+  it('reports a spawn failure as 127 with the message', async () => {
+    const r = await runShell('echo hi', path.join(dir, 'missing-cwd'));
+    expect(r.exitCode).toBe(127);
+    expect(r.output).not.toBe('');
   });
 
   it.skipIf(process.platform === 'win32')('resolves promptly for an already-aborted signal', async () => {

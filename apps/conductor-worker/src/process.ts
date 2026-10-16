@@ -23,6 +23,7 @@ export interface Tracked {
 
 const SAFE_SHELL_ARG = /^[\w.:/=*@-]+$/;
 const UNSAFE_SHELL_PATH = /["%^&|<>]/;
+/** Output cap in UTF-16 code units (string length), not bytes. */
 const OUTPUT_CAP = 1024 * 1024;
 const SPAWN_FAILED_CODE = 127;
 const TIMEOUT_CODE = 124;
@@ -81,6 +82,15 @@ export function needsShell(resolved: string, platform: NodeJS.Platform): boolean
   return platform === 'win32' && /\.(cmd|bat)$/i.test(resolved);
 }
 
+/** Validates and joins a cmd.exe command line; the command path is always double-quoted. */
+export function buildWin32ShellLine(cmd: string, args: string[]): string {
+  if (UNSAFE_SHELL_PATH.test(cmd)) throw new UnsafeShellArgError('command path', cmd);
+  for (const a of args) {
+    if (!SAFE_SHELL_ARG.test(a)) throw new UnsafeShellArgError('argument', a);
+  }
+  return [`"${cmd}"`, ...args].join(' ');
+}
+
 export function spawnTracked(
   cmd: string,
   args: string[],
@@ -89,17 +99,8 @@ export function spawnTracked(
   const platform = opts.platform ?? process.platform;
   const win = platform === 'win32';
   const shell = needsShell(cmd, platform);
-  let command = cmd;
-  if (shell) {
-    if (UNSAFE_SHELL_PATH.test(cmd)) throw new UnsafeShellArgError('command path', cmd);
-    for (const a of args) {
-      if (!SAFE_SHELL_ARG.test(a)) throw new UnsafeShellArgError('argument', a);
-    }
-    // cmd.exe /d /s /c strips the outer quotes, so a path with a space needs its own.
-    if (cmd.includes(' ')) command = `"${cmd}"`;
-  }
-
-  const child = spawn(command, args, {
+  // one validated command line and no args array: Node 24+ deprecates args with shell: true
+  const child = spawn(shell ? buildWin32ShellLine(cmd, args) : cmd, shell ? [] : args, {
     cwd: opts.cwd,
     env: opts.env ?? process.env,
     stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
@@ -206,20 +207,25 @@ export async function runShell(
     return { exitCode: 128 + os.constants.signals.SIGTERM, output: '', timedOut: false };
   }
 
-  const child = win
-    ? spawn('cmd.exe', ['/d', '/s', '/c', `"${command}"`], {
-        cwd,
-        env: opts.env ?? process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-        windowsVerbatimArguments: true,
-      })
-    : spawn('sh', ['-c', command], {
-        cwd,
-        env: opts.env ?? process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: true,
-      });
+  let child: ChildProcess;
+  try {
+    child = win
+      ? spawn('cmd.exe', ['/d', '/s', '/c', `"${command}"`], {
+          cwd,
+          env: opts.env ?? process.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
+          windowsVerbatimArguments: true,
+        })
+      : spawn('sh', ['-c', command], {
+          cwd,
+          env: opts.env ?? process.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: true,
+        });
+  } catch (err) {
+    return { exitCode: SPAWN_FAILED_CODE, output: (err as Error).message, timedOut: false };
+  }
   const tracked = track(child);
 
   let output = '';
@@ -245,26 +251,45 @@ export async function runShell(
       : undefined;
   opts.signal?.addEventListener('abort', stop, { once: true });
 
-  try {
-    const { code, signal } = await tracked.exited;
-    // let the last buffered chunks arrive, but never wait on a grandchild holding the pipe
-    await Promise.race([
-      Promise.all(
-        [tracked.stdout, tracked.stderr].map(
-          (s) => new Promise<void>((r) => (s.readableEnded ? r() : void s.once('close', () => r()))),
-        ),
-      ),
-      sleep(250),
-    ]);
-    return {
-      exitCode: timedOut ? TIMEOUT_CODE : exitCodeOf(code, signal),
-      output: output.length > OUTPUT_CAP ? output.slice(-OUTPUT_CAP) : output,
-      timedOut,
-    };
-  } finally {
-    if (timer) clearTimeout(timer);
-    opts.signal?.removeEventListener('abort', stop);
+  const { code, signal } = await tracked.exited;
+  // the child is gone: a late timer or abort must not report 124 or kill a recycled pid
+  if (timer) clearTimeout(timer);
+  opts.signal?.removeEventListener('abort', stop);
+
+  if (!win && tracked.pid > 0) {
+    try {
+      // background grandchildren of the command must not outlive it
+      process.kill(-tracked.pid, 'SIGKILL');
+    } catch {
+      // best effort: ESRCH or anything else
+    }
   }
+  // let the last buffered chunks arrive, but never wait on a grandchild holding the pipe
+  let drainTimer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    Promise.all(
+      [tracked.stdout, tracked.stderr].map(
+        (s) => new Promise<void>((r) => (s.readableEnded ? r() : void s.once('close', () => r()))),
+      ),
+    ),
+    new Promise<void>((r) => {
+      drainTimer = setTimeout(r, 250);
+    }),
+  ]);
+  clearTimeout(drainTimer);
+  // output arriving after the drain window is dropped
+  tracked.stdout.destroy();
+  tracked.stderr.destroy();
+
+  const exitCode = timedOut ? TIMEOUT_CODE : exitCodeOf(code, signal);
+  if (exitCode === SPAWN_FAILED_CODE && tracked.spawnError !== undefined) {
+    output += (output === '' ? '' : '\n') + tracked.spawnError;
+  }
+  return {
+    exitCode,
+    output: output.length > OUTPUT_CAP ? output.slice(-OUTPUT_CAP) : output,
+    timedOut,
+  };
 }
 
 export function lastLines(text: string, n: number): string {
