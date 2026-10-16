@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { TaskCompleteMsg, TaskQuotaExhaustedMsg } from '@cortex/shared-types';
 
@@ -18,12 +18,22 @@ export function readState(file: string): WorkerState {
     const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
     if (!isObj(raw)) return emptyState();
     const activeTaskId = typeof raw.activeTaskId === 'string' ? raw.activeTaskId : null;
-    const unconfirmed = isObj(raw.unconfirmed) && typeof raw.unconfirmed.taskId === 'string' && isObj(raw.unconfirmed.msg)
-      ? (raw.unconfirmed as unknown as WorkerState['unconfirmed'])
-      : null;
-    const lastRegistered = isObj(raw.lastRegistered) && typeof raw.lastRegistered.hubVersion === 'string'
-      ? (raw.lastRegistered as unknown as WorkerState['lastRegistered'])
-      : null;
+    const um = raw.unconfirmed;
+    const unconfirmed: WorkerState['unconfirmed'] =
+      isObj(um) &&
+      typeof um.taskId === 'string' &&
+      isObj(um.msg) &&
+      (um.msg.type === 'task.complete' || um.msg.type === 'task.quota_exhausted')
+        ? { taskId: um.taskId, msg: um.msg as unknown as TaskCompleteMsg | TaskQuotaExhaustedMsg }
+        : null;
+    const lr = raw.lastRegistered;
+    const lastRegistered: WorkerState['lastRegistered'] =
+      isObj(lr) &&
+      typeof lr.hubVersion === 'string' &&
+      (typeof lr.projectId === 'string' || lr.projectId === null) &&
+      typeof lr.at === 'string'
+        ? { projectId: lr.projectId, hubVersion: lr.hubVersion, at: lr.at }
+        : null;
     return { activeTaskId, unconfirmed, lastRegistered };
   } catch {
     return emptyState();
@@ -32,7 +42,16 @@ export function readState(file: string): WorkerState {
 
 export function writeState(file: string, s: WorkerState): void {
   mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, JSON.stringify(s, null, 2));
-  renameSync(tmp, file);
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(s, null, 2), { mode: 0o600 });
+    renameSync(tmp, file);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // best effort
+    }
+    throw err;
+  }
 }

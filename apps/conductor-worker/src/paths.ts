@@ -38,6 +38,7 @@ export function workerPaths(agentId: string, homeDir: string): WorkerPaths {
 }
 
 export function worktreePath(p: WorkerPaths, taskId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(taskId)) throw new Error(`unsafe task id: ${taskId}`);
   return path.join(p.worktrees, taskId);
 }
 

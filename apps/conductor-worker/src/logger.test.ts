@@ -70,6 +70,16 @@ describe('logger', () => {
     expect(readFileSync(`${file}.1`, 'utf8')).not.toContain('line-0-');
   });
 
+  it('replaces an older .1 on rotation', () => {
+    const file = path.join(dir, 'old1.log');
+    writeFileSync(`${file}.1`, 'OLD');
+    writeFileSync(file, 'z'.repeat(90));
+    const log = createLogger({ file, stdout: false, maxBytes: 100 });
+    log.info('trigger rotation here');
+    expect(readFileSync(`${file}.1`, 'utf8')).not.toContain('OLD');
+    expect(existsSync(`${file}.2`)).toBe(false);
+  });
+
   it('rotation survives a pre-existing oversize file', () => {
     const file = path.join(dir, 'pre.log');
     writeFileSync(file, 'y'.repeat(500));

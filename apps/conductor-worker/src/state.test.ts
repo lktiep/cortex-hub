@@ -40,4 +40,22 @@ describe('state', () => {
     mkdirSync(path.join(dir, 'adir'));
     expect(readState(path.join(dir, 'adir'))).toEqual(empty);
   });
+
+  it('drops invalid nested fields but keeps valid ones', () => {
+    const f = path.join(dir, 'nested.json');
+    const read = (o: unknown): WorkerState => {
+      writeFileSync(f, JSON.stringify(o));
+      return readState(f);
+    };
+    const lr = { projectId: null, hubVersion: '1', at: 'x' };
+    expect(read({ lastRegistered: { ...lr, projectId: 42 } }).lastRegistered).toBeNull();
+    expect(read({ lastRegistered: { projectId: 'p', hubVersion: '1' } }).lastRegistered).toBeNull();
+    expect(read({ lastRegistered: lr }).lastRegistered).toEqual(lr);
+    expect(read({ unconfirmed: { taskId: 't', msg: {} } }).unconfirmed).toBeNull();
+    expect(read({ unconfirmed: { taskId: 't', msg: { type: 'bogus' } } }).unconfirmed).toBeNull();
+    const ok = { taskId: 't', msg: { type: 'task.complete' } };
+    expect(read({ unconfirmed: ok }).unconfirmed).toEqual(ok);
+    const part = read({ activeTaskId: 't9', unconfirmed: { taskId: 1 }, lastRegistered: 5 });
+    expect(part).toEqual({ activeTaskId: 't9', unconfirmed: null, lastRegistered: null });
+  });
 });

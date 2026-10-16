@@ -40,4 +40,12 @@ describe('paths', () => {
   it('defaultAgentId joins host and repo basename', () => {
     expect(defaultAgentId('Box', '/src/My Repo')).toBe('box-my-repo');
   });
+
+  it('worktreePath accepts hub ids and refuses unsafe ones', () => {
+    const p = workerPaths('a1', '/h');
+    expect(worktreePath(p, 'task_abc123')).toBe(path.join(p.worktrees, 'task_abc123'));
+    for (const bad of ['../x', 'a/b', '', '..']) {
+      expect(() => worktreePath(p, bad)).toThrow(`unsafe task id: ${bad}`);
+    }
+  });
 });

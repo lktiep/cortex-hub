@@ -15,6 +15,15 @@ export function redact(text: string, secrets: readonly string[]): string {
   return out.replace(/(apikey=)[^&\s"']*/gi, '$1***');
 }
 
+let stdoutGuarded = false;
+function guardStdout(): void {
+  if (stdoutGuarded) return;
+  stdoutGuarded = true;
+  process.stdout.on('error', () => {
+    // a closed stdout (EPIPE) must not crash the daemon
+  });
+}
+
 export function createLogger(opts: {
   file?: string;
   stdout?: boolean;
@@ -38,9 +47,15 @@ export function createLogger(opts: {
   };
 
   const emit = (level: string, m: string): void => {
-    const line = `${now().toISOString()} ${level} ${redact(m, secrets)}\n`;
+    let line: string;
+    try {
+      line = `${now().toISOString()} ${level} ${redact(m, secrets)}\n`;
+    } catch {
+      return;
+    }
     if (opts.stdout !== false) {
       try {
+        guardStdout();
         process.stdout.write(line);
       } catch {
         // logging must never throw
