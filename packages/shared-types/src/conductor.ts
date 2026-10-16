@@ -26,12 +26,16 @@ export interface WorkerRegisterMsg {
 }
 export interface TaskAcceptMsg { type: 'task.accept'; taskId: string }
 export interface TaskProgressMsg { type: 'task.progress'; taskId: string; message: string; percent?: number }
-export interface TaskCompleteMsg { type: 'task.complete'; taskId: string; status: 'completed' | 'review' | 'failed'; result: TaskResult }
+// `attempt` on an outcome: the attempt it reports on (AssignedTask.attempt). The hub
+// ignores an outcome for an attempt other than the current one; absent → not checked.
+export interface TaskCompleteMsg {
+  type: 'task.complete'; taskId: string; status: 'completed' | 'review' | 'failed'; result: TaskResult; attempt?: number
+}
 export interface TaskQuotaExhaustedMsg {
   type: 'task.quota_exhausted'; taskId: string; executor: Executor; model: string
-  modelScope?: string; resetAt?: string; raw: string; handoff: TaskHandoff
+  modelScope?: string; resetAt?: string; raw: string; handoff: TaskHandoff; attempt?: number
 }
-export interface TaskDeclineMsg { type: 'task.decline'; taskId: string; reason: string }
+export interface TaskDeclineMsg { type: 'task.decline'; taskId: string; reason: string; attempt?: number }
 export interface StatusUpdateMsg { type: 'status.update'; state: 'idle' | 'busy' }
 export type WorkerToHubMsg = WorkerRegisterMsg | TaskAcceptMsg | TaskProgressMsg | TaskCompleteMsg
   | TaskQuotaExhaustedMsg | TaskDeclineMsg | StatusUpdateMsg

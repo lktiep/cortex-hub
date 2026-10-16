@@ -38,14 +38,25 @@ function current(taskId: string): TaskRow {
 
 /**
  * Reads the task inside the caller's transaction. Unknown → 404. A task that
- * `allowed` rejects → 409, an `ignored` log row and no other change.
+ * `allowed` rejects, or an `attempt` other than the task's current one (a
+ * worker re-sending an earlier attempt's outcome) → 409, an `ignored` log row
+ * and no other change. Without `attempt` (legacy scripts, REST, MCP) the
+ * attempt is not checked.
  */
-function load(taskId: string, by: string | null, step: string, allowed: (task: TaskRow) => boolean): Outcome {
+function load(
+  taskId: string, by: string | null, step: string, allowed: (task: TaskRow) => boolean, attempt?: number,
+): Outcome {
   const task = getTask(taskId)
   if (task === undefined) return { ok: false, status: 404, error: `task ${taskId} not found` }
-  if (allowed(task)) return { ok: true, task }
-  const holder = task.assigned_to_agent === null ? '' : `, assigned to ${task.assigned_to_agent}`
-  const error = `${step} ignored: task is ${task.status}${holder}`
+  let error: string
+  if (!allowed(task)) {
+    const holder = task.assigned_to_agent === null ? '' : `, assigned to ${task.assigned_to_agent}`
+    error = `${step} ignored: task is ${task.status}${holder}`
+  } else if (attempt !== undefined && attempt !== task.attempt) {
+    error = `${step} ignored: attempt ${attempt} is stale, the task is on attempt ${task.attempt}`
+  } else {
+    return { ok: true, task }
+  }
   logTask(taskId, by, 'ignored', error)
   return { ok: false, status: 409, error }
 }
@@ -57,12 +68,13 @@ function heldBy(agentId: string): (task: TaskRow) => boolean {
 
 /**
  * Back to `pending`, shared by fail, quota, decline and return: the
- * assignment and lease are cleared; `branch`, `last_agent` and `attempt` stay,
+ * assignment, acceptance and lease are cleared; `branch`, `last_agent` and `attempt` stay,
  * so the next attempt continues on the same branch, preferably on the same machine.
  */
 function toPending(task: TaskRow, reason: string): void {
   db.prepare(`
-    UPDATE conductor_tasks SET status = 'pending', assigned_to_agent = NULL, assigned_at = NULL, lease_expires_at = NULL
+    UPDATE conductor_tasks
+    SET status = 'pending', assigned_to_agent = NULL, assigned_at = NULL, accepted_at = NULL, lease_expires_at = NULL
     WHERE id = ?
   `).run(task.id)
   logTask(task.id, task.assigned_to_agent, 'returned', reason.slice(0, LOG_MESSAGE_MAX))
@@ -75,8 +87,17 @@ function saveContext(task: TaskRow, patch: Record<string, unknown>): void {
 /** What a committed step leaves to do: the worker to mark (null for none) before the dispatch pass. */
 interface Settled { outcome: Outcome; worker: string | null; state?: 'idle' | 'busy' }
 
+/**
+ * Pushes to workers (revokes, the dispatch pass) must follow a commit. Inside a
+ * caller's open transaction the step would only commit with it, so it refuses.
+ */
+function assertOutsideTransaction(): void {
+  if (db.inTransaction) throw new Error('lifecycle: must not run inside a db transaction')
+}
+
 /** Runs `step` in one transaction; after a successful commit, marks the worker and dispatches. */
 function settle(step: () => Settled, now?: number): Outcome {
+  assertOutsideTransaction()
   const { outcome, worker, state = 'idle' } = db.transaction(step)()
   if (!outcome.ok) return outcome
   if (worker !== null) setStatus(worker, state, now)
@@ -145,15 +166,23 @@ export function recordProgress(
 /**
  * `failed` → `failAttempt`. `review`, or `completed` with `review_required` → `review`
  * and the lead is told. Otherwise `completed`. With `agentId` null (REST/MCP)
- * the owner check is skipped, but the task must be active or in `review`.
+ * the owner check is skipped, but the task must be active or in `review`; an
+ * active one is revoked from its worker first. `attempt`: see `load`.
  */
 export function completeTask(
-  taskId: string, agentId: string | null, status: 'completed' | 'review' | 'failed', result: TaskResult,
+  taskId: string, agentId: string | null, status: 'completed' | 'review' | 'failed', result: TaskResult, attempt?: number,
 ): Outcome {
-  if (status === 'failed') return failAttempt(taskId, agentId, result.error ?? result.summary)
+  if (status === 'failed') return failAttempt(taskId, agentId, result.error ?? result.summary, attempt)
+  assertOutsideTransaction()
+  if (agentId === null) {
+    const before = getTask(taskId)
+    if (before !== undefined && isActive(before.status) && (attempt === undefined || attempt === before.attempt)) {
+      revokeTask(taskId, 'completed')
+    }
+  }
   return settle((): Settled => {
     const allowed = agentId === null ? (t: TaskRow) => isActive(t.status) || t.status === 'review' : heldBy(agentId)
-    const loaded = load(taskId, agentId, 'complete', allowed)
+    const loaded = load(taskId, agentId, 'complete', allowed, attempt)
     if (!loaded.ok) return refused(loaded)
     const { task } = loaded
     const by = agentId ?? task.assigned_to_agent
@@ -186,10 +215,11 @@ export function completeTask(
  * Counts a failed attempt and returns the task to `pending`. The second
  * failure sets `escalated_at` (the dispatcher then skips the task) and tells
  * the lead, once. `agentId` null (reclaim, REST) skips the owner check.
+ * `attempt`: see `load`.
  */
-export function failAttempt(taskId: string, agentId: string | null, error: string): Outcome {
+export function failAttempt(taskId: string, agentId: string | null, error: string, attempt?: number): Outcome {
   return settle((): Settled => {
-    const loaded = load(taskId, agentId, 'fail', agentId === null ? (t) => isActive(t.status) : heldBy(agentId))
+    const loaded = load(taskId, agentId, 'fail', agentId === null ? (t) => isActive(t.status) : heldBy(agentId), attempt)
     if (!loaded.ok) return refused(loaded)
     const { task } = loaded
     const failCount = task.fail_count + 1
@@ -224,13 +254,13 @@ function quotaUntil(resetAt: string | undefined, now: number): string {
 
 /**
  * Records the quota for (the worker's host, executor, `modelScope ?? model`),
- * keeping the later reset; stores the handoff; returns the task with no
- * failure counted. A worker with no live connection has no known host, so
- * no quota row is written.
+ * keeping the later reset with its own reason and time; stores the handoff;
+ * returns the task with no failure counted. A worker with no live connection
+ * has no known host, so no quota row is written. `msg.attempt`: see `load`.
  */
 export function quotaExhausted(taskId: string, agentId: string, msg: TaskQuotaExhaustedMsg, now: number = Date.now()): Outcome {
   return settle((): Settled => {
-    const loaded = load(taskId, agentId, 'quota_exhausted', heldBy(agentId))
+    const loaded = load(taskId, agentId, 'quota_exhausted', heldBy(agentId), msg.attempt)
     if (!loaded.ok) return refused(loaded)
     const { task } = loaded
     const model = msg.modelScope ?? msg.model
@@ -240,7 +270,10 @@ export function quotaExhausted(taskId: string, agentId: string, msg: TaskQuotaEx
         INSERT INTO conductor_quota (host, executor, model, exhausted_until, reason, updated_at) VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT (host, executor, model) DO UPDATE SET
           exhausted_until = MAX(conductor_quota.exhausted_until, excluded.exhausted_until),
-          reason = excluded.reason, updated_at = excluded.updated_at
+          reason = CASE WHEN excluded.exhausted_until >= conductor_quota.exhausted_until
+            THEN excluded.reason ELSE conductor_quota.reason END,
+          updated_at = CASE WHEN excluded.exhausted_until >= conductor_quota.exhausted_until
+            THEN excluded.updated_at ELSE conductor_quota.updated_at END
       `).run(host, msg.executor, model, quotaUntil(msg.resetAt, now), msg.raw.slice(0, QUOTA_REASON_MAX), isoSeconds(now))
     }
     saveContext(task, { handoff: msg.handoff })
@@ -249,11 +282,14 @@ export function quotaExhausted(taskId: string, agentId: string, msg: TaskQuotaEx
   }, now)
 }
 
-/** Back to `pending`. `busy` marks the worker busy; any other reason keeps the task away from it for good. */
-export function declineTask(taskId: string, agentId: string, reason: string): Outcome {
+/**
+ * Back to `pending`. `busy` marks the worker busy; any other reason keeps the
+ * task away from it for good. `attempt`: see `load`.
+ */
+export function declineTask(taskId: string, agentId: string, reason: string, attempt?: number): Outcome {
   const busy = reason === 'busy'
   return settle((): Settled => {
-    const loaded = load(taskId, agentId, 'decline', heldBy(agentId))
+    const loaded = load(taskId, agentId, 'decline', heldBy(agentId), attempt)
     if (!loaded.ok) return refused(loaded)
     const { task } = loaded
     if (!busy) {
@@ -274,6 +310,7 @@ export function revokeTask(taskId: string, reason: string): void {
 
 /** Any task not yet finished → `cancelled`; an active one is revoked first and its worker freed. */
 export function cancelTask(taskId: string, by: string | null): Outcome {
+  assertOutsideTransaction()
   const before = getTask(taskId)
   if (before !== undefined && isActive(before.status)) revokeTask(taskId, 'cancelled')
   return settle((): Settled => {

@@ -189,6 +189,22 @@ describe('completion', () => {
 
     expect(completeTask('t1', null, 'completed', { summary: 'again' })).toMatchObject({ ok: false, status: 409 })
   })
+
+  it('without an agent, completing an active task revokes it from its worker first', () => {
+    running('t1', 'w1')
+    insertTask(testDb, { id: 't2', title: 'Reviewed', status: 'review', assigned_to_agent: 'w2', api_key_owner: 'lead' })
+    const ws1 = connect('w1')
+    const ws2 = connect('w2')
+    setStatus('w1', 'busy', NOW)
+
+    expect(completeTask('t1', null, 'completed', { summary: 'done by the lead' }).ok).toBe(true)
+    expect(completeTask('t2', null, 'completed', { summary: 'approved' }).ok).toBe(true)
+
+    expect(ws1.sent).toEqual([{ type: 'task.revoked', taskId: 't1', reason: 'completed' }])
+    // a task in review is no longer running anywhere, so there is nothing to revoke
+    expect(ws2.sent).toEqual([])
+    expect(getByAgent('w1')?.status).toBe('idle')
+  })
 })
 
 describe('failures and returns', () => {
@@ -220,10 +236,32 @@ describe('failures and returns', () => {
     expect(row('t1').status).toBe('pending')
   })
 
+  it('escalates once: a third failure sends no second notification and keeps escalated_at', () => {
+    running('t1', 'w1')
+    const rerun = (): void => {
+      testDb.prepare("UPDATE conductor_tasks SET status = 'in_progress', assigned_to_agent = 'w1' WHERE id = 't1'").run()
+    }
+    failAttempt('t1', 'w1', 'one')
+    rerun()
+    failAttempt('t1', 'w1', 'two')
+    expect(notifications().filter((n) => n.kind === 'escalated')).toHaveLength(1)
+    // backdated, so a rewrite within the same second would show
+    testDb.prepare("UPDATE conductor_tasks SET escalated_at = ? WHERE id = 't1'").run(isoSeconds(NOW - HOUR))
+    rerun()
+
+    expect(failAttempt('t1', 'w1', 'three').ok).toBe(true)
+
+    expect(row('t1')).toMatchObject({ status: 'pending', fail_count: 3, escalated_at: isoSeconds(NOW - HOUR) })
+    expect(notifications().filter((n) => n.kind === 'escalated')).toHaveLength(1)
+    expect(logs('t1', 'escalated')).toHaveLength(1)
+  })
+
   it('returnTask needs an active task and keeps branch, last_agent, attempt and fail_count', () => {
-    running('t1', 'w1', { attempt: 3, fail_count: 1 })
+    running('t1', 'w1', { attempt: 3, fail_count: 1, accepted_at: isoSeconds(NOW) })
 
     expect(returnTask('t1', 'rerouted').ok).toBe(true)
+    // the next attempt is accepted afresh
+    expect(row('t1').accepted_at).toBeNull()
 
     expect(row('t1')).toMatchObject({
       status: 'pending', assigned_to_agent: null, assigned_at: null, lease_expires_at: null,
@@ -281,18 +319,22 @@ describe('quota', () => {
   })
 
   it('quota keeps the later reset', () => {
-    testDb.prepare('INSERT INTO conductor_quota (host, executor, model, exhausted_until, reason) VALUES (?, ?, ?, ?, ?)')
-      .run('host-w1', 'claude', 'opus', isoSeconds(NOW + 3 * HOUR), 'old')
+    testDb.prepare('INSERT INTO conductor_quota (host, executor, model, exhausted_until, reason, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run('host-w1', 'claude', 'opus', isoSeconds(NOW + 3 * HOUR), 'old', isoSeconds(NOW - HOUR))
     running('t1', 'w1')
     running('t2', 'w1')
     connect('w1')
+    const updatedAt = (): unknown => testDb.prepare('SELECT updated_at FROM conductor_quota').pluck().get()
 
+    // an earlier reset changes nothing: the reason and time stay those of the kept reset
     quotaExhausted('t1', 'w1', quotaMsg('t1', { resetAt: isoSeconds(NOW + HOUR), raw: 'earlier' }), NOW)
-    expect(quotaRows()).toMatchObject([{ exhausted_until: isoSeconds(NOW + 3 * HOUR), reason: 'earlier' }])
+    expect(quotaRows()).toMatchObject([{ exhausted_until: isoSeconds(NOW + 3 * HOUR), reason: 'old' }])
+    expect(updatedAt()).toBe(isoSeconds(NOW - HOUR))
 
     // a later reset replaces it, stored to the second
     quotaExhausted('t2', 'w1', quotaMsg('t2', { resetAt: new Date(NOW + 5 * HOUR).toISOString(), raw: 'later' }), NOW)
     expect(quotaRows()).toMatchObject([{ exhausted_until: isoSeconds(NOW + 5 * HOUR), reason: 'later' }])
+    expect(updatedAt()).toBe(isoSeconds(NOW))
   })
 
   it('without a live connection the host is unknown: no quota row, but the handoff is kept and the task returned', () => {
@@ -368,5 +410,96 @@ describe('cancel', () => {
     expect(cancelTask('p', 'lead')).toMatchObject({ ok: false, status: 409 })
     expect(cancelTask('missing', 'lead')).toMatchObject({ ok: false, status: 404 })
     expect([row('c').status, row('f').status]).toEqual(['completed', 'failed'])
+  })
+})
+
+describe('attempt fence', () => {
+  it('a stale-attempt failure is ignored', () => {
+    insertTask(testDb, { id: 't1', task_key: 'T1', title: 'Fix login', api_key_owner: 'lead' })
+    connect('w1')
+    dispatch(NOW)
+    expect(failAttempt('t1', 'w1', 'tests red', 1).ok).toBe(true)
+    // the same worker got attempt 2 straight back
+    expect(row('t1')).toMatchObject({ status: 'assigned', assigned_to_agent: 'w1', attempt: 2, fail_count: 1 })
+    const before = row('t1')
+
+    // a re-sent failure of attempt 1, after a reconnect
+    expect(failAttempt('t1', 'w1', 'x', 1)).toMatchObject({ ok: false, status: 409 })
+
+    expect(row('t1')).toEqual(before)
+    expect(row('t1')).toMatchObject({ status: 'assigned', fail_count: 1, escalated_at: null })
+    expect(notifications()).toEqual([])
+    expect(logs('t1', 'ignored')).toEqual([{ agent_id: 'w1', message: 'fail ignored: attempt 1 is stale, the task is on attempt 2' }])
+  })
+
+  it('a stale-attempt quota report is ignored', () => {
+    running('t1', 'w1', { attempt: 2 })
+    connect('w1')
+    const before = row('t1')
+
+    expect(quotaExhausted('t1', 'w1', quotaMsg('t1', { attempt: 1 }), NOW)).toMatchObject({ ok: false, status: 409 })
+
+    expect(row('t1')).toEqual(before)
+    expect(quotaRows()).toEqual([])
+    expect(logs('t1', 'ignored')).toHaveLength(1)
+  })
+
+  it('a stale-attempt decline is ignored', () => {
+    running('t1', 'w1', { attempt: 2 })
+    connect('w1')
+    setStatus('w1', 'busy', NOW)
+    const before = row('t1')
+
+    expect(declineTask('t1', 'w1', 'no gpu here', 1)).toMatchObject({ ok: false, status: 409 })
+
+    expect(row('t1')).toEqual(before)
+    expect(getByAgent('w1')?.status).toBe('busy')
+    expect(logs('t1', 'ignored')).toHaveLength(1)
+  })
+
+  it('a stale-attempt completion is ignored, completed or failed', () => {
+    running('t1', 'w1', { attempt: 2 })
+    connect('w1')
+    const before = row('t1')
+
+    expect(completeTask('t1', 'w1', 'completed', { summary: 'done' }, 1)).toMatchObject({ ok: false, status: 409 })
+    expect(completeTask('t1', 'w1', 'failed', { summary: 'red', error: 'boom' }, 1)).toMatchObject({ ok: false, status: 409 })
+
+    expect(row('t1')).toEqual(before)
+    expect(logs('t1', 'ignored').map((l) => l.message)).toEqual([
+      'complete ignored: attempt 1 is stale, the task is on attempt 2',
+      'fail ignored: attempt 1 is stale, the task is on attempt 2',
+    ])
+  })
+
+  it('a matching attempt still works', () => {
+    for (const id of ['a', 'b', 'c', 'd']) running(id, 'w1', { attempt: 2 })
+    connect('w1')
+
+    expect(failAttempt('a', 'w1', 'red', 2).ok).toBe(true)
+    expect(quotaExhausted('b', 'w1', quotaMsg('b', { attempt: 2 }), NOW).ok).toBe(true)
+    expect(declineTask('c', 'w1', 'no gpu here', 2).ok).toBe(true)
+    expect(completeTask('d', 'w1', 'completed', { summary: 'done' }, 2).ok).toBe(true)
+
+    expect(row('a').fail_count).toBe(1)
+    expect(quotaRows()).toHaveLength(1)
+    expect(context('c').declined).toEqual(['w1'])
+    expect(row('d').status).toBe('completed')
+    expect(testDb.prepare("SELECT COUNT(*) FROM conductor_task_logs WHERE action = 'ignored'").pluck().get()).toBe(0)
+  })
+})
+
+describe('transactions', () => {
+  it('a lifecycle step refuses to run inside an open transaction, before anything is sent', () => {
+    running('t1', 'w1')
+    const ws = connect('w1')
+    const message = 'lifecycle: must not run inside a db transaction'
+
+    expect(() => testDb.transaction(() => failAttempt('t1', 'w1', 'x'))()).toThrow(message)
+    expect(() => testDb.transaction(() => completeTask('t1', null, 'completed', { summary: 'done' }))()).toThrow(message)
+    expect(() => testDb.transaction(() => cancelTask('t1', 'lead'))()).toThrow(message)
+
+    expect(row('t1')).toMatchObject({ status: 'in_progress', fail_count: 0 })
+    expect(ws.sent).toEqual([])
   })
 })
