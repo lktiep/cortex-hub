@@ -135,6 +135,8 @@ type Frame = Record<string, unknown>
 
 interface HubBehavior {
   autoPong?: boolean
+  /** Compress every frame the hub sends, so the client inflates them asynchronously. */
+  perMessageDeflate?: boolean
   /** An HTTP status to refuse the n-th handshake (1-based) with, or null to accept it. */
   reject?: (handshake: number) => number | null
   onConnection?: (ws: WebSocket, conn: number) => void
@@ -167,6 +169,7 @@ async function startHub(behavior: HubBehavior = {}): Promise<TestHub> {
     host: '127.0.0.1',
     port: 0,
     autoPong: behavior.autoPong ?? true,
+    perMessageDeflate: behavior.perMessageDeflate === true ? { threshold: 0 } : false,
     verifyClient: (_info, cb) => {
       hub.handshakes++
       const status = behavior.reject?.(hub.handshakes) ?? null
@@ -288,9 +291,11 @@ function makeClient(hub: TestHub, over: Partial<HubClientOptions> = {}) {
 }
 
 afterEach(async () => {
+  // real timers first: if a fake-timer test failed half way, stop()'s 2 s terminate
+  // timer must still fire, or the hang would hide the real failure
+  vi.useRealTimers()
   await Promise.all(clients.splice(0).map((c) => c.stop()))
   await Promise.all(hubs.splice(0).map((h) => h.close()))
-  vi.useRealTimers()
   vi.restoreAllMocks()
   // no log line carries the key or the raw URL
   const leaked = allLines.splice(0).filter((l) => l.m.includes(KEY) || /apikey=/i.test(l.m))
@@ -361,6 +366,35 @@ describe('buildWsUrl', () => {
     expect(url.searchParams.get('hostname')).toBe('host&1')
     expect(url.searchParams.get('protocol')).toBe(String(CONDUCTOR_PROTOCOL_VERSION))
   })
+
+  const q = { apiKey: KEY, agentId: 'agent-1', hostname: 'host-1' }
+
+  it('accepts ws:// and wss:// in any case', () => {
+    expect(new URL(buildWsUrl('ws://127.0.0.1:8318/ws/conductor', q)).protocol).toBe('ws:')
+    expect(new URL(buildWsUrl('WSS://hub.example.invalid/ws/conductor', q)).protocol).toBe('wss:')
+  })
+
+  it.each([
+    ['http://hub.example.invalid/ws/conductor', 'http:'],
+    ['https://hub.example.invalid/ws/conductor', 'https:'],
+    ['ftp://hub.example.invalid/ws/conductor', 'ftp:'],
+    ['file:///tmp/ws/conductor', 'file:'],
+  ])('rejects %s', (wsUrl, scheme) => {
+    expect(() => buildWsUrl(wsUrl, q)).toThrow(`hub URL must be ws:// or wss:// (got ${scheme})`)
+  })
+
+  it.each(['wss://hub.example.invalid/ws/conductor#x', 'wss://hub.example.invalid/ws/conductor#'])(
+    'rejects a #fragment: %s',
+    (wsUrl) => {
+      expect(() => buildWsUrl(wsUrl, q)).toThrow('hub URL must not contain a #fragment')
+    },
+  )
+
+  it('rejects a string that is not a URL', () => {
+    expect(() => buildWsUrl('hub.example.invalid/ws/conductor', q)).toThrow(
+      'hub URL is not a valid URL',
+    )
+  })
 })
 
 // ── the client against a live server ──
@@ -394,6 +428,19 @@ describe('HubClient', () => {
     expect(url.searchParams.get('hostname')).toBe('host-1.local')
     expect(url.searchParams.get('protocol')).toBe('2')
     expect(req?.headers.authorization).toBe(`Bearer ${KEY}`)
+  })
+
+  it('refuses an unusable hub URL once, when it is constructed', async () => {
+    const hub = await startHub()
+    const httpUrl = hub.url.replace(/^ws:/, 'http:')
+    expect(() => makeClient(hub, { wsUrl: httpUrl })).toThrow(
+      'hub URL must be ws:// or wss:// (got http:)',
+    )
+    expect(() => makeClient(hub, { wsUrl: `${hub.url}#x` })).toThrow(
+      'hub URL must not contain a #fragment',
+    )
+    await realDelay(100)
+    expect(hub.handshakes).toBe(0)
   })
 
   it('reconnects with backoff after a 1006 close and re-sends a fresh register', async () => {
@@ -462,6 +509,29 @@ describe('HubClient', () => {
     expect(reconnectDelays(log)).toEqual([])
     expect(client.registered).toBe(false)
     expect(client.send(progress('after fatal'))).toBe(false)
+  })
+
+  it('a fatal close after registered stops the pings and never reconnects', async () => {
+    fakeTimers()
+    const pings = vi.spyOn(WebSocket.prototype, 'ping')
+    const hub = await startHub()
+    const { client, log, events } = makeClient(hub, { pingMs: 1000 })
+    client.start()
+    await until(() => client.registered, 'registered')
+    vi.advanceTimersByTime(1000)
+    await until(() => hub.pings[0] === 1, 'a ping while registered')
+    expect(pings).toHaveBeenCalledTimes(1)
+
+    socketOf(hub, 0).close(CLOSE_CODES.replaced, 'replaced')
+    await until(() => events.fatal.length === 1, 'fatal')
+    expect(client.registered).toBe(false)
+    vi.advanceTimersByTime(3 * 1000)
+    await realDelay(100)
+    expect(pings).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(events.fatal).toEqual([['replaced', 'replaced']])
+    expect(hub.handshakes).toBe(1)
+    expect(reconnectDelays(log)).toEqual([])
   })
 
   it.each([401, 403])(
@@ -542,6 +612,38 @@ describe('HubClient', () => {
     expect(framesOf(hub, 1)[3]?.['message']).toBe('registered-1')
     // nothing was sent twice
     expect(framesOf(hub, 0)).toHaveLength(5)
+  })
+
+  it('keeps the queue for the next registered when registered is read on a closing socket', async () => {
+    // The hub compresses `registered` and drops the TCP connection once it is written.
+    // The client inflates the frame asynchronously, so ws hands it over after the
+    // connection's end has set CLOSING; a send then would drop the queue silently.
+    const hub = await startHub({
+      perMessageDeflate: true,
+      onFrame: (ws, msg, conn) => {
+        if (msg['type'] !== 'worker.register') return
+        if (conn === 0) ws.send(JSON.stringify(registered(conn)), () => ws.terminate())
+        else answerRegister(ws, msg, conn)
+      },
+    })
+    const { client, log, events } = makeClient(hub)
+    client.sendReliable(accept('t-1'))
+    client.sendReliable(complete('t-1'))
+    client.start()
+    await until(() => events.registered.some((m) => m.connectionId === 'c-1'), 'registered on c-1')
+    // a sentinel behind the flush: once it arrives, everything flushed before it has too
+    expect(client.send(progress('sentinel'))).toBe(true)
+    await until(() => framesOf(hub, 1).some((f) => f['type'] === 'task.progress'), 'sentinel')
+    expect(framesOf(hub, 1).map((f) => f['type'])).toEqual([
+      'worker.register',
+      'task.accept',
+      'task.complete',
+      'task.progress',
+    ])
+    expect(framesOf(hub, 0)).toEqual([registerMsg(1)])
+    // the frame read on the closing socket is not a registration
+    expect(events.registered).toEqual([registered(1)])
+    expect(log.lines.some((l) => l.m.includes('as the connection closed'))).toBe(true)
   })
 
   it('drops progress while disconnected', async () => {

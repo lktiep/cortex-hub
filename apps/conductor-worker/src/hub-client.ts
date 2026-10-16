@@ -58,12 +58,26 @@ export function backoffDelay(
   return Math.round(nominal * (0.8 + 0.4 * rand()))
 }
 
-/** The hub URL with the key, agent id, hostname and protocol version in the query. */
+/**
+ * The hub URL with the key, agent id, hostname and protocol version in the query.
+ * Throws for anything but a ws:// or wss:// URL without a fragment: ws would refuse it
+ * on every connect, so it is refused once, up front.
+ */
 export function buildWsUrl(
   wsUrl: string,
   q: { apiKey: string; agentId: string; hostname: string },
 ): string {
-  const url = new URL(wsUrl)
+  let url: URL
+  try {
+    url = new URL(wsUrl)
+  } catch {
+    throw new Error('hub URL is not a valid URL')
+  }
+  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+    throw new Error(`hub URL must be ws:// or wss:// (got ${url.protocol})`)
+  }
+  // href keeps a bare '#' that `hash` reports as ''
+  if (url.href.includes('#')) throw new Error('hub URL must not contain a #fragment')
   url.searchParams.set('apiKey', q.apiKey)
   url.searchParams.set('agentId', q.agentId)
   url.searchParams.set('hostname', q.hostname)
@@ -273,6 +287,16 @@ export class HubClient {
   }
 
   private onRegistered(ws: WebSocket, msg: RegisteredMsg): void {
+    // ws can hand over a frame it read just before the connection ended (a compressed
+    // one is inflated after the TCP end), with the socket already CLOSING. A send then
+    // drops silently, so the queue stays for the next `registered`, which also counts
+    // as the registration: the close handler reconnects.
+    if (ws.readyState !== WebSocket.OPEN) {
+      this.opts.logger.info(
+        'the hub answered worker.register as the connection closed; waiting for the next registered',
+      )
+      return
+    }
     this.isRegistered = true
     this.attempt = 0
     if (this.registerTimer !== null) clearTimeout(this.registerTimer)
