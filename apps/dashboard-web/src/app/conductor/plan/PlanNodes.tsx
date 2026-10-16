@@ -5,6 +5,7 @@ import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import {
   STATUS_COLOR,
   STATUS_LABEL,
+  basename,
   type ColNodeData,
   type GateNodeData,
   type LaneNodeData,
@@ -25,10 +26,6 @@ function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ')
 }
 
-function basename(file: string): string {
-  return file.split('/').filter(Boolean).pop() ?? file
-}
-
 export function TaskNode({ data }: NodeProps<Node<TaskNodeData>>) {
   const { task, mode, critical, ghost, note, route, noFiles, selected } = data
   const color = STATUS_COLOR[task.state]
@@ -45,7 +42,7 @@ export function TaskNode({ data }: NodeProps<Node<TaskNodeData>>) {
     <div
       className={className}
       style={{ ['--st' as string]: color }}
-      title={compactTitle(task.key, task.title, STATUS_LABEL[task.state], note)}
+      title={tooltip(task.key, task.title, STATUS_LABEL[task.state], note)}
     >
       <Handle type="target" position={Position.Left} className={styles.h} />
       {detail ? (
@@ -81,7 +78,7 @@ export function TaskNode({ data }: NodeProps<Node<TaskNodeData>>) {
   )
 }
 
-function compactTitle(key: string, title: string, status: string, note: string | null): string {
+function tooltip(key: string, title: string, status: string, note: string | null): string {
   return [`${key} ${title}`, note ? `${status} · ${note}` : status].join('\n')
 }
 
@@ -99,7 +96,7 @@ export function GateNode({ data }: NodeProps<Node<GateNodeData>>) {
         critical && styles.gateCritical,
         selected && styles.gateSelected,
       )}
-      title={compactTitle(task.key, task.title, STATUS_LABEL[task.state], null)}
+      title={tooltip(task.key, task.title, STATUS_LABEL[task.state], null)}
     >
       <Handle type="target" position={Position.Left} className={styles.h} />
       <span className={styles.gateId}>{task.key}</span>

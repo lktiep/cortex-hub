@@ -137,7 +137,9 @@ describe('toFlow', () => {
     expect(data('a')).toMatchObject({ critical: true, ghost: null, noFiles: true, selected: false })
     expect(data('f').noFiles).toBe(false)
     expect(data('d').noFiles).toBe(false)
-    expect((nodes.find((n) => n.id === 'g')?.data as GateNodeData).task.kind).toBe('gate')
+    const gateData = nodes.find((n) => n.id === 'g')?.data as GateNodeData
+    expect(gateData.task.kind).toBe('gate')
+    expect('noFiles' in gateData).toBe(false)
     expect(data('in')).toMatchObject({ ghost: 'input', critical: false })
     expect(data('out')).toMatchObject({ ghost: 'output', route: 'claude·opus-5-5' })
     expect(data('a').note).toBeNull()
@@ -149,6 +151,52 @@ describe('toFlow', () => {
     const out = toFlow(layout, new Map(list.map((t) => [t.id, t])), NO_CRIT, [], 'compact', NOW, 'b')
     expect((out.nodes.find((n) => n.id === 'b')?.data as TaskNodeData).selected).toBe(true)
     expect((out.nodes.find((n) => n.id === 'a')?.data as TaskNodeData).selected).toBe(false)
+  })
+
+  it('marks critical and selected on a gate node', () => {
+    const list = tasks({ id: 'g', kind: 'gate', approver: 'lead' }, { id: 'b', depends_on: deps('g') })
+    const layout = layoutPlan(list, [worker()], { mode: 'compact' })
+    const crit: CriticalPath = { ids: ['g', 'b'], edges: new Set(['g>b']), days: 1 }
+    const out = toFlow(layout, new Map(list.map((t) => [t.id, t])), crit, [], 'compact', NOW, 'g')
+    expect(out.nodes.find((n) => n.id === 'g')?.data).toMatchObject({ critical: true, selected: true, blocks: 1 })
+    expect(out.nodes.find((n) => n.id === 'b')?.data).toMatchObject({ critical: true, selected: false })
+  })
+
+  it('does not draw a dependency edge between an input ghost and an output ghost', () => {
+    const list = tasks(
+      { id: 'grp', kind: 'group' },
+      { id: 'in', parent_task_id: 'other' },
+      { id: 'm', parent_task_id: 'grp', depends_on: deps('in') },
+      { id: 'out', depends_on: deps('m', 'in') },
+    )
+    const { nodes, edges } = build(list, { phaseGroup: 'grp', mode: 'detail' })
+    expect(nodes.filter((n) => n.id === 'in' || n.id === 'out')).toHaveLength(2)
+    expect(edges.map((e) => `${e.source}>${e.target}`).sort()).toEqual(['in>m', 'm>out'])
+  })
+
+  it('still draws a same-file edge between two laid-out ghosts', () => {
+    const list = tasks(
+      { id: 'grp', kind: 'group' },
+      { id: 'in', parent_task_id: 'other' },
+      { id: 'm', parent_task_id: 'grp', depends_on: deps('in') },
+      { id: 'out', depends_on: deps('m') },
+    )
+    const conflicts: FileConflict[] = [{ from: 'in', to: 'out', file: 'a/b.ts' }]
+    const { edges } = build(list, { phaseGroup: 'grp', mode: 'detail', conflicts })
+    expect(edges.find((e) => e.id === 'file:in>out')?.label).toBe('b.ts')
+  })
+
+  it('an edge between two gates is green only when every gate end is done', () => {
+    const half = tasks(
+      { id: 'g1', kind: 'gate', approver: 'user', status: 'approved' },
+      { id: 'g2', kind: 'gate', approver: 'lead', depends_on: deps('g1') },
+    )
+    expect(edgeOf(build(half).edges, 'g1', 'g2').style?.stroke).toBe('#fbbf24')
+    const both = tasks(
+      { id: 'g1', kind: 'gate', approver: 'user', status: 'approved' },
+      { id: 'g2', kind: 'gate', approver: 'lead', status: 'approved', depends_on: deps('g1') },
+    )
+    expect(edgeOf(build(both).edges, 'g1', 'g2').style?.stroke).toBe('rgba(52,211,153,.55)')
   })
 
   it('drops edges whose ends are not both laid out, including a ghost\'s own deps', () => {
@@ -164,7 +212,20 @@ describe('toFlow', () => {
     expect(pairs).toEqual(['in>m', 'm>out'])
   })
 
-  it('works on a cyclic plan and conflicts computed from analysis', () => {
+  it('renders a dependency cycle without throwing', () => {
+    const list = tasks(
+      { id: 'A', depends_on: deps('B') },
+      { id: 'B', depends_on: deps('A') },
+      { id: 'C', depends_on: deps('A') },
+    )
+    const { depth, cyclic } = computeDepths(list)
+    expect([...cyclic].sort()).toEqual(['A', 'B'])
+    const out = build(list, { crit: criticalPath(list, cyclic), conflicts: fileConflicts(list, depth) })
+    expect(out.nodes.filter((n) => n.type === 'task').map((n) => n.id).sort()).toEqual(['A', 'B', 'C'])
+    expect(out.edges.map((e) => e.id).sort()).toEqual(['dep:A>B', 'dep:A>C', 'dep:B>A'])
+  })
+
+  it('draws a same-file edge computed from analysis', () => {
     const list = tasks(
       { id: 'a', files: JSON.stringify(['f.ts']) },
       { id: 'b', files: JSON.stringify(['f.ts']) },

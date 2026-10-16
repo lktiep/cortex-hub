@@ -78,7 +78,7 @@ export type ColNodeData = {
 
 const arrow = (color: string) => ({ type: MarkerType.ArrowClosed, width: 10, height: 10, color })
 
-function basename(file: string): string {
+export function basename(file: string): string {
   return file.split('/').filter(Boolean).pop() ?? file
 }
 
