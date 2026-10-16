@@ -105,6 +105,19 @@ function settle(step: () => Settled, now?: number): Outcome {
   return outcome
 }
 
+/**
+ * Before a lead's step on a running task (no agent: REST, MCP, cancel): tells
+ * its worker to stop, ahead of the transaction. Skipped for a task not active
+ * or a stale `attempt`, which the step itself then refuses.
+ */
+function revokeBefore(taskId: string, reason: string, attempt?: number): void {
+  assertOutsideTransaction()
+  const before = getTask(taskId)
+  if (before !== undefined && isActive(before.status) && (attempt === undefined || attempt === before.attempt)) {
+    revokeTask(taskId, reason)
+  }
+}
+
 function refused(outcome: Outcome): Settled {
   return { outcome, worker: null }
 }
@@ -172,14 +185,9 @@ export function recordProgress(
 export function completeTask(
   taskId: string, agentId: string | null, status: 'completed' | 'review' | 'failed', result: TaskResult, attempt?: number,
 ): Outcome {
+  // failAttempt sends its own revoke ('failed'), so a lead's failure is revoked once
   if (status === 'failed') return failAttempt(taskId, agentId, result.error ?? result.summary, attempt)
-  assertOutsideTransaction()
-  if (agentId === null) {
-    const before = getTask(taskId)
-    if (before !== undefined && isActive(before.status) && (attempt === undefined || attempt === before.attempt)) {
-      revokeTask(taskId, 'completed')
-    }
-  }
+  if (agentId === null) revokeBefore(taskId, 'completed', attempt)
   return settle((): Settled => {
     const allowed = agentId === null ? (t: TaskRow) => isActive(t.status) || t.status === 'review' : heldBy(agentId)
     const loaded = load(taskId, agentId, 'complete', allowed, attempt)
@@ -214,10 +222,11 @@ export function completeTask(
 /**
  * Counts a failed attempt and returns the task to `pending`. The second
  * failure sets `escalated_at` (the dispatcher then skips the task) and tells
- * the lead, once. `agentId` null (reclaim, REST) skips the owner check.
- * `attempt`: see `load`.
+ * the lead, once. `agentId` null (reclaim, REST) skips the owner check and
+ * revokes the task from its worker first. `attempt`: see `load`.
  */
 export function failAttempt(taskId: string, agentId: string | null, error: string, attempt?: number): Outcome {
+  if (agentId === null) revokeBefore(taskId, 'failed', attempt)
   return settle((): Settled => {
     const loaded = load(taskId, agentId, 'fail', agentId === null ? (t) => isActive(t.status) : heldBy(agentId), attempt)
     if (!loaded.ok) return refused(loaded)
@@ -310,9 +319,7 @@ export function revokeTask(taskId: string, reason: string): void {
 
 /** Any task not yet finished → `cancelled`; an active one is revoked first and its worker freed. */
 export function cancelTask(taskId: string, by: string | null): Outcome {
-  assertOutsideTransaction()
-  const before = getTask(taskId)
-  if (before !== undefined && isActive(before.status)) revokeTask(taskId, 'cancelled')
+  revokeBefore(taskId, 'cancelled')
   return settle((): Settled => {
     const loaded = load(taskId, by, 'cancel', (t) => !isTerminal(t.status))
     if (!loaded.ok) return refused(loaded)

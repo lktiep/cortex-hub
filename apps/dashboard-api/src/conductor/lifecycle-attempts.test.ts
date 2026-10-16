@@ -236,6 +236,22 @@ describe('failures and returns', () => {
     expect(row('t1').status).toBe('pending')
   })
 
+  it('without an agent, failing an active task revokes it from its worker first, once', () => {
+    running('t1', 'w1')
+    running('t2', 'w2', { fail_count: 1 })
+    const ws1 = connect('w1')
+    const ws2 = connect('w2')
+    // the dispatch pass after each step may hand a worker new work; only the revokes matter here
+    const revokes = (ws: FakeSocket): unknown[] => ws.sent.filter((m) => (m as { type: string }).type === 'task.revoked')
+
+    expect(failAttempt('t1', null, 'lead: wrong approach').ok).toBe(true)
+    expect(completeTask('t2', null, 'failed', { summary: 'red', error: 'lead: tests missing' }).ok).toBe(true)
+
+    expect(revokes(ws1)).toEqual([{ type: 'task.revoked', taskId: 't1', reason: 'failed' }])
+    expect(revokes(ws2)).toEqual([{ type: 'task.revoked', taskId: 't2', reason: 'failed' }])
+    expect([row('t1').fail_count, row('t2').fail_count]).toEqual([1, 2])
+  })
+
   it('escalates once: a third failure sends no second notification and keeps escalated_at', () => {
     running('t1', 'w1')
     const rerun = (): void => {
@@ -496,6 +512,7 @@ describe('transactions', () => {
     const message = 'lifecycle: must not run inside a db transaction'
 
     expect(() => testDb.transaction(() => failAttempt('t1', 'w1', 'x'))()).toThrow(message)
+    expect(() => testDb.transaction(() => failAttempt('t1', null, 'x'))()).toThrow(message)
     expect(() => testDb.transaction(() => completeTask('t1', null, 'completed', { summary: 'done' }))()).toThrow(message)
     expect(() => testDb.transaction(() => cancelTask('t1', 'lead'))()).toThrow(message)
 
