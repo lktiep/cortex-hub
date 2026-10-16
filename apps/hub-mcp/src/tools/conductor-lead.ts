@@ -8,9 +8,9 @@ import { apiCall } from '../api-call.js'
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
 
 // z.enum needs a non-empty tuple; EXECUTORS is typed readonly Executor[] but is non-empty by definition.
-const executorEnum = z.enum(EXECUTORS as unknown as [Executor, ...Executor[]])
-const priorityField = z.union([z.enum(['critical', 'high', 'medium', 'low']), z.number().int().min(1).max(10)])
-const routeSpec = z.object({
+export const executorEnum = z.enum(EXECUTORS as unknown as [Executor, ...Executor[]])
+export const priorityField = z.union([z.enum(['critical', 'high', 'medium', 'low']), z.number().int().min(1).max(10)])
+export const routeSpec = z.object({
   executor: executorEnum.nullable(),
   model: z.string().nullable().optional(),
   effort: z.string().nullable().optional(),

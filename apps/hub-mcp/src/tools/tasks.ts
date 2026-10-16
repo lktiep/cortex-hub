@@ -1,7 +1,9 @@
 import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
+import { PRIORITY_LABELS } from '@cortex/shared-types'
 import { apiCall } from '../api-call.js'
+import { executorEnum, priorityField, routeSpec } from './conductor-lead.js'
 
 /**
  * Register Cortex Conductor task management tools.
@@ -15,15 +17,22 @@ export function registerTaskTools(server: McpServer, env: Env) {
     {
       title: z.string().describe('Short title describing the task'),
       description: z.string().optional().describe('Detailed description of what needs to be done'),
-      assignTo: z.string().optional().describe('Agent ID to assign the task to'),
-      priority: z.string().optional().describe('Priority level: low, medium, high, critical'),
+      assignTo: z.string().optional().describe('Agent ID to pin the task to; the dispatcher hands it to that agent when it is connected and idle'),
+      priority: priorityField.optional().describe('critical|high|medium|low or 1-10 (lower runs first)'),
       requiredCapabilities: z.array(z.string()).optional().describe('Capabilities required to complete this task'),
       dependsOn: z.array(z.string()).optional().describe('Task IDs that must complete before this task can start'),
       notifyOnComplete: z.array(z.string()).optional().describe('Agent IDs to notify when this task completes'),
       context: z.record(z.string(), z.unknown()).optional().describe('Arbitrary context object to pass to the assigned agent'),
       parentTaskId: z.string().optional().describe('Parent task ID if this is a sub-task'),
+      executor: executorEnum.optional().describe('Executor to run the task with'),
+      model: z.string().optional().describe('Model for the executor'),
+      effort: z.string().optional().describe('Reasoning effort for the executor'),
+      fallback: z.array(routeSpec).optional().describe('Fallback routes tried in order when the first is unavailable'),
+      files: z.array(z.string()).optional().describe('Files the task will touch (used for locks)'),
+      branch: z.string().optional().describe('Branch the task works on'),
+      reviewRequired: z.boolean().optional().describe('Whether the result needs review before completing'),
     },
-    async ({ title, description, assignTo, priority, requiredCapabilities, dependsOn, notifyOnComplete, context, parentTaskId }) => {
+    async ({ title, description, assignTo, priority, requiredCapabilities, dependsOn, notifyOnComplete, context, parentTaskId, executor, model, effort, fallback, files, branch, reviewRequired }) => {
       try {
         const response = await apiCall(env, '/api/conductor', {
           method: 'POST',
@@ -32,12 +41,19 @@ export function registerTaskTools(server: McpServer, env: Env) {
             title,
             description,
             assignedTo: assignTo,
-            priority,
+            priority: typeof priority === 'string' ? PRIORITY_LABELS[priority] : priority,
             requiredCapabilities,
             dependsOn,
             notifyOnComplete,
             metadata: context,
             parentTaskId,
+            ...(executor !== undefined && { executor }),
+            ...(model !== undefined && { model }),
+            ...(effort !== undefined && { effort }),
+            ...(fallback !== undefined && { fallback }),
+            ...(files !== undefined && { files }),
+            ...(branch !== undefined && { branch }),
+            ...(reviewRequired !== undefined && { reviewRequired }),
           }),
           signal: AbortSignal.timeout(10000),
         })
@@ -80,8 +96,9 @@ export function registerTaskTools(server: McpServer, env: Env) {
     'Retrieve tasks assigned to you. Automatically checks both your agentId and API key name.',
     {
       agentId: z.string().optional().describe('Agent ID (auto-detected if not provided)'),
+      projectId: z.string().optional().describe('Project ID from cortex_session_start — limits unpinned tasks to that project'),
     },
-    async ({ agentId }) => {
+    async ({ agentId, projectId }) => {
       try {
         const effectiveAgentId = agentId || env.API_KEY_OWNER
         const response = await apiCall(env, '/api/conductor/pickup', {
@@ -90,6 +107,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
           body: JSON.stringify({
             agentId: effectiveAgentId,
             apiKeyOwner: env.API_KEY_OWNER,
+            ...(projectId && { projectId }),
           }),
           signal: AbortSignal.timeout(10000),
         })
@@ -171,7 +189,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
   // task.update — update task status and add progress messages
   server.tool(
     'cortex_task_update',
-    'Update the status of a task. Use to transition tasks through their lifecycle: in_progress, review, completed, or failed. Can also re-parent orphan tasks.',
+    'Update the status of a task. Use to transition tasks through their lifecycle: in_progress, review, completed, or failed. Can also re-parent orphan tasks. The optional message is stored in the task log.',
     {
       taskId: z.string().describe('The ID of the task to update'),
       status: z.enum(['in_progress', 'review', 'completed', 'failed']).describe('The new status for the task'),
@@ -224,7 +242,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
         const params = new URLSearchParams()
         if (projectId) params.set('projectId', projectId)
         if (status) params.set('status', status)
-        if (assignedTo) params.set('assignedTo', assignedTo)
+        if (assignedTo) params.set('assigned_to', assignedTo)
         if (limit) params.set('limit', String(limit))
 
         const url = `/api/conductor?${params.toString()}`
@@ -242,7 +260,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
           }
         }
 
-        const data = (await response.json()) as { tasks?: Array<{ id: string; title: string; status: string; assigned_to_agent?: string; priority?: number; created_at?: string }> }
+        const data = (await response.json()) as { tasks?: Array<{ id: string; title: string; status: string; assigned_to_agent?: string; priority?: number; created_at?: string; task_key?: string | null; kind?: string; wait_reason?: string | null; escalated_at?: string | null }> }
         const tasks = data.tasks ?? []
 
         if (tasks.length === 0) {
@@ -254,6 +272,10 @@ export function registerTaskTools(server: McpServer, env: Env) {
           const parts = [`| ${task.id} | ${task.title} | ${task.status}`]
           if (task.assigned_to_agent) parts.push(` | ${task.assigned_to_agent}`)
           if (task.priority) parts.push(` | ${task.priority}`)
+          if (task.task_key) parts.push(` | key: ${task.task_key}`)
+          if (task.kind && task.kind !== 'work') parts.push(` | ${task.kind}`)
+          if (task.wait_reason) parts.push(` | wait: ${task.wait_reason}`)
+          if (task.escalated_at) parts.push(' | escalated')
           lines.push(parts.join(''))
         }
 
