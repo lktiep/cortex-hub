@@ -1,15 +1,19 @@
-// Task lifecycle, attempt half (spec §6.2, §6.5–§6.7): a worker accepts,
-// reports progress, completes, fails, runs out of quota or declines; the lead
-// cancels. Each step changes the row, logs and notifies in one transaction.
-// After the commit, the worker the step freed is marked idle and a dispatch
-// pass runs, so the dispatcher's pushes always follow committed state.
-import type { TaskQuotaExhaustedMsg, TaskResult, TaskRevokedMsg } from '@cortex/shared-types'
+// Task lifecycle (spec §6.2, §6.5–§6.7): a worker accepts, reports progress,
+// completes, fails, runs out of quota or declines; the lead reviews or cancels.
+// Each step changes the row, logs and notifies in one transaction, and a
+// completion runs the completion chain (dependents, groups, legacy parents) in
+// the same transaction. After the commit, the messages the step queued are
+// sent, the worker it freed is marked idle and a dispatch pass runs, so every
+// push follows committed state.
+import type {
+  ReviewRequest, TaskQuotaExhaustedMsg, TaskResult, TaskReview, TaskRevokedMsg,
+} from '@cortex/shared-types'
 import { db } from '../db/client.js'
 import { getConductorConfig } from './config.js'
 import { dispatch } from './dispatcher.js'
 import { formatNotification, notifyLead } from './notify.js'
 import { getByAgent, sendTo, setStatus } from './registry.js'
-import { ACTIVE_STATUSES, getTask, isoSeconds, logTask, taskContext, type TaskRow } from './rows.js'
+import { ACTIVE_STATUSES, getTask, isoSeconds, logTask, parseJson, stringList, taskContext, type TaskRow } from './rows.js'
 
 export type Outcome = { ok: true; task: TaskRow } | { ok: false; status: 403 | 404 | 409; error: string }
 
@@ -20,6 +24,10 @@ const LEASE_STEP_MS = 60_000
 const QUOTA_DEFAULT_MS = 3600_000
 const QUOTA_REASON_MAX = 500
 const ESCALATE_AT = 2
+/** Legacy subtask statuses that keep a `work` parent open (moved from `checkParentCompletion`). */
+const LEGACY_OPEN_STATUSES = ['pending', 'blocked', 'assigned', 'accepted', 'in_progress', 'review']
+/** What a return to `pending` sets: the assignment, acceptance and lease are cleared. */
+const BACK_TO_PENDING = "status = 'pending', assigned_to_agent = NULL, assigned_at = NULL, accepted_at = NULL, lease_expires_at = NULL"
 
 function isActive(status: string): boolean {
   return (ACTIVE_STATUSES as readonly string[]).includes(status)
@@ -72,11 +80,7 @@ function heldBy(agentId: string): (task: TaskRow) => boolean {
  * so the next attempt continues on the same branch, preferably on the same machine.
  */
 function toPending(task: TaskRow, reason: string): void {
-  db.prepare(`
-    UPDATE conductor_tasks
-    SET status = 'pending', assigned_to_agent = NULL, assigned_at = NULL, accepted_at = NULL, lease_expires_at = NULL
-    WHERE id = ?
-  `).run(task.id)
+  db.prepare(`UPDATE conductor_tasks SET ${BACK_TO_PENDING} WHERE id = ?`).run(task.id)
   logTask(task.id, task.assigned_to_agent, 'returned', reason.slice(0, LOG_MESSAGE_MAX))
 }
 
@@ -84,8 +88,19 @@ function saveContext(task: TaskRow, patch: Record<string, unknown>): void {
   db.prepare('UPDATE conductor_tasks SET context = ? WHERE id = ?').run(JSON.stringify({ ...taskContext(task), ...patch }), task.id)
 }
 
-/** What a committed step leaves to do: the worker to mark (null for none) before the dispatch pass. */
-interface Settled { outcome: Outcome; worker: string | null; state?: 'idle' | 'busy' }
+/** A WebSocket message held back until the transaction that produced it has committed. */
+interface Send {
+  agentId: string
+  msg: object
+  /** For a `notify_on_complete` message: the task whose `notified_agents` records a delivered send. */
+  notifiedFor?: string
+}
+
+/**
+ * What a committed step leaves to do: the messages to send, then the worker to
+ * mark (null for none), then the dispatch pass.
+ */
+interface Settled { outcome: Outcome; worker: string | null; state?: 'idle' | 'busy'; sends?: Send[] }
 
 /**
  * Pushes to workers (revokes, the dispatch pass) must follow a commit. Inside a
@@ -95,11 +110,34 @@ function assertOutsideTransaction(): void {
   if (db.inTransaction) throw new Error('lifecycle: must not run inside a db transaction')
 }
 
-/** Runs `step` in one transaction; after a successful commit, marks the worker and dispatches. */
+/**
+ * Sends the queued messages; must follow the commit. The agents a
+ * `notify_on_complete` message reached are added to that task's `notified_agents`.
+ */
+function flush(sends: Send[]): void {
+  const delivered = new Map<string, string[]>()
+  for (const { agentId, msg, notifiedFor } of sends) {
+    if (sendTo(agentId, msg) && notifiedFor !== undefined) {
+      delivered.set(notifiedFor, [...(delivered.get(notifiedFor) ?? []), agentId])
+    }
+  }
+  if (delivered.size === 0) return
+  db.transaction(() => {
+    for (const [taskId, agents] of delivered) {
+      const task = getTask(taskId)
+      if (task === undefined) continue
+      const notified = [...new Set([...stringList(task.notified_agents), ...agents])]
+      db.prepare('UPDATE conductor_tasks SET notified_agents = ? WHERE id = ?').run(JSON.stringify(notified), taskId)
+    }
+  })()
+}
+
+/** Runs `step` in one transaction; after a successful commit, sends, marks the worker and dispatches. */
 function settle(step: () => Settled, now?: number): Outcome {
   assertOutsideTransaction()
-  const { outcome, worker, state = 'idle' } = db.transaction(step)()
+  const { outcome, worker, state = 'idle', sends = [] } = db.transaction(step)()
   if (!outcome.ok) return outcome
+  flush(sends)
   if (worker !== null) setStatus(worker, state, now)
   dispatch(now)
   return outcome
@@ -122,14 +160,161 @@ function refused(outcome: Outcome): Settled {
   return { outcome, worker: null }
 }
 
-// Task 8: the completion chain (unblock dependents, complete finished groups).
-function onCompleted(_task: TaskRow): void {
-  // no-op until Task 8
+/** Sets `escalated_at` and tells the lead, at the second failure or rejection and only once (spec §6.6). */
+function escalate(task: TaskRow, by: string | null, count: number, of: 'failures' | 'rejections', reason: string): void {
+  if (count < ESCALATE_AT || task.escalated_at !== null) return
+  db.prepare('UPDATE conductor_tasks SET escalated_at = ? WHERE id = ?').run(isoSeconds(Date.now()), task.id)
+  logTask(task.id, by, 'escalated', `${count} ${of}`)
+  const updated = current(task.id)
+  notifyLead(updated, 'escalated', formatNotification('escalated', updated, { count, of, reason }))
 }
 
-// Task 8: the parent check after a cancel (a group whose last open child was cancelled).
-function checkParent(_task: TaskRow): void {
-  // no-op until Task 8
+/** True when every id names a `completed` task. */
+function allCompleted(ids: string[]): boolean {
+  const unique = [...new Set(ids)]
+  const { n } = db.prepare(
+    "SELECT COUNT(*) AS n FROM conductor_tasks WHERE status = 'completed' AND id IN (SELECT value FROM json_each(?))",
+  ).get(JSON.stringify(unique)) as { n: number }
+  return n === unique.length
+}
+
+/** `blocked` tasks that depend on `completedId` and whose dependencies are now all completed → `pending`. */
+function unblockDependents(completedId: string): void {
+  const blocked = db.prepare("SELECT * FROM conductor_tasks WHERE status = 'blocked'").all() as TaskRow[]
+  for (const dependent of blocked) {
+    const deps = stringList(dependent.depends_on)
+    if (!deps.includes(completedId) || !allCompleted(deps)) continue
+    db.prepare("UPDATE conductor_tasks SET status = 'pending' WHERE id = ?").run(dependent.id)
+    logTask(dependent.id, null, 'unblocked', `All dependencies met after ${completedId} completed`)
+    if (dependent.kind === 'gate') {
+      const gate = current(dependent.id)
+      notifyLead(gate, 'gate_ready', formatNotification('gate_ready', gate, {}))
+    }
+  }
+}
+
+/** Tasks whose completion chain is running; a re-entrant call for one of them is skipped. */
+const resolving = new Set<string>()
+
+/**
+ * The completion chain, inside the caller's transaction (spec §6.2): unblocks
+ * dependents, queues `task.completed` for the `notify_on_complete` agents, and
+ * checks the parent. Messages go on `sends`, for after the commit.
+ */
+function completionChain(task: TaskRow, sends: Send[]): void {
+  if (resolving.has(task.id)) {
+    console.warn(`[conductor] completion chain: skipping ${task.id} (already resolving)`)
+    return
+  }
+  resolving.add(task.id)
+  try {
+    unblockDependents(task.id)
+    const notify = stringList(task.notify_on_complete)
+    if (notify.length > 0) {
+      const msg = {
+        type: 'task.completed',
+        taskId: task.id,
+        title: task.title,
+        result: task.result ? parseJson(task.result, {}) : null,
+        completedBy: task.completed_by,
+        timestamp: new Date().toISOString(),
+      }
+      for (const agentId of notify) sends.push({ agentId, msg, notifiedFor: task.id })
+    }
+    checkParent(task, sends)
+  } finally {
+    resolving.delete(task.id)
+  }
+}
+
+/**
+ * After a child completes or is cancelled. A `group` parent is `cancelled` when
+ * every child is, `completed` when every other child is; a legacy `work` parent
+ * keeps `checkParentCompletion`'s behaviour. A finished parent is checked in turn.
+ */
+function checkParent(task: TaskRow, sends: Send[]): void {
+  if (task.parent_task_id === null) return
+  const parent = getTask(task.parent_task_id)
+  if (parent === undefined || isTerminal(parent.status)) return
+  const children = db.prepare('SELECT * FROM conductor_tasks WHERE parent_task_id = ?').all(parent.id) as TaskRow[]
+  if (parent.kind === 'group') checkGroup(parent, children, sends)
+  else if (parent.kind === 'work') checkLegacyParent(parent, children, sends)
+}
+
+function checkGroup(group: TaskRow, children: TaskRow[], sends: Send[]): void {
+  const counted = children.filter((c) => c.status !== 'cancelled')
+  const at = isoSeconds(Date.now())
+  if (counted.length === 0) {
+    db.prepare("UPDATE conductor_tasks SET status = 'cancelled', completed_at = ? WHERE id = ?").run(at, group.id)
+    logTask(group.id, null, 'cancelled', 'every child cancelled')
+    // a cancelled group unblocks nothing; only its own parent may now be done
+    checkParent(current(group.id), sends)
+  } else if (counted.every((c) => c.status === 'completed')) {
+    db.prepare("UPDATE conductor_tasks SET status = 'completed', completed_at = ? WHERE id = ?").run(at, group.id)
+    logTask(group.id, null, 'completed', 'every child completed')
+    completionChain(current(group.id), sends)
+  }
+}
+
+/**
+ * A legacy parent completes when every non-cancelled subtask is completed (or
+ * `approved`): with an assignee it enters `synthesis` and the assignee is
+ * asked to synthesize; without one it completes and runs the chain.
+ */
+function checkLegacyParent(parent: TaskRow, subtasks: TaskRow[], sends: Send[]): void {
+  const counted = subtasks.filter((t) => t.status !== 'cancelled')
+  if (counted.length === 0 || counted.some((t) => LEGACY_OPEN_STATUSES.includes(t.status))) return
+
+  if (counted.every((t) => t.status === 'completed' || t.status === 'approved')) {
+    const subtaskResults = subtasks.map((t) => ({
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      assignedTo: t.assigned_to_agent,
+      completedBy: t.completed_by,
+      result: t.result ? parseJson(t.result, null) : null,
+    }))
+    if (parent.assigned_to_agent) {
+      saveContext(parent, { subtaskResults, phase: 'synthesis' })
+      db.prepare("UPDATE conductor_tasks SET status = 'synthesis' WHERE id = ?").run(parent.id)
+      logTask(parent.id, null, 'synthesis_ready', `All ${counted.length} subtasks completed. Awaiting Lead Agent synthesis.`)
+      // the message `pushTaskToAgent` (ws/conductor.ts) sent
+      sends.push({
+        agentId: parent.assigned_to_agent,
+        msg: {
+          type: 'task.assigned',
+          taskId: parent.id,
+          title: parent.title,
+          description: `All ${counted.length} subtasks completed. Please synthesize results and submit final summary.`,
+          timestamp: new Date().toISOString(),
+        },
+      })
+    } else {
+      db.prepare("UPDATE conductor_tasks SET status = 'completed', completed_at = ?, result = ? WHERE id = ?")
+        .run(isoSeconds(Date.now()), JSON.stringify({ subtaskResults, autoCompleted: true }), parent.id)
+      logTask(parent.id, null, 'auto_completed', `All ${subtasks.length} subtasks completed`)
+      completionChain(current(parent.id), sends)
+    }
+  } else if (counted.some((t) => t.status === 'failed')) {
+    const failed = subtasks.filter((t) => t.status === 'failed').map((t) => t.id)
+    logTask(parent.id, null, 'subtask_failed', `Subtasks failed: ${failed.join(', ')}`)
+  }
+}
+
+/**
+ * The completion chain for a task completed outside this module (the legacy
+ * REST and WS handlers): runs it in one transaction, then sends what it queued
+ * and dispatches. Must not be called inside a transaction.
+ */
+export function onCompleted(task: TaskRow): void {
+  assertOutsideTransaction()
+  const sends = db.transaction((): Send[] => {
+    const queued: Send[] = []
+    completionChain(task, queued)
+    return queued
+  })()
+  flush(sends)
+  dispatch()
 }
 
 /** `assigned → accepted`. A repeat accept of a task already accepted or running is a no-op. */
@@ -214,8 +399,9 @@ export function completeTask(
     `).run(JSON.stringify(result), isoSeconds(Date.now()), by, taskId)
     logTask(taskId, by, 'completed', result.summary.slice(0, LOG_MESSAGE_MAX))
     const updated = current(taskId)
-    onCompleted(updated)
-    return { outcome: { ok: true, task: updated }, worker }
+    const sends: Send[] = []
+    completionChain(updated, sends)
+    return { outcome: { ok: true, task: updated }, worker, sends }
   })
 }
 
@@ -234,13 +420,7 @@ export function failAttempt(taskId: string, agentId: string | null, error: strin
     const failCount = task.fail_count + 1
     db.prepare('UPDATE conductor_tasks SET fail_count = ? WHERE id = ?').run(failCount, taskId)
     toPending(task, `failed: ${error}`)
-
-    if (failCount >= ESCALATE_AT && task.escalated_at === null) {
-      db.prepare('UPDATE conductor_tasks SET escalated_at = ? WHERE id = ?').run(isoSeconds(Date.now()), taskId)
-      logTask(taskId, task.assigned_to_agent, 'escalated', `${failCount} failures`)
-      const updated = current(taskId)
-      notifyLead(updated, 'escalated', formatNotification('escalated', updated, { count: failCount, of: 'failures', reason: error }))
-    }
+    escalate(task, task.assigned_to_agent, failCount, 'failures', error)
     return { outcome: { ok: true, task: current(taskId) }, worker: task.assigned_to_agent }
   })
 }
@@ -331,7 +511,75 @@ export function cancelTask(taskId: string, by: string | null): Outcome {
     `).run(isoSeconds(Date.now()), taskId)
     logTask(taskId, by, 'cancelled', `was ${task.status}`)
     const updated = current(taskId)
-    checkParent(updated)
-    return { outcome: { ok: true, task: updated }, worker: isActive(task.status) ? task.assigned_to_agent : null }
+    const sends: Send[] = []
+    checkParent(updated, sends)
+    return { outcome: { ok: true, task: updated }, worker: isActive(task.status) ? task.assigned_to_agent : null, sends }
+  })
+}
+
+/** A `work` task in `review`, or a `gate` in `pending` (awaiting approval). */
+function reviewable(task: TaskRow): boolean {
+  return (task.kind === 'work' && task.status === 'review') || (task.kind === 'gate' && task.status === 'pending')
+}
+
+/**
+ * A rejection (spec §6.6): the review entry is appended, `reject_count` grows
+ * and the task returns to `pending`, any completion cleared; `branch`,
+ * `last_agent` and `attempt` stay. The second rejection escalates.
+ */
+function rejectWork(task: TaskRow, by: string, feedback: string, now: number): void {
+  const reviews = taskContext(task).reviews
+  const review: TaskReview = { at: isoSeconds(now), by, verdict: 'reject', feedback }
+  const rejectCount = task.reject_count + 1
+  saveContext(task, { reviews: [...(Array.isArray(reviews) ? reviews : []), review] })
+  db.prepare(`UPDATE conductor_tasks SET ${BACK_TO_PENDING}, completed_at = NULL, completed_by = NULL, reject_count = ? WHERE id = ?`)
+    .run(rejectCount, task.id)
+  logTask(task.id, by, 'rejected', feedback.slice(0, LOG_MESSAGE_MAX))
+  escalate(task, by, rejectCount, 'rejections', feedback)
+}
+
+/**
+ * The lead's verdict (spec §6.2, §6.6). On a `work` task in `review`: approve
+ * → `completed` and the chain; reject → back to `pending` with the feedback.
+ * On a `gate` in `pending`: approve → `completed` and the chain; reject → each
+ * completed direct dependency of kind `work` is rejected the same way and the
+ * gate returns to `blocked`. A `user` gate is approved only from the dashboard.
+ * `by` defaults to the channel. Anything else → 409.
+ */
+export function reviewTask(taskId: string, req: ReviewRequest, via: 'mcp' | 'dashboard'): Outcome {
+  const by = req.by ?? (via === 'dashboard' ? 'dashboard' : 'mcp')
+  return settle((): Settled => {
+    const loaded = load(taskId, by, 'review', reviewable)
+    if (!loaded.ok) return refused(loaded)
+    const { task } = loaded
+    if (task.kind === 'gate' && task.approver === 'user' && via === 'mcp') {
+      return refused({ ok: false, status: 403, error: 'user gates are approved in the dashboard' })
+    }
+    const now = Date.now()
+
+    if (req.verdict === 'approve') {
+      db.prepare("UPDATE conductor_tasks SET status = 'completed', completed_at = ?, completed_by = ? WHERE id = ?")
+        .run(isoSeconds(now), by, taskId)
+      logTask(taskId, by, 'approved', req.feedback?.slice(0, LOG_MESSAGE_MAX))
+      const updated = current(taskId)
+      const sends: Send[] = []
+      completionChain(updated, sends)
+      // a task in review holds no worker
+      return { outcome: { ok: true, task: updated }, worker: null, sends }
+    }
+
+    const feedback = req.feedback ?? ''
+    if (task.kind === 'work') {
+      rejectWork(task, by, feedback, now)
+    } else {
+      for (const depId of stringList(task.depends_on)) {
+        const dep = getTask(depId)
+        // only finished work goes back; an active task would need its worker revoked first
+        if (dep?.kind === 'work' && dep.status === 'completed') rejectWork(dep, by, feedback, now)
+      }
+      db.prepare("UPDATE conductor_tasks SET status = 'blocked' WHERE id = ?").run(taskId)
+      logTask(taskId, by, 'rejected', feedback.slice(0, LOG_MESSAGE_MAX))
+    }
+    return { outcome: { ok: true, task: current(taskId) }, worker: null }
   })
 }

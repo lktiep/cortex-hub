@@ -8,6 +8,8 @@ import {
   setAgentStatus,
 } from '../ws/conductor.js'
 import { agentMatchesAssignment } from '../conductor/dispatcher.js'
+import { onCompleted } from '../conductor/lifecycle.js'
+import type { TaskRow as ConductorTaskRow } from '../conductor/rows.js'
 
 export const conductorRouter = new Hono()
 
@@ -71,164 +73,6 @@ function allDependenciesMet(dependsOn: string[]): boolean {
     `SELECT COUNT(*) as cnt FROM conductor_tasks WHERE id IN (${placeholders}) AND status = 'completed'`
   ).get(...dependsOn) as { cnt: number }
   return completedCount.cnt === dependsOn.length
-}
-
-/**
- * After a task completes, resolve downstream dependencies:
- * 1. Unblock tasks that depend on this one (if all deps met)
- * 2. Notify agents in notify_on_complete
- * 3. Check if parent task's subtasks are all complete
- */
-/** Guard against re-entrant resolveCompletionChain calls (prevents infinite loops) */
-const _resolving = new Set<string>()
-
-export function resolveCompletionChain(completedTask: TaskRow): void {
-  const completedId = completedTask.id
-
-  // ── Anti-recursion guard: skip if already resolving this task ──
-  if (_resolving.has(completedId)) {
-    console.warn(`[conductor] resolveCompletionChain: skipping ${completedId} (already resolving)`)
-    return
-  }
-  _resolving.add(completedId)
-
-  try {
-    // 1. Find tasks that depend on this completed task and unblock them
-    const dependentTasks = db.prepare(
-      "SELECT * FROM conductor_tasks WHERE status = 'blocked'"
-    ).all() as TaskRow[]
-
-    for (const task of dependentTasks) {
-      const deps = safeJsonParse<string[]>(task.depends_on, [])
-      if (!deps.includes(completedId)) continue
-
-      // Check if ALL dependencies for this task are now met
-      if (allDependenciesMet(deps)) {
-        db.prepare(
-          "UPDATE conductor_tasks SET status = 'pending' WHERE id = ?"
-        ).run(task.id)
-
-        logTaskAction(task.id, null, 'unblocked', `All dependencies met after ${completedId} completed`)
-
-        // If the task has an assigned agent, notify them
-        if (task.assigned_to_agent) {
-          pushTaskToAgent(task.assigned_to_agent, task.id, task.title, task.description)
-        }
-      }
-    }
-
-    // 2. Notify agents listed in notify_on_complete
-    const notifyList = safeJsonParse<string[]>(completedTask.notify_on_complete, [])
-    if (notifyList.length > 0) {
-      const notified = notifyAgents(notifyList, {
-        type: 'task.completed',
-        taskId: completedId,
-        title: completedTask.title,
-        result: completedTask.result ? safeJsonParse(completedTask.result, {}) : null,
-        completedBy: completedTask.completed_by,
-        timestamp: new Date().toISOString(),
-      })
-
-      // Record which agents were actually notified
-      const existingNotified = safeJsonParse<string[]>(completedTask.notified_agents, [])
-      const allNotified = [...new Set([...existingNotified, ...notified])]
-      db.prepare(
-        'UPDATE conductor_tasks SET notified_agents = ? WHERE id = ?'
-      ).run(JSON.stringify(allNotified), completedId)
-    }
-
-    // 3. Auto-review DISABLED — was causing recursive task spam loops.
-    //    Reviews should be explicitly created by the strategy/pipeline, not auto-generated.
-    //    TODO: Re-enable when review scheduling is properly integrated into pipeline strategy.
-
-    // 4. Check if this is a subtask and all siblings are complete -> update parent
-    if (completedTask.parent_task_id) {
-      checkParentCompletion(completedTask.parent_task_id)
-    }
-  } finally {
-    _resolving.delete(completedId)
-  }
-}
-
-/**
- * Check if all subtasks of a parent are complete.
- * If so, mark the parent as completed with a summary result.
- */
-function checkParentCompletion(parentId: string): void {
-  const parent = db.prepare(
-    'SELECT * FROM conductor_tasks WHERE id = ?'
-  ).get(parentId) as TaskRow | undefined
-
-  if (!parent) return
-  // Don't update if parent is already in a terminal state
-  if (parent.status === 'completed' || parent.status === 'cancelled' || parent.status === 'failed') return
-
-  const subtasks = db.prepare(
-    'SELECT * FROM conductor_tasks WHERE parent_task_id = ?'
-  ).all(parentId) as TaskRow[]
-
-  if (subtasks.length === 0) return
-
-  // Only consider non-cancelled subtasks
-  const activeSubtasks = subtasks.filter((t) => t.status !== 'cancelled')
-  if (activeSubtasks.length === 0) return
-
-  // Parent completes ONLY when ALL active subtasks are completed (no pending/blocked/in_progress)
-  const allComplete = activeSubtasks.every((t) => t.status === 'completed' || t.status === 'approved')
-  const anyPending = activeSubtasks.some((t) => ['pending', 'blocked', 'assigned', 'accepted', 'in_progress', 'review'].includes(t.status))
-  const anyFailed = activeSubtasks.some((t) => t.status === 'failed')
-
-  // Don't auto-complete if any subtask is still in progress
-  if (anyPending) return
-
-  if (allComplete) {
-    const subtaskResults = subtasks.map((t) => ({
-      id: t.id,
-      title: t.title,
-      status: t.status,
-      assignedTo: t.assigned_to_agent,
-      completedBy: t.completed_by,
-      result: t.result ? safeJsonParse(t.result, null) : null,
-    }))
-
-    // If parent has a Lead Agent assigned, enter synthesis mode instead of auto-completing
-    if (parent.assigned_to_agent) {
-      const existingCtx = safeJsonParse<Record<string, unknown>>(parent.context, {})
-      const updatedCtx = { ...existingCtx, subtaskResults, phase: 'synthesis' }
-
-      db.prepare(`
-        UPDATE conductor_tasks
-        SET status = 'synthesis', context = ?
-        WHERE id = ?
-      `).run(JSON.stringify(updatedCtx), parentId)
-
-      logTaskAction(parentId, null, 'synthesis_ready',
-        `All ${activeSubtasks.length} subtasks completed. Awaiting Lead Agent synthesis.`)
-
-      // Notify Lead Agent via WS to synthesize
-      pushTaskToAgent(parent.assigned_to_agent, parentId, parent.title,
-        `All ${activeSubtasks.length} subtasks completed. Please synthesize results and submit final summary.`)
-
-      console.log(`[conductor] Synthesis requested: ${parentId} → ${parent.assigned_to_agent}`)
-    } else {
-      // No Lead Agent — fallback to auto-complete
-      db.prepare(`
-        UPDATE conductor_tasks
-        SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-            result = ?
-        WHERE id = ?
-      `).run(JSON.stringify({ subtaskResults, autoCompleted: true }), parentId)
-
-      logTaskAction(parentId, null, 'auto_completed', `All ${subtasks.length} subtasks completed`)
-
-      const updatedParent = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(parentId) as TaskRow
-      resolveCompletionChain(updatedParent)
-    }
-  } else if (anyFailed) {
-    // If any subtask failed, mark parent for review
-    const failedTasks = subtasks.filter((t) => t.status === 'failed').map((t) => t.id)
-    logTaskAction(parentId, null, 'subtask_failed', `Subtasks failed: ${failedTasks.join(', ')}`)
-  }
 }
 
 // ── Connected agents (real-time from WebSocket) ──
@@ -737,7 +581,7 @@ conductorRouter.put('/:id', async (c) => {
       if (existing.assigned_to_agent) {
         setAgentStatus(existing.assigned_to_agent, 'idle')
       }
-      resolveCompletionChain(updatedTask)
+      onCompleted(updatedTask as ConductorTaskRow)
 
       // Fire-and-forget recipe capture (OpenSpace-inspired auto-learning)
       if (updatedTask.result) {
@@ -866,7 +710,7 @@ conductorRouter.put('/:id', async (c) => {
         }
 
         // Resolve completion chain since approved = completed
-        resolveCompletionChain(finalTask)
+        onCompleted(finalTask as ConductorTaskRow)
 
         return c.json({ task: finalTask })
       }
@@ -1110,7 +954,7 @@ conductorRouter.post('/:id/finalize', async (c) => {
       `Finalized with ${approvedFindings.length}/${allFindings.length} findings approved`)
 
     const updatedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(taskId) as TaskRow
-    resolveCompletionChain(updatedTask)
+    onCompleted(updatedTask as ConductorTaskRow)
 
     return c.json({ task: updatedTask })
   } catch (error) {

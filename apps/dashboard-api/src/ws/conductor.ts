@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { db } from '../db/client.js'
-import { resolveCompletionChain } from '../routes/conductor.js'
+import { onCompleted } from '../conductor/lifecycle.js'
 
 // ── Load valid capabilities from templates ──
 let validCapabilityIds: Set<string> = new Set()
@@ -280,7 +280,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       // Resolve dependency chain: unblock waiting tasks, notify, auto-complete parent
       const completedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(completedTaskId)
       if (completedTask) {
-        try { resolveCompletionChain(completedTask as Parameters<typeof resolveCompletionChain>[0]) } catch (e) {
+        try { onCompleted(completedTask as Parameters<typeof onCompleted>[0]) } catch (e) {
           console.error('[ws] resolveCompletionChain error:', e)
         }
       }
@@ -583,7 +583,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       // Resolve completion chain for the parent
       const completedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(taskId)
       if (completedTask) {
-        resolveCompletionChain(completedTask as Parameters<typeof resolveCompletionChain>[0])
+        onCompleted(completedTask as Parameters<typeof onCompleted>[0])
       }
       break
     }
