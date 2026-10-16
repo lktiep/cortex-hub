@@ -230,11 +230,11 @@ describe('registerPayload', () => {
 
   it('reports the unconfirmed task, else the persisted active task', () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null, engineGroup: null });
     expect(new Worker(h.deps).registerPayload().activeTaskId).toBe(TASK_B);
 
     const msg = done(makeTask());
-    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg }, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg }, lastRegistered: null, engineGroup: null });
     expect(new Worker(h.deps).registerPayload().activeTaskId).toBe(TASK_A);
   });
 });
@@ -272,7 +272,7 @@ describe('task.assigned', () => {
       { via: 'send', msg: IDLE },
     ]);
     expect(w.busy).toBe(false);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: done(task) }, lastRegistered: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: done(task) }, lastRegistered: null, engineGroup: null });
   });
 
   it.each([
@@ -293,7 +293,7 @@ describe('task.assigned', () => {
     await w.idle();
 
     if (outcome.kind !== 'completed' && outcome.kind !== 'failed' && outcome.kind !== 'quota') throw new Error('unreachable');
-    expect(seen).toEqual([{ activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: outcome.msg }, lastRegistered: null }]);
+    expect(seen).toEqual([{ activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: outcome.msg }, lastRegistered: null, engineGroup: null }]);
     expect(h.sent.slice(-2)).toEqual([
       { via: 'reliable', msg: outcome.msg },
       { via: 'send', msg: IDLE },
@@ -364,7 +364,7 @@ describe('task.assigned', () => {
         { via: 'send', msg: IDLE },
       ]);
       expect(h.calls).toHaveLength(1);
-      expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null });
+      expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
     },
   );
 
@@ -388,6 +388,7 @@ describe('task.assigned', () => {
       activeTaskId: null,
       unconfirmed: { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) },
       lastRegistered: null,
+      engineGroup: null,
     });
     const seen: WorkerState[] = [];
     h.onReliable.fn = (m) => {
@@ -396,13 +397,13 @@ describe('task.assigned', () => {
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask()));
     await started(h);
-    expect(seen).toEqual([{ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null }]);
+    expect(seen).toEqual([{ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null }]);
   });
 
   it("declines when the route's executor is not available", async () => {
     const h = harness();
     const unconfirmed = { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) };
-    writeState(paths.stateFile, { activeTaskId: null, unconfirmed, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed, lastRegistered: null, engineGroup: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask({ route: { executor: 'codex', model: null, effort: null } })));
     await w.idle();
@@ -414,7 +415,7 @@ describe('task.assigned', () => {
     ]);
     expect(h.calls).toHaveLength(0);
     expect(w.busy).toBe(false);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed, lastRegistered: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed, lastRegistered: null, engineGroup: null });
   });
 
   it('declines when there is no route executor and no default engine', async () => {
@@ -450,7 +451,7 @@ describe('task.assigned', () => {
 
   it('declines an unsafe task id before accepting and leaves the state alone', async () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null, engineGroup: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask({ id: '../escape' })));
     await w.idle();
@@ -488,7 +489,7 @@ describe('task.assigned', () => {
       { via: 'reliable', msg: { type: 'task.decline', taskId: TASK_A, reason: 'branch-in-use: /elsewhere', attempt: 3 } },
       { via: 'send', msg: IDLE },
     ]);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
   });
 
   it('clears an unconfirmed outcome once a new task is accepted', async () => {
@@ -497,11 +498,12 @@ describe('task.assigned', () => {
       activeTaskId: null,
       unconfirmed: { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) },
       lastRegistered: null,
+      engineGroup: null,
     });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask()));
     await started(h);
-    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null });
+    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
   });
 
   it('reports a run that throws as a failed task', async () => {
@@ -555,7 +557,7 @@ describe('task.resumed', () => {
   it('re-sends the stored outcome when the hub resumes a finished task', async () => {
     const h = harness();
     const msg = done(makeTask());
-    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg }, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg }, lastRegistered: null, engineGroup: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask(), 'task.resumed'));
     await w.idle();
@@ -568,18 +570,18 @@ describe('task.resumed', () => {
   it('runs a resumed task afresh when the stored outcome is for another attempt', async () => {
     const h = harness();
     const old = done(makeTask({ attempt: 1 }));
-    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: old }, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: old }, lastRegistered: null, engineGroup: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask({ attempt: 2 }), 'task.resumed'));
     const call = await started(h);
     expect(call.opts).toEqual({ resumed: true });
     expect(h.sent).toEqual([accept(), { via: 'send', msg: BUSY }]);
-    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null });
+    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
   });
 
   it('runs the task the worker stopped with, as resumed', async () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask(), 'task.resumed'));
     expect((await started(h)).opts).toEqual({ resumed: true });
@@ -594,6 +596,7 @@ describe('task.revoked', () => {
       activeTaskId: null,
       unconfirmed: { taskId: TASK_A, msg: done(makeTask()) },
       lastRegistered: null,
+      engineGroup: null,
     });
     const w = new Worker(h.deps);
     w.handle(revoked(TASK_A));
@@ -604,7 +607,7 @@ describe('task.revoked', () => {
 
   it('clears a persisted active task on task.revoked and logs an unknown one', () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
     const w = new Worker(h.deps);
     w.handle(revoked(TASK_B));
     expect(state().activeTaskId).toBe(TASK_A);
@@ -624,12 +627,12 @@ describe('task.revoked', () => {
     expect(call.signal.reason).toBe('revoked');
     await w.idle();
     expect(types(h)).toEqual(['task.accept', 'status.update:busy', 'status.update:idle']);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
   });
 
   it('drops a task revoked while it is still being checked', async () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask(), 'task.resumed'));
     w.handle(revoked(TASK_A));
@@ -648,7 +651,7 @@ describe('task.revoked', () => {
     expect(h.sent).toEqual([{ via: 'send', msg: IDLE }]);
     expect(h.calls).toHaveLength(0);
     expect(w.busy).toBe(false);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
   });
 });
 
@@ -656,7 +659,7 @@ describe('registered gate', () => {
   it('drops task.assigned and task.resumed while not registered but honours task.revoked', async () => {
     const h = harness();
     h.registered.value = false;
-    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null, engineGroup: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask()));
     w.handle(assigned(makeTask(), 'task.resumed'));
@@ -697,6 +700,7 @@ describe('stop', () => {
       activeTaskId: null,
       unconfirmed: { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) },
       lastRegistered: null,
+      engineGroup: null,
     };
     writeState(paths.stateFile, before);
     const w = new Worker(h.deps);
@@ -758,5 +762,28 @@ describe('onRegistered', () => {
     w.onRegistered({ type: 'registered', connectionId: 'c1', projectId: 'proj-1', hubVersion: WORKER_VERSION });
     expect(h.logs.filter((l) => l.startsWith('WARN'))).toEqual([]);
     expect(state().lastRegistered).toMatchObject({ projectId: 'proj-1', hubVersion: WORKER_VERSION });
+  });
+});
+
+describe('engine process group', () => {
+  it('writes the group the runner reports to the state file, and clears it', async () => {
+    const h = harness();
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    const call = await started(h);
+    expect(state().engineGroup).toBeNull();
+    call.deps.onEngineGroup?.(4242);
+    expect(state()).toMatchObject({ activeTaskId: TASK_A, engineGroup: 4242 });
+    call.deps.onEngineGroup?.(null);
+    expect(state().engineGroup).toBeNull();
+    call.finish({ kind: 'completed', msg: done(call.task) });
+    await w.idle();
+  });
+
+  it('forgets a group an earlier process recorded: its id may belong to another process by now', () => {
+    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: 4242 });
+    const w = new Worker(harness().deps);
+    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    expect(w.registerPayload().activeTaskId).toBe(TASK_A);
   });
 });

@@ -114,6 +114,7 @@ describe('runDoctor', () => {
       activeTaskId: null,
       unconfirmed: null,
       lastRegistered: { projectId: 'proj-9', hubVersion: '1', at: 'now' },
+      engineGroup: null,
     });
     expect(byName(await runDoctor(ctx()), 'project mapping').detail).toContain('proj-9');
   });

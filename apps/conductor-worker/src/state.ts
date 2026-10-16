@@ -6,9 +6,15 @@ export interface WorkerState {
   activeTaskId: string | null;
   unconfirmed: { taskId: string; msg: TaskCompleteMsg | TaskQuotaExhaustedMsg } | null;
   lastRegistered: { projectId: string | null; hubVersion: string; at: string } | null;
+  /**
+   * The process group of the engine running now (POSIX; the engine leads it), so `stop` can
+   * kill it after the grace period: the worker's own tree kill does not reach it. Null when no
+   * engine runs, and always on Windows, where the worker's tree kill covers the engine.
+   */
+  engineGroup: number | null;
 }
 
-const emptyState = (): WorkerState => ({ activeTaskId: null, unconfirmed: null, lastRegistered: null });
+const emptyState = (): WorkerState => ({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -34,7 +40,9 @@ export function readState(file: string): WorkerState {
       typeof lr.at === 'string'
         ? { projectId: lr.projectId, hubVersion: lr.hubVersion, at: lr.at }
         : null;
-    return { activeTaskId, unconfirmed, lastRegistered };
+    const eg = raw.engineGroup;
+    const engineGroup = typeof eg === 'number' && Number.isInteger(eg) && eg > 0 ? eg : null;
+    return { activeTaskId, unconfirmed, lastRegistered, engineGroup };
   } catch {
     return emptyState();
   }

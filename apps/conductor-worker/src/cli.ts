@@ -191,15 +191,18 @@ export function isEntrypoint(
   }
 }
 
-/** Deletes from `env`, in place, every entry whose value contains `secret`, whatever the variable is called. */
+/**
+ * Deletes from `env`, in place, every entry whose value is exactly `secret`, whatever the
+ * variable is called. Exact, not a substring: a short key would otherwise take PATH with it.
+ */
 export function scrubSecret(env: NodeJS.ProcessEnv, secret: string): void {
   if (secret === '') return;
   for (const [k, v] of Object.entries(env)) {
-    if (v?.includes(secret) === true) delete env[k];
+    if (v === secret) delete env[k];
   }
 }
 
-/** A copy of `env` without any entry whose value contains `secret`. */
+/** A copy of `env` without any entry whose value is exactly `secret`. */
 export function envWithoutSecret(env: NodeJS.ProcessEnv, secret: string): NodeJS.ProcessEnv {
   const out = { ...env };
   scrubSecret(out, secret);

@@ -29,6 +29,7 @@ import type { EngineAdapter } from '../engines/types.js';
 import { HubClient } from '../hub-client.js';
 import { workerPaths } from '../paths.js';
 import type { WorkerPaths } from '../paths.js';
+import { writeState } from '../state.js';
 import type { WorkerState } from '../state.js';
 import { createGitFixture } from '../test-utils/git-fixture.js';
 import type { GitFixture } from '../test-utils/git-fixture.js';
@@ -405,6 +406,36 @@ describe('stopWorker', () => {
     expect(existsSync(paths.pidFile)).toBe(false);
   });
 
+  posixOnly('also kills the engine process group the worker recorded, which the worker tree kill misses', async () => {
+    const paths = freshPaths();
+    const engineFile = path.join(paths.home, 'engine.pid');
+    // a daemon that ignores the stop file and runs an engine in a process group of its own, as runCli does
+    const w = spawnNode(
+      `const { spawn } = require('node:child_process');
+       const e = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', detached: true });
+       require('node:fs').writeFileSync(process.env.ENGINE_FILE, String(e.pid));
+       setInterval(() => {}, 1000);`,
+      { detached: true, env: { ENGINE_FILE: engineFile } },
+    );
+    await until(() => existsSync(engineFile), 'the engine');
+    const engine = Number(readFileSync(engineFile, 'utf8'));
+    strayPids.push(engine);
+    writeState(paths.stateFile, { activeTaskId: 't-1', unconfirmed: null, lastRegistered: null, engineGroup: engine });
+    writePid(paths, w.pid ?? 0);
+    expect(await stopWorker(paths, { graceMs: 200 })).toBe('killed');
+    expect(isAlive(w.pid ?? 0)).toBe(false);
+    await until(() => !isAlive(engine), 'the engine to die', 3000);
+  });
+
+  posixOnly('a recorded engine group that is gone already does not fail the stop', async () => {
+    const paths = freshPaths();
+    const w = spawnNode('setInterval(() => {}, 1000)', { detached: true });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: await deadPid() });
+    writePid(paths, w.pid ?? 0);
+    expect(await stopWorker(paths, { graceMs: 200 })).toBe('killed');
+    expect(isAlive(w.pid ?? 0)).toBe(false);
+  });
+
   it("stopWorker returns 'not-running' for a stale pid file", async () => {
     const paths = freshPaths();
     writePid(paths, await deadPid());
@@ -427,6 +458,7 @@ describe('statusText', () => {
     activeTaskId: 't-9',
     unconfirmed: null,
     lastRegistered: { projectId: 'p-1', hubVersion: '1.2.3', at: '2026-10-17T10:00:00.000Z' },
+    engineGroup: null,
   };
 
   it('shows running, the pid, the agent id, the task and the last registration', () => {
@@ -442,7 +474,7 @@ describe('statusText', () => {
 
   it('shows stopped, a stale pid, no task and never registered', async () => {
     const paths = freshPaths();
-    const empty: WorkerState = { activeTaskId: null, unconfirmed: null, lastRegistered: null };
+    const empty: WorkerState = { activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null };
     expect(statusText(paths, empty)).toMatch(/stopped/);
     expect(statusText(paths, empty)).toMatch(/active task:\s+none/);
     expect(statusText(paths, empty)).toMatch(/last registered:\s+never/);
@@ -631,7 +663,7 @@ describe('start', () => {
         CORTEX_API_KEY: KEY,
         CORTEX_AGENT_ID: 'w1',
         CORTEX_WORKER_DAEMON: '1',
-        ALSO_THE_KEY: `Bearer ${KEY}`,
+        ALSO_THE_KEY: KEY,
       },
       homeDir: home,
       hostname: 'box',
@@ -689,7 +721,8 @@ describe('start', () => {
 
     // the engines and their setup/test commands never see the key, whatever the variable
     expect(h.adapterEnvs).toHaveLength(1);
-    expect(Object.values(h.adapterEnvs[0] ?? {}).some((v) => v?.includes(KEY))).toBe(false);
+    expect(Object.values(h.adapterEnvs[0] ?? {}).some((v) => v === KEY)).toBe(false);
+    expect(h.adapterEnvs[0]?.ALSO_THE_KEY).toBeUndefined();
     expect(h.adapterEnvs[0]?.PATH).toBe(process.env.PATH);
 
     writeFileSync(h.paths.stopFile, '');
@@ -726,7 +759,7 @@ describe('start', () => {
     expect(existsSync(h.paths.pidFile)).toBe(false);
   });
 
-  it('removes every process.env entry that holds the key, so git, gh and hooks never see it', async () => {
+  it('removes every process.env entry whose value is the key, so git, gh and hooks never see it', async () => {
     vi.stubEnv('CW_TEST_KEY_COPY', KEY);
     vi.stubEnv('CW_TEST_KEY_HEADER', `Authorization: Bearer ${KEY}`);
     vi.stubEnv('CW_TEST_UNRELATED', 'keep me');
@@ -734,10 +767,12 @@ describe('start', () => {
     const h = harness(hub);
     void launch(h);
     await until(() => hub?.frames.length !== 0, 'worker.register');
-    expect(Object.entries(process.env).filter(([, v]) => v?.includes(KEY))).toEqual([]);
+    expect(Object.entries(process.env).filter(([, v]) => v === KEY)).toEqual([]);
     expect(process.env['CW_TEST_UNRELATED']).toBe('keep me');
+    // exact values only: matching substrings, a short key would take PATH with it
+    expect(process.env['CW_TEST_KEY_HEADER']).toBe(`Authorization: Bearer ${KEY}`);
     // the engines' env is the scrubbed one too
-    expect(Object.values(h.adapterEnvs[0] ?? {}).some((v) => v?.includes(KEY))).toBe(false);
+    expect(Object.values(h.adapterEnvs[0] ?? {}).some((v) => v === KEY)).toBe(false);
   });
 
   /** Emits `names` from inside `HubClient.stop`, i.e. while a shutdown is under way. */

@@ -84,6 +84,8 @@ export class Worker {
     this.deps = deps;
     this.run = deps.run ?? runTask;
     this.state = readState(deps.paths.stateFile);
+    // a group an earlier process recorded is not this one's to kill: its id may be reused by now
+    if (this.state.engineGroup !== null) this.update({ engineGroup: null });
   }
 
   get busy(): boolean {
@@ -329,6 +331,10 @@ export class Worker {
       env,
       engineTimeoutMs,
       identity,
+      // recorded so `stop` can kill the engine if this process does not stop in time
+      onEngineGroup: (engineGroup) => {
+        this.update({ engineGroup });
+      },
     };
   }
 

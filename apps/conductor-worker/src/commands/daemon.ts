@@ -17,6 +17,7 @@ import path from 'node:path';
 import type { CliArgs } from '../cli.js';
 import type { WorkerPaths } from '../paths.js';
 import { killTree } from '../process.js';
+import { readState } from '../state.js';
 import type { WorkerState } from '../state.js';
 
 /** How long `stop` lets a running task wrap up (push its work) before it kills the worker. */
@@ -216,7 +217,8 @@ async function waitGone(pid: number, ms: number): Promise<boolean> {
 
 /**
  * Asks the worker to stop through the stop file, waits `graceMs` (enough for a WIP push),
- * then kills its process tree.
+ * then kills its process tree, and on POSIX the engine's process group it recorded, which
+ * leads a group of its own and so is outside that tree.
  */
 export async function stopWorker(
   paths: WorkerPaths,
@@ -252,6 +254,9 @@ export async function stopWorker(
   if (!(await waitGone(pid, KILL_GRACE_MS))) {
     throw new Error(`pid ${pid} is still running after SIGKILL`);
   }
+  // read once the worker is gone: a worker that reaped its engine on SIGTERM has cleared it
+  const engineGroup = platform === 'win32' ? null : readState(paths.stateFile).engineGroup;
+  if (engineGroup !== null) await killTree(engineGroup, platform, KILL_GRACE_MS);
   cleanUp();
   return 'killed';
 }

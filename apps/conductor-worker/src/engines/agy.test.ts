@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { win32QuotedLength } from '../prompt.js';
 import { createAgyAdapter } from './agy.js';
 
 const fx = (name: string): string =>
@@ -140,6 +141,17 @@ describe('agy buildArgs', () => {
     const a = createAgyAdapter({ bin: 'agy', printTimeout: '30m', env: {} });
     const args = a.buildArgs(i, 'linux').args;
     expect(args.slice(-2)).toEqual(['--print-timeout', '30m']);
+  });
+});
+
+describe('agy promptLength', () => {
+  it('measures the prompt as CreateProcess receives it on win32, and by its length elsewhere', () => {
+    const prompt = 'say "hi" to C:\\dir\\';
+    const win = createAgyAdapter({ bin: 'agy', platform: 'win32', env: {} });
+    expect(win.promptLength?.(prompt)).toBe(win32QuotedLength(prompt));
+    expect(win32QuotedLength(prompt)).toBeGreaterThan(prompt.length);
+    const linux = createAgyAdapter({ bin: 'agy', platform: 'linux', env: {} });
+    expect(linux.promptLength?.(prompt)).toBe(prompt.length);
   });
 });
 

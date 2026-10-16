@@ -14,6 +14,7 @@ afterEach(() => {
 });
 
 const opts = { platform: process.platform, env: process.env };
+const posixOnly = it.skipIf(process.platform === 'win32');
 
 function script(body: string): string[] {
   const file = path.join(dir, 'fake.mjs');
@@ -107,6 +108,41 @@ describe('runCli', () => {
     expect(r.stderr).toMatch(/refusing to pass/);
     expect(r.timedOut).toBe(false);
     expect(r.aborted).toBe(false);
+  });
+
+  posixOnly('reports the engine process group once it starts', async () => {
+    const args = script(`console.log(process.pid);`);
+    const groups: number[] = [];
+    const onGroup = (g: number): void => {
+      groups.push(g);
+    };
+    const r = await runCli(process.execPath, { args }, input({ onGroup }).input, opts);
+    expect(r.exitCode).toBe(0);
+    // the engine is spawned detached, so it leads its own group
+    expect(groups).toEqual([Number(r.stdout.trim())]);
+  });
+
+  it('reports no process group on win32, where the engine leads none, or when the spawn fails', async () => {
+    const args = script(`console.log('x');`);
+    const groups: number[] = [];
+    const onGroup = (g: number): void => {
+      groups.push(g);
+    };
+    const win = await runCli(process.execPath, { args }, input({ onGroup }).input, { platform: 'win32', env: process.env });
+    expect(win.exitCode).toBe(0);
+    const missing = await runCli(path.join(dir, 'nope'), { args: [] }, input({ onGroup }).input, opts);
+    expect(missing.exitCode).toBe(127);
+    expect(groups).toEqual([]);
+  });
+
+  posixOnly('survives a throwing onGroup callback', async () => {
+    const args = script(`console.log('x');`);
+    const onGroup = (): void => {
+      throw new Error('cb');
+    };
+    const r = await runCli(process.execPath, { args }, input({ onGroup }).input, opts);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe('x\n');
   });
 
   it('resolves 127 with the spawn error for a missing binary', async () => {

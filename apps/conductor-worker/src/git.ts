@@ -255,6 +255,15 @@ async function remoteRefExists(repo: string, branch: string): Promise<boolean> {
   return r.code === 0;
 }
 
+/** True when `origin/<branch>` exists and is not in the history of the worktree's HEAD. */
+async function missesRemoteWork(repo: string, dir: string, branch: string): Promise<boolean> {
+  if (!(await remoteRefExists(repo, branch))) return false;
+  const r = await git(['merge-base', '--is-ancestor', `origin/${branch}`, 'HEAD'], { cwd: dir });
+  if (r.code === 0) return false;
+  if (r.code === 1) return true;
+  throw new Error(`could not compare the worktree ${dir} with origin/${branch}: ${tail(r)}`);
+}
+
 export async function prepareWorktree(
   repo: string,
   dir: string,
@@ -263,13 +272,28 @@ export async function prepareWorktree(
 ): Promise<{ from: 'branch' | 'base' | 'existing' }> {
   const fetch = await git(['fetch', 'origin', '--prune'], { cwd: repo });
   if (fetch.code !== 0) throw new Error(`git fetch failed: ${tail(fetch)}`);
-  await git(['worktree', 'prune'], { cwd: repo });
 
+  // no `git worktree prune`: it would also drop the user's own registrations of missing paths
   const here = canonical(dir);
   const registered = (await listWorktrees(repo)).find((e) => canonical(e.path) === here);
-  if (registered !== undefined) {
-    if (registered.branch === branch) return { from: 'existing' };
-    throw new Error(`worktree ${dir} holds ${registered.branch ?? 'a detached HEAD'}, expected ${branch}`);
+  if (registered !== undefined && !existsSync(dir)) {
+    // this path's directory is gone; its stale registration would block the add below
+    await removeWorktree(repo, dir);
+  } else if (registered !== undefined) {
+    if (registered.branch !== branch) {
+      throw new Error(`worktree ${dir} holds ${registered.branch ?? 'a detached HEAD'}, expected ${branch}`);
+    }
+    if (!(await missesRemoteWork(repo, dir, branch))) return { from: 'existing' };
+    // another machine pushed the branch since this worktree was kept: start again from it
+    const status = await git(['status', '--porcelain'], { cwd: dir });
+    if (status.code !== 0) throw new Error(`git status failed in ${dir}: ${tail(status)}`);
+    if (status.stdout.trim() !== '') {
+      throw new Error(
+        `the worktree ${dir} has uncommitted changes, and origin/${branch} has commits it lacks; ` +
+          `commit or discard the changes there, or remove the worktree`,
+      );
+    }
+    await removeWorktree(repo, dir);
   }
 
   const elsewhere = await branchCheckedOutAt(repo, branch, dir);
@@ -280,7 +304,8 @@ export async function prepareWorktree(
   else if (await remoteRefExists(repo, baseBranch)) from = 'base';
   else throw new Error(`base branch ${baseBranch} not found on origin`);
 
-  // an orphan left behind after a prune: git refuses to add into a non-empty directory
+  // an orphan: a directory without a registration, such as one a crashed add left behind or
+  // whose registration the user pruned; git refuses to add into a non-empty directory
   assertSafeToReplace(repo, dir);
   if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
   mkdirSync(path.dirname(dir), { recursive: true });

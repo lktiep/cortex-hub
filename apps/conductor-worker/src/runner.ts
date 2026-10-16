@@ -40,6 +40,8 @@ export interface RunnerDeps {
   engineTimeoutMs: number;
   identity: { name: string; email: string };
   now?: () => Date;
+  /** Told the engine's process group once it starts (POSIX), and null once the engine is done. */
+  onEngineGroup?: (pgid: number | null) => void;
 }
 
 export type AbortReason = 'revoked' | 'stopping';
@@ -235,11 +237,16 @@ export async function runTask(
   };
 
   const runEngine = async (worktree: string, testCommand: string | null): Promise<RunOutput> => {
-    const prompt = buildPrompt(task, { resumed: opts.resumed, testCommand });
+    const prompt = buildPrompt(task, {
+      resumed: opts.resumed,
+      testCommand,
+      measure: (p) => adapter.promptLength?.(p) ?? p.length,
+    });
     const throttle = createProgressThrottle((message) =>
       deps.send({ type: 'task.progress', taskId: task.id, message }),
     );
     engineStarted = true;
+    let grouped = false;
     try {
       return await adapter.run({
         prompt,
@@ -252,9 +259,15 @@ export async function runTask(
           const text = adapter.progressText(line);
           if (text !== null) throttle.push(text);
         },
+        onGroup: (pgid) => {
+          grouped = true;
+          deps.onEngineGroup?.(pgid);
+        },
       });
     } finally {
       throttle.stop();
+      // the engine is done; runCli reaps its group before it returns
+      if (grouped) deps.onEngineGroup?.(null);
     }
   };
 

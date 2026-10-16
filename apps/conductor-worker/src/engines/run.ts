@@ -52,6 +52,15 @@ export async function runCli(
     };
   }
 
+  // spawnTracked starts it detached on POSIX, so it leads a group of its own
+  if (opts.platform !== 'win32' && tracked.pid > 0) {
+    try {
+      input.onGroup?.(tracked.pid);
+    } catch {
+      // a broken callback must not break the run
+    }
+  }
+
   let stdout = '';
   let stderr = '';
   let pending = '';

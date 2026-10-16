@@ -1,5 +1,6 @@
 import os from 'node:os';
 import { resolveCommand } from '../process.js';
+import { win32QuotedLength } from '../prompt.js';
 import { agyModelScope, parseResetsIn } from './quota.js';
 import { runCli } from './run.js';
 import type { Classification, EngineAdapter, RunInput, RunOutput } from './types.js';
@@ -108,6 +109,8 @@ export function createAgyAdapter(
 
   return {
     executor: 'agy',
+
+    promptLength: (prompt) => (platform === 'win32' ? win32QuotedLength(prompt) : prompt.length),
 
     async detect() {
       const bin = resolveBin();

@@ -13,6 +13,11 @@ export interface RunInput {
   signal: AbortSignal;
   timeoutMs: number;
   onLine: (line: string) => void;
+  /**
+   * Called once the engine has started, with the process group it leads. POSIX only: on
+   * Windows the engine leads no group, and a failed spawn has none.
+   */
+  onGroup?: (pgid: number) => void;
 }
 
 export interface RunOutput {
@@ -44,4 +49,9 @@ export interface EngineAdapter {
   progressText(line: string): string | null;
   /** Final answer, at most 4 000 chars. */
   summary(stdout: string): string;
+  /**
+   * How a prompt counts against PROMPT_LIMIT when it is not just its length: agy takes the
+   * prompt in argv, which Windows quotes and escapes on the command line.
+   */
+  promptLength?(prompt: string): number;
 }

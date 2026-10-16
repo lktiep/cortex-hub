@@ -112,7 +112,7 @@ describe('parseCli', () => {
 });
 
 describe('envWithoutSecret', () => {
-  it('drops every entry whose value contains the secret, whatever its name', () => {
+  it('drops every entry whose value is the secret, whatever its name', () => {
     const env = {
       PATH: '/bin',
       CORTEX_API_KEY: 'sk-123',
@@ -121,8 +121,18 @@ describe('envWithoutSecret', () => {
       OTHER: 'sk-12',
       EMPTY: undefined,
     };
-    expect(envWithoutSecret(env, 'sk-123')).toEqual({ PATH: '/bin', OTHER: 'sk-12', EMPTY: undefined });
+    expect(envWithoutSecret(env, 'sk-123')).toEqual({
+      PATH: '/bin',
+      HEADERS: 'Authorization: Bearer sk-123',
+      OTHER: 'sk-12',
+      EMPTY: undefined,
+    });
     expect(env.CORTEX_API_KEY).toBe('sk-123');
+  });
+
+  it('keeps PATH and every other value that merely contains a short key', () => {
+    const env = { PATH: '/usr/local/bin', HOME: '/home/s', CORTEX_API_KEY: 's', CMD: 'tests ok' };
+    expect(envWithoutSecret(env, 's')).toEqual({ PATH: '/usr/local/bin', HOME: '/home/s', CMD: 'tests ok' });
   });
 
   it('keeps everything for an empty secret', () => {
@@ -131,12 +141,18 @@ describe('envWithoutSecret', () => {
 });
 
 describe('scrubSecret', () => {
-  it('deletes, in place, every entry whose value contains the secret', () => {
+  it('deletes, in place, every entry whose value is the secret', () => {
     const env: NodeJS.ProcessEnv = { PATH: '/bin', CORTEX_API_KEY: 'sk-123', HEADERS: 'Bearer sk-123', OTHER: 'sk-12' };
     scrubSecret(env, 'sk-123');
-    expect(env).toEqual({ PATH: '/bin', OTHER: 'sk-12' });
+    expect(env).toEqual({ PATH: '/bin', HEADERS: 'Bearer sk-123', OTHER: 'sk-12' });
     scrubSecret(env, '');
-    expect(env).toEqual({ PATH: '/bin', OTHER: 'sk-12' });
+    expect(env).toEqual({ PATH: '/bin', HEADERS: 'Bearer sk-123', OTHER: 'sk-12' });
+  });
+
+  it('leaves PATH alone for a one-character key it contains', () => {
+    const env: NodeJS.ProcessEnv = { PATH: '/usr/local/bin', CORTEX_API_KEY: 's' };
+    scrubSecret(env, 's');
+    expect(env).toEqual({ PATH: '/usr/local/bin' });
   });
 });
 

@@ -9,6 +9,7 @@ import type { GhRun } from './git.js';
 import type { Logger } from './logger.js';
 import { workerPaths, worktreePath } from './paths.js';
 import type { WorkerPaths } from './paths.js';
+import { PROMPT_LIMIT } from './prompt.js';
 import { commitTitle, runTask } from './runner.js';
 import type { RunOutcome, RunnerDeps } from './runner.js';
 import { FIXTURE_GIT_IDENTITY, createGitFixture, isolateGitConfig } from './test-utils/git-fixture.js';
@@ -78,6 +79,7 @@ function fakeEngine(
     classify?: Classification;
     summary?: string;
     defaultModel?: string | null;
+    promptLength?: (prompt: string) => number;
   } = {},
 ): FakeEngine {
   const inputs: RunInput[] = [];
@@ -103,6 +105,7 @@ function fakeEngine(
     },
     progressText: (line) => (line.startsWith('#') ? null : `p:${line}`),
     summary: () => o.summary ?? 'Wrote engine.txt.',
+    ...(o.promptLength !== undefined ? { promptLength: o.promptLength } : {}),
   };
   return { adapter, inputs, classified };
 }
@@ -412,6 +415,16 @@ describe('runTask', () => {
     expect(msg.result).toMatchObject({ branch: BRANCH, commit: remoteSha() });
   });
 
+  it('fits the prompt under the limit as the engine measures it', async () => {
+    // an engine whose argv escaping doubles every character, as quotes do on Windows
+    const engine = fakeEngine({ promptLength: (p) => p.length * 2 });
+    const h = harness(engine.adapter);
+    await run(makeTask({ description: 'd'.repeat(20_000) }), h);
+    const prompt = engine.inputs[0]?.prompt ?? '';
+    expect(prompt.length * 2).toBeLessThanOrEqual(PROMPT_LIMIT);
+    expect(prompt).toContain('[truncated]');
+  });
+
   posixOnly('engine timeout returns failed and kills the engine', async () => {
     const pidFile = path.join(fx.root, 'engine.pid');
     const engine = fakeEngine({
@@ -434,6 +447,68 @@ describe('runTask', () => {
     expect(remoteSubject()).toBe('WIP K-1: engine timeout');
     expect(msg.result).toMatchObject({ branch: BRANCH, commit: remoteSha() });
     await expectGone(pidFile);
+  });
+
+  it('records the engine process group while the engine runs and clears it once it exits', async () => {
+    const events: string[] = [];
+    const engine = fakeEngine({
+      run: (input) => {
+        input.onGroup?.(4321);
+        events.push('engine running');
+        writeChange(input.cwd);
+        return { exitCode: 0, stdout: 'done\n' };
+      },
+    });
+    const h = harness(engine.adapter);
+    h.deps.onEngineGroup = (g) => {
+      events.push(`group ${String(g)}`);
+    };
+    expect((await run(makeTask(), h)).kind).toBe('completed');
+    expect(events).toEqual(['group 4321', 'engine running', 'group null']);
+  });
+
+  it('clears the engine process group when the engine throws, and never records one it was not given', async () => {
+    const groups: Array<number | null> = [];
+    const onEngineGroup = (g: number | null): void => {
+      groups.push(g);
+    };
+    const throwing = fakeEngine({
+      run: (input) => {
+        input.onGroup?.(4321);
+        throw new Error('engine blew up');
+      },
+    });
+    const h = harness(throwing.adapter);
+    h.deps.onEngineGroup = onEngineGroup;
+    const out = await run(makeTask(), h);
+    expect(msgOf(out).result.error).toContain('engine blew up');
+    expect(groups).toEqual([4321, null]);
+
+    groups.length = 0;
+    const silent = harness(fakeEngine().adapter);
+    silent.deps.onEngineGroup = onEngineGroup;
+    expect((await run(makeTask({ id: 'task_fedcba9876543210', branch: 'task/k-2' }), silent)).kind).toBe('completed');
+    expect(groups).toEqual([]);
+  });
+
+  posixOnly('reports the real engine process group from runCli', async () => {
+    const groups: Array<number | null> = [];
+    let shellPid = 0;
+    const engine = fakeEngine({
+      run: async (input) => {
+        writeChange(input.cwd);
+        const out = await runCli('sh', { args: ['-c', 'echo $$'] }, input, { platform: process.platform, env: process.env });
+        shellPid = Number(out.stdout.trim());
+        return out;
+      },
+    });
+    const h = harness(engine.adapter);
+    h.deps.onEngineGroup = (g) => {
+      groups.push(g);
+    };
+    expect((await run(makeTask(), h)).kind).toBe('completed');
+    expect(shellPid).toBeGreaterThan(0);
+    expect(groups).toEqual([shellPid, null]);
   });
 
   posixOnly('revoke aborts: engine killed, WIP pushed, no completion message', async () => {

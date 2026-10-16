@@ -29,8 +29,8 @@ import {
   type GitServer,
 } from './harness.js';
 
-// Distinctive on purpose: the worker drops every env entry whose value contains the key, so a
-// key such as `k` would also drop CORTEX_TEST_CMD ("tests ok") and any path holding a "k".
+// Distinctive on purpose, so the checks that it never reaches a message or log cannot pass or
+// fail by chance. (The worker drops only env entries whose value is exactly the key.)
 const API_KEY = 'e2e-key-3f9c1a7d5b2e8046';
 const AGENT_ID = 'e2e-1';
 

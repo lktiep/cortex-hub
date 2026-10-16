@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AssignedTask } from '@cortex/shared-types'
-import { PROMPT_LIMIT, buildPrompt } from './prompt.js'
+import { PROMPT_LIMIT, buildPrompt, win32QuotedLength } from './prompt.js'
 
 const RULE_A = 'Do not commit, push, or switch branches; the worker does that.'
 const RULE_B = 'Stay inside this working tree.'
@@ -221,5 +221,65 @@ describe('buildPrompt', () => {
       })),
     })
     expectSafe(buildPrompt(task, { resumed: true }))
+  })
+})
+
+describe('win32QuotedLength', () => {
+  // the input/output pairs libuv documents for quote_cmd_arg, which Node uses to build the
+  // CreateProcess command line on Windows
+  const documented: Array<[string, string]> = [
+    ['hello"world', '"hello\\"world"'],
+    ['hello""world', '"hello\\"\\"world"'],
+    ['hello\\world', 'hello\\world'],
+    ['hello\\\\world', 'hello\\\\world'],
+    ['hello\\"world', '"hello\\\\\\"world"'],
+    ['hello\\\\"world', '"hello\\\\\\\\\\"world"'],
+    ['hello world\\', '"hello world\\\\"'],
+  ]
+
+  it.each(documented)('measures %s as libuv quotes it', (arg, quoted) => {
+    expect(win32QuotedLength(arg)).toBe(quoted.length)
+  })
+
+  it('counts the quotes around an empty or a spaced argument, and nothing for a plain one', () => {
+    expect(win32QuotedLength('')).toBe(2)
+    expect(win32QuotedLength('plain')).toBe(5)
+    expect(win32QuotedLength('a b\tc')).toBe(7)
+    // a backslash inside a quoted argument is doubled only before a quote or at the end
+    expect(win32QuotedLength('a\\b c')).toBe(7)
+    expect(win32QuotedLength('{"k": "v\\"w"}')).toBe(13 + 2 + 5 + 1)
+  })
+})
+
+describe('buildPrompt with a measure', () => {
+  // a JSON-heavy description: every quote costs two characters once escaped for CreateProcess
+  const json = JSON.stringify(Array.from({ length: 700 }, (_, i) => ({ k: `v${i}`, q: 'say "hi"' })))
+
+  it('fits the escaped length under the limit when given win32QuotedLength', () => {
+    expect(json.length).toBeLessThan(PROMPT_LIMIT)
+    expect(win32QuotedLength(json)).toBeGreaterThan(PROMPT_LIMIT)
+    const task = makeTask({ description: json })
+    // by its raw length it fits
+    expect(buildPrompt(task)).toContain(json)
+    const prompt = buildPrompt(task, { measure: win32QuotedLength })
+    expect(win32QuotedLength(prompt)).toBeLessThanOrEqual(PROMPT_LIMIT)
+    expect(prompt).toContain('[truncated]')
+    expect(prompt).toContain(RULE_A)
+    expect(prompt).toContain(RULE_B)
+  })
+
+  it('still fits everything oversized and quote-heavy at once', () => {
+    const quotes = '\\"'.repeat(20_000)
+    const task = makeTask({
+      title: quotes,
+      description: quotes,
+      files: Array.from({ length: 2000 }, (_, i) => `src/"f${i}".ts`),
+      handoff: { branch: 'b', commit: null, note: quotes },
+      reviews: [{ at: '2026-01-01T00:00:00Z', by: 'x', verdict: 'reject', feedback: quotes }],
+    })
+    const prompt = buildPrompt(task, { resumed: true, measure: win32QuotedLength })
+    expect(win32QuotedLength(prompt)).toBeLessThanOrEqual(PROMPT_LIMIT)
+    expect(prompt).toContain(RULE_A)
+    expect(prompt).toContain(RULE_B)
   })
 })

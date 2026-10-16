@@ -48,6 +48,23 @@ afterEach(() => {
 const real = (p: string): string => realpathSync.native(p);
 const wt = (name: string): string => path.join(fx.scratch, name);
 
+function commitFile(cwd: string, file: string, text: string): string {
+  writeFileSync(path.join(cwd, file), text);
+  fx.run(cwd, ['add', file]);
+  fx.run(cwd, ['commit', '-m', file]);
+  return fx.run(cwd, ['rev-parse', 'HEAD']);
+}
+
+/** Pushes a commit on `branch` from another clone, as another machine would; returns its sha. */
+function pushFromElsewhere(branch: string, file: string): string {
+  const other = path.join(fx.scratch, `elsewhere-${file}`);
+  fx.run(fx.scratch, ['clone', fx.origin, other]);
+  fx.run(other, ['checkout', '-B', branch]);
+  const sha = commitFile(other, file, 'theirs');
+  fx.run(other, ['push', 'origin', branch]);
+  return sha;
+}
+
 describe('sanitizeRemoteUrl', () => {
   it('strips userinfo from https and keeps ssh', () => {
     expect(sanitizeRemoteUrl('https://user:secret@github.com/o/r.git')).toBe('https://github.com/o/r.git');
@@ -128,6 +145,62 @@ describe('prepareWorktree', () => {
     const r = await prepareWorktree(fx.repo, dir, 'task/c', 'main');
     expect(r).toEqual({ from: 'existing' });
     expect(readFileSync(path.join(dir, 'wip.txt'), 'utf8')).toBe('keep me');
+  });
+
+  it('starts a clean kept worktree again when origin/<branch> is not in its history', async () => {
+    const dir = wt('moved');
+    await prepareWorktree(fx.repo, dir, 'task/moved', 'main');
+    // the commit an earlier attempt could not push; another machine has pushed the branch since
+    commitFile(dir, 'local.txt', 'mine');
+    const theirs = pushFromElsewhere('task/moved', 'theirs.txt');
+    expect(await prepareWorktree(fx.repo, dir, 'task/moved', 'main')).toEqual({ from: 'branch' });
+    expect(fx.run(dir, ['rev-parse', 'HEAD'])).toBe(theirs);
+    expect(existsSync(path.join(dir, 'theirs.txt'))).toBe(true);
+    expect(existsSync(path.join(dir, 'local.txt'))).toBe(false);
+  });
+
+  it('refuses a dirty kept worktree that origin/<branch> has moved past, naming the branch and the path', async () => {
+    const dir = wt('moved-dirty');
+    await prepareWorktree(fx.repo, dir, 'task/moved-dirty', 'main');
+    pushFromElsewhere('task/moved-dirty', 'theirs.txt');
+    writeFileSync(path.join(dir, 'wip.txt'), 'uncommitted');
+    await expect(prepareWorktree(fx.repo, dir, 'task/moved-dirty', 'main')).rejects.toThrow(
+      `the worktree ${dir} has uncommitted changes, and origin/task/moved-dirty has commits it lacks`,
+    );
+    expect(readFileSync(path.join(dir, 'wip.txt'), 'utf8')).toBe('uncommitted');
+  });
+
+  it('reuses a kept worktree, dirty or not, whose history holds origin/<branch>', async () => {
+    const dir = wt('ahead');
+    await prepareWorktree(fx.repo, dir, 'task/ahead', 'main');
+    commitFile(dir, 'pushed.txt', 'pushed');
+    fx.run(dir, ['push', 'origin', 'task/ahead']);
+    const local = commitFile(dir, 'local.txt', 'not pushed yet');
+    writeFileSync(path.join(dir, 'wip.txt'), 'uncommitted');
+    expect(await prepareWorktree(fx.repo, dir, 'task/ahead', 'main')).toEqual({ from: 'existing' });
+    expect(fx.run(dir, ['rev-parse', 'HEAD'])).toBe(local);
+    expect(readFileSync(path.join(dir, 'wip.txt'), 'utf8')).toBe('uncommitted');
+  });
+
+  it('clears the stale registration of its own path when the directory is gone', async () => {
+    const dir = wt('gone');
+    await prepareWorktree(fx.repo, dir, 'task/gone', 'main');
+    rmSync(dir, { recursive: true, force: true });
+    expect(await prepareWorktree(fx.repo, dir, 'task/gone', 'main')).toEqual({ from: 'base' });
+    expect(fx.run(dir, ['branch', '--show-current'])).toBe('task/gone');
+
+    // a stale registration on another branch is cleared the same way
+    rmSync(dir, { recursive: true, force: true });
+    expect(await prepareWorktree(fx.repo, dir, 'task/gone-2', 'main')).toEqual({ from: 'base' });
+    expect(fx.run(dir, ['branch', '--show-current'])).toBe('task/gone-2');
+  });
+
+  it("leaves the user's own stale worktree registrations alone", async () => {
+    const theirs = path.join(fx.scratch, 'on-an-unmounted-volume');
+    fx.run(fx.repo, ['worktree', 'add', '-b', 'feature/usb', theirs]);
+    rmSync(theirs, { recursive: true, force: true });
+    await prepareWorktree(fx.repo, wt('n'), 'task/n', 'main');
+    expect(fx.run(fx.repo, ['worktree', 'list', '--porcelain'])).toContain(`worktree ${theirs}\n`);
   });
 
   it('throws BranchInUseError when the branch is checked out elsewhere', async () => {

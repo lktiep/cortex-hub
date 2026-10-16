@@ -1,6 +1,7 @@
 import type { AssignedTask } from '@cortex/shared-types'
 
-// Under Windows' 32 767-char CreateProcess limit for agy's argv prompt.
+// Under Windows' 32 767-char CreateProcess limit for agy's argv prompt, as measured by the
+// engine (`EngineAdapter.promptLength`): on Windows that is the quoted length, which quotes inflate.
 export const PROMPT_LIMIT = 24_000
 
 const MARK = '[truncated]'
@@ -75,10 +76,40 @@ function headOf(s: string, n: number): string {
   return last >= 0xd800 && last <= 0xdbff ? h.slice(0, -1) : h
 }
 
+/**
+ * The length of `arg` on the command line Node builds for CreateProcess on Windows (libuv's
+ * quote_cmd_arg): an argument holding a space, tab or quote is wrapped in quotes, each quote
+ * inside gets a backslash, and the backslashes before a quote or before the closing quote
+ * are doubled.
+ */
+export function win32QuotedLength(arg: string): number {
+  if (arg === '') return 2
+  if (!/[ \t"]/.test(arg)) return arg.length
+  if (!/["\\]/.test(arg)) return arg.length + 2
+  let n = arg.length + 2
+  let backslashes = 0
+  for (let i = 0; i < arg.length; i++) {
+    const c = arg[i]
+    if (c === '\\') {
+      backslashes++
+      continue
+    }
+    if (c === '"') n += backslashes + 1
+    backslashes = 0
+  }
+  return n + backslashes // the closing quote
+}
+
 export function buildPrompt(
   task: AssignedTask,
-  opts: { resumed?: boolean; testCommand?: string | null } = {},
+  opts: {
+    resumed?: boolean
+    testCommand?: string | null
+    /** How the prompt counts against PROMPT_LIMIT; its length unless the engine says otherwise. */
+    measure?: (prompt: string) => number
+  } = {},
 ): string {
+  const size = opts.measure ?? ((s: string): number => s.length)
   const sorted = task.reviews
     .map((r, i) => ({ r, i }))
     .sort((a, b) => time(b.r.at) - time(a.r.at) || a.i - b.i)
@@ -105,7 +136,7 @@ export function buildPrompt(
         : `## Tests\nAfter you finish, the worker runs \`${oneLine(command).slice(0, TEST_COMMAND_MAX)}\` in this working tree; if it fails, the task fails. Run it yourself before you stop.`,
     resumed: opts.resumed === true,
   }
-  const over = (): boolean => render(p).length > PROMPT_LIMIT
+  const over = (): boolean => size(render(p)) > PROMPT_LIMIT
 
   /**
    * Set a field to its head so the prompt fits, with the marker appended. The head keeps
@@ -117,8 +148,13 @@ export function buildPrompt(
     set(orig)
     if (!over()) return
     set(MARK)
-    const room = PROMPT_LIMIT - render(p).length
-    set(headOf(orig, Math.max(room, floor)) + MARK)
+    let n = Math.max(PROMPT_LIMIT - size(render(p)), floor)
+    set(headOf(orig, n) + MARK)
+    // the head's own escaping can still overflow: cut it by the overflow until it fits
+    while (over() && n > floor) {
+      n = Math.max(floor, n - (size(render(p)) - PROMPT_LIMIT))
+      set(headOf(orig, n) + MARK)
+    }
   }
   const setDescription = (v: string): void => {
     p.description = v
