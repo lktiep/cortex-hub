@@ -1,9 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+import type Database from 'better-sqlite3'
 import type { EngineInfo, RouteSpec } from '@cortex/shared-types'
+import { createTestDb } from './testing.js'
+
+let testDb: Database.Database
+vi.mock('../db/client.js', () => ({ get db() { return testDb } }))
+
 import {
   quotaModelMatches, routeChain, selectAssignments,
   type CandidateTask, type CandidateWorker, type QuotaRow, type SelectionInput,
 } from './dispatcher.js'
+
+beforeAll(() => { testDb = createTestDb() })
 
 const NOW = '2026-10-16T12:00:00Z'
 const T1 = '2026-10-16T13:00:00Z'

@@ -293,7 +293,7 @@ function toCandidate(row: TaskRow, defaultFallback: RouteSpec[]): CandidateTask 
     id: row.id, projectId: row.project_id, priority: row.priority, createdAt: row.created_at,
     dependsOn: stringList(row.depends_on), requiredCapabilities: stringList(row.required_capabilities),
     files: stringList(row.files), routes: routesOf(row, defaultFallback),
-    pinnedAgent: row.pinned_agent, declined: declinedBy(row), lastAgent: row.last_agent,
+    pinnedAgent: row.pinned_agent || null, declined: declinedBy(row), lastAgent: row.last_agent,
   }
 }
 
@@ -429,12 +429,16 @@ export function dispatch(now: number = Date.now()): Assignment[] {
  * Pull mode (`cortex_task_pickup` without a worker): the first ready task that
  * is pinned to the caller, or unpinned with no executor and no required
  * capabilities, becomes `accepted` by the caller. Null when there is none.
+ * A pin matches when it equals one of the caller's ids after normalizing both
+ * (no substring match); an empty pin means unpinned. With `projectId` given,
+ * only that project's tasks and project-less ones are eligible; without it
+ * there is no project filter, as for a protocol-1 worker.
  */
 export function pickForPull(
-  identity: { agentId?: string; apiKeyOwner?: string; sessionAgent?: string },
+  identity: { agentId?: string; apiKeyOwner?: string; sessionAgent?: string; projectId?: string | null },
   now: number = Date.now(),
 ): TaskRow | null {
-  const { agentId, apiKeyOwner, sessionAgent } = identity
+  const { agentId, apiKeyOwner, sessionAgent, projectId } = identity
   const assignee = agentId ?? apiKeyOwner ?? sessionAgent
   if (!assignee) return null
   const callerIds = [agentId, apiKeyOwner, sessionAgent].map(normalizeIdentity).filter(Boolean)
@@ -446,8 +450,10 @@ export function pickForPull(
     const locks = lockedFiles()
     const nowIso = isoSeconds(now)
     for (const row of rows) {
-      const takes = row.pinned_agent
-        ? agentMatchesAssignment(row.pinned_agent, agentId, apiKeyOwner, sessionAgent)
+      if (projectId !== undefined && row.project_id !== null && row.project_id !== projectId) continue
+      const pinned = row.pinned_agent || null
+      const takes = pinned !== null
+        ? callerIds.includes(normalizeIdentity(pinned))
         : !row.executor && stringList(row.required_capabilities).length === 0
       if (!takes) continue
       if (declinedBy(row).some((d) => callerIds.includes(normalizeIdentity(d)))) continue

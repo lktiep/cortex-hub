@@ -10,7 +10,7 @@ const ID_KEY_LENGTH = 8
 export function slugify(title: string): string {
   return title
     .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
@@ -18,9 +18,17 @@ export function slugify(title: string): string {
     .replace(/-+$/, '')
 }
 
-/** `task_key` reduced to `[A-Za-z0-9._-]`, else the id without its `task_` prefix, first 8 characters. */
+/**
+ * `task_key` reduced to `[A-Za-z0-9._-]` and made safe as a git ref component:
+ * no `..`, no trailing `.lock` or `.`, no leading `.` or `-`. Else the id
+ * without its `task_` prefix, first 8 characters.
+ */
 function branchKey(task: TaskRow): string {
-  const key = (task.task_key ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+  const key = (task.task_key ?? '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/(?:\.lock|[.-])+$/, '')
+    .replace(/^[.-]+/, '')
   return key !== '' ? key : task.id.replace(/^task_/, '').slice(0, ID_KEY_LENGTH)
 }
 

@@ -111,23 +111,30 @@ export function setStatus(agentId: string, status: 'idle' | 'busy', now: number 
   conn.status = status
 }
 
-/** False when the agent is not connected, its socket is not open, or the send throws. */
-export function sendTo(agentId: string, msg: object): boolean {
-  const conn = getByAgent(agentId)
-  if (!conn || conn.ws.readyState !== OPEN) return false
+/** Sends on an open socket; a throwing send is logged and reported as false. */
+function sendOn(conn: WorkerConn, data: string): boolean {
   try {
-    conn.ws.send(JSON.stringify(msg))
+    conn.ws.send(data)
     return true
-  } catch {
+  } catch (err) {
+    console.warn(`[conductor] send to ${conn.agentId} failed: ${err instanceof Error ? err.message : String(err)}`)
     return false
   }
 }
 
+/** False when the agent is not connected, its socket is not open, or the send throws. */
+export function sendTo(agentId: string, msg: object): boolean {
+  const conn = getByAgent(agentId)
+  if (!conn || conn.ws.readyState !== OPEN) return false
+  return sendOn(conn, JSON.stringify(msg))
+}
+
+/** A socket whose send throws is skipped; the others still receive the message. */
 export function broadcastToOwner(owner: string, msg: object, excludeAgentId?: string): void {
   const data = JSON.stringify(msg)
   for (const conn of conns.values()) {
     if (conn.apiKeyOwner === owner && conn.agentId !== excludeAgentId && conn.ws.readyState === OPEN) {
-      conn.ws.send(data)
+      sendOn(conn, data)
     }
   }
 }

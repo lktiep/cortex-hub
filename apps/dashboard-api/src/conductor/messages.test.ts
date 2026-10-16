@@ -14,6 +14,11 @@ describe('slugify', () => {
     expect(slugify('  Inventory UI: grid & drag!  ')).toBe('inventory-ui-grid-drag')
   })
 
+  it('drops combining accents instead of dashing them', () => {
+    expect(slugify('Café crème brûlée')).toBe('cafe-creme-brulee')
+    expect(slugify('Sửa lỗi')).toBe('sua-loi')
+  })
+
   it('keeps at most 40 characters without a trailing dash', () => {
     expect(slugify('a'.repeat(50))).toBe('a'.repeat(40))
     expect(slugify(`${'a'.repeat(39)} b`)).toBe('a'.repeat(39))
@@ -34,6 +39,24 @@ describe('branchFor', () => {
   it('sanitises the key to [A-Za-z0-9._-]', () => {
     const task = insertTask(testDb, { id: 't1', task_key: 'Phase 1/A', title: 'X' })
     expect(branchFor(task, 'cx/{key}-{slug}')).toBe('cx/Phase-1-A-x')
+  })
+
+  it('makes the key a valid git ref component: no "..", no trailing .lock', () => {
+    const task = insertTask(testDb, { id: 't1', task_key: 'v1..2.lock', title: 'X' })
+    for (const template of ['cx/{key}', 'cx/{key}-{slug}']) {
+      const branch = branchFor(task, template)
+      expect(branch).not.toContain('..')
+      expect(branch.endsWith('.lock')).toBe(false)
+    }
+    expect(branchFor(task, 'cx/{key}')).toBe('cx/v1.2')
+    expect(branchFor(task, 'cx/{key}-{slug}')).toBe('cx/v1.2-x')
+  })
+
+  it('strips a leading "." or "-" and trailing dots, and falls back to the id when nothing is left', () => {
+    const lead = insertTask(testDb, { id: 't1', task_key: '.-hidden...', title: 'X' })
+    expect(branchFor(lead, 'cx/{key}')).toBe('cx/hidden')
+    const empty = insertTask(testDb, { id: 'task_0123456789abcdef', task_key: '...lock', title: 'X' })
+    expect(branchFor(empty, 'cx/{key}')).toBe('cx/01234567')
   })
 })
 

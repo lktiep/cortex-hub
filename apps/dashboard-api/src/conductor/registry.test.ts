@@ -1,9 +1,16 @@
-import { beforeEach, describe, expect, it } from 'vitest'
-import { fakeSocket } from './testing.js'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import type Database from 'better-sqlite3'
+import { createTestDb, fakeSocket } from './testing.js'
+
+let testDb: Database.Database
+vi.mock('../db/client.js', () => ({ get db() { return testDb } }))
+
 import {
   addConnection, broadcastToOwner, getByAgent, lastSeen, removeConnection, resetRegistry,
   sendTo, setStatus, updateConnection, type ConnInit,
 } from './registry.js'
+
+beforeAll(() => { testDb = createTestDb() })
 
 function init(agentId: string, hostname: string, ws = fakeSocket(), owner = 'o1'): ConnInit {
   return { ws, agentId, apiKeyOwner: owner, apiKeyProjectId: null, hostname, ide: null, platform: null, capabilities: [] }
@@ -71,6 +78,37 @@ describe('registry', () => {
     a.send = () => { throw new Error('socket broke') }
     addConnection(init('w1', 'h1', a))
     expect(sendTo('w1', { type: 'x' })).toBe(false)
+  })
+
+  it('a throwing send is logged with the agent id and the error message', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const a = fakeSocket()
+      a.send = () => { throw new Error('socket broke') }
+      addConnection(init('w1', 'h1', a))
+      expect(sendTo('w1', { type: 'x' })).toBe(false)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]?.[0])).toContain('w1')
+      expect(String(warn.mock.calls[0]?.[0])).toContain('socket broke')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('broadcastToOwner skips a socket whose send throws and reaches the rest', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const a = fakeSocket(), b = fakeSocket()
+      a.send = () => { throw new Error('socket broke') }
+      addConnection(init('w1', 'h1', a))
+      addConnection(init('w2', 'h2', b))
+      expect(() => broadcastToOwner('o1', { type: 'n' })).not.toThrow()
+      expect(b.sent).toEqual([{ type: 'n' }])
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]?.[0])).toContain('w1')
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('setStatus idle sets idleSince once', () => {

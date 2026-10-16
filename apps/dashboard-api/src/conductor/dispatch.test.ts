@@ -13,6 +13,7 @@ import type { TaskRow } from './rows.js'
 const NOW = Date.UTC(2026, 9, 16, 12, 0, 0)
 const NOW_ISO = '2026-10-16T12:00:00Z'
 const IN_1H = '2026-10-16T13:00:00Z'
+const IN_2H = '2026-10-16T14:00:00Z'
 const IN_24H = '2026-10-17T12:00:00Z'
 const CLAUDE: EngineInfo = { executor: 'claude', models: ['opus', 'sonnet'], defaultModel: 'opus' }
 
@@ -223,6 +224,51 @@ describe('dispatch', () => {
     }])
   })
 
+  it('a capacity wait whose reset time moves updates wait_until without a new notification', () => {
+    insertTask(testDb, {
+      id: 't1', task_key: 'TT1', title: 'Fix login', api_key_owner: 'lead', executor: 'claude', model: 'opus', fallback: '[]',
+    })
+    connect('w1')
+    testDb.prepare('INSERT INTO conductor_quota (host, executor, model, exhausted_until) VALUES (?, ?, ?, ?)')
+      .run('host-w1', 'claude', 'opus', IN_1H)
+
+    dispatch(NOW)
+    expect(row('t1')).toMatchObject({ wait_reason: 'capacity', wait_until: IN_1H })
+    expect(notifications()).toHaveLength(1)
+
+    testDb.prepare('UPDATE conductor_quota SET exhausted_until = ?').run(IN_2H)
+    expect(dispatch(NOW)).toEqual([])
+
+    expect(row('t1')).toMatchObject({ status: 'pending', wait_reason: 'capacity', wait_until: IN_2H })
+    expect(notifications()).toHaveLength(1)
+  })
+
+  it('a wait moving from capacity to no_worker sends a second notification', () => {
+    insertTask(testDb, {
+      id: 't1', task_key: 'TT1', title: 'Fix login', api_key_owner: 'lead', executor: 'claude', model: 'opus', fallback: '[]',
+    })
+    const ws = connect('w1')
+    testDb.prepare('INSERT INTO conductor_quota (host, executor, model, exhausted_until) VALUES (?, ?, ?, ?)')
+      .run('host-w1', 'claude', 'opus', IN_1H)
+
+    dispatch(NOW)
+    expect(row('t1').wait_reason).toBe('capacity')
+
+    ws.readyState = 3
+    dispatch(NOW)
+
+    expect(row('t1')).toMatchObject({ status: 'pending', wait_reason: 'no_worker', wait_until: null })
+    expect(notifications().map((n) => [n.task_id, n.kind])).toEqual([['t1', 'capacity'], ['t1', 'no_worker']])
+  })
+
+  it('an empty pinned_agent counts as unpinned', () => {
+    insertTask(testDb, { id: 't1', title: 'Fix login', pinned_agent: '' })
+    const ws = connect('w1')
+
+    expect(dispatch(NOW).map((a) => [a.taskId, a.agentId])).toEqual([['t1', 'w1']])
+    expect(ws.sent).toHaveLength(1)
+  })
+
   it('a lock wait is recorded without a notification', () => {
     insertTask(testDb, { id: 't0', title: 'Running', status: 'in_progress', assigned_to_agent: 'w9', files: '["src/a/"]' })
     insertTask(testDb, { id: 't1', title: 'Blocked', api_key_owner: 'lead', files: '["src/a/b.ts"]' })
@@ -291,5 +337,38 @@ describe('pickForPull', () => {
 
     expect(pickForPull({ sessionAgent: 'claude-code' }, NOW)?.id).toBe('free')
     expect(pickForPull({}, NOW)).toBeNull()
+  })
+
+  it('with a projectId, takes only that project\'s tasks and project-less ones', () => {
+    insertTask(testDb, { id: 'b', title: 'Project B work', project_id: 'proj-b', priority: 1 })
+    insertTask(testDb, { id: 'a', title: 'Project A work', project_id: 'proj-a', priority: 2 })
+    insertTask(testDb, { id: 'none', title: 'Project-less work', priority: 3 })
+
+    expect(pickForPull({ agentId: 'claude-code', projectId: 'proj-a' }, NOW)?.id).toBe('a')
+    expect(pickForPull({ agentId: 'claude-code', projectId: 'proj-a' }, NOW)?.id).toBe('none')
+    expect(pickForPull({ agentId: 'claude-code', projectId: 'proj-a' }, NOW)).toBeNull()
+    expect(row('b').status).toBe('pending')
+  })
+
+  it('without a projectId there is no project filter', () => {
+    insertTask(testDb, { id: 'b', title: 'Project B work', project_id: 'proj-b' })
+
+    expect(pickForPull({ agentId: 'claude-code' }, NOW)?.id).toBe('b')
+  })
+
+  it('a pin matches only an exact (normalized) caller id, never a substring', () => {
+    insertTask(testDb, { id: 'pin', title: 'Pinned work', pinned_agent: 'claude-code' })
+
+    expect(pickForPull({ sessionAgent: 'claude-code-2' }, NOW)).toBeNull()
+    expect(pickForPull({ agentId: 'claude' }, NOW)).toBeNull()
+    expect(row('pin').status).toBe('pending')
+
+    expect(pickForPull({ agentId: 'other', apiKeyOwner: ' Claude-Code ' }, NOW)?.id).toBe('pin')
+  })
+
+  it('an empty pinned_agent counts as unpinned', () => {
+    insertTask(testDb, { id: 't1', title: 'Free', pinned_agent: '' })
+
+    expect(pickForPull({ agentId: 'claude-code' }, NOW)?.id).toBe('t1')
   })
 })
