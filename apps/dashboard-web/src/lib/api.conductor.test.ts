@@ -57,11 +57,11 @@ describe('conductor api clients', () => {
   })
 
   it("a 409 from review rejects with ApiError status 409 and the hub's error text", async () => {
-    reply({ error: 'review ignored: task is running' }, 409)
+    reply({ error: 'nothing to return: cancel the gate or reroute its dependencies' }, 409)
     await expect(reviewConductorTask('g1', { verdict: 'approve' })).rejects.toMatchObject({
       name: 'ApiError',
       status: 409,
-      message: 'review ignored: task is running',
+      message: 'nothing to return: cancel the gate or reroute its dependencies',
     })
   })
 

@@ -55,10 +55,20 @@ describe('routeBodyFromForm', () => {
 
 describe('actionErrorMessage', () => {
   it('maps 409, 403 and a 400 cycle', () => {
-    expect(actionErrorMessage({ status: 409, message: 'x' })).toBe('This task changed state on the hub — the view has been refreshed.')
+    expect(actionErrorMessage({ status: 409, message: 'x' })).toBe('x — the view has been refreshed.')
     expect(actionErrorMessage({ status: 403, message: 'Not your task' })).toBe('Not your task')
     expect(actionErrorMessage({ status: 400, message: 'bad', data: { cycle: ['A', 'B', 'A'] } }))
       .toBe('That change would create a cycle: A → B → A')
     expect(actionErrorMessage(new Error('boom'))).toBe('boom')
+  })
+  it("a 409 shows the hub's reason", () => {
+    expect(actionErrorMessage({ status: 409, message: 'nothing to return: cancel the gate or reroute its dependencies' }))
+      .toBe('nothing to return: cancel the gate or reroute its dependencies — the view has been refreshed.')
+  })
+  it('a 409 without a hub message (empty or api.ts synthesised) keeps the generic sentence', () => {
+    const generic = 'This task changed state on the hub — the view has been refreshed.'
+    expect(actionErrorMessage({ status: 409, message: '' })).toBe(generic)
+    expect(actionErrorMessage({ status: 409 })).toBe(generic)
+    expect(actionErrorMessage({ status: 409, message: 'API error: 409' })).toBe(generic)
   })
 })

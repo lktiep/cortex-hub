@@ -15,6 +15,22 @@ function plan(r: Parameters<typeof row>[0]): PlanTask {
 }
 
 describe('toPlanTasks', () => {
+  it('draws a standalone work root as a one-task plan', () => {
+    const solo = row({ id: 'solo', task_key: 'S1', depends_on: '["elsewhere"]', parent_task_id: 'p' })
+    const out = toPlanTasks(solo, [solo])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ id: 'solo', key: 'S1', parentId: null, groupId: null, externalDeps: 1, deps: [] })
+    const legacy = row({ id: 'legacy-1' })
+    expect(toPlanTasks(legacy, [])).toHaveLength(1)
+    const gate = row({ id: 'g', kind: 'gate', approver: 'user' })
+    expect(toPlanTasks(gate, [gate])[0]?.state).toBe('needs_user')
+  })
+
+  it('keeps an empty group root empty', () => {
+    expect(toPlanTasks(root, [])).toEqual([])
+    expect(toPlanTasks(root, [root])).toEqual([])
+  })
+
   it('treats a legacy row as work with a key from the id', () => {
     const t = plan({ id: 'abcdef123456', depends_on: '[]' })
     expect(t.kind).toBe('work')
@@ -104,7 +120,8 @@ describe('deriveState', () => {
     ['pending+escalated', { id: 'a', status: 'pending', escalated_at: 'x' }, 'escalated'],
     ['gate user', { id: 'a', kind: 'gate', approver: 'user' }, 'needs_user'],
     ['gate lead', { id: 'a', kind: 'gate', approver: 'lead' }, 'gate_lead'],
-    ['gate pending, no approver', { id: 'a', kind: 'gate' }, 'gate_lead'],
+    ['gate pending, no approver', { id: 'a', kind: 'gate' }, 'needs_user'],
+    ['gate pending, null approver', { id: 'a', kind: 'gate', approver: null }, 'needs_user'],
     ['gate blocked', { id: 'a', kind: 'gate', approver: 'user', status: 'blocked' }, 'blocked'],
     ['capacity', { id: 'a', wait_reason: 'capacity' }, 'waiting'],
     ['no_worker', { id: 'a', wait_reason: 'no_worker' }, 'waiting'],

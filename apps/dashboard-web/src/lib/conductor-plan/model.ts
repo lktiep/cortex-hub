@@ -66,7 +66,7 @@ export function deriveState(row: ConductorTask): PlanState {
   if (s === 'review') return 'review'
   if (s === 'pending') {
     if (row.escalated_at) return 'escalated'
-    if (row.kind === 'gate') return row.approver === 'user' ? 'needs_user' : 'gate_lead'
+    if (row.kind === 'gate') return row.approver === 'lead' ? 'gate_lead' : 'needs_user'
     return asWaitReason(row.wait_reason) ? 'waiting' : 'ready'
   }
   if (RUNNING.has(s)) return 'running'
@@ -129,9 +129,19 @@ function toPlanTask(row: ConductorTask): PlanTask {
   }
 }
 
-/** Rows of one plan tree → PlanTasks (root excluded) with groupId set and deps resolved. */
+/**
+ * Rows of one plan tree → PlanTasks (root excluded) with groupId set and deps resolved. A work or
+ * gate root with no descendants is itself the plan: it comes back as a one-task plan.
+ */
 export function toPlanTasks(root: ConductorTask, rows: ConductorTask[]): PlanTask[] {
   const tasks = rows.filter((r) => r.id !== root.id).map(toPlanTask)
+  if (tasks.length === 0) {
+    if (root.kind === 'group') return []
+    const solo = toPlanTask(root)
+    solo.parentId = null
+    resolveDeps([solo])
+    return [solo]
+  }
   const byId = new Map(tasks.map((t) => [t.id, t]))
   for (const t of tasks) {
     const seen = new Set<string>([t.id])

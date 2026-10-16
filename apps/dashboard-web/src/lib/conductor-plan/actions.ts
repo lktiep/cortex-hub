@@ -36,7 +36,11 @@ export function routeBodyFromForm(form: RouteForm, task: PlanTask): RouteBody {
 export function actionErrorMessage(err: unknown): string {
   if (typeof err === 'object' && err !== null) {
     const e = err as { status?: unknown; message?: unknown; data?: unknown }
-    if (e.status === 409) return 'This task changed state on the hub — the view has been refreshed.'
+    if (e.status === 409) {
+      // api.ts synthesises "API error: <status>" when the hub sent no text; that is not a reason.
+      const hub = typeof e.message === 'string' && e.message !== '' && !/^API error: \d+$/.test(e.message) ? e.message : null
+      return hub ? `${hub} — the view has been refreshed.` : 'This task changed state on the hub — the view has been refreshed.'
+    }
     if (e.status === 400 && typeof e.data === 'object' && e.data !== null) {
       const cycle = (e.data as { cycle?: unknown }).cycle
       if (Array.isArray(cycle) && cycle.length > 0) {
