@@ -1,9 +1,5 @@
-// Plan task actions: which actions a task offers, the reroute form <-> request body mapping,
-// and error text. Pure module — no React, no DOM.
-import type { Executor, RouteBody } from '../api'
+// Plan task actions: which actions a task offers, and error text. Pure module — no React, no DOM.
 import type { PlanTask } from './model'
-
-export interface RouteForm { executor: Executor | ''; model: string; effort: string; pinnedAgent: string }
 
 export function availableActions(task: PlanTask): { review: boolean; clearEscalation: boolean; route: boolean } {
   return {
@@ -11,25 +7,6 @@ export function availableActions(task: PlanTask): { review: boolean; clearEscala
     clearEscalation: task.state === 'escalated',
     route: task.kind === 'work' && task.state !== 'done' && task.state !== 'stopped',
   }
-}
-
-export function routeFormFrom(task: PlanTask): RouteForm {
-  return {
-    executor: task.primary?.executor ?? '',
-    model: task.primary?.model ?? '',
-    effort: task.primary?.effort ?? '',
-    pinnedAgent: task.row.pinned_agent ?? '',
-  }
-}
-
-export function routeBodyFromForm(form: RouteForm, task: PlanTask): RouteBody {
-  const from = routeFormFrom(task)
-  const body: RouteBody = {}
-  if (form.executor !== from.executor) body.executor = form.executor === '' ? null : form.executor
-  if (form.model.trim() !== from.model) body.model = form.model.trim() || null
-  if (form.effort.trim() !== from.effort) body.effort = form.effort.trim() || null
-  if (form.pinnedAgent.trim() !== from.pinnedAgent) body.pinnedAgent = form.pinnedAgent.trim() || null
-  return body
 }
 
 // ApiError is not exported from api.ts, so its shape is duck-typed.

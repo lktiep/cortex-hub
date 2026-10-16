@@ -1,13 +1,14 @@
 'use client'
 
 // Per-task actions for the plan drawer: approve, reject, clear escalation, reroute, review history.
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { EXECUTORS, reviewConductorTask, routeConductorTask } from '@/lib/api'
 import type { ConductorWorker, Executor } from '@/lib/api'
-import {
-  actionErrorMessage, availableActions, routeBodyFromForm, routeFormFrom, type RouteForm,
-} from '@/lib/conductor-plan/actions'
+import { actionErrorMessage, availableActions } from '@/lib/conductor-plan/actions'
 import type { PlanTask } from '@/lib/conductor-plan/model'
+import {
+  modelOptions, pinOptions, routeBodyFromForm, routeFormFrom, type RouteForm,
+} from '@/lib/conductor-plan/route-form'
 import { formatTimeAgo } from '../components/shared'
 import styles from './plan.module.css'
 
@@ -20,27 +21,34 @@ interface Props {
 export function PlanTaskActions({ task, workers, onDone }: Props) {
   const avail = availableActions(task)
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false) // state lags a same-tick double click; the ref does not
   const [error, setError] = useState<string | null>(null)
   const [rejecting, setRejecting] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [form, setForm] = useState<RouteForm>(() => routeFormFrom(task))
+  // The form is diffed against what it showed on mount, so a poll that brings a reroute made
+  // elsewhere cannot make Save send the old values back.
+  const [baseline, setBaseline] = useState<RouteForm>(form)
 
-  const body = routeBodyFromForm(form, task)
+  const body = routeBodyFromForm(form, baseline)
   const changed = Object.keys(body).length > 0
-  const models = Array.from(new Set(
-    workers.flatMap((w) => w.engines.filter((e) => e.executor === form.executor).flatMap((e) => e.models)),
-  )).filter((m) => m !== '*')
+  const models = modelOptions(workers, form.executor)
+  const pins = pinOptions(workers, form.pinnedAgent)
 
-  async function run(call: () => Promise<unknown>) {
+  async function run(call: () => Promise<unknown>, afterOk?: () => void) {
+    if (busyRef.current) return
+    busyRef.current = true
     setBusy(true)
     setError(null)
     try {
       await call()
+      afterOk?.()
       onDone()
     } catch (err) {
       setError(actionErrorMessage(err))
       if (typeof err === 'object' && err !== null && (err as { status?: unknown }).status === 409) onDone()
     } finally {
+      busyRef.current = false
       setBusy(false)
     }
   }
@@ -73,7 +81,10 @@ export function PlanTaskActions({ task, workers, onDone }: Props) {
           <button
             className={styles.actionBtn}
             disabled={busy || feedback.trim() === ''}
-            onClick={() => void run(() => reviewConductorTask(task.id, { verdict: 'reject', feedback: feedback.trim(), by: 'dashboard' }))}
+            onClick={() => void run(() => reviewConductorTask(task.id, { verdict: 'reject', feedback: feedback.trim(), by: 'dashboard' }), () => {
+              setRejecting(false)
+              setFeedback('')
+            })}
           >
             Send rejection
           </button>
@@ -125,12 +136,16 @@ export function PlanTaskActions({ task, workers, onDone }: Props) {
             onChange={(e) => setForm({ ...form, pinnedAgent: e.target.value })}
           >
             <option value="">any</option>
-            {workers.map((w) => <option key={w.agentId} value={w.agentId}>{w.agentId}</option>)}
+            {pins.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
           <button
             className={styles.actionBtn}
             disabled={busy || !changed}
-            onClick={() => void run(() => routeConductorTask(task.id, body))}
+            onClick={() => {
+              if (task.state === 'running' &&
+                !window.confirm('This stops the running attempt and restarts it on the new route. Continue?')) return
+              void run(() => routeConductorTask(task.id, body), () => setBaseline(form))
+            }}
           >
             Save route
           </button>

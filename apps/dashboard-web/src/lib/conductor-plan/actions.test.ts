@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ConductorTask } from '../api'
 import type { PlanTask } from './model'
-import { actionErrorMessage, availableActions, routeBodyFromForm, routeFormFrom } from './actions'
+import { actionErrorMessage, availableActions } from './actions'
 
 function task(over: Partial<PlanTask> = {}, row: Partial<ConductorTask> = {}): PlanTask {
   return {
@@ -32,24 +32,6 @@ describe('availableActions', () => {
     expect(availableActions(task({ kind: 'group' })).route).toBe(false)
     expect(availableActions(task({ state: 'done' })).route).toBe(false)
     expect(availableActions(task({ state: 'stopped' })).route).toBe(false)
-  })
-})
-
-describe('routeBodyFromForm', () => {
-  const t = task()
-  it('sends only what changed', () => {
-    const f = routeFormFrom(t)
-    expect(f).toEqual({ executor: 'claude', model: 'opus', effort: 'high', pinnedAgent: 'w1' })
-    expect(routeBodyFromForm(f, t)).toEqual({})
-    expect(routeBodyFromForm({ ...f, executor: 'codex' }, t)).toEqual({ executor: 'codex' })
-    expect(routeBodyFromForm({ ...f, executor: '' }, t)).toEqual({ executor: null })
-    expect(routeBodyFromForm({ ...f, model: '' }, t)).toEqual({ model: null })
-    expect(routeBodyFromForm({ ...f, effort: ' low ' }, t)).toEqual({ effort: 'low' })
-    expect(routeBodyFromForm({ ...f, pinnedAgent: '' }, t)).toEqual({ pinnedAgent: null })
-  })
-  it('treats a null route as empty fields', () => {
-    const n = task({ primary: null }, { pinned_agent: null })
-    expect(routeFormFrom(n)).toEqual({ executor: '', model: '', effort: '', pinnedAgent: '' })
   })
 })
 
