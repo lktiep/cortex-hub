@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,8 +13,6 @@ import { commitTitle, runTask } from './runner.js';
 import type { RunOutcome, RunnerDeps } from './runner.js';
 import { FIXTURE_GIT_IDENTITY, createGitFixture, isolateGitConfig } from './test-utils/git-fixture.js';
 import type { GitFixture } from './test-utils/git-fixture.js';
-
-type Reliable = Parameters<RunnerDeps['sendReliable']>[0];
 
 const TASK_ID = 'task_0123456789abcdef';
 const BRANCH = 'task/k-1';
@@ -135,7 +133,6 @@ function fakeGh(o: { authed?: boolean; onCall?: (args: string[]) => void } = {})
 interface Harness {
   deps: RunnerDeps;
   progress: TaskProgressMsg[];
-  reliable: Reliable[];
   logs: string[];
   ghCalls: GhCall[];
 }
@@ -145,7 +142,6 @@ function harness(
   o: { env?: NodeJS.ProcessEnv; gh?: { gh: GhRun; calls: GhCall[] }; engineTimeoutMs?: number } = {},
 ): Harness {
   const progress: TaskProgressMsg[] = [];
-  const reliable: Reliable[] = [];
   const logs: string[] = [];
   const { gh, calls } = o.gh ?? fakeGh();
   const logger: Logger = {
@@ -160,7 +156,6 @@ function harness(
     paths,
     adapter,
     send: (m) => progress.push(m),
-    sendReliable: (m) => reliable.push(m),
     gh,
     logger,
     env: { PATH: process.env.PATH, ...o.env },
@@ -168,7 +163,7 @@ function harness(
     identity: { name: 'Cortex Worker', email: 'cortex-worker@localhost' },
     now: () => NOW,
   };
-  return { deps, progress, reliable, logs, ghCalls: calls };
+  return { deps, progress, logs, ghCalls: calls };
 }
 
 const run = (task: AssignedTask, h: Harness, signal = new AbortController().signal, opts?: { resumed?: boolean }) =>
@@ -201,6 +196,32 @@ function failingHook(name: 'pre-commit' | 'pre-push', text: string): void {
   const hook = path.join(fx.repo, '.git', 'hooks', name);
   writeFileSync(hook, `#!/bin/sh\necho "${text}" >&2\nexit 1\n`);
   chmodSync(hook, 0o755);
+}
+
+/** A hook that touches `entered`, then holds git until `go` exists (10 s at most) and lets it pass. */
+function gatedHook(name: 'pre-commit' | 'pre-push', entered: string, go: string): void {
+  const hook = path.join(fx.repo, '.git', 'hooks', name);
+  writeFileSync(
+    hook,
+    `#!/bin/sh\ntouch "${entered}"\ni=0\nwhile [ ! -f "${go}" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done\nexit 0\n`,
+  );
+  chmodSync(hook, 0o755);
+}
+
+const localSubject = (branch = BRANCH): string => fx.run(fx.repo, ['log', '-1', '--format=%s', branch]);
+const prBodyOf = (h: Harness): string =>
+  h.ghCalls.find((c) => c.args[0] === 'pr' && c.args[1] === 'create')?.input ?? '';
+
+/** Publishes `BRANCH` on origin with one commit, as an earlier attempt on another machine would. */
+function pushPriorCommit(): string {
+  const other = path.join(fx.scratch, 'other');
+  fx.run(fx.scratch, ['clone', fx.origin, other]);
+  fx.run(other, ['checkout', '-b', BRANCH]);
+  writeFileSync(path.join(other, 'wip.txt'), 'earlier run');
+  fx.run(other, ['add', 'wip.txt']);
+  fx.run(other, ['commit', '-m', 'WIP K-1: quota handoff']);
+  fx.run(other, ['push', 'origin', BRANCH]);
+  return fx.run(other, ['rev-parse', 'HEAD']);
 }
 
 function alive(pid: number): boolean {
@@ -251,7 +272,6 @@ describe('runTask', () => {
         result: { summary: 'Wrote engine.txt.', prUrl: PR_URL, branch: BRANCH, commit: remoteSha(), testOutput: 'all green' },
       },
     });
-    expect(h.reliable).toEqual([msgOf(out)]);
 
     const input = engine.inputs[0];
     expect(input?.cwd).toBe(dirOf());
@@ -284,7 +304,6 @@ describe('runTask', () => {
     expect(msg.result.branch).toBeUndefined();
     expect(msg.result.commit).toBeUndefined();
     expect(remoteHas(BRANCH)).toBe(false);
-    expect(h.reliable).toEqual([msg]);
   });
 
   it('completes on a clean tree when context.allowEmpty is true', async () => {
@@ -355,7 +374,6 @@ describe('runTask', () => {
       },
     });
     expect(quotaOf(out).handoff.note).toContain(remoteSha());
-    expect(h.reliable).toEqual([quotaOf(out)]);
   });
 
   it('quota on a clean tree returns handoff.commit null', async () => {
@@ -392,7 +410,6 @@ describe('runTask', () => {
     // partial work is not lost
     expect(remoteSubject()).toBe('WIP K-1: engine error');
     expect(msg.result).toMatchObject({ branch: BRANCH, commit: remoteSha() });
-    expect(h.reliable).toEqual([msg]);
   });
 
   posixOnly('engine timeout returns failed and kills the engine', async () => {
@@ -437,7 +454,6 @@ describe('runTask', () => {
     const out = await run(makeTask(), h, ac.signal);
 
     expect(out).toEqual({ kind: 'aborted', reason: 'revoked' });
-    expect(h.reliable).toEqual([]);
     expect(remoteSubject()).toBe('WIP K-1: revoked');
     expect(existsSync(dirOf())).toBe(false);
     await expectGone(pidFile);
@@ -445,27 +461,53 @@ describe('runTask', () => {
 
   posixOnly('an abort before the engine starts makes no WIP commit', async () => {
     const ac = new AbortController();
+    const marker = path.join(fx.root, 'setup-started');
     const engine = fakeEngine();
-    const h = harness(engine.adapter);
-    setTimeout(() => ac.abort('stopping'), 300);
-    const out = await run(makeTask({ context: { setupCommand: 'sleep 30' } }), h, ac.signal);
+    const h = harness(engine.adapter, { env: { MARKER: marker } });
+    // the setup dirties the tree, so a WIP commit would have something to commit
+    const setupCommand = 'echo dirty > setup.txt; touch "$MARKER"; sleep 30';
+    const pending = run(makeTask({ context: { setupCommand } }), h, ac.signal);
+    await waitFor(() => existsSync(marker));
+    ac.abort('stopping');
+    const out = await pending;
 
     expect(out).toEqual({ kind: 'aborted', reason: 'stopping' });
     expect(engine.inputs).toEqual([]);
+    expect(localSubject()).toBe('init');
     expect(remoteHas(BRANCH)).toBe(false);
     expect(existsSync(dirOf())).toBe(false);
-    expect(h.reliable).toEqual([]);
   });
 
-  it('an abort during commit, push and PR lets git finish, then returns aborted', async () => {
+  posixOnly('an abort during the test command saves the WIP and returns aborted', async () => {
     const ac = new AbortController();
-    const gh = fakeGh({ onCall: () => ac.abort('stopping') });
-    const h = harness(fakeEngine().adapter, { gh });
-    const out = await run(makeTask(), h, ac.signal);
+    const marker = path.join(fx.root, 'tests-started');
+    const h = harness(fakeEngine().adapter, { env: { MARKER: marker } });
+    const pending = run(makeTask({ testCommand: 'touch "$MARKER"; sleep 30' }), h, ac.signal);
+    await waitFor(() => existsSync(marker));
+    ac.abort('revoked');
+    const out = await pending;
+
+    expect(out).toEqual({ kind: 'aborted', reason: 'revoked' });
+    expect(remoteSubject()).toBe('WIP K-1: revoked');
+    expect(h.ghCalls).toEqual([]);
+    expect(existsSync(dirOf())).toBe(false);
+  });
+
+  posixOnly('an abort during commit, push and PR lets git finish, then returns aborted', async () => {
+    const ac = new AbortController();
+    const entered = path.join(fx.root, 'hook-entered');
+    const go = path.join(fx.root, 'hook-go');
+    // the abort lands while `git commit` runs: a runner that stops before pushing fails below
+    gatedHook('pre-commit', entered, go);
+    const h = harness(fakeEngine().adapter);
+    const pending = run(makeTask(), h, ac.signal);
+    await waitFor(() => existsSync(entered));
+    ac.abort('stopping');
+    writeFileSync(go, '');
+    const out = await pending;
 
     expect(out).toEqual({ kind: 'aborted', reason: 'stopping' });
     expect(remoteSubject()).toBe('K-1: Add a file');
-    expect(h.reliable).toEqual([]);
     expect(existsSync(dirOf())).toBe(false);
   });
 
@@ -479,7 +521,6 @@ describe('runTask', () => {
     expect(reason.startsWith('branch-in-use: ')).toBe(true);
     expect(real(reason.slice('branch-in-use: '.length))).toBe(real(fx.repo));
     expect(engine.inputs).toEqual([]);
-    expect(h.reliable).toEqual([]);
   });
 
   it('fails with worktree: <message> when the worktree cannot be prepared', async () => {
@@ -493,7 +534,6 @@ describe('runTask', () => {
     expect(msgOf(unsafe)).toMatchObject({ taskId: '../x', status: 'failed', attempt: 3 });
     expect(msgOf(unsafe).result.error).toBe('worktree: unsafe task id: ../x');
     expect(engine.inputs).toEqual([]);
-    expect(h.reliable).toHaveLength(2);
   });
 
   posixOnly('runs the setup command before the engine and fails the task when it fails', async () => {
@@ -572,24 +612,90 @@ describe('runTask', () => {
   });
 
   it('counts commits already on the branch as changes', async () => {
-    const other = path.join(fx.scratch, 'other');
-    fx.run(fx.scratch, ['clone', fx.origin, other]);
-    fx.run(other, ['checkout', '-b', BRANCH]);
-    writeFileSync(path.join(other, 'wip.txt'), 'earlier run');
-    fx.run(other, ['add', 'wip.txt']);
-    fx.run(other, ['commit', '-m', 'WIP K-1: quota handoff']);
-    fx.run(other, ['push', 'origin', BRANCH]);
-    const prior = fx.run(other, ['rev-parse', 'HEAD']);
-
+    const prior = pushPriorCommit();
     const engine = fakeEngine({ run: () => ({ exitCode: 0, stdout: 'already done' }) });
     const h = harness(engine.adapter);
-    const task = makeTask({ handoff: { branch: BRANCH, commit: prior, note: 'ran out of quota' } });
+    // the engine left the tree clean, so what the tests write is not committed
+    const task = makeTask({
+      handoff: { branch: BRANCH, commit: prior, note: 'ran out of quota' },
+      testCommand: 'echo report > junit.xml',
+    });
     const out = await run(task, h, undefined, { resumed: true });
 
     expect(out.kind).toBe('completed');
     expect(msgOf(out).result).toMatchObject({ branch: BRANCH, commit: prior, prUrl: PR_URL });
     expect(remoteSha()).toBe(prior);
     expect(engine.inputs[0]?.prompt).toContain('## Resuming');
+  });
+
+  posixOnly('decides "no changes" before the tests run, so test artifacts do not count', async () => {
+    const engine = fakeEngine({ run: () => ({ exitCode: 0, stdout: 'nothing to do' }) });
+    const h = harness(engine.adapter);
+    const out = await run(makeTask({ testCommand: 'echo "<testsuite/>" > junit.xml; echo ok' }), h);
+
+    expect(out.kind).toBe('failed');
+    expect(msgOf(out).result).toMatchObject({ error: 'engine made no changes', testOutput: 'ok' });
+    expect(localSubject()).toBe('init');
+    expect(remoteHas(BRANCH)).toBe(false);
+    expect(h.ghCalls).toEqual([]);
+  });
+
+  it('reports a failed check for earlier commits as its own error and keeps the worktree', async () => {
+    // the branch is on origin, so preparing it never needs the base branch, which does not exist
+    pushPriorCommit();
+    const out = await run(makeTask({ baseBranch: 'gone' }), harness(fakeEngine().adapter));
+
+    const error = msgOf(out).result.error ?? '';
+    expect(out.kind).toBe('failed');
+    expect(error).toMatch(/^checking origin\/gone\.\.HEAD for earlier commits failed: /);
+    expect(error).not.toContain('could not commit');
+    expect(error).toContain(dirOf());
+    expect(existsSync(path.join(dirOf(), 'engine.txt'))).toBe(true);
+  });
+
+  posixOnly('keeps a worktree from an earlier attempt when setup fails or the run aborts before the engine', async () => {
+    mkdirSync(path.dirname(dirOf()), { recursive: true });
+    fx.run(fx.repo, ['worktree', 'add', '-B', BRANCH, dirOf(), 'origin/main']);
+    const earlier = path.join(dirOf(), 'earlier.txt');
+    writeFileSync(earlier, 'uncommitted work from the last attempt\n');
+
+    const engine = fakeEngine();
+    const failed = await run(makeTask(), harness(engine.adapter, { env: { CORTEX_SETUP_CMD: 'exit 5' } }));
+    expect(msgOf(failed).result.error).toBe('setup command failed (exit 5)');
+    expect(existsSync(earlier)).toBe(true);
+
+    const ac = new AbortController();
+    const marker = path.join(fx.root, 'setup-started');
+    const env = { CORTEX_SETUP_CMD: 'touch "$MARKER"; sleep 30', MARKER: marker };
+    const pending = run(makeTask(), harness(engine.adapter, { env }), ac.signal);
+    await waitFor(() => existsSync(marker));
+    ac.abort('stopping');
+    expect(await pending).toEqual({ kind: 'aborted', reason: 'stopping' });
+    expect(existsSync(earlier)).toBe(true);
+    expect(engine.inputs).toEqual([]);
+  });
+
+  posixOnly('fences the test tail with more backticks than it contains', async () => {
+    const h = harness(fakeEngine().adapter);
+    const out = await run(makeTask({ testCommand: "echo '```js'; echo '````'; echo ok" }), h);
+
+    expect(out.kind).toBe('completed');
+    expect(prBodyOf(h)).toContain('`````\n```js\n````\nok\n`````');
+  });
+
+  posixOnly('scrubs credentials from the setup tail, the test output and the PR body', async () => {
+    const leak = 'echo "fetching https://bot:s3cret@github.com/o/r.git"';
+    const h = harness(fakeEngine().adapter);
+    const out = await run(makeTask({ testCommand: leak }), h);
+    expect(msgOf(out).result.testOutput).toBe('fetching https://github.com/o/r.git');
+    expect(prBodyOf(h)).toContain('fetching https://github.com/o/r.git');
+    expect(prBodyOf(h)).not.toContain('s3cret');
+
+    const setup = await run(
+      makeTask({ id: 'task_setup', branch: 'task/setup', context: { setupCommand: `${leak}; exit 1` } }),
+      harness(fakeEngine().adapter),
+    );
+    expect(msgOf(setup).result.error).toBe('setup command failed (exit 1)\nfetching https://github.com/o/r.git');
   });
 
   it('appends the compare URL to the summary when no pull request was opened', async () => {
@@ -605,16 +711,45 @@ describe('runTask', () => {
     );
   });
 
-  it('fails with the error of an unexpected throw and removes the worktree', async () => {
+  it('an unexpected throw after the engine started keeps the worktree and names it', async () => {
     const engine = fakeEngine({
-      run: () => {
+      run: (input) => {
+        writeChange(input.cwd);
         throw new Error('adapter crashed');
       },
     });
     const h = harness(engine.adapter);
     const out = await run(makeTask(), h);
 
-    expect(msgOf(out)).toMatchObject({ status: 'failed', attempt: 3, result: { error: 'adapter crashed' } });
+    const msg = msgOf(out);
+    expect(msg).toMatchObject({ status: 'failed', attempt: 3 });
+    expect(msg.result.error).toMatch(/^adapter crashed\n/);
+    expect(msg.result.error).toContain(dirOf());
+    expect(existsSync(path.join(dirOf(), 'engine.txt'))).toBe(true);
+  });
+
+  posixOnly('a failed push keeps the worktree with the commit on its local branch, and the retry pushes it', async () => {
+    failingHook('pre-push', 'push refused');
+    const first = await run(makeTask(), harness(fakeEngine().adapter));
+
+    const local = fx.run(fx.repo, ['rev-parse', BRANCH]);
+    const result = msgOf(first).result;
+    expect(first.kind).toBe('failed');
+    expect(result.error).toContain('push refused');
+    expect(result.error).toContain(local);
+    expect(result.error).toContain(dirOf());
+    expect(result.branch).toBeUndefined();
+    expect(result.commit).toBeUndefined();
+    expect(localSubject()).toBe('K-1: Add a file');
+    expect(existsSync(dirOf())).toBe(true);
+    expect(remoteHas(BRANCH)).toBe(false);
+
+    // the retry reuses the kept worktree, so `worktree add -B` never resets the local commit away
+    rmSync(path.join(fx.repo, '.git', 'hooks', 'pre-push'));
+    const retry = await run(makeTask(), harness(fakeEngine({ run: () => ({ exitCode: 0 }) }).adapter));
+    expect(retry.kind).toBe('completed');
+    expect(msgOf(retry).result.commit).toBe(local);
+    expect(remoteSha()).toBe(local);
     expect(existsSync(dirOf())).toBe(false);
   });
 
@@ -642,7 +777,7 @@ describe('runTask', () => {
     expect(existsSync(path.join(dirOf(), 'engine.txt'))).toBe(true);
   });
 
-  posixOnly('a failed WIP push is logged and leaves no commit in the result or handoff', async () => {
+  posixOnly('a failed WIP push is logged, keeps the worktree and leaves no commit in the result or handoff', async () => {
     failingHook('pre-push', 'push refused');
     const failed = await run(
       makeTask(),
@@ -650,15 +785,21 @@ describe('runTask', () => {
     );
     const result = msgOf(failed).result;
     expect(result.error).toMatch(/^engine exploded\n.*push/s);
+    expect(result.error).toContain(dirOf());
     expect(result.commit).toBeUndefined();
     expect(result.branch).toBeUndefined();
+    expect(localSubject()).toBe('WIP K-1: engine error');
+    expect(existsSync(dirOf())).toBe(true);
 
     const h = harness(fakeEngine({ classify: { kind: 'quota', raw: 'q' } }).adapter);
     const quota = await run(makeTask({ id: 'task_quota', branch: 'task/quota' }), h);
     const msg = quotaOf(quota);
     expect(msg.handoff.commit).toBeNull();
     expect(msg.handoff.note).toMatch(/push/);
+    expect(msg.handoff.note).toContain(dirOf('task_quota'));
     expect(h.logs.some((l) => l.startsWith('ERROR') && l.includes('push'))).toBe(true);
+    expect(localSubject('task/quota')).toBe('WIP K-1: quota handoff');
+    expect(existsSync(dirOf('task_quota'))).toBe(true);
     expect(remoteHas('task/quota')).toBe(false);
   });
 });

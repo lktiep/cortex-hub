@@ -1,8 +1,6 @@
 import type {
   AssignedTask,
-  TaskAcceptMsg,
   TaskCompleteMsg,
-  TaskDeclineMsg,
   TaskProgressMsg,
   TaskQuotaExhaustedMsg,
   TaskResult,
@@ -16,8 +14,9 @@ import {
   prepareWorktree,
   pushBranch,
   removeWorktree,
+  scrubCredentials,
 } from './git.js';
-import type { GhRun } from './git.js';
+import type { GhRun, RunResult } from './git.js';
 import type { Logger } from './logger.js';
 import { worktreePath } from './paths.js';
 import type { WorkerPaths } from './paths.js';
@@ -25,13 +24,16 @@ import { lastLines, runShell } from './process.js';
 import { createProgressThrottle } from './progress.js';
 import { buildPrompt } from './prompt.js';
 
+/**
+ * What a run needs from the worker. The runner never sends an outcome: the worker
+ * records the returned message as unconfirmed, then sends it.
+ */
 export interface RunnerDeps {
   repo: string;
   remote: string;
   paths: WorkerPaths;
   adapter: EngineAdapter;
   send: (m: TaskProgressMsg) => void;
-  sendReliable: (m: TaskAcceptMsg | TaskCompleteMsg | TaskQuotaExhaustedMsg | TaskDeclineMsg) => void;
   gh: GhRun;
   logger: Logger;
   env: NodeJS.ProcessEnv;
@@ -40,7 +42,7 @@ export interface RunnerDeps {
   now?: () => Date;
 }
 
-type AbortReason = 'revoked' | 'stopping';
+export type AbortReason = 'revoked' | 'stopping';
 
 export type RunOutcome =
   | { kind: 'completed' | 'failed'; msg: TaskCompleteMsg }
@@ -91,13 +93,30 @@ function prBody(task: AssignedTask, summary: string, testOutput: string | undefi
   return parts.join('\n\n');
 }
 
-/** Commits ahead of origin/<baseBranch> mean the branch already carries work: returns HEAD then. */
-async function priorWork(dir: string, baseBranch: string): Promise<string | null> {
-  const count = await git(['rev-list', '--count', `origin/${baseBranch}..HEAD`], { cwd: dir });
-  if (count.code !== 0) throw new Error(`git rev-list failed: ${lastLines(count.stderr.trim(), 20)}`);
-  if (Number(count.stdout.trim()) <= 0) return null;
+function gitTail(r: RunResult): string {
+  return scrubCredentials(lastLines((r.stderr.trim() !== '' ? r.stderr : r.stdout).trim(), 20));
+}
+
+interface TreeState {
+  /** Uncommitted changes, untracked files included. */
+  dirty: boolean;
+  /** Commits on the branch that origin/<baseBranch> does not have, e.g. an earlier attempt's WIP. */
+  ahead: boolean;
+}
+
+/** What the engine left behind, read before the test command can add artifacts of its own. */
+async function treeState(dir: string, baseBranch: string): Promise<TreeState> {
+  const status = await git(['status', '--porcelain'], { cwd: dir });
+  if (status.code !== 0) throw new Error(`checking the worktree for changes failed: ${gitTail(status)}`);
+  const range = `origin/${baseBranch}..HEAD`;
+  const count = await git(['rev-list', '--count', range], { cwd: dir });
+  if (count.code !== 0) throw new Error(`checking ${range} for earlier commits failed: ${gitTail(count)}`);
+  return { dirty: status.stdout.trim() !== '', ahead: Number(count.stdout.trim()) > 0 };
+}
+
+async function headCommit(dir: string): Promise<string> {
   const head = await git(['rev-parse', 'HEAD'], { cwd: dir });
-  if (head.code !== 0) throw new Error(`git rev-parse failed: ${lastLines(head.stderr.trim(), 20)}`);
+  if (head.code !== 0) throw new Error(`reading the branch head failed: ${gitTail(head)}`);
   return head.stdout.trim();
 }
 
@@ -110,9 +129,13 @@ interface Wip {
 }
 
 /**
- * Runs one accepted task end to end. Never throws: every path ends in an outcome.
- * Completed, failed and quota outcomes are sent through `sendReliable`; a decline or
- * an abort sends nothing.
+ * Runs one accepted task end to end and returns its outcome. Never throws, and never
+ * sends the outcome itself.
+ *
+ * The worktree is removed at the end, except when work would be lost with it: a commit
+ * or push that failed, an unexpected throw once the engine started, or a worktree kept
+ * from an earlier attempt when this run stops before its engine runs. A retry then finds
+ * it again (`from: 'existing'`).
  */
 export async function runTask(
   task: AssignedTask,
@@ -122,13 +145,16 @@ export async function runTask(
 ): Promise<RunOutcome> {
   const { adapter, logger } = deps;
   const now = deps.now ?? ((): Date => new Date());
-  /** Set once the worktree is prepared; it is removed at the end unless `keepWorktree`. */
+  /** Set once the worktree is prepared. */
   let dir: string | null = null;
+  /** The worktree came from an earlier attempt. */
+  let reused = false;
+  let engineStarted = false;
   let keepWorktree = false;
   let engineSummary = '';
 
   const log = (level: 'info' | 'warn' | 'error', m: string): void => logger[level](`task ${task.id}: ${m}`);
-  const aborted = (): RunOutcome => ({
+  const aborted = (): { kind: 'aborted'; reason: AbortReason } => ({
     kind: 'aborted',
     reason: signal.reason === 'revoked' ? 'revoked' : 'stopping',
   });
@@ -158,7 +184,11 @@ export async function runTask(
       await pushBranch(worktree, task.branch);
       return { commit, pushed: true, problem: null };
     } catch (err) {
-      const problem = `pushing the WIP commit ${commit} failed: ${messageOf(err)}`;
+      // the commit lives only on the local branch, which a fresh `worktree add -B` would reset
+      keepWorktree = true;
+      const problem =
+        `the WIP commit ${commit} was not pushed; it is on the local branch ${task.branch} ` +
+        `in the worktree kept at ${worktree}\n${messageOf(err)}`;
       log('error', problem);
       return { commit, pushed: false, problem };
     }
@@ -197,17 +227,19 @@ export async function runTask(
   /** An abort once the engine has started: the WIP is saved, nothing is reported. */
   const abortWithWip = async (worktree: string): Promise<RunOutcome> => {
     const outcome = aborted();
-    if (outcome.kind === 'aborted') await saveWip(worktree, outcome.reason);
+    await saveWip(worktree, outcome.reason);
     return outcome;
   };
 
   const runEngine = async (worktree: string, testCommand: string | null): Promise<RunOutput> => {
+    const prompt = buildPrompt(task, { resumed: opts.resumed, testCommand });
     const throttle = createProgressThrottle((message) =>
       deps.send({ type: 'task.progress', taskId: task.id, message }),
     );
+    engineStarted = true;
     try {
       return await adapter.run({
-        prompt: buildPrompt(task, { resumed: opts.resumed, testCommand }),
+        prompt,
         cwd: worktree,
         model: task.route.model,
         effort: task.route.effort,
@@ -231,6 +263,7 @@ export async function runTask(
     try {
       worktree = worktreePath(deps.paths, task.id);
       const { from } = await prepareWorktree(deps.repo, worktree, task.branch, task.baseBranch);
+      reused = from === 'existing';
       log('info', `worktree ready at ${worktree} (from ${from})`);
     } catch (err) {
       if (err instanceof BranchInUseError) return { kind: 'declined', reason: `branch-in-use: ${err.path}` };
@@ -247,7 +280,7 @@ export async function runTask(
       const setup = await runShell(setupCommand, worktree, shellOpts);
       if (signal.aborted) return aborted();
       if (setup.exitCode !== 0) {
-        const tail = lastLines(setup.output.trimEnd(), SETUP_TAIL_LINES);
+        const tail = scrubCredentials(lastLines(setup.output.trimEnd(), SETUP_TAIL_LINES));
         return fail([`setup command failed (exit ${setup.exitCode})${tail === '' ? '' : `\n${tail}`}`]);
       }
     }
@@ -269,6 +302,8 @@ export async function runTask(
     });
     if (verdict.kind === 'quota') return quotaHandoff(worktree, verdict);
     if (verdict.kind === 'error') return failWithWip(worktree, 'engine error', verdict.message);
+    // read now: whatever the test command writes (coverage/, junit.xml) is not the engine's work
+    const changes = await treeState(worktree, task.baseBranch);
 
     // 5. tests
     let testOutput: string | undefined;
@@ -276,30 +311,41 @@ export async function runTask(
     if (testCommand !== null) {
       const tests = await runShell(testCommand, worktree, shellOpts);
       if (signal.aborted) return abortWithWip(worktree);
-      testOutput = lastLines(tests.output, TEST_TAIL_LINES);
+      testOutput = scrubCredentials(lastLines(tests.output, TEST_TAIL_LINES));
       if (tests.exitCode !== 0) testError = `tests failed (exit ${tests.exitCode})`;
     }
     const withTests = testOutput !== undefined ? { testOutput } : {};
 
-    // 6. commit; from here on an abort lets git finish
-    let commit: string | null;
-    try {
-      commit = (await commitAll(worktree, commitTitle(task), deps.identity)) ?? (await priorWork(worktree, task.baseBranch));
-    } catch (err) {
-      keepWorktree = true;
-      return fail([testError, `could not commit the work; the worktree is kept at ${worktree}\n${messageOf(err)}`], withTests);
-    }
-    if (commit === null) {
+    const noChanges = (): RunOutcome => {
       if (testError !== null) return fail([testError], withTests);
       if (task.context['allowEmpty'] !== true) return fail(['engine made no changes'], withTests);
       return complete('completed', { summary: engineSummary, ...withTests });
+    };
+    if (!changes.dirty && !changes.ahead) return noChanges();
+
+    // 6. commit; from here on an abort lets git finish
+    let commit: string | null = null;
+    if (changes.dirty) {
+      try {
+        commit = await commitAll(worktree, commitTitle(task), deps.identity);
+      } catch (err) {
+        keepWorktree = true;
+        return fail([testError, `could not commit the work; the worktree is kept at ${worktree}\n${messageOf(err)}`], withTests);
+      }
     }
+    commit ??= changes.ahead ? await headCommit(worktree) : null;
+    if (commit === null) return noChanges();
 
     // 7. push and pull request
     try {
       await pushBranch(worktree, task.branch);
     } catch (err) {
-      return fail([testError, `${messageOf(err)}\nthe commit ${commit} stays on the local branch ${task.branch}`], withTests);
+      // the commit lives only on the local branch, which a fresh `worktree add -B` would reset
+      keepWorktree = true;
+      const error =
+        `the commit ${commit} was not pushed; it is on the local branch ${task.branch} ` +
+        `in the worktree kept at ${worktree}\n${messageOf(err)}`;
+      return fail([testError, error], withTests);
     }
     let pr: { prUrl?: string; compareUrl?: string } = {};
     try {
@@ -336,37 +382,37 @@ export async function runTask(
     return complete('failed', { ...result, summary: summary === '' ? testError : summary, error: testError });
   };
 
-  /** Removes the worktree, then reports the outcome; an aborted run reports nothing. */
+  /** Removes the worktree unless something in it must survive; an aborted run reports nothing. */
   const settle = async (outcome: RunOutcome): Promise<RunOutcome> => {
-    if (dir !== null && !keepWorktree) {
-      try {
-        await removeWorktree(deps.repo, dir);
-      } catch (err) {
-        log('warn', messageOf(err));
+    if (dir !== null) {
+      if (keepWorktree || (reused && !engineStarted)) {
+        log('info', `worktree kept at ${dir}`);
+      } else {
+        try {
+          await removeWorktree(deps.repo, dir);
+        } catch (err) {
+          log('warn', messageOf(err));
+        }
       }
     }
-    if (signal.aborted) {
-      const result = aborted();
-      log('info', `${result.kind} (${signal.reason === 'revoked' ? 'revoked' : 'stopping'})`);
-      return result;
-    }
-    log('info', outcome.kind);
-    if (outcome.kind === 'completed' || outcome.kind === 'failed' || outcome.kind === 'quota') {
-      try {
-        deps.sendReliable(outcome.msg);
-      } catch (err) {
-        log('error', `sending the outcome failed: ${messageOf(err)}`);
-      }
-    }
-    return outcome;
+    const result = signal.aborted ? aborted() : outcome;
+    log('info', result.kind === 'aborted' ? `aborted (${result.reason})` : result.kind);
+    return result;
   };
 
   let outcome: RunOutcome;
   try {
     outcome = await execute();
   } catch (err) {
-    log('error', `unexpected error: ${messageOf(err)}`);
-    outcome = fail([messageOf(err)]);
+    const message = messageOf(err);
+    log('error', `unexpected error: ${message}`);
+    if (engineStarted && dir !== null) {
+      // the engine's work exists only in this worktree
+      keepWorktree = true;
+      outcome = fail([message, `the worktree is kept at ${dir}`]);
+    } else {
+      outcome = fail([message]);
+    }
   }
   return settle(outcome);
 }
