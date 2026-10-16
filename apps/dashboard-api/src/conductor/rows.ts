@@ -69,6 +69,12 @@ export function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   try { return JSON.parse(raw) as T } catch { return fallback }
 }
 
+/** A JSON array column's string entries; anything else reads as empty. */
+export function stringList(raw: string | null | undefined): string[] {
+  const parsed = parseJson<unknown>(raw, [])
+  return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []
+}
+
 export function taskContext(row: TaskRow): TaskContext {
   const parsed = parseJson<unknown>(row.context, {})
   return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as TaskContext) : {}

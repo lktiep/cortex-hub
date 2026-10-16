@@ -111,11 +111,16 @@ export function setStatus(agentId: string, status: 'idle' | 'busy', now: number 
   conn.status = status
 }
 
+/** False when the agent is not connected, its socket is not open, or the send throws. */
 export function sendTo(agentId: string, msg: object): boolean {
   const conn = getByAgent(agentId)
   if (!conn || conn.ws.readyState !== OPEN) return false
-  conn.ws.send(JSON.stringify(msg))
-  return true
+  try {
+    conn.ws.send(JSON.stringify(msg))
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function broadcastToOwner(owner: string, msg: object, excludeAgentId?: string): void {

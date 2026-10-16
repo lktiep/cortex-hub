@@ -1,8 +1,18 @@
 // Dispatcher (spec §6.4). selectAssignments() and its helpers are pure: they
 // decide from plain state which worker takes which ready task on which route,
 // and why the others wait, without reading the database or the registry.
-import type { EngineInfo, RouteSpec, WaitReason } from '@cortex/shared-types'
+// The DB half below them loads that state, applies the result and pushes the
+// assignments (dispatch), and serves pull-mode pickups (pickForPull).
+import type { EngineInfo, Executor, RouteSpec, WaitReason } from '@cortex/shared-types'
+import { db } from '../db/client.js'
+import { baseBranchFor, getConductorConfig, type ConductorConfig } from './config.js'
 import { pathsConflict } from './files.js'
+import { assignedMsg, branchFor } from './messages.js'
+import { formatNotification, notifyLead } from './notify.js'
+import { listConnections, sendTo } from './registry.js'
+import {
+  ACTIVE_STATUSES, LOCKING_STATUSES, getTask, isoSeconds, logTask, parseJson, stringList, taskContext, type TaskRow,
+} from './rows.js'
 
 export interface CandidateTask {
   id: string; projectId: string | null; priority: number; createdAt: string
@@ -170,4 +180,293 @@ export function selectAssignments(input: SelectionInput): { assign: Assignment[]
   }
 
   return { assign, wait }
+}
+
+/** Normalize agent identity for flexible matching (lowercase, trimmed) */
+export function normalizeIdentity(id: string | null | undefined): string {
+  if (!id) return ''
+  return id.toLowerCase().trim()
+}
+
+/**
+ * Check if a requesting agent matches a task's assigned_to field.
+ * Matches on agentId, apiKeyOwner, or sessionAgent (any of them).
+ */
+export function agentMatchesAssignment(
+  assignedTo: string | null,
+  agentId?: string | null,
+  apiKeyOwner?: string | null,
+  sessionAgent?: string | null
+): boolean {
+  if (!assignedTo) return true // unassigned tasks can be picked up by anyone
+  const target = normalizeIdentity(assignedTo)
+  const candidates = [agentId, apiKeyOwner, sessionAgent]
+    .map(normalizeIdentity)
+    .filter(Boolean)
+  return candidates.some((c) => c === target || target.includes(c) || c.includes(target))
+}
+
+// ── DB half: load state, apply the selection, push the assignments ──
+
+const WS_OPEN = 1
+
+function str(v: unknown): string | null {
+  return typeof v === 'string' && v !== '' ? v : null
+}
+
+/** Executors are validated on write; an unknown one is kept so that it matches no engine. */
+function toRoute(executor: unknown, model: unknown, effort: unknown): RouteSpec {
+  return { executor: str(executor) as Executor | null, model: str(model), effort: str(effort) }
+}
+
+/** `[primary, ...fallback]`; a null or unreadable `fallback` means the project default. */
+function routesOf(row: TaskRow, defaultFallback: RouteSpec[]): RouteSpec[] {
+  const parsed = parseJson<unknown>(row.fallback, null)
+  const fallback = Array.isArray(parsed)
+    ? parsed
+      .filter((r): r is Record<string, unknown> => r !== null && typeof r === 'object')
+      .map((r) => toRoute(r.executor, r.model, r.effort))
+    : null
+  return routeChain(toRoute(row.executor, row.model, row.effort), fallback, defaultFallback)
+}
+
+/** `agy/gemini-4-argon-low`, as shown in notifications and logs. */
+function routeLabel(route: RouteSpec): string {
+  const base = `${route.executor ?? 'any'}/${route.model ?? 'default'}`
+  return route.effort === null ? base : `${base}@${route.effort}`
+}
+
+function declinedBy(row: TaskRow): string[] {
+  const declined = taskContext(row).declined
+  return Array.isArray(declined) ? declined.filter((d): d is string => typeof d === 'string') : []
+}
+
+/** `kind = 'work'`, `pending`, not escalated; dependencies and file locks are checked by the caller. */
+function pendingWork(): TaskRow[] {
+  return db.prepare(
+    "SELECT * FROM conductor_tasks WHERE kind = 'work' AND status = 'pending' AND escalated_at IS NULL ORDER BY priority ASC, created_at ASC, rowid ASC",
+  ).all() as TaskRow[]
+}
+
+/** The ids among `ids` whose task is `completed`. */
+function completedAmong(ids: string[]): Set<string> {
+  if (ids.length === 0) return new Set()
+  const rows = db.prepare(
+    "SELECT id FROM conductor_tasks WHERE status = 'completed' AND id IN (SELECT value FROM json_each(?))",
+  ).all(JSON.stringify([...new Set(ids)])) as { id: string }[]
+  return new Set(rows.map((r) => r.id))
+}
+
+function inList(statuses: readonly string[]): string {
+  return statuses.map(() => '?').join(', ')
+}
+
+/** File lists of the tasks that hold locks (`LOCKING_STATUSES`). */
+function lockedFiles(): string[][] {
+  const rows = db.prepare(`SELECT files FROM conductor_tasks WHERE status IN (${inList(LOCKING_STATUSES)})`)
+    .all(...LOCKING_STATUSES) as { files: string | null }[]
+  return rows.map((r) => stringList(r.files)).filter((files) => files.length > 0)
+}
+
+/** Agents with a task in `ACTIVE_STATUSES`; a task in `review` does not count. */
+function agentsWithActiveTask(): Set<string> {
+  const rows = db.prepare(
+    `SELECT DISTINCT assigned_to_agent AS agent FROM conductor_tasks WHERE status IN (${inList(ACTIVE_STATUSES)}) AND assigned_to_agent IS NOT NULL`,
+  ).all(...ACTIVE_STATUSES) as { agent: string }[]
+  return new Set(rows.map((r) => r.agent))
+}
+
+/** Registered connections whose socket is open. */
+function loadWorkers(): CandidateWorker[] {
+  const active = agentsWithActiveTask()
+  return listConnections()
+    .filter((c) => c.ready && c.ws.readyState === WS_OPEN)
+    .map((c) => ({
+      agentId: c.agentId, host: c.hostname, projectId: c.projectId, protocol: c.protocol,
+      capabilities: c.capabilities, engines: c.engines,
+      busy: c.status === 'busy' || active.has(c.agentId), idleSince: c.idleSince,
+    }))
+}
+
+function toCandidate(row: TaskRow, defaultFallback: RouteSpec[]): CandidateTask {
+  return {
+    id: row.id, projectId: row.project_id, priority: row.priority, createdAt: row.created_at,
+    dependsOn: stringList(row.depends_on), requiredCapabilities: stringList(row.required_capabilities),
+    files: stringList(row.files), routes: routesOf(row, defaultFallback),
+    pinnedAgent: row.pinned_agent, declined: declinedBy(row), lastAgent: row.last_agent,
+  }
+}
+
+function loadState(now: number, cfg: ConductorConfig): { input: SelectionInput; rows: Map<string, TaskRow> } {
+  const nowIso = isoSeconds(now)
+  const rows = pendingWork()
+  const pending = rows.map((r) => toCandidate(r, cfg.defaultFallback))
+  const quota = db.prepare(
+    'SELECT host, executor, model, exhausted_until AS exhaustedUntil FROM conductor_quota WHERE exhausted_until > ?',
+  ).all(nowIso) as QuotaRow[]
+  return {
+    input: {
+      pending,
+      completedIds: completedAmong(pending.flatMap((t) => t.dependsOn)),
+      lockedFiles: lockedFiles(),
+      workers: loadWorkers(),
+      quota,
+      now: nowIso,
+    },
+    rows: new Map(rows.map((r) => [r.id, r])),
+  }
+}
+
+export function loadSelectionInput(now: number): SelectionInput {
+  return loadState(now, getConductorConfig()).input
+}
+
+function leaseUntil(now: number, cfg: ConductorConfig): string {
+  return isoSeconds(now + cfg.leaseHours * 3600_000)
+}
+
+/** Writes the wait only when it changed; a change to `capacity` or `no_worker` tells the lead once. */
+function applyWait(row: TaskRow, wait: Wait, routes: RouteSpec[]): void {
+  if (row.wait_reason === wait.reason && row.wait_until === wait.until) return
+  db.prepare("UPDATE conductor_tasks SET wait_reason = ?, wait_until = ? WHERE id = ? AND status = 'pending'")
+    .run(wait.reason, wait.until, row.id)
+  if (wait.reason === row.wait_reason) return
+  if (wait.reason === 'capacity') {
+    notifyLead(row, 'capacity', formatNotification('capacity', row, { until: wait.until }))
+  } else if (wait.reason === 'no_worker') {
+    notifyLead(row, 'no_worker', formatNotification('no_worker', row, { routes: routes.map(routeLabel).join(' → ') }))
+  }
+}
+
+/** The conditional assign; null when the task is no longer pending. */
+function applyAssignment(row: TaskRow, a: Assignment, now: number, cfg: ConductorConfig): TaskRow | null {
+  const changed = db.prepare(`
+    UPDATE conductor_tasks
+    SET status = 'assigned', assigned_to_agent = ?, assigned_at = ?, attempt = attempt + 1, current_route = ?,
+        lease_expires_at = ?, last_agent = ?, branch = COALESCE(NULLIF(branch, ''), ?), wait_reason = NULL, wait_until = NULL
+    WHERE id = ? AND status = 'pending'
+  `).run(a.agentId, isoSeconds(now), JSON.stringify(a.route), leaseUntil(now, cfg), a.agentId,
+    branchFor(row, cfg.branchTemplate), row.id).changes
+  if (changed === 0) return null
+  logTask(row.id, a.agentId, 'assigned', routeLabel(a.route))
+  return getTask(row.id) ?? null
+}
+
+let running = false
+let rerun = false
+
+// Task 7 replaces this with lifecycle.returnTask
+function returnAfterSendFailure(task: TaskRow): void {
+  const changed = db.prepare(`
+    UPDATE conductor_tasks SET status = 'pending', assigned_to_agent = NULL, assigned_at = NULL, lease_expires_at = NULL
+    WHERE id = ? AND status = 'assigned' AND assigned_to_agent = ?
+  `).run(task.id, task.assigned_to_agent).changes
+  if (changed === 0) return
+  logTask(task.id, task.assigned_to_agent, 'returned', 'send failed')
+  rerun = true // returnTask gets the same effect by calling dispatch()
+}
+
+/** One load–select–apply pass in a transaction, then the pushes. Agents in `sendFailed` count as busy. */
+function dispatchPass(now: number, sendFailed: Set<string>): Assignment[] {
+  const cfg = getConductorConfig()
+  const applied = db.transaction((): { assignment: Assignment; task: TaskRow }[] => {
+    const { input, rows } = loadState(now, cfg)
+    input.workers = input.workers.map((w) => (sendFailed.has(w.agentId) ? { ...w, busy: true } : w))
+    const { assign, wait } = selectAssignments(input)
+    const assigned = new Set(assign.map((a) => a.taskId))
+    const routes = new Map(input.pending.map((t) => [t.id, t.routes]))
+    for (const w of wait) {
+      const row = rows.get(w.taskId)
+      if (row !== undefined && !assigned.has(w.taskId)) applyWait(row, w, routes.get(w.taskId) ?? [])
+    }
+    const out: { assignment: Assignment; task: TaskRow }[] = []
+    for (const a of assign) {
+      const row = rows.get(a.taskId)
+      const task = row === undefined ? null : applyAssignment(row, a, now, cfg)
+      if (task !== null) out.push({ assignment: a, task })
+    }
+    return out
+  })()
+
+  const sent: Assignment[] = []
+  for (const { assignment, task } of applied) {
+    if (sendTo(assignment.agentId, assignedMsg(task, baseBranchFor(task.project_id), 'task.assigned'))) {
+      sent.push(assignment)
+    } else {
+      sendFailed.add(assignment.agentId)
+      returnAfterSendFailure(task)
+    }
+  }
+  return sent
+}
+
+/**
+ * Assigns ready tasks to idle workers and pushes `task.assigned`. Synchronous;
+ * a call made while one runs (e.g. from a send) only asks the running call for
+ * one more pass. Returns the assignments that were applied and delivered.
+ */
+export function dispatch(now: number = Date.now()): Assignment[] {
+  if (running) {
+    rerun = true
+    return []
+  }
+  running = true
+  const sendFailed = new Set<string>()
+  const done: Assignment[] = []
+  try {
+    do {
+      rerun = false
+      done.push(...dispatchPass(now, sendFailed))
+    } while (rerun)
+  } finally {
+    running = false
+    rerun = false
+  }
+  return done
+}
+
+/**
+ * Pull mode (`cortex_task_pickup` without a worker): the first ready task that
+ * is pinned to the caller, or unpinned with no executor and no required
+ * capabilities, becomes `accepted` by the caller. Null when there is none.
+ */
+export function pickForPull(
+  identity: { agentId?: string; apiKeyOwner?: string; sessionAgent?: string },
+  now: number = Date.now(),
+): TaskRow | null {
+  const { agentId, apiKeyOwner, sessionAgent } = identity
+  const assignee = agentId ?? apiKeyOwner ?? sessionAgent
+  if (!assignee) return null
+  const callerIds = [agentId, apiKeyOwner, sessionAgent].map(normalizeIdentity).filter(Boolean)
+  const cfg = getConductorConfig()
+
+  return db.transaction((): TaskRow | null => {
+    const rows = pendingWork()
+    const completed = completedAmong(rows.flatMap((r) => stringList(r.depends_on)))
+    const locks = lockedFiles()
+    const nowIso = isoSeconds(now)
+    for (const row of rows) {
+      const takes = row.pinned_agent
+        ? agentMatchesAssignment(row.pinned_agent, agentId, apiKeyOwner, sessionAgent)
+        : !row.executor && stringList(row.required_capabilities).length === 0
+      if (!takes) continue
+      if (declinedBy(row).some((d) => callerIds.includes(normalizeIdentity(d)))) continue
+      if (!stringList(row.depends_on).every((id) => completed.has(id))) continue
+      const files = stringList(row.files)
+      if (locks.some((held) => pathsConflict(held, files))) continue
+
+      const changed = db.prepare(`
+        UPDATE conductor_tasks
+        SET status = 'accepted', assigned_to_agent = ?, assigned_at = ?, accepted_at = ?, attempt = attempt + 1,
+            lease_expires_at = ?, last_agent = ?, context = ?, branch = COALESCE(NULLIF(branch, ''), ?),
+            wait_reason = NULL, wait_until = NULL
+        WHERE id = ? AND status = 'pending'
+      `).run(assignee, nowIso, nowIso, leaseUntil(now, cfg), assignee,
+        JSON.stringify({ ...taskContext(row), pull: true }), branchFor(row, cfg.branchTemplate), row.id).changes
+      if (changed === 0) continue
+      logTask(row.id, assignee, 'accepted', 'picked up in pull mode')
+      return getTask(row.id) ?? null
+    }
+    return null
+  })()
 }

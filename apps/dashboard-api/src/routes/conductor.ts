@@ -7,6 +7,7 @@ import {
   notifyAgents,
   setAgentStatus,
 } from '../ws/conductor.js'
+import { agentMatchesAssignment } from '../conductor/dispatcher.js'
 
 export const conductorRouter = new Hono()
 
@@ -36,30 +37,6 @@ interface TaskRow {
 }
 
 // ── Helpers ──
-
-/** Normalize agent identity for flexible matching (lowercase, trimmed) */
-function normalizeIdentity(id: string | null | undefined): string {
-  if (!id) return ''
-  return id.toLowerCase().trim()
-}
-
-/**
- * Check if a requesting agent matches a task's assigned_to field.
- * Matches on agentId, apiKeyOwner, or sessionAgent (any of them).
- */
-function agentMatchesAssignment(
-  assignedTo: string | null,
-  agentId?: string | null,
-  apiKeyOwner?: string | null,
-  sessionAgent?: string | null
-): boolean {
-  if (!assignedTo) return true // unassigned tasks can be picked up by anyone
-  const target = normalizeIdentity(assignedTo)
-  const candidates = [agentId, apiKeyOwner, sessionAgent]
-    .map(normalizeIdentity)
-    .filter(Boolean)
-  return candidates.some((c) => c === target || target.includes(c) || c.includes(target))
-}
 
 /** Parse a JSON string field safely, returning fallback on error */
 function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {

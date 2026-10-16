@@ -66,6 +66,13 @@ describe('registry', () => {
     expect(a.sent).toEqual([{ type: 'x' }])
   })
 
+  it('sendTo returns false when the send throws', () => {
+    const a = fakeSocket()
+    a.send = () => { throw new Error('socket broke') }
+    addConnection(init('w1', 'h1', a))
+    expect(sendTo('w1', { type: 'x' })).toBe(false)
+  })
+
   it('setStatus idle sets idleSince once', () => {
     addConnection(init('w1', 'h1'), 2_000)
     setStatus('w1', 'busy', 3_000)
