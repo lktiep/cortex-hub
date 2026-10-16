@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","model":"synthetic-model"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it."},{"type":"tool_use","name":"Edit","input":{}}]}}
+{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached|1792000000"}
