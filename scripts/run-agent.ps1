@@ -15,15 +15,15 @@ foreach ($a in $args) {
 if (-not $Hub) { $Hub = $env:CORTEX_HUB_URL }
 if (-not $Hub -and (Test-Path $W)) { try { $out = & node $W hub-url 2>$null; if ($LASTEXITCODE -eq 0) { $Hub = "$out".Trim() } } catch { $Hub = '' } }
 if (-not $Hub) { Die 'no hub URL; pass --hub https://<your-mcp-host>' }
-$Hub = ($Hub.TrimEnd('/') -replace '/mcp$', '').TrimEnd('/')
+$Hub = ($Hub.Trim() -replace '/+$', '') -replace '/mcp$', '' -replace '/+$', ''
 New-Item -ItemType Directory -Force -Path $HomeDir | Out-Null
-$js = 'const [url, out] = process.argv.slice(1); fetch(url).then(async (r) => { if (r.status === 404) process.exit(44); if (!r.ok) { console.error(''HTTP '' + r.status); process.exit(1); } const body = await r.text(); if (!body.startsWith(''#!/usr/bin/env node'')) { console.error(''unexpected response body''); process.exit(1); } require(''node:fs'').writeFileSync(out, body); }).catch((e) => { console.error(String(e)); process.exit(1); });'
-& node -e $js "$Hub/conductor/worker.mjs" "$W.tmp"
+$js = 'const [url, out] = process.argv.slice(1); fetch(url, { signal: AbortSignal.timeout(60000) }).then(async (r) => { if (r.status === 404) process.exit(44); if (!r.ok) { console.error(''HTTP '' + r.status); process.exit(1); } const body = await r.text(); if (!body.startsWith(''#!/usr/bin/env node'')) { console.error(''unexpected response body''); process.exit(1); } require(''node:fs'').writeFileSync(out, body); }).catch((e) => { const c = e && e.cause; console.error(e && e.name === ''TimeoutError'' ? ''timed out'' : String(c && (c.code || (c.errors && c.errors[0] && c.errors[0].code) || c.message) || e)); process.exit(1); });'
+& node -e $js "$Hub/conductor/worker.mjs" "$W.tmp.$PID"
 $rc = $LASTEXITCODE
-if ($rc -eq 44) { Remove-Item -Force -ErrorAction SilentlyContinue "$W.tmp"; Die 'this hub does not serve the worker yet - upgrade the hub' }
+if ($rc -eq 44) { Remove-Item -Force -ErrorAction SilentlyContinue "$W.tmp.$PID"; Die 'this hub does not serve the worker yet - upgrade the hub' }
 if ($rc -ne 0) {
-  Remove-Item -Force -ErrorAction SilentlyContinue "$W.tmp"
+  Remove-Item -Force -ErrorAction SilentlyContinue "$W.tmp.$PID"
   if (-not (Test-Path $W)) { Die "could not download the worker from $Hub" }
   Write-Warning 'download failed; using cached worker'
-} else { Move-Item -Force "$W.tmp" $W }
+} else { Move-Item -Force "$W.tmp.$PID" $W }
 & node $W @args; exit $LASTEXITCODE

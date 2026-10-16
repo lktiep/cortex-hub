@@ -12,21 +12,21 @@ done
 [ -n "$HUB" ] || HUB="${CORTEX_HUB_URL:-}"
 [ -n "$HUB" ] || { [ -f "$W" ] && HUB="$(node "$W" hub-url 2>/dev/null)" || HUB=""; }
 [ -n "$HUB" ] || die "no hub URL; pass --hub https://<your-mcp-host>"
-HUB="${HUB%/}"; HUB="${HUB%/mcp}"; HUB="${HUB%/}"
+HUB="$(printf '%s' "$HUB" | sed -E 's:^[[:space:]]+::; s:[[:space:]]+$::; s:/+$::; s:/mcp$::; s:/+$::')"
 mkdir -p "$HOME_DIR"; rc=0
 node -e '
 const [url, out] = process.argv.slice(1);
-fetch(url).then(async (r) => {
+fetch(url, { signal: AbortSignal.timeout(60000) }).then(async (r) => {
   if (r.status === 404) process.exit(44);
   if (!r.ok) { console.error("HTTP " + r.status); process.exit(1); }
   const body = await r.text();
   if (!body.startsWith("#!/usr/bin/env node")) { console.error("unexpected response body"); process.exit(1); }
   require("node:fs").writeFileSync(out, body);
-}).catch((e) => { console.error(String(e && e.cause && e.cause.code || e)); process.exit(1); });
-' "$HUB/conductor/worker.mjs" "$W.tmp" || rc=$?
-if [ "$rc" -eq 44 ]; then rm -f "$W.tmp"; die "this hub does not serve the worker yet — upgrade the hub"; fi
+}).catch((e) => { const c = e && e.cause; console.error(e && e.name === "TimeoutError" ? "timed out" : String(c && (c.code || (c.errors && c.errors[0] && c.errors[0].code) || c.message) || e)); process.exit(1); });
+' "$HUB/conductor/worker.mjs" "$W.tmp.$$" || rc=$?
+if [ "$rc" -eq 44 ]; then rm -f "$W.tmp.$$"; die "this hub does not serve the worker yet — upgrade the hub"; fi
 if [ "$rc" -ne 0 ]; then
-  rm -f "$W.tmp"; [ -f "$W" ] || die "could not download the worker from $HUB"
+  rm -f "$W.tmp.$$"; [ -f "$W" ] || die "could not download the worker from $HUB"
   echo "[cortex] warning: download failed; using cached worker" >&2
-else mv "$W.tmp" "$W"; fi
+else mv "$W.tmp.$$" "$W"; fi
 exec node "$W" "$@"
