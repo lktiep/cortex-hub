@@ -1,11 +1,42 @@
-import { WebSocketServer, WebSocket } from 'ws'
-import type { IncomingMessage } from 'http'
-import type { Server } from 'http'
+// Worker WebSocket (spec §6.3, §6.5). A worker connects with its API key and
+// agent id in the query string; protocol-2 workers then send `worker.register`,
+// legacy scripts and the extension send `agent.register`. Nothing is dispatched
+// to a socket before it registers. Task outcomes go through the lifecycle
+// module, assignments through the dispatcher; connections live in the registry.
+import { WebSocketServer, WebSocket, type RawData } from 'ws'
+import type { IncomingMessage, Server } from 'http'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import {
+  CLOSE_CODES, EXECUTORS,
+  type EngineInfo, type Executor, type RegisteredMsg, type TaskHandoff, type TaskQuotaExhaustedMsg,
+  type TaskResult, type TaskRevokedMsg, type WorkerView,
+} from '@cortex/shared-types'
 import { db } from '../db/client.js'
-import { onCompleted } from '../conductor/lifecycle.js'
+import { baseBranchFor } from '../conductor/config.js'
+import { dispatch } from '../conductor/dispatcher.js'
+import {
+  acceptTask, completeTask, declineTask, failAttempt, onCompleted, quotaExhausted, recordProgress, returnTask,
+  type Outcome,
+} from '../conductor/lifecycle.js'
+import { assignedMsg } from '../conductor/messages.js'
+import {
+  addConnection, broadcastToOwner, getByAgent, getConnection, listConnections, removeConnection, sendTo,
+  setStatus, touch, updateConnection, type WorkerConn,
+} from '../conductor/registry.js'
+import { ACTIVE_STATUSES, getTask, isoSeconds } from '../conductor/rows.js'
+import { findProjectByRepo } from '../lib/project-match.js'
+import { appVersion } from '../version.js'
+
+const OPEN = 1
+const KEEPALIVE_MS = 30_000
+const STALE_MS = 60_000
+const PROGRESS_MAX = 4000
+const ACTIVE_IN = ACTIVE_STATUSES.map(() => '?').join(', ')
+const COMPLETE_STATUSES = ['completed', 'review', 'failed'] as const
+/** TaskResult fields the lifecycle and notifications read as text; a non-string value is dropped. */
+const RESULT_TEXT_FIELDS = ['prUrl', 'branch', 'commit', 'testOutput', 'error'] as const
 
 // ── Load valid capabilities from templates ──
 let validCapabilityIds: Set<string> = new Set()
@@ -35,318 +66,391 @@ function validateCapabilities(raw: unknown): string[] {
   return valid
 }
 
-interface ConnectedAgent {
-  ws: WebSocket
-  agentId: string
-  apiKeyOwner: string
-  hostname?: string
-  ide?: string
-  platform?: string
-  capabilities: string[]
-  /** 'idle' when no in_progress tasks, 'busy' otherwise */
-  status: 'idle' | 'busy'
-  connectedAt: Date
-  lastPing: Date
+/** The `capabilities` query parameter: a JSON array, possibly URI-encoded once more. */
+function parseCapabilities(raw: string | null): unknown {
+  const text = raw || '[]'
+  try {
+    return JSON.parse(decodeURIComponent(text))
+  } catch {
+    try { return JSON.parse(text) } catch { return [] }
+  }
 }
 
-/** Store connected agents by agentId */
-const agents = new Map<string, ConnectedAgent>()
+// ── Message field readers ──
 
-export function setupConductorWebSocket(server: Server) {
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+}
+
+function str(v: unknown): string | null {
+  return typeof v === 'string' && v !== '' ? v : null
+}
+
+function attemptOf(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isInteger(v) ? v : undefined
+}
+
+function toExecutor(v: unknown): Executor | null {
+  return typeof v === 'string' && (EXECUTORS as readonly string[]).includes(v) ? (v as Executor) : null
+}
+
+/** Engines with a known executor and a `models` array; non-string models are dropped. */
+function toEngines(raw: unknown): EngineInfo[] {
+  if (!Array.isArray(raw)) return []
+  const engines: EngineInfo[] = []
+  for (const e of raw) {
+    if (!isRecord(e)) continue
+    const executor = toExecutor(e['executor'])
+    const models = e['models']
+    if (executor === null || !Array.isArray(models)) continue
+    engines.push({
+      executor,
+      models: models.filter((m): m is string => typeof m === 'string'),
+      defaultModel: typeof e['defaultModel'] === 'string' ? e['defaultModel'] : null,
+    })
+  }
+  return engines
+}
+
+/**
+ * A worker's `result`: a legacy script sends a string, the extension an object
+ * without `summary`. Either way the lifecycle gets a string `summary`; the
+ * other fields are kept.
+ */
+function toResult(raw: unknown): TaskResult {
+  if (typeof raw === 'string') return { summary: raw }
+  const fields: Record<string, unknown> = isRecord(raw) ? { ...raw } : {}
+  for (const key of RESULT_TEXT_FIELDS) {
+    if (key in fields && typeof fields[key] !== 'string') delete fields[key]
+  }
+  // the text fields are strings now; anything else is only stored as JSON
+  return { ...fields, summary: typeof fields['summary'] === 'string' ? fields['summary'] : '' } as TaskResult
+}
+
+function toHandoff(raw: unknown): TaskHandoff | null {
+  if (!isRecord(raw) || typeof raw['branch'] !== 'string') return null
+  return {
+    branch: raw['branch'],
+    commit: typeof raw['commit'] === 'string' ? raw['commit'] : null,
+    note: typeof raw['note'] === 'string' ? raw['note'] : '',
+  }
+}
+
+/** Null when `taskId`, `executor`, `model` or `handoff` is missing or malformed. */
+function toQuotaMsg(msg: Record<string, unknown>): TaskQuotaExhaustedMsg | null {
+  const taskId = str(msg['taskId'])
+  const executor = toExecutor(msg['executor'])
+  const model = str(msg['model'])
+  const handoff = toHandoff(msg['handoff'])
+  if (taskId === null || executor === null || model === null || handoff === null) return null
+  return {
+    type: 'task.quota_exhausted',
+    taskId,
+    executor,
+    model,
+    modelScope: str(msg['modelScope']) ?? undefined,
+    resetAt: str(msg['resetAt']) ?? undefined,
+    raw: typeof msg['raw'] === 'string' ? msg['raw'] : '',
+    handoff,
+    attempt: attemptOf(msg['attempt']),
+  }
+}
+
+// ── Sending ──
+
+function reply(agent: WorkerConn, msg: object): void {
+  if (agent.ws.readyState === OPEN) agent.ws.send(JSON.stringify(msg))
+}
+
+/** Every open socket, whatever its owner (dashboard events). */
+function broadcastAll(msg: object): void {
+  for (const conn of listConnections()) sendTo(conn.agentId, msg)
+}
+
+/** A step the lifecycle refused (not the holder, stale attempt, …) has been logged there; it is only reported here. */
+function applied(agent: WorkerConn, step: string, outcome: Outcome): outcome is Extract<Outcome, { ok: true }> {
+  if (!outcome.ok) console.warn(`[ws] ${step} from ${agent.agentId} ignored: ${outcome.error}`)
+  return outcome.ok
+}
+
+/** Unregisters the connection; `agent.offline` only when it was still registered (not replaced or dropped already). */
+function dropConnection(conn: WorkerConn): void {
+  if (!removeConnection(conn.connectionId)) return
+  broadcastToOwner(conn.apiKeyOwner, {
+    type: 'agent.offline',
+    agentId: conn.agentId,
+    timestamp: new Date().toISOString(),
+  })
+  console.log(`[ws] Agent disconnected: ${conn.agentId}`)
+}
+
+export function setupConductorWebSocket(server: Server): WebSocketServer {
   const wss = new WebSocketServer({ server, path: '/ws/conductor' })
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     // Extract params from query string: /ws/conductor?apiKey=sk_xxx&agentId=xxx
     const url = new URL(req.url || '', `http://${req.headers.host}`)
     const apiKey = url.searchParams.get('apiKey')
-    const agentId = url.searchParams.get('agentId') || 'unknown'
-    const hostname = url.searchParams.get('hostname') || undefined
-    const ide = url.searchParams.get('ide') || undefined
-    const platform = url.searchParams.get('platform') || undefined
-    const capabilitiesRaw = url.searchParams.get('capabilities') || '[]'
-
     if (!apiKey) {
-      ws.close(4001, 'Missing apiKey')
+      ws.close(CLOSE_CODES.missingKey, 'Missing apiKey')
       return
     }
 
     // Validate API key against stored keys (hash the raw key first)
     const keyHash = createHash('sha256').update(apiKey).digest('hex')
     const keyRow = db
-      .prepare('SELECT name FROM api_keys WHERE key_hash = ?')
-      .get(keyHash) as { name: string } | undefined
-
+      .prepare('SELECT name, project_id FROM api_keys WHERE key_hash = ?')
+      .get(keyHash) as { name: string; project_id: string | null } | undefined
     if (!keyRow) {
-      ws.close(4003, 'Invalid apiKey')
+      ws.close(CLOSE_CODES.badKey, 'Invalid apiKey')
       return
     }
-    const apiKeyOwner = keyRow.name
 
-    let parsedCaps: unknown = []
-    try {
-      parsedCaps = JSON.parse(decodeURIComponent(capabilitiesRaw))
-    } catch {
-      try { parsedCaps = JSON.parse(capabilitiesRaw) } catch { parsedCaps = [] }
-    }
-    const capabilities = validateCapabilities(parsedCaps)
-
-    // Register agent connection
-    const agent: ConnectedAgent = {
+    const added = addConnection({
       ws,
-      agentId,
-      apiKeyOwner,
-      hostname,
-      ide,
-      platform,
-      capabilities,
-      status: 'idle',
-      connectedAt: new Date(),
-      lastPing: new Date(),
+      agentId: url.searchParams.get('agentId') || 'unknown',
+      apiKeyOwner: keyRow.name,
+      apiKeyProjectId: keyRow.project_id,
+      hostname: url.searchParams.get('hostname') || '',
+      ide: url.searchParams.get('ide') || null,
+      platform: url.searchParams.get('platform') || null,
+      capabilities: validateCapabilities(parseCapabilities(url.searchParams.get('capabilities'))),
+    })
+    if (!added.ok) {
+      ws.close(added.code, added.reason)
+      return
     }
-    agents.set(agentId, agent)
+    const conn = added.conn
 
     // Broadcast agent online to same-owner agents (exclude self)
     broadcastToOwner(
-      apiKeyOwner,
+      conn.apiKeyOwner,
       {
         type: 'agent.online',
-        agentId,
-        hostname,
-        ide,
-        capabilities,
-        platform,
+        agentId: conn.agentId,
+        hostname: conn.hostname || undefined,
+        ide: conn.ide ?? undefined,
+        capabilities: conn.capabilities,
+        platform: conn.platform ?? undefined,
         timestamp: new Date().toISOString(),
       },
-      agentId,
+      conn.agentId,
     )
 
     // Send welcome with current agent list
-    ws.send(
-      JSON.stringify({
-        type: 'welcome',
-        agentId,
-        onlineAgents: getOnlineAgents(apiKeyOwner),
-        timestamp: new Date().toISOString(),
-      }),
-    )
-
-    console.log(`[ws] Agent connected: ${agentId} (${apiKeyOwner})`)
-
-    // Re-push pending tasks: send the FIRST incomplete task assigned to this agent
-    // Agent processes sequentially — only push one at a time, the rest stay queued on server
-    const pendingTask = db.prepare(
-      "SELECT id, title, description FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'in_progress', 'pending', 'assigned') ORDER BY priority ASC, created_at ASC LIMIT 1"
-    ).get(agentId) as { id: string; title: string; description: string } | undefined
-    if (pendingTask) {
-      ws.send(
-        JSON.stringify({
-          type: 'task.assigned',
-          taskId: pendingTask.id,
-          title: pendingTask.title,
-          description: pendingTask.description,
-          resumed: true,
-          timestamp: new Date().toISOString(),
-        }),
-      )
-      console.log(`[ws] Re-pushed task ${pendingTask.id} to reconnected agent ${agentId}`)
-    }
-
-    // Handle incoming messages
-    ws.on('message', (data: Buffer) => {
-      try {
-        const msg = JSON.parse(data.toString())
-        handleMessage(agent, msg)
-      } catch {
-        ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }))
-      }
+    reply(conn, {
+      type: 'welcome',
+      agentId: conn.agentId,
+      onlineAgents: getOnlineAgents(conn.apiKeyOwner),
+      timestamp: new Date().toISOString(),
     })
 
-    // Handle disconnect
-    ws.on('close', () => {
-      agents.delete(agentId)
-      broadcastToOwner(apiKeyOwner, {
-        type: 'agent.offline',
-        agentId,
-        timestamp: new Date().toISOString(),
-      })
-      console.log(`[ws] Agent disconnected: ${agentId}`)
-    })
+    console.log(`[ws] Agent connected: ${conn.agentId} (${conn.apiKeyOwner})${added.replaced ? ', replacing its previous connection' : ''}`)
 
-    // Ping/pong keepalive
-    ws.on('pong', () => {
-      agent.lastPing = new Date()
-    })
+    ws.on('message', (data: RawData) => onMessage(ws, conn.connectionId, data))
+    ws.on('close', () => dropConnection(conn))
+    ws.on('pong', () => touch(conn.connectionId))
   })
 
   // Keepalive interval: terminate stale connections, ping active ones
-  setInterval(() => {
-    for (const [id, agent] of agents) {
-      if (Date.now() - agent.lastPing.getTime() > 60000) {
-        agent.ws.terminate()
-        agents.delete(id)
-      } else {
-        agent.ws.ping()
+  const keepalive = setInterval(() => {
+    for (const conn of listConnections()) {
+      if (!(conn.ws instanceof WebSocket)) continue
+      if (Date.now() - Date.parse(conn.lastPing) > STALE_MS) {
+        conn.ws.terminate()
+        dropConnection(conn)
+      } else if (conn.ws.readyState === WebSocket.OPEN) {
+        conn.ws.ping()
       }
     }
-  }, 30000)
+  }, KEEPALIVE_MS)
+  wss.on('close', () => clearInterval(keepalive))
 
   return wss
 }
 
-function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
+/**
+ * Parses one frame and hands it to its handler. A frame from a socket that has
+ * been replaced or dropped is ignored; a handler that throws is logged.
+ */
+function onMessage(ws: WebSocket, connectionId: string, data: RawData): void {
+  let msg: unknown
+  try {
+    msg = JSON.parse(data.toString())
+  } catch {
+    if (ws.readyState === OPEN) ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }))
+    return
+  }
+  if (!isRecord(msg)) {
+    if (ws.readyState === OPEN) ws.send(JSON.stringify({ type: 'error', message: 'Message must be a JSON object' }))
+    return
+  }
+  const agent = getConnection(connectionId)
+  if (agent === undefined) return
+  try {
+    handleMessage(agent, msg)
+  } catch (err) {
+    console.error(`[ws] ${String(msg['type'])} from ${agent.agentId} failed:`, err)
+  }
+}
+
+/**
+ * `worker.register` (protocol 2): resolves the project, records the worker,
+ * answers `registered`, then resumes or revokes the task the worker reports,
+ * settles the other active tasks the hub still holds for it, and dispatches.
+ */
+function onWorkerRegister(agent: WorkerConn, msg: Record<string, unknown>): void {
+  const matched = findProjectByRepo(str(msg['repo']) ?? '')?.id ?? null
+  if (matched !== null && agent.apiKeyProjectId !== null && matched !== agent.apiKeyProjectId) {
+    console.warn(`[ws] ${agent.agentId}: repo is project ${matched}, its key is scoped to ${agent.apiKeyProjectId}`)
+    dropConnection(agent)
+    agent.ws.close(CLOSE_CODES.badKey, 'key is scoped to another project')
+    return
+  }
+  const projectId = matched ?? agent.apiKeyProjectId
+  updateConnection(agent.connectionId, {
+    protocol: 2,
+    os: str(msg['os']),
+    version: str(msg['version']),
+    capabilities: validateCapabilities(msg['capabilities']),
+    engines: toEngines(msg['engines']),
+    defaultExecutor: toExecutor(msg['defaultExecutor']),
+    projectId,
+    ready: true,
+  })
+  reply(agent, { type: 'registered', connectionId: agent.connectionId, projectId, hubVersion: appVersion } satisfies RegisteredMsg)
+  console.log(`[ws] Worker registered: ${agent.agentId} v${agent.version ?? '?'} project=${projectId ?? 'none'}`)
+
+  let resumed: string | null = null
+  const activeTaskId = str(msg['activeTaskId'])
+  if (activeTaskId !== null) {
+    const task = getTask(activeTaskId)
+    if (task !== undefined && (ACTIVE_STATUSES as readonly string[]).includes(task.status) && task.assigned_to_agent === agent.agentId) {
+      reply(agent, assignedMsg(task, baseBranchFor(task.project_id), 'task.resumed'))
+      resumed = task.id
+    } else {
+      // the hub has taken it back (reclaimed, reassigned or finished): the worker stops; the row is not touched
+      reply(agent, { type: 'task.revoked', taskId: activeTaskId, reason: 'reclaimed' } satisfies TaskRevokedMsg)
+    }
+  }
+
+  // tasks the hub still holds for this agent that the restarted worker no longer runs
+  const held = db.prepare(`SELECT id, status FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN (${ACTIVE_IN})`)
+    .all(agent.agentId, ...ACTIVE_STATUSES) as { id: string; status: string }[]
+  for (const task of held) {
+    if (task.id === resumed) continue
+    if (task.status === 'assigned') returnTask(task.id, 'worker restarted')
+    else failAttempt(task.id, agent.agentId, 'worker restarted without the task')
+  }
+  dispatch()
+}
+
+/** `agent.register` (protocol 1: cortex-agent.sh, the extension): metadata, then a dispatch. */
+function onAgentRegister(agent: WorkerConn, msg: Record<string, unknown>): void {
+  const caps = validateCapabilities(msg['capabilities'])
+  updateConnection(agent.connectionId, {
+    ...(caps.length > 0 ? { capabilities: caps } : {}),
+    ide: str(msg['ide']) ?? agent.ide,
+    platform: str(msg['platform']) ?? str(msg['os']) ?? agent.platform,
+    ready: true,
+  })
+  broadcastToOwner(agent.apiKeyOwner, {
+    type: 'agent.capabilities_updated',
+    agentId: agent.agentId,
+    capabilities: agent.capabilities,
+    timestamp: new Date().toISOString(),
+  }, agent.agentId)
+  console.log(`[ws] Agent registered: ${agent.agentId} capabilities=[${agent.capabilities.join(',')}]`)
+  dispatch()
+}
+
+function handleMessage(agent: WorkerConn, msg: Record<string, unknown>) {
   const type = msg['type'] as string | undefined
 
   switch (type) {
-    case 'task.accept':
-      db.prepare(
-        'UPDATE conductor_tasks SET status = ?, accepted_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', ?) WHERE id = ?',
-      ).run('accepted', new Date().toISOString(), msg['taskId'] as string)
+    case 'worker.register':
+      onWorkerRegister(agent, msg)
+      break
+
+    case 'agent.register':
+      onAgentRegister(agent, msg)
+      break
+
+    case 'task.accept': {
+      const taskId = str(msg['taskId'])
+      if (taskId === null || !applied(agent, 'task.accept', acceptTask(taskId, agent.agentId))) break
       broadcastToOwner(agent.apiKeyOwner, {
         type: 'task.accepted',
-        taskId: msg['taskId'],
+        taskId,
         agentId: agent.agentId,
         timestamp: new Date().toISOString(),
       })
       break
+    }
 
     case 'task.progress': {
-      const taskId = msg['taskId'] as string
-      const message = (msg['message'] as string || '').slice(0, 4000)
-      // Persist to task logs (keep last 50 per task)
-      if (taskId && message) {
-        db.prepare(
-          'INSERT INTO conductor_task_logs (task_id, agent_id, action, message) VALUES (?, ?, ?, ?)'
-        ).run(taskId, agent.agentId, 'progress', message)
-        // Prune old progress logs (keep last 50)
-        db.prepare(
-          "DELETE FROM conductor_task_logs WHERE task_id = ? AND action = 'progress' AND id NOT IN (SELECT id FROM conductor_task_logs WHERE task_id = ? AND action = 'progress' ORDER BY id DESC LIMIT 50)"
-        ).run(taskId, taskId)
-        // Update task status to in_progress if still accepted
-        db.prepare(
-          "UPDATE conductor_tasks SET status = 'in_progress' WHERE id = ? AND status = 'accepted'"
-        ).run(taskId)
-      }
+      const taskId = str(msg['taskId'])
+      if (taskId === null) break
+      const message = (typeof msg['message'] === 'string' ? msg['message'] : '').slice(0, PROGRESS_MAX)
+      const percent = typeof msg['percent'] === 'number' ? msg['percent'] : undefined
+      if (!applied(agent, 'task.progress', recordProgress(taskId, agent.agentId, message, percent))) break
       broadcastToOwner(agent.apiKeyOwner, {
         type: 'task.progress',
         taskId,
         agentId: agent.agentId,
         message,
-        percent: msg['percent'],
+        percent,
         timestamp: new Date().toISOString(),
       })
       break
     }
 
     case 'task.complete': {
-      const completedTaskId = msg['taskId'] as string
-      if (!completedTaskId) break
-
-      // Guard: skip if task is already in a terminal state (prevents double completion)
-      const preCheck = db.prepare('SELECT status FROM conductor_tasks WHERE id = ?').get(completedTaskId) as { status: string } | undefined
-      if (!preCheck || preCheck.status === 'completed' || preCheck.status === 'cancelled' || preCheck.status === 'approved') {
-        console.warn(`[ws] task.complete: skipping ${completedTaskId} (already ${preCheck?.status ?? 'not found'})`)
+      const taskId = str(msg['taskId'])
+      if (taskId === null) break
+      // legacy scripts and the extension send no status: theirs is a completion
+      const status = msg['status'] ?? 'completed'
+      if (!COMPLETE_STATUSES.some((s) => s === status)) {
+        console.warn(`[ws] task.complete from ${agent.agentId} ignored: unknown status ${JSON.stringify(status)}`)
         break
       }
-
-      // Guard: block completion if task is awaiting user approval (strategy_review)
-      if (preCheck.status === 'strategy_review') {
-        console.warn(`[ws] task.complete: BLOCKED ${completedTaskId} — task is awaiting strategy approval, agent cannot complete`)
-        agent.ws.send(JSON.stringify({
-          type: 'error',
-          message: `Cannot complete task ${completedTaskId}: strategy awaiting user approval`,
-          taskId: completedTaskId,
-          timestamp: new Date().toISOString(),
-        }))
-        break
-      }
-
-      db.prepare(
-        'UPDATE conductor_tasks SET status = ?, result = ?, completed_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', ?), completed_by = ? WHERE id = ? AND status NOT IN (?, ?, ?)',
-      ).run(
-        'completed',
-        JSON.stringify(msg['result'] ?? {}),
-        new Date().toISOString(),
-        agent.agentId,
-        completedTaskId,
-        'completed', 'cancelled', 'approved',
+      const result = toResult(msg['result'])
+      const outcome = completeTask(
+        taskId, agent.agentId, status as (typeof COMPLETE_STATUSES)[number], result, attemptOf(msg['attempt']),
       )
+      if (!applied(agent, 'task.complete', outcome) || outcome.task.status !== 'completed') break
       broadcastToOwner(agent.apiKeyOwner, {
         type: 'task.completed',
-        taskId: completedTaskId,
+        taskId,
         agentId: agent.agentId,
-        result: msg['result'],
+        result,
         timestamp: new Date().toISOString(),
       })
-      // Resolve dependency chain: unblock waiting tasks, notify, auto-complete parent
-      const completedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(completedTaskId)
-      if (completedTask) {
-        try { onCompleted(completedTask as Parameters<typeof onCompleted>[0]) } catch (e) {
-          console.error('[ws] onCompleted error:', e)
-        }
-      }
-
-      // Auto-push next task: find next incomplete sibling or agent task
-      // 1. First check siblings (same parent) — ensures pipeline sequential flow
-      // 2. Fallback to any task assigned to this agent
-      const completedRow = db.prepare('SELECT parent_task_id FROM conductor_tasks WHERE id = ?').get(completedTaskId) as { parent_task_id: string | null } | undefined
-      const parentId = completedRow?.parent_task_id
-
-      let nextTask: { id: string; title: string; description: string } | undefined
-
-      if (parentId) {
-        // Find next sibling that hasn't started yet
-        nextTask = db.prepare(
-          "SELECT id, title, description FROM conductor_tasks WHERE parent_task_id = ? AND status IN ('accepted', 'pending', 'assigned', 'review') AND id != ? AND title NOT LIKE '[Review]%' AND title NOT LIKE 'Review:%' ORDER BY created_at ASC LIMIT 1"
-        ).get(parentId, completedTaskId) as typeof nextTask
-      }
-
-      if (!nextTask) {
-        // Fallback: any task assigned to this agent
-        nextTask = db.prepare(
-          "SELECT id, title, description FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'pending', 'assigned') AND id != ? AND title NOT LIKE '[Review]%' AND title NOT LIKE 'Review:%' ORDER BY priority ASC, created_at ASC LIMIT 1"
-        ).get(agent.agentId, completedTaskId) as typeof nextTask
-      }
-
-      if (nextTask) {
-        // Update status to accepted before pushing
-        db.prepare("UPDATE conductor_tasks SET status = 'accepted', accepted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ? AND status IN ('pending', 'assigned', 'review')").run(nextTask.id)
-
-        agent.ws.send(
-          JSON.stringify({
-            type: 'task.assigned',
-            taskId: nextTask.id,
-            title: nextTask.title,
-            description: nextTask.description,
-            autoNext: true,
-            timestamp: new Date().toISOString(),
-          }),
-        )
-        console.log(`[ws] Auto-pushed next task ${nextTask.id} to ${agent.agentId} after completing ${completedTaskId}`)
-      }
       break
     }
 
-    case 'agent.register': {
-      // Handle registration message from cortex-agent.sh (capabilities + metadata)
-      const regCaps = validateCapabilities(msg['capabilities'])
-      if (regCaps.length > 0) agent.capabilities = regCaps
-      if (msg['hostname']) agent.hostname = msg['hostname'] as string
-      if (msg['ide']) agent.ide = msg['ide'] as string
-      if (msg['platform'] || msg['os']) agent.platform = (msg['platform'] || msg['os']) as string
-      broadcastToOwner(agent.apiKeyOwner, {
-        type: 'agent.capabilities_updated',
-        agentId: agent.agentId,
-        capabilities: agent.capabilities,
-        timestamp: new Date().toISOString(),
-      }, agent.agentId)
-      console.log(`[ws] Agent registered: ${agent.agentId} capabilities=[${agent.capabilities.join(',')}]`)
+    case 'task.quota_exhausted': {
+      const quota = toQuotaMsg(msg)
+      if (quota === null) {
+        console.warn(`[ws] task.quota_exhausted from ${agent.agentId} ignored: malformed`)
+        break
+      }
+      applied(agent, 'task.quota_exhausted', quotaExhausted(quota.taskId, agent.agentId, quota))
+      break
+    }
+
+    case 'task.decline': {
+      const taskId = str(msg['taskId'])
+      if (taskId === null) break
+      const reason = str(msg['reason']) ?? 'no reason given'
+      applied(agent, 'task.decline', declineTask(taskId, agent.agentId, reason, attemptOf(msg['attempt'])))
       break
     }
 
     case 'capabilities.update': {
       // Allow agents to update their capabilities at runtime (validated)
       const validated = validateCapabilities(msg['capabilities'])
-      agent.capabilities = validated
+      updateConnection(agent.connectionId, { capabilities: validated })
       broadcastToOwner(agent.apiKeyOwner, {
         type: 'agent.capabilities_updated',
         agentId: agent.agentId,
@@ -357,10 +461,11 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
     }
 
     case 'status.update': {
-      const newStatus = msg['status'] as string | undefined
-      if (newStatus === 'idle' || newStatus === 'busy') {
-        agent.status = newStatus
-      }
+      // protocol 2 sends `state`; the extension sends `status`
+      const state = msg['state'] ?? msg['status']
+      if (state !== 'idle' && state !== 'busy') break
+      setStatus(agent.agentId, state)
+      if (state === 'idle') dispatch()
       break
     }
 
@@ -388,7 +493,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
 
       const onlineAgents = getOnlineAgents(agent.apiKeyOwner)
 
-      agent.ws.send(JSON.stringify({
+      reply(agent, {
         type: 'data.response',
         tasks,
         sessions,
@@ -396,7 +501,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
         taskStats,
         quality: qualitySummary ?? { total: 0, avgScore: null },
         timestamp: new Date().toISOString(),
-      }))
+      })
       break
     }
 
@@ -412,27 +517,27 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       if (titleLowerCheck.includes('strategy') || titleLowerCheck.includes('overhaul') || titleLowerCheck.includes('premium') || titleLowerCheck.includes('redesign')) {
         if (!hasParent) {
           console.warn(`[ws] task.create: BLOCKED top-level task "${title}" from ${agent.agentId} — agents cannot create strategy tasks`)
-          agent.ws.send(JSON.stringify({
+          reply(agent, {
             type: 'task.created',
             taskId: 'blocked',
             title,
             blocked: true,
             reason: 'Agents cannot create top-level strategy tasks. Implement your assigned task instead.',
             timestamp: new Date().toISOString(),
-          }))
+          })
           break
         }
       }
       if (titleLowerCheck.startsWith('[review]') || titleLowerCheck.startsWith('review:') || titleLowerCheck.includes('plan review')) {
         console.warn(`[ws] task.create: HARD BLOCKED review task "${title}" from ${agent.agentId}`)
-        agent.ws.send(JSON.stringify({
+        reply(agent, {
           type: 'task.created',
           taskId: 'blocked',
           title,
           blocked: true,
           deduplicated: true,
           timestamp: new Date().toISOString(),
-        }))
+        })
         break
       }
 
@@ -442,11 +547,11 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       ).get(agent.agentId) as { c: number }
       if (recentCount.c >= 5) {
         console.warn(`[ws] task.create: RATE LIMITED ${agent.agentId} (${recentCount.c} tasks in last 60s)`)
-        agent.ws.send(JSON.stringify({
+        reply(agent, {
           type: 'error',
           message: `Rate limited: too many tasks created (${recentCount.c}/5 per minute)`,
           timestamp: new Date().toISOString(),
-        }))
+        })
         break
       }
 
@@ -477,7 +582,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
 
         if (recentReview) {
           console.warn(`[ws] task.create: BLOCKED review spam "${title}" by ${agent.agentId} (existing: ${recentReview.id})`)
-          agent.ws.send(JSON.stringify({
+          reply(agent, {
             type: 'task.created',
             taskId: recentReview.id,
             title,
@@ -486,7 +591,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
             deduplicated: true,
             blocked: true,
             timestamp: new Date().toISOString(),
-          }))
+          })
           break
         }
       }
@@ -498,7 +603,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
 
       if (recentDupe) {
         console.warn(`[ws] task.create: dedup hit for "${title}" by ${agent.agentId} (existing: ${recentDupe.id})`)
-        agent.ws.send(JSON.stringify({
+        reply(agent, {
           type: 'task.created',
           taskId: recentDupe.id,
           title,
@@ -506,45 +611,33 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
           parentTaskId,
           deduplicated: true,
           timestamp: new Date().toISOString(),
-        }))
+        })
         break
       }
 
       const newId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
 
+      // `assignTo` pins the task to that agent; the dispatcher assigns and pushes it
       db.prepare(`
         INSERT INTO conductor_tasks
-          (id, title, description, priority, assigned_to_agent, created_by_agent,
+          (id, title, description, priority, pinned_agent, created_by_agent,
            parent_task_id, context, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
       `).run(newId, title, description, priority, assignTo ?? null, agent.agentId,
-        parentTaskId ?? null, context, assignTo ? 'assigned' : 'pending')
+        parentTaskId ?? null, context)
 
       console.log(`[ws] task.create: ${newId} "${title}" by ${agent.agentId} → ${assignTo ?? 'unassigned'}`)
 
-      // Push to assigned agent
-      if (assignTo) {
-        pushTaskToAgent(assignTo, newId, title, description)
-      }
-
       // Confirm back to creator
-      agent.ws.send(JSON.stringify({
+      reply(agent, {
         type: 'task.created',
         taskId: newId,
         title,
         assignedTo: assignTo,
         parentTaskId,
         timestamp: new Date().toISOString(),
-      }))
-
-      // Broadcast update
-      broadcastToOwner(agent.apiKeyOwner, {
-        type: 'task.assigned',
-        taskId: newId,
-        title,
-        description,
-        timestamp: new Date().toISOString(),
-      }, assignTo ? undefined : agent.agentId)
+      })
+      dispatch()
       break
     }
 
@@ -581,9 +674,9 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       })
 
       // Resolve completion chain for the parent
-      const completedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(taskId)
+      const completedTask = getTask(taskId)
       if (completedTask) {
-        onCompleted(completedTask as Parameters<typeof onCompleted>[0])
+        onCompleted(completedTask)
       }
       break
     }
@@ -659,128 +752,95 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       // Agent-to-agent messaging (same owner only)
       const targetId = msg['to'] as string | undefined
       if (!targetId) break
-      const target = agents.get(targetId)
+      const target = getByAgent(targetId)
       if (target && target.apiKeyOwner === agent.apiKeyOwner) {
-        target.ws.send(
-          JSON.stringify({
-            type: 'message',
-            from: agent.agentId,
-            content: msg['content'],
-            timestamp: new Date().toISOString(),
-          }),
-        )
+        sendTo(targetId, {
+          type: 'message',
+          from: agent.agentId,
+          content: msg['content'],
+          timestamp: new Date().toISOString(),
+        })
       }
       break
     }
   }
 }
 
-/** Broadcast to all agents of same owner, optionally excluding one */
-function broadcastToOwner(owner: string, msg: object, excludeId?: string) {
-  const data = JSON.stringify(msg)
-  for (const [id, agent] of agents) {
-    if (
-      agent.apiKeyOwner === owner &&
-      id !== excludeId &&
-      agent.ws.readyState === WebSocket.OPEN
-    ) {
-      agent.ws.send(data)
-    }
-  }
-}
-
 function getOnlineAgents(owner: string) {
-  const result: Array<{ agentId: string; hostname?: string; ide?: string; capabilities: string[]; platform?: string }> = []
-  for (const [, agent] of agents) {
-    if (agent.apiKeyOwner === owner) {
-      result.push({
-        agentId: agent.agentId,
-        hostname: agent.hostname,
-        ide: agent.ide,
-        capabilities: agent.capabilities,
-        platform: agent.platform,
-      })
-    }
-  }
-  return result
+  return listConnections()
+    .filter((c) => c.apiKeyOwner === owner)
+    .map((c) => ({
+      agentId: c.agentId,
+      hostname: c.hostname || undefined,
+      ide: c.ide ?? undefined,
+      capabilities: c.capabilities,
+      platform: c.platform ?? undefined,
+    }))
 }
 
-/** Get ALL connected agents with capabilities (for dashboard API and orchestrator) */
-export function getAllConnectedAgents() {
-  const result: Array<{
-    agentId: string
-    apiKeyOwner: string
-    hostname?: string
-    ide?: string
-    platform?: string
-    capabilities: string[]
-    status: 'idle' | 'busy'
-    connectedAt: string
-    lastPing: string
-  }> = []
-  for (const [, agent] of agents) {
-    result.push({
-      agentId: agent.agentId,
-      apiKeyOwner: agent.apiKeyOwner,
-      hostname: agent.hostname,
-      ide: agent.ide,
-      platform: agent.platform,
-      capabilities: agent.capabilities,
-      status: agent.status,
-      connectedAt: agent.connectedAt.toISOString(),
-      lastPing: agent.lastPing.toISOString(),
-    })
-  }
-  return result
+/**
+ * Get ALL connected agents with capabilities (for dashboard API and orchestrator).
+ * `currentTaskId` and `quota` (the live rows for the worker's host) come from the DB.
+ */
+export function getAllConnectedAgents(): WorkerView[] {
+  const conns = listConnections()
+  if (conns.length === 0) return []
+  const quota = db.prepare(
+    'SELECT host, executor, model, exhausted_until, reason FROM conductor_quota WHERE exhausted_until > ? ORDER BY executor, model',
+  ).all(isoSeconds()) as { host: string; executor: string; model: string; exhausted_until: string; reason: string | null }[]
+  const currentTask = db.prepare(
+    `SELECT id FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN (${ACTIVE_IN}) ORDER BY assigned_at DESC LIMIT 1`,
+  )
+  return conns.map((c) => ({
+    agentId: c.agentId,
+    apiKeyOwner: c.apiKeyOwner,
+    hostname: c.hostname || undefined,
+    ide: c.ide ?? undefined,
+    platform: c.platform ?? undefined,
+    capabilities: c.capabilities,
+    status: c.status,
+    connectedAt: c.connectedAt,
+    lastPing: c.lastPing,
+    connectionId: c.connectionId,
+    os: c.os,
+    version: c.version,
+    projectId: c.projectId,
+    engines: c.engines,
+    defaultExecutor: c.defaultExecutor,
+    currentTaskId: (currentTask.get(c.agentId, ...ACTIVE_STATUSES) as { id: string } | undefined)?.id ?? null,
+    quota: quota
+      .filter((q) => q.host === c.hostname)
+      // quota rows are written from validated quota messages only
+      .map((q) => ({ executor: q.executor as Executor, model: q.model, exhaustedUntil: q.exhausted_until, reason: q.reason })),
+  }))
 }
 
-/** Push a task assignment notification to a connected agent. Returns true if delivered. */
-export function notifyTaskAssigned(
-  apiKeyOwner: string,
-  taskId: string,
-  title: string,
-  assignedTo: string,
-): boolean {
-  const target = agents.get(assignedTo)
-  if (target && target.apiKeyOwner === apiKeyOwner) {
-    target.ws.send(
-      JSON.stringify({
-        type: 'task.assigned',
-        taskId,
-        title,
-        timestamp: new Date().toISOString(),
-      }),
-    )
-    return true // delivered instantly
-  }
-  return false // agent not connected
-}
-
-/** Push a task assignment notification to an agent by agentId, regardless of API key owner. */
+/**
+ * Kept for the routes that still assign directly. A task the dispatcher owns
+ * (`pending`, or a legacy `assigned` row without a lease) is pinned to the
+ * agent and dispatched, so it is pushed once and with a lease; the answer is
+ * whether it ended up assigned to that agent. Any other task (the strategy
+ * flow, `synthesis`) gets the flat legacy `task.assigned`; the answer is
+ * whether it was delivered.
+ */
 export function pushTaskToAgent(
   assignedTo: string,
   taskId: string,
   title: string,
   description: string,
 ): boolean {
-  console.log(`[ws] pushTaskToAgent: looking for "${assignedTo}" in ${agents.size} agents: [${[...agents.keys()].join(', ')}]`)
-  for (const [id, agent] of agents) {
-    if (id === assignedTo && agent.ws.readyState === WebSocket.OPEN) {
-      agent.ws.send(
-        JSON.stringify({
-          type: 'task.assigned',
-          taskId,
-          title,
-          description,
-          timestamp: new Date().toISOString(),
-        }),
-      )
-      console.log(`[ws] pushTaskToAgent: sent task.assigned to ${assignedTo}`)
-      return true
-    }
+  const task = getTask(taskId)
+  const dispatchable = task !== undefined
+    && (task.status === 'pending' || (task.status === 'assigned' && task.lease_expires_at === null))
+  if (!dispatchable) {
+    return sendTo(assignedTo, { type: 'task.assigned', taskId, title, description, timestamp: new Date().toISOString() })
   }
-  console.log(`[ws] pushTaskToAgent: agent "${assignedTo}" not found or WS not open`)
-  return false
+  // pinned first, so that the dispatch pass returnTask runs already respects it
+  db.prepare('UPDATE conductor_tasks SET pinned_agent = ? WHERE id = ?').run(assignedTo, taskId)
+  if (task.status === 'assigned') returnTask(taskId, `pinned to ${assignedTo}, handed to the dispatcher`)
+  else dispatch()
+  const after = getTask(taskId)
+  return after?.status === 'assigned' && after.assigned_to_agent === assignedTo
 }
 
 /** Notify specific agents about a task event via WebSocket */
@@ -788,33 +848,18 @@ export function notifyAgents(
   agentIds: string[],
   message: Record<string, unknown>,
 ): string[] {
-  const notified: string[] = []
-  for (const targetId of agentIds) {
-    const agent = agents.get(targetId)
-    if (agent && agent.ws.readyState === WebSocket.OPEN) {
-      agent.ws.send(JSON.stringify(message))
-      notified.push(targetId)
-    }
-  }
-  return notified
+  return agentIds.filter((agentId) => sendTo(agentId, message))
 }
 
-/** Mark an agent as busy/idle */
-/** Broadcast strategy ready event to all agents of the task's owner */
+/** Broadcast strategy ready event to all connected agents (the dashboard picks it up) */
 export function broadcastStrategyReady(taskId: string, title: string, strategy: unknown): void {
-  // Broadcast to all owners (dashboard will pick it up)
-  const data = JSON.stringify({
+  broadcastAll({
     type: 'task.strategy_ready',
     taskId,
     title,
     strategy,
     timestamp: new Date().toISOString(),
   })
-  for (const [, agent] of agents) {
-    if (agent.ws.readyState === WebSocket.OPEN) {
-      agent.ws.send(data)
-    }
-  }
 }
 
 /** Broadcast a new comment to all connected agents (for real-time updates) */
@@ -822,22 +867,15 @@ export function broadcastComment(taskId: string, comment: {
   id: number; task_id: string; finding_id: string | null; agent_id: string | null
   comment: string; comment_type: string; created_at: string
 }): void {
-  const data = JSON.stringify({
+  broadcastAll({
     type: 'task.comment',
     taskId,
     comment,
     timestamp: new Date().toISOString(),
   })
-  for (const [, agent] of agents) {
-    if (agent.ws.readyState === WebSocket.OPEN) {
-      agent.ws.send(data)
-    }
-  }
 }
 
+/** Mark an agent as busy/idle */
 export function setAgentStatus(agentId: string, status: 'idle' | 'busy'): void {
-  const agent = agents.get(agentId)
-  if (agent) {
-    agent.status = status
-  }
+  setStatus(agentId, status)
 }

@@ -1,22 +1,9 @@
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
-import { readFileSync } from 'node:fs'
 import { db } from './db/client.js'
 import { gitnexusUrl, gitnexusHeaders } from './lib/gitnexus.js'
-
-// The release CI builds under is passed in as APP_VERSION. version.json is the
-// fallback for a local build: in an image it can lag, because CI claims the
-// next version after the commit it builds was written.
-let appVersion = process.env['APP_VERSION'] || ''
-if (!appVersion) {
-  try {
-    const versionJson = JSON.parse(readFileSync('./version.json', 'utf-8')) as { version?: string }
-    appVersion = versionJson.version || '0.0.0-dev'
-  } catch {
-    appVersion = '0.0.0-dev' // version.json not found
-  }
-}
+import { appVersion } from './version.js'
 import { cors } from 'hono/cors'
 import { logger as honoLogger } from 'hono/logger'
 import { createLogger } from '@cortex/shared-utils'
