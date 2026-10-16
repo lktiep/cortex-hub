@@ -1,4 +1,4 @@
-const RESETS_IN = /Resets in\s+(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?/i;
+const RESETS_IN = /Resets in\s+(?:(\d+)h(?![a-z]))?\s*(?:(\d+)m(?![a-z]))?\s*(?:(\d+)s(?![a-z]))?/i;
 
 /** 'Resets in 89h3m4s' -> ISO timestamp `now` plus that span; undefined when there is no duration. */
 export function parseResetsIn(text: string, now: Date): string | undefined {

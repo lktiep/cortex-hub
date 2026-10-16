@@ -122,6 +122,17 @@ describe('runCli', () => {
     expect(r.stdout.endsWith('END')).toBe(true);
   });
 
+  it('never hands onLine an over-cap partial line', async () => {
+    const args = script(
+      `process.stdout.write('before\\n'); process.stdout.write('a'.repeat(9*1024*1024)); process.stdout.write('\\n{"ok":1}\\n');`,
+    );
+    const i = input();
+    const r = await runCli(process.execPath, { args }, i.input, opts);
+    expect(r.exitCode).toBe(0);
+    expect(i.lines).toEqual(['before', '{"ok":1}']);
+    expect(r.stdout.endsWith('{"ok":1}\n')).toBe(true);
+  });
+
   it('survives a throwing onLine callback', async () => {
     const args = script(`console.log('x');`);
     const r = await runCli(
@@ -135,5 +146,6 @@ describe('runCli', () => {
       opts,
     );
     expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe('x\n');
   });
 });

@@ -66,6 +66,32 @@ describe('agy classify', () => {
     expect(agy.classify(2, 'garbage\n{not json', 'what')).toEqual({ kind: 'error', message: 'what' });
   });
 
+  it('classifies exit 3 with no output as quota without resetAt', () => {
+    const c = agy.classify(3, '', '', { model: null, now });
+    expect(c.kind).toBe('quota');
+    if (c.kind === 'quota') expect(c.resetAt).toBeUndefined();
+  });
+
+  it('reads the reset time from the full stderr even when raw is truncated', () => {
+    const stderr = `${'x'.repeat(3000)}\n${fx('quota.stderr.txt')}`;
+    const c = agy.classify(null, '', stderr, { model: null, now });
+    expect(c.kind).toBe('quota');
+    if (c.kind === 'quota') {
+      expect(c.resetAt).toBe(resetAt);
+      expect(c.raw.length).toBe(2000);
+    }
+  });
+
+  it('classifies a non-quota ERROR result with exit 1 as error', () => {
+    const out = '{"event":"result","result":{"status":"ERROR","error":"tool crashed"}}\n';
+    expect(agy.classify(1, out, '')).toEqual({ kind: 'error', message: 'tool crashed' });
+  });
+
+  it('classifies a SUCCESS response that mentions quota as ok', () => {
+    const out = '{"event":"result","result":{"status":"SUCCESS","response":"quota exceeded 429"}}\n';
+    expect(agy.classify(0, out, '')).toEqual({ kind: 'ok' });
+  });
+
   it('classifies exit 0 without a SUCCESS result as error', () => {
     expect(agy.classify(0, '{"event":"init"}\n', '').kind).toBe('error');
     expect(agy.classify(0, '', '').kind).toBe('error');
@@ -177,6 +203,16 @@ describe('agy binary, defaults, detect and models', () => {
     const a = createAgyAdapter({ platform: 'linux', env: { CORTEX_AGY_BIN: path.join(dir, 'missing-agy') } });
     const d = await a.detect();
     expect(d.found).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('run() works when detached from the adapter', async () => {
+    const bin = fakeBin(`console.log('a');`);
+    const { run } = createAgyAdapter({ bin, env: process.env });
+    const r = await run({
+      prompt: 'p', cwd: dir, model: null, effort: null,
+      signal: new AbortController().signal, timeoutMs: 20_000, onLine: () => undefined,
+    });
+    expect(r.exitCode).toBe(0);
   });
 
   it.skipIf(process.platform === 'win32')('run() streams lines through onLine', async () => {

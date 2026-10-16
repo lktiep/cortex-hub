@@ -55,6 +55,8 @@ export async function runCli(
   let stdout = '';
   let stderr = '';
   let pending = '';
+  // set when a line outgrew the cap: its remainder is dropped up to the next newline
+  let skipping = false;
   const emit = (line: string): void => {
     try {
       input.onLine(line.endsWith('\r') ? line.slice(0, -1) : line);
@@ -67,12 +69,23 @@ export async function runCli(
   tracked.stdout.on('data', (chunk: string) => {
     stdout += chunk;
     if (stdout.length > STDOUT_CAP * 2) stdout = stdout.slice(-STDOUT_CAP);
-    pending += chunk;
+    let rest = chunk;
+    if (skipping) {
+      const end = rest.indexOf('\n');
+      if (end === -1) return;
+      rest = rest.slice(end + 1);
+      skipping = false;
+    }
+    pending += rest;
     let nl = pending.indexOf('\n');
     while (nl !== -1) {
       emit(pending.slice(0, nl));
       pending = pending.slice(nl + 1);
       nl = pending.indexOf('\n');
+    }
+    if (pending.length > STDOUT_CAP) {
+      pending = '';
+      skipping = true;
     }
   });
   tracked.stderr.on('data', (chunk: string) => {

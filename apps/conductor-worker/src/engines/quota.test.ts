@@ -17,6 +17,7 @@ describe('parseResetsIn', () => {
   it('returns undefined without a match', () => {
     expect(parseResetsIn('Individual quota reached.', t0)).toBeUndefined();
     expect(parseResetsIn('Resets in soon', t0)).toBeUndefined();
+    expect(parseResetsIn('Resets in 3ms', t0)).toBeUndefined();
   });
 });
 

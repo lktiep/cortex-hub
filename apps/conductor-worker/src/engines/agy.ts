@@ -85,6 +85,16 @@ export function createAgyAdapter(
   const resolveBin = (): string | null =>
     opts.bin ?? (env.CORTEX_AGY_BIN || null) ?? resolveCommand('agy', platform, env);
 
+  const buildArgs: EngineAdapter['buildArgs'] = (i, targetPlatform) => {
+    const mode =
+      opts.mode ?? (env.CORTEX_AGY_MODE || undefined) ?? (targetPlatform === 'win32' ? 'accept-edits' : 'auto');
+    const args = ['-p', i.prompt, '--output-format', 'stream-json', '--mode', mode];
+    if (i.model !== null) args.push('--model', i.model);
+    if (i.effort !== null) args.push('--effort', i.effort);
+    if (opts.printTimeout) args.push('--print-timeout', opts.printTimeout);
+    return { args };
+  };
+
   const quiet = (over: Partial<RunInput> = {}): RunInput => ({
     prompt: '',
     cwd: os.tmpdir(),
@@ -126,18 +136,10 @@ export function createAgyAdapter(
       return null;
     },
 
-    buildArgs(i, targetPlatform) {
-      const mode =
-        opts.mode ?? (env.CORTEX_AGY_MODE || undefined) ?? (targetPlatform === 'win32' ? 'accept-edits' : 'auto');
-      const args = ['-p', i.prompt, '--output-format', 'stream-json', '--mode', mode];
-      if (i.model !== null) args.push('--model', i.model);
-      if (i.effort !== null) args.push('--effort', i.effort);
-      if (opts.printTimeout) args.push('--print-timeout', opts.printTimeout);
-      return { args };
-    },
+    buildArgs,
 
     run(input: RunInput): Promise<RunOutput> {
-      const built = this.buildArgs(
+      const built = buildArgs(
         { prompt: input.prompt, model: input.model, effort: input.effort },
         platform,
       );
@@ -152,13 +154,14 @@ export function createAgyAdapter(
       const agyError = findAgyError(stderr);
       const isQuota =
         exitCode === QUOTA_EXIT_CODE ||
+        // brief-mandated; can match unrelated text such as "disk quota"
         (result?.status === 'ERROR' && /quota/i.test(resultError)) ||
         agyError?.status === 'RESOURCE_EXHAUSTED' ||
         agyError?.error_code === 429;
       if (isQuota) {
-        const raw = [stderr.trim(), resultError].filter((t) => t !== '').join('\n').slice(0, RAW_MAX);
-        const q: Classification = { kind: 'quota', raw };
-        const resetAt = parseResetsIn(raw, ctx?.now ?? new Date());
+        const full = [stderr.trim(), resultError].filter((t) => t !== '').join('\n');
+        const q: Classification = { kind: 'quota', raw: full.slice(0, RAW_MAX) };
+        const resetAt = parseResetsIn(full, ctx?.now ?? new Date());
         if (resetAt !== undefined) q.resetAt = resetAt;
         const modelScope = agyModelScope(ctx?.model ?? null);
         if (modelScope !== undefined) q.modelScope = modelScope;
