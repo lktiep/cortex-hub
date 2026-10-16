@@ -1,6 +1,8 @@
 import { serve } from '@hono/node-server'
 import type { IncomingMessage } from 'node:http'
 import app from './index.js'
+import { defaultBundlePath, serveWorkerAsset } from './worker-asset.js'
+import { forwardCloseCode } from './ws-close.js'
 
 const port = Number(process.env.PORT) || 8317
 const DASHBOARD_API_URL = (process.env.DASHBOARD_API_URL || 'http://localhost:4000').replace(/\/$/, '')
@@ -40,8 +42,10 @@ async function validateWsAuth(req: IncomingMessage): Promise<{ valid: boolean; a
   }
 }
 
+const assetOpts = { bundlePath: defaultBundlePath(process.env, import.meta.url) }
+
 const server = serve({
-  fetch: app.fetch,
+  fetch: async (req, env) => (await serveWorkerAsset(req, assetOpts)) ?? app.fetch(req, env),
   port,
 }, (info) => {
   console.log(`MCP Gateway running at http://localhost:${info.port}`)
@@ -100,9 +104,9 @@ server.on('upgrade', async (req: IncomingMessage, socket, head) => {
           console.log(`[WS Proxy] Client disconnected: agent=${auth.agentId}, code=${code}`)
           upstream.close()
         })
-        upstream.on('close', (code: number) => {
+        upstream.on('close', (code: number, reason: Buffer) => {
           console.log(`[WS Proxy] Upstream disconnected: code=${code}`)
-          clientWs.close()
+          clientWs.close(forwardCloseCode(code), reason)
         })
 
         clientWs.on('error', (err: Error) => {
