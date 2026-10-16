@@ -14,6 +14,7 @@ import { registerSessionTools } from './tools/session.js'
 import { registerChangeTools } from './tools/changes.js'
 import { registerAnalyticsTools } from './tools/analytics.js'
 import { registerTaskTools } from './tools/tasks.js'
+import { registerConductorLeadTools } from './tools/conductor-lead.js'
 import { validateApiKey, invalidateTokenCache } from './middleware/auth.js'
 import { telemetryStorage } from './api-call.js'
 import { appendHintBlocks, canAppendHints } from './hint-blocks.js'
@@ -189,6 +190,7 @@ function createMcpServer(env: Env, permissions?: string[]) {
   registerChangeTools(server, env)
   registerAnalyticsTools(server, env)
   registerTaskTools(server, env)
+  registerConductorLeadTools(server, env)
   return server
 }
 
