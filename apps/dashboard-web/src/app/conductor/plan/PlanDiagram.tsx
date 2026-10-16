@@ -14,9 +14,10 @@ import {
 import '@xyflow/react/dist/style.css'
 import type { ConductorWorker } from '@/lib/api'
 import { criticalPath, fileConflicts } from '@/lib/conductor-plan/analysis'
-import { STATUS_COLOR, STATUS_LABEL, toFlow } from '@/lib/conductor-plan/flow'
+import { toFlow } from '@/lib/conductor-plan/flow'
 import { computeDepths, layoutPlan, type PhaseSelection } from '@/lib/conductor-plan/layout'
 import type { PlanState, PlanTask } from '@/lib/conductor-plan/model'
+import { STATUS_COLOR, STATUS_LABEL } from '@/lib/conductor-plan/status'
 import { nodeTypes } from './PlanNodes'
 import styles from './plan.module.css'
 

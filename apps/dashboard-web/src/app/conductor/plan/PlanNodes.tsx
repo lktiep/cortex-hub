@@ -3,8 +3,6 @@
 // Node renderers for the plan diagram: task, gate, and the lane and column backgrounds.
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import {
-  STATUS_COLOR,
-  STATUS_LABEL,
   basename,
   type ColNodeData,
   type GateNodeData,
@@ -12,6 +10,7 @@ import {
   type TaskNodeData,
 } from '@/lib/conductor-plan/flow'
 import type { PlanState } from '@/lib/conductor-plan/model'
+import { STATUS_COLOR, STATUS_LABEL } from '@/lib/conductor-plan/status'
 import styles from './plan.module.css'
 
 const STATE_CLASS: Partial<Record<PlanState, string>> = {

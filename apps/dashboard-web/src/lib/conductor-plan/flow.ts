@@ -3,33 +3,7 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
 import type { CriticalPath, FileConflict } from './analysis'
 import type { Lane, PlanLayout } from './layout'
-import { nodeNote, routeLabel, type PlanState, type PlanTask } from './model'
-
-export const STATUS_COLOR: Record<PlanState, string> = {
-  done: '#34d399',
-  review: '#a78bfa',
-  needs_user: '#fbbf24',
-  gate_lead: '#fbbf24',
-  escalated: '#f87171',
-  running: '#60a5fa',
-  waiting: '#22d3ee',
-  ready: '#e5e7eb',
-  blocked: '#6b7280',
-  stopped: '#4b5563',
-}
-
-export const STATUS_LABEL: Record<PlanState, string> = {
-  done: 'done',
-  review: 'in review',
-  needs_user: 'needs you',
-  gate_lead: 'awaiting lead',
-  escalated: 'escalated',
-  running: 'running',
-  waiting: 'waiting',
-  ready: 'ready',
-  blocked: 'blocked',
-  stopped: 'stopped',
-}
+import { nodeNote, routeLabel, type PlanTask } from './model'
 
 export const EDGE_CRITICAL = '#f87171'
 export const EDGE_GATE = '#fbbf24'

@@ -1,9 +1,9 @@
 // Plan summaries: progress counts, Needs you, Awaiting lead, fallback tally and worker rows.
 // Pure folds over PlanTask[] — no React, no DOM; anything time-dependent takes `now`.
 import type { ConductorSession, ConductorWorker } from '../api'
-import { STATUS_COLOR } from './flow'
 import { nodeNote, routeLabel } from './model'
 import type { PlanTask } from './model'
+import { STATUS_COLOR } from './status'
 
 export type ProgressBucket = 'done' | 'review' | 'running' | 'ready' | 'waiting' | 'blocked'
 
