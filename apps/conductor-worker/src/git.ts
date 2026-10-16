@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { exitCodeOf, killTree, lastLines, resolveCommand, spawnTracked } from './process.js';
 
@@ -21,6 +21,7 @@ function runChild(
   extraEnv: Record<string, string>,
   args: string[],
   opts: { cwd: string; input?: string },
+  ceilingMs: number,
 ): Promise<RunResult> {
   return (async (): Promise<RunResult> => {
     let tracked;
@@ -52,7 +53,7 @@ function runChild(
     const timer = setTimeout(() => {
       timedOut = true;
       void killTree(tracked.pid);
-    }, CEILING_MS);
+    }, ceilingMs);
     const { code, signal } = await tracked.exited;
     clearTimeout(timer);
 
@@ -80,29 +81,45 @@ function runChild(
   })();
 }
 
-export const git: GitRun = (args, opts) =>
-  runChild('git', { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' }, args, opts);
+/** Internal factory; `ceilingMs` and `bin` exist so the ceiling can be tested. */
+export function createGitRunner(o: { bin?: string; ceilingMs?: number } = {}): GitRun {
+  return (args, opts) =>
+    runChild(
+      o.bin ?? 'git',
+      { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
+      args,
+      opts,
+      o.ceilingMs ?? CEILING_MS,
+    );
+}
+
+export const git: GitRun = createGitRunner();
 
 export function createGh(bin: string = process.env.CORTEX_GH_BIN ?? 'gh'): GhRun {
   return (args, opts) =>
-    runChild(resolveCommand(bin) ?? bin, { GH_PROMPT_DISABLED: '1' }, args, opts);
+    runChild(resolveCommand(bin) ?? bin, { GH_PROMPT_DISABLED: '1' }, args, opts, CEILING_MS);
 }
 
 // --- URLs ---
 
+/** http(s) loses all userinfo; any other scheme loses only the password and keeps the user. */
+function stripUserinfo(scheme: string, userinfo: string, original: string): string {
+  if (/^https?$/i.test(scheme)) return `${scheme}://`;
+  const colon = userinfo.indexOf(':');
+  return colon < 0 ? original : `${scheme}://${userinfo.slice(0, colon)}@`;
+}
+
 export function sanitizeRemoteUrl(url: string): string {
-  if (/^https?:\/\//i.test(url)) {
-    try {
-      const u = new URL(url);
-      if (u.username === '' && u.password === '') return url;
-      u.username = '';
-      u.password = '';
-      return u.toString();
-    } catch {
-      // fall through to the regex
-    }
-  }
-  return url.replace(/\/\/[^/]*@/, '//');
+  return url.replace(/^([a-z][a-z0-9+.-]*):\/\/([^/]*)@/i, (m, scheme: string, userinfo: string) =>
+    stripUserinfo(scheme, userinfo, m),
+  );
+}
+
+/** Applies the sanitising rules to every URL inside free text (git and gh output). */
+export function scrubCredentials(text: string): string {
+  return text.replace(/\b([a-z][a-z0-9+.-]*):\/\/([^\s/]*)@/gi, (m, scheme: string, userinfo: string) =>
+    stripUserinfo(scheme, userinfo, m),
+  );
 }
 
 export async function originUrl(repo: string): Promise<string | null> {
@@ -166,7 +183,7 @@ function canonical(p: string): string {
 }
 
 function tail(r: RunResult): string {
-  return lastLines((r.stderr.trim() !== '' ? r.stderr : r.stdout).trim(), 20);
+  return scrubCredentials(lastLines((r.stderr.trim() !== '' ? r.stderr : r.stdout).trim(), 20));
 }
 
 interface WorktreeEntry {
@@ -203,6 +220,36 @@ export async function branchCheckedOutAt(
   return null;
 }
 
+/** Path from git's "branch is already used by / checked out at" error, else null. */
+export function parseBranchInUse(stderr: string): string | null {
+  const m =
+    /is already used by worktree at '([^']+)'/.exec(stderr) ??
+    /is already checked out at '([^']+)'/.exec(stderr);
+  return m?.[1] ?? null;
+}
+
+function isSameOrUnder(child: string, parent: string): boolean {
+  if (child === parent) return true;
+  const prefix = parent.endsWith(path.sep) ? parent : parent + path.sep;
+  return child.startsWith(prefix);
+}
+
+function holdsOwnRepository(dir: string): boolean {
+  try {
+    return lstatSync(path.join(dir, '.git')).isDirectory();
+  } catch {
+    return false; // missing, or a stale pointer file: both are fine to replace
+  }
+}
+
+function assertSafeToReplace(repo: string, dir: string): void {
+  const d = canonical(dir);
+  const r = canonical(repo);
+  if (isSameOrUnder(r, d) || isSameOrUnder(d, r) || holdsOwnRepository(dir)) {
+    throw new Error(`refusing to replace ${dir}`);
+  }
+}
+
 async function remoteRefExists(repo: string, branch: string): Promise<boolean> {
   const r = await git(['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`], { cwd: repo });
   return r.code === 0;
@@ -234,16 +281,15 @@ export async function prepareWorktree(
   else throw new Error(`base branch ${baseBranch} not found on origin`);
 
   // an orphan left behind after a prune: git refuses to add into a non-empty directory
+  assertSafeToReplace(repo, dir);
   if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
   mkdirSync(path.dirname(dir), { recursive: true });
 
   const start = `origin/${from === 'branch' ? branch : baseBranch}`;
   const add = await git(['worktree', 'add', '-B', branch, dir, start], { cwd: repo });
   if (add.code !== 0) {
-    const used =
-      /is already used by worktree at '([^']+)'/.exec(add.stderr) ??
-      /is already checked out at '([^']+)'/.exec(add.stderr);
-    if (used?.[1] !== undefined) throw new BranchInUseError(branch, used[1]);
+    const used = parseBranchInUse(add.stderr);
+    if (used !== null) throw new BranchInUseError(branch, used);
     throw new Error(`git worktree add failed: ${tail(add)}`);
   }
   return { from };
@@ -275,7 +321,9 @@ export async function commitAll(
   const commit = await git([...identity, 'commit', '-F', '-'], { cwd: dir, input: message });
   if (commit.code !== 0) {
     // hooks print to either stream
-    throw new Error(`git commit failed: ${lastLines(`${commit.stdout}\n${commit.stderr}`.trim(), 40)}`);
+    throw new Error(
+      `git commit failed: ${scrubCredentials(lastLines(`${commit.stdout}\n${commit.stderr}`.trim(), 40))}`,
+    );
   }
   const head = await git(['rev-parse', 'HEAD'], { cwd: dir });
   if (head.code !== 0) throw new Error(`git rev-parse failed: ${tail(head)}`);

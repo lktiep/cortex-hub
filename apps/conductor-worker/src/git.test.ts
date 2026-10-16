@@ -8,13 +8,16 @@ import {
   commitAll,
   compareUrl,
   createGh,
+  createGitRunner,
   git,
   openPullRequest,
   originUrl,
+  parseBranchInUse,
   prepareWorktree,
   pushBranch,
   removeWorktree,
   sanitizeRemoteUrl,
+  scrubCredentials,
 } from './git.js';
 import type { GhRun } from './git.js';
 import {
@@ -51,11 +54,36 @@ describe('sanitizeRemoteUrl', () => {
     expect(sanitizeRemoteUrl('https://token@github.com/o/r.git')).toBe('https://github.com/o/r.git');
     expect(sanitizeRemoteUrl('git@github.com:o/r.git')).toBe('git@github.com:o/r.git');
     expect(sanitizeRemoteUrl('https://github.com/o/r.git')).toBe('https://github.com/o/r.git');
+    expect(sanitizeRemoteUrl('https://x-access-token:ghp_abc@github.com/o/r.git')).toBe(
+      'https://github.com/o/r.git',
+    );
+  });
+
+  it('keeps the user of non-http schemes and drops only the password', () => {
+    expect(sanitizeRemoteUrl('ssh://git@github.com/o/r.git')).toBe('ssh://git@github.com/o/r.git');
+    expect(sanitizeRemoteUrl('ssh://u:p@h/o/r.git')).toBe('ssh://u@h/o/r.git');
   });
 
   it('strips userinfo with a regex when the URL does not parse', () => {
     expect(sanitizeRemoteUrl('https://user:pa ss@exa mple.com/o/r')).not.toContain('pa ss');
     expect(sanitizeRemoteUrl('https://user:pa ss@exa mple.com/o/r')).not.toContain('user');
+  });
+});
+
+describe('scrubCredentials', () => {
+  it('scrubs every URL inside free text', () => {
+    const text = 'fatal: unable to access https://u:tok1@host/a.git\nthen ssh://git:pw2@h/b.git and git@h:c.git';
+    expect(scrubCredentials(text)).toBe(
+      'fatal: unable to access https://host/a.git\nthen ssh://git@h/b.git and git@h:c.git',
+    );
+  });
+});
+
+describe('parseBranchInUse', () => {
+  it('reads both git wordings', () => {
+    expect(parseBranchInUse("fatal: 'task/x' is already used by worktree at '/p/q'")).toBe('/p/q');
+    expect(parseBranchInUse("fatal: 'task/x' is already checked out at '/p/q'")).toBe('/p/q');
+    expect(parseBranchInUse('fatal: something else')).toBeNull();
   });
 });
 
@@ -127,6 +155,47 @@ describe('prepareWorktree', () => {
     await expect(prepareWorktree(fx.repo, dir, 'task/g2', 'main')).rejects.toThrow(
       `worktree ${dir} holds task/g1, expected task/g2`,
     );
+  });
+
+  it('does not leak credentials from a failing fetch', async () => {
+    fx.run(fx.repo, ['remote', 'set-url', 'origin', 'https://u:tok123@127.0.0.1:9/o/r.git']);
+    const err = await prepareWorktree(fx.repo, wt('leak'), 'task/leak', 'main').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain('tok123');
+  });
+
+  it('refuses to replace the parent of the repo', async () => {
+    await expect(prepareWorktree(fx.repo, fx.root, 'task/p1', 'main')).rejects.toThrow(
+      `refusing to replace ${fx.root}`,
+    );
+    expect(existsSync(path.join(fx.repo, '.git'))).toBe(true);
+    expect(existsSync(path.join(fx.root, 'origin.git'))).toBe(true);
+  });
+
+  it('refuses a directory inside the repo', async () => {
+    const inside = path.join(fx.repo, 'sub');
+    mkdirSync(inside);
+    await expect(prepareWorktree(fx.repo, inside, 'task/p2', 'main')).rejects.toThrow('refusing to replace');
+    expect(existsSync(inside)).toBe(true);
+  });
+
+  it('refuses a directory holding its own repository', async () => {
+    const other = wt('own-repo');
+    mkdirSync(other);
+    fx.run(other, ['init']);
+    writeFileSync(path.join(other, 'keep.txt'), 'precious');
+    await expect(prepareWorktree(fx.repo, other, 'task/p3', 'main')).rejects.toThrow('refusing to replace');
+    expect(readFileSync(path.join(other, 'keep.txt'), 'utf8')).toBe('precious');
+    expect(existsSync(path.join(other, '.git'))).toBe(true);
+  });
+
+  it('still replaces an orphan with a .git pointer file', async () => {
+    const dir = wt('stale');
+    mkdirSync(dir);
+    writeFileSync(path.join(dir, '.git'), 'gitdir: /nowhere/.git/worktrees/stale\n');
+    writeFileSync(path.join(dir, 'junk.txt'), 'stale');
+    expect(await prepareWorktree(fx.repo, dir, 'task/p4', 'main')).toEqual({ from: 'base' });
+    expect(existsSync(path.join(dir, 'junk.txt'))).toBe(false);
   });
 
   it('replaces an orphan directory', async () => {
@@ -317,14 +386,35 @@ describe('runners', () => {
     expect(r.code).not.toBe(0);
   });
 
-  it('git never prompts and merges env at call time', async () => {
-    process.env.CORTEX_TEST_MARK = 'late';
+  it.skipIf(process.platform === 'win32')('git children get the unattended env, merged at call time', async () => {
+    process.env.CORTEX_TEST_MARK = 'late-marker';
     try {
-      const r = await git(['config', '--get', 'user.name'], { cwd: fx.repo });
-      expect(r.stdout.trim()).toBe(FIXTURE_GIT_IDENTITY.name);
+      const r = await git(['-c', 'alias.e=!env', 'e'], { cwd: fx.repo });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain('GIT_TERMINAL_PROMPT=0');
+      expect(r.stdout).toContain('GCM_INTERACTIVE=never');
+      expect(r.stdout).toContain('CORTEX_TEST_MARK=late-marker');
     } finally {
       delete process.env.CORTEX_TEST_MARK;
     }
+  });
+
+  it.skipIf(process.platform === 'win32')('a child over the ceiling resolves 124 and its group is gone', async () => {
+    const run = createGitRunner({ bin: process.execPath, ceilingMs: 200 });
+    const r = await run(['-e', 'console.log(process.pid); setTimeout(() => {}, 60000)'], { cwd: fx.root });
+    expect(r.code).toBe(124);
+    const pid = Number(r.stdout.trim());
+    expect(pid).toBeGreaterThan(0);
+    let alive = true;
+    for (let i = 0; i < 40 && alive; i++) {
+      try {
+        process.kill(-pid, 0);
+        await new Promise((res) => setTimeout(res, 50));
+      } catch {
+        alive = false;
+      }
+    }
+    expect(alive).toBe(false);
   });
 
   it('a missing gh binary resolves with code 127', async () => {
