@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
+import { takeNotifications } from '../conductor/notify.js'
 
 export const statsRouter = new Hono()
 
@@ -887,8 +888,13 @@ statsRouter.get('/hints/:agentId', (c) => {
       }
     }
 
+    const toolsUsedCount = new Set(calls.map(c2 => c2.tool)).size
+    // Taken last: takeNotifications marks the rows delivered, so nothing above may throw after it.
+    // The two-hint cap is for tips; a lead's notices are not tips and are never dropped.
+    const conductor = takeNotifications(agentId)
+
     // Two at most. Beyond that the block gets skimmed and the useful one goes with it.
-    return c.json({ agentId, hints: hints.slice(0, 2), toolsUsedCount: new Set(calls.map(c2 => c2.tool)).size })
+    return c.json({ agentId, hints: hints.slice(0, 2), conductor, toolsUsedCount })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }

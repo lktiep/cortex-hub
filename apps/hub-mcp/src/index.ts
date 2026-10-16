@@ -16,6 +16,7 @@ import { registerAnalyticsTools } from './tools/analytics.js'
 import { registerTaskTools } from './tools/tasks.js'
 import { validateApiKey, invalidateTokenCache } from './middleware/auth.js'
 import { telemetryStorage } from './api-call.js'
+import { appendHintBlocks, canAppendHints } from './hint-blocks.js'
 import type { Env } from './types.js'
 
 
@@ -395,30 +396,29 @@ app.all('/mcp', async (c) => {
 
       if (toolName !== 'unknown' && toolName !== 'cortex_health' && agentId !== 'unknown') {
         try {
-          const hintsRes = await fetch(
-            `${apiUrl}/api/metrics/hints/${encodeURIComponent(agentId)}?currentTool=${encodeURIComponent(toolName)}`,
-            { signal: AbortSignal.timeout(2000) }
-          )
-          if (hintsRes.ok) {
-            const hintsData = (await hintsRes.json()) as { hints: string[] }
-            if (hintsData.hints.length > 0 && respBody) {
-              try {
-                const parsed = JSON.parse(respBody)
-                if (parsed.result?.content && Array.isArray(parsed.result.content)) {
-                  const lastItem = parsed.result.content[parsed.result.content.length - 1]
-                  if (lastItem?.type === 'text' && typeof lastItem.text === 'string') {
-                    lastItem.text += '\n\n---\n💡 Cortex hints:\n' + hintsData.hints.map((h: string) => `  ${h}`).join('\n')
-                  }
-                  const modifiedBody = JSON.stringify(parsed)
-                  return new Response(modifiedBody, {
-                    status: res.status,
-                    headers: res.headers,
-                  })
-                }
-              } catch { /* JSON parse failed */ }
+          // Parse first: the hints endpoint marks conductor notices delivered, so it must only be
+          // asked when this body can carry them.
+          const parsed: unknown = respBody ? JSON.parse(respBody) : null
+          if (canAppendHints(parsed)) {
+            const hintsRes = await fetch(
+              `${apiUrl}/api/metrics/hints/${encodeURIComponent(agentId)}?currentTool=${encodeURIComponent(toolName)}`,
+              { signal: AbortSignal.timeout(2000) }
+            )
+            if (hintsRes.ok) {
+              const hintsData = (await hintsRes.json()) as { hints?: string[]; conductor?: string[] }
+              const hints = hintsData.hints ?? []
+              const conductor = hintsData.conductor ?? []
+              const lastItem = parsed.result.content.at(-1)
+              if (lastItem && (hints.length > 0 || conductor.length > 0)) {
+                lastItem.text = appendHintBlocks(lastItem.text, hints, conductor)
+                return new Response(JSON.stringify(parsed), {
+                  status: res.status,
+                  headers: res.headers,
+                })
+              }
             }
           }
-        } catch { /* hints fetch failed */ }
+        } catch { /* body not JSON, or hints fetch failed */ }
       }
 
       return res
