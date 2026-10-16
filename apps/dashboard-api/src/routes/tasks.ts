@@ -1,11 +1,51 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { db } from '../db/client.js'
-import { pushTaskToAgent } from '../ws/conductor.js'
+import type { ReviewRequest, RoutePatch, TaskResult } from '@cortex/shared-types'
+import { dispatch } from '../conductor/dispatcher.js'
+import {
+  acceptTask, cancelTask, completeTask, recordProgress, rerouteTask, reviewTask, revokeTask, type Outcome,
+} from '../conductor/lifecycle.js'
+import { ACTIVE_STATUSES, getTask, logTask, parseJson, type TaskRow } from '../conductor/rows.js'
+import { priorityValue } from '../conductor/tree.js'
 
 export const tasksRouter = new Hono()
 
 function generateTaskId(): string {
   return `task_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+}
+
+const USE_ASSIGN = 'use /assign or the dispatcher'
+const COMPLETING = ['completed', 'failed', 'review'] as const
+type Completing = (typeof COMPLETING)[number]
+
+/** A lifecycle refusal as its HTTP answer. */
+function refusal(c: Context, r: { status: 400 | 403 | 404 | 409; error: string; cycle?: string[] }) {
+  return c.json(r.cycle === undefined ? { error: r.error } : { error: r.error, cycle: r.cycle }, r.status)
+}
+
+function isActive(status: string): boolean {
+  return (ACTIVE_STATUSES as readonly string[]).includes(status)
+}
+
+/** A request `result` (or the stored column) as a TaskResult; anything but an object becomes the summary. */
+function toTaskResult(result: unknown): TaskResult {
+  if (result === undefined || result === null || result === '') return { summary: '' }
+  if (typeof result !== 'object') return { summary: String(result) }
+  if (Array.isArray(result)) return { summary: JSON.stringify(result) }
+  const fields: Record<string, unknown> = { ...result }
+  const s = fields.summary
+  fields.summary = typeof s === 'string' ? s : s === undefined || s === null ? '' : JSON.stringify(s)
+  return fields as unknown as TaskResult // summary is a string, as TaskResult requires
+}
+
+/** PATCH accepted/in_progress: the assignee accepts (when `assigned`) and in_progress records progress. */
+function acceptOrStart(row: TaskRow, status: 'accepted' | 'in_progress'): Outcome {
+  const agent = row.assigned_to_agent
+  if (!agent || !isActive(row.status)) return { ok: false, status: 409, error: USE_ASSIGN }
+  let outcome: Outcome = { ok: true, task: row }
+  if (row.status === 'assigned') outcome = acceptTask(row.id, agent)
+  if (outcome.ok && status === 'in_progress') outcome = recordProgress(row.id, agent, 'started')
+  return outcome
 }
 
 // GET /api/tasks — list tasks with filters
@@ -48,7 +88,8 @@ tasksRouter.get('/', (c) => {
   }
 })
 
-// POST /api/tasks — create task
+// POST /api/tasks — create task. An assignee is a pin: the dispatcher hands the
+// task over when that agent is connected and idle.
 tasksRouter.post('/', async (c) => {
   try {
     const body = await c.req.json()
@@ -69,7 +110,7 @@ tasksRouter.post('/', async (c) => {
       description?: string
       projectId?: string
       assignTo?: string
-      priority?: number
+      priority?: number | string
       requiredCapabilities?: string[]
       dependsOn?: string[]
       notifyOnComplete?: string[]
@@ -81,54 +122,40 @@ tasksRouter.post('/', async (c) => {
     if (!title) {
       return c.json({ error: 'title is required' }, 400)
     }
+    const priorityInt = priorityValue(priority as number | undefined)
+    if (priorityInt === null) {
+      return c.json({ error: `unknown priority ${String(priority)}` }, 400)
+    }
 
     const id = generateTaskId()
-    const now = new Date().toISOString()
-    const status = assignTo ? 'assigned' : 'pending'
+    const owner = c.req.header('X-API-Key-Owner') || null
 
-    const stmt = db.prepare(`
+    db.prepare(`
       INSERT INTO conductor_tasks
         (id, title, description, project_id, parent_task_id, created_by_agent,
-         assigned_to_agent, status, priority, required_capabilities,
-         depends_on, notify_on_complete, context, assigned_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-
-    stmt.run(
+         pinned_agent, status, priority, required_capabilities,
+         depends_on, notify_on_complete, context, api_key_owner)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+    `).run(
       id,
       title,
       description ?? '',
       projectId ?? null,
       parentTaskId ?? null,
       createdByAgent ?? null,
-      assignTo ?? null,
-      status,
-      priority ?? 5,
+      assignTo || null,
+      priorityInt,
       JSON.stringify(requiredCapabilities ?? []),
       JSON.stringify(dependsOn ?? []),
       JSON.stringify(notifyOnComplete ?? []),
       JSON.stringify(context ?? {}),
-      assignTo ? now : null,
+      owner,
     )
 
-    // Log creation
-    db.prepare(
-      'INSERT INTO conductor_task_logs (task_id, agent_id, action, message) VALUES (?, ?, ?, ?)',
-    ).run(id, createdByAgent ?? null, 'created', `Task "${title}" created`)
+    logTask(id, createdByAgent ?? null, 'created', `Task "${title}" created`)
+    dispatch()
 
-    if (assignTo) {
-      db.prepare(
-        'INSERT INTO conductor_task_logs (task_id, agent_id, action, message) VALUES (?, ?, ?, ?)',
-      ).run(id, createdByAgent ?? null, 'assigned', `Assigned to ${assignTo}`)
-
-      // Push real-time WebSocket notification to the assigned agent
-      console.log(`[tasks] Pushing task ${id} to agent "${assignTo}"`)
-      const pushed = pushTaskToAgent(assignTo, id, title, description ?? '')
-      console.log(`[tasks] pushTaskToAgent result: ${pushed}`)
-    }
-
-    const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id)
-    return c.json({ task }, 201)
+    return c.json({ task: getTask(id) }, 201)
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -218,108 +245,122 @@ tasksRouter.get('/:id', (c) => {
   }
 })
 
-// PATCH /api/tasks/:id — update task (status, assign, etc)
+// PATCH /api/tasks/:id — update task. Order: validate everything, reroute
+// (dependsOn, assignedToAgent), plain fields, then the status step; nothing is
+// written before a validation failure.
 tasksRouter.patch('/:id', async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json()
+    const body = await c.req.json() as Record<string, unknown>
 
-    const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id)
+    const existing = getTask(id)
     if (!existing) {
       return c.json({ error: 'Task not found' }, 404)
     }
 
-    const allowedFields: Record<string, string> = {
+    const status = typeof body.status === 'string' ? body.status : undefined
+    const agentId = typeof body.agentId === 'string' ? body.agentId : undefined
+    const feedback = [body.feedback, body.message].find((v): v is string => typeof v === 'string' && v !== '')
+
+    // ── Validate ──
+    const priority = 'priority' in body ? priorityValue(body.priority as number) : undefined
+    if (priority === null) return c.json({ error: `unknown priority ${String(body.priority)}` }, 400)
+    if (body.status !== undefined && status === undefined) return c.json({ error: 'status must be a string' }, 400)
+    if (status === 'assigned' || status === 'pending') return c.json({ error: USE_ASSIGN }, 400)
+    if (status === 'rejected' && feedback === undefined) {
+      return c.json({ error: 'a rejection needs the feedback in feedback or message' }, 400)
+    }
+    const known = ['accepted', 'in_progress', 'approved', 'rejected', 'cancelled', ...COMPLETING]
+    if (status !== undefined && !known.includes(status)) return c.json({ error: `unsupported status ${status}` }, 400)
+    const pinned = body.assignedToAgent
+    if ('assignedToAgent' in body && pinned !== null && typeof pinned !== 'string') {
+      return c.json({ error: 'assignedToAgent must be a string or null' }, 400)
+    }
+
+    const fields: Record<string, string> = {
       title: 'title',
       description: 'description',
-      status: 'status',
-      priority: 'priority',
-      assignedToAgent: 'assigned_to_agent',
       assignedSessionId: 'assigned_session_id',
       requiredCapabilities: 'required_capabilities',
-      dependsOn: 'depends_on',
       notifyOnComplete: 'notify_on_complete',
       context: 'context',
-      result: 'result',
     }
-
+    // a result sent with a completing status is the completion's; on its own it is stored as given
+    if (!(COMPLETING as readonly string[]).includes(status ?? '')) fields.result = 'result'
     const setClauses: string[] = []
     const values: unknown[] = []
-
-    for (const [key, column] of Object.entries(allowedFields)) {
+    for (const [key, column] of Object.entries(fields)) {
       if (key in body) {
-        let value = body[key]
-        // Serialize arrays/objects to JSON strings
-        if (typeof value === 'object' && value !== null) {
-          value = JSON.stringify(value)
-        }
+        const value = body[key]
         setClauses.push(`${column} = ?`)
-        values.push(value)
+        values.push(typeof value === 'object' && value !== null ? JSON.stringify(value) : value)
       }
     }
-
-    // Handle timestamp fields based on status changes
-    if (body.status) {
-      const now = new Date().toISOString()
-      if (body.status === 'assigned') {
-        setClauses.push('assigned_at = ?')
-        values.push(now)
-      } else if (body.status === 'accepted') {
-        setClauses.push('accepted_at = ?')
-        values.push(now)
-      } else if (body.status === 'completed' || body.status === 'failed') {
-        setClauses.push('completed_at = ?')
-        values.push(now)
-      }
+    if (priority !== undefined) {
+      setClauses.push('priority = ?')
+      values.push(priority)
     }
-
-    if (setClauses.length === 0) {
+    const route: RoutePatch = {}
+    if ('dependsOn' in body) route.dependsOn = body.dependsOn as string[]
+    if ('assignedToAgent' in body) route.pinnedAgent = (pinned as string | null) || null
+    const rerouting = Object.keys(route).length > 0
+    if (setClauses.length === 0 && !rerouting && status === undefined) {
       return c.json({ error: 'No valid fields to update' }, 400)
     }
 
-    values.push(id)
-    db.prepare(`UPDATE conductor_tasks SET ${setClauses.join(', ')} WHERE id = ?`).run(...values)
+    // ── Reroute, then fields, then status ──
+    if (rerouting) {
+      const moved = rerouteTask(id, route, agentId ?? 'dashboard')
+      if (!moved.ok) return refusal(c, moved)
+    }
+    if (setClauses.length > 0) {
+      db.prepare(`UPDATE conductor_tasks SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, id)
+      const changed = [...Object.keys(fields).filter((k) => k in body), ...(priority !== undefined ? ['priority'] : [])]
+      logTask(id, agentId ?? null, 'updated', `Updated: ${changed.join(', ')}`)
+    }
 
-    // Log the update
-    const changes = Object.keys(allowedFields).filter((k) => k in body)
-    db.prepare(
-      'INSERT INTO conductor_task_logs (task_id, agent_id, action, message) VALUES (?, ?, ?, ?)',
-    ).run(id, body.agentId ?? null, 'updated', `Updated: ${changes.join(', ')}`)
+    if (status !== undefined) {
+      const row = getTask(id) ?? existing
+      let outcome: Outcome
+      if (status === 'accepted' || status === 'in_progress') {
+        outcome = acceptOrStart(row, status)
+      } else if (status === 'approved' || status === 'rejected') {
+        const req: ReviewRequest = { verdict: status === 'approved' ? 'approve' : 'reject' }
+        if (feedback !== undefined) req.feedback = feedback
+        if (agentId !== undefined) req.by = agentId
+        outcome = reviewTask(id, req, 'dashboard')
+      } else if (status === 'cancelled') {
+        outcome = cancelTask(id, agentId ?? 'dashboard')
+      } else {
+        // without a result the stored one stands
+        const result = 'result' in body ? toTaskResult(body.result) : toTaskResult(parseJson<unknown>(row.result, row.result))
+        outcome = completeTask(id, null, status as Completing, result)
+      }
+      if (!outcome.ok) return refusal(c, outcome)
+    }
 
-    const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id)
-    return c.json({ task })
+    return c.json({ task: getTask(id) })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
 })
 
-// POST /api/tasks/:id/assign — assign to agent/session
+// POST /api/tasks/:id/assign — pin the task to an agent; the dispatcher hands it over
 tasksRouter.post('/:id/assign', async (c) => {
   try {
     const id = c.req.param('id')
     const body = await c.req.json()
-    const { agentId, sessionId } = body as { agentId?: string; sessionId?: string }
+    const { agentId } = body as { agentId?: string; sessionId?: string }
 
     if (!agentId) {
       return c.json({ error: 'agentId is required' }, 400)
     }
 
-    const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id)
-    if (!existing) {
-      return c.json({ error: 'Task not found' }, 404)
-    }
+    const moved = rerouteTask(id, { pinnedAgent: agentId }, 'dashboard')
+    if (!moved.ok) return refusal(c, moved)
+    dispatch()
 
-    const now = new Date().toISOString()
-    db.prepare(
-      'UPDATE conductor_tasks SET assigned_to_agent = ?, assigned_session_id = ?, status = ?, assigned_at = ? WHERE id = ?',
-    ).run(agentId, sessionId ?? null, 'assigned', now, id)
-
-    db.prepare(
-      'INSERT INTO conductor_task_logs (task_id, agent_id, action, message) VALUES (?, ?, ?, ?)',
-    ).run(id, agentId, 'assigned', `Assigned to ${agentId}${sessionId ? ` (session: ${sessionId})` : ''}`)
-
-    const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id)
-    return c.json({ task })
+    return c.json({ task: getTask(id) })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -373,10 +414,12 @@ tasksRouter.post('/:id/logs', async (c) => {
   }
 })
 
-// DELETE /api/tasks/:id — cancel/delete task
+// DELETE /api/tasks/:id — delete task (an active one is revoked first)
 tasksRouter.delete('/:id', (c) => {
   const id = c.req.param('id')
   try {
+    const existing = getTask(id)
+    if (existing && isActive(existing.status)) revokeTask(id, 'deleted')
     db.prepare('DELETE FROM conductor_task_logs WHERE task_id = ?').run(id)
     const result = db.prepare('DELETE FROM conductor_tasks WHERE id = ?').run(id)
     if (result.changes === 0) {
@@ -388,11 +431,12 @@ tasksRouter.delete('/:id', (c) => {
   }
 })
 
-// PATCH /api/tasks/:id/cancel — soft cancel (set status to cancelled)
+// PATCH /api/tasks/:id/cancel — soft cancel through the lifecycle (revokes an active task)
 tasksRouter.patch('/:id/cancel', (c) => {
   const id = c.req.param('id')
   try {
-    db.prepare("UPDATE conductor_tasks SET status = 'cancelled', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?").run(id)
+    const outcome = cancelTask(id, 'dashboard')
+    if (!outcome.ok) return refusal(c, outcome)
     return c.json({ success: true, id, status: 'cancelled' })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
