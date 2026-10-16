@@ -1,7 +1,7 @@
 import * as vscode from 'vscode'
 import { readFileSync } from 'node:fs'
 import { hostname } from 'node:os'
-import { DEFAULT_HUB_WS_URL, detectHub, toConductorWsUrl } from './mcp-config.js'
+import { detectHub, resolveApiKey, resolveHubUrl } from './mcp-config.js'
 import type { HubDetection } from './mcp-config.js'
 
 export interface CortexConfig {
@@ -12,7 +12,7 @@ export interface CortexConfig {
   platform: string
   capabilities: string[]
   autoConnect: boolean
-  /** Where the hub was detected from (a config path or "default"). Never the key. */
+  /** Where hubUrl came from: 'setting', 'env:<NAME>', a config path or 'default'. Never the key. */
   hubSource: string
 }
 
@@ -47,53 +47,28 @@ function readText(path: string): string | undefined {
   }
 }
 
-/** First env var in `names` that is set and non-empty. */
-function firstEnv(names: string[]): string | undefined {
-  for (const name of names) {
-    const v = process.env[name]
-    if (v) return v
-  }
-  return undefined
-}
-
-/** Resolve the conductor WebSocket URL: setting, env, MCP config, default. */
-function resolveHubUrl(settings: vscode.WorkspaceConfiguration, detected: HubDetection | undefined): string {
-  const settingsUrl = settings.get<string>('hubUrl', '')
-  if (settingsUrl) {
-    const ws = toConductorWsUrl(settingsUrl)
-    if (ws) return ws
-  }
-  for (const name of ['CORTEX_HUB_WS_URL', 'CORTEX_HUB_URL']) {
-    const v = process.env[name]
-    const ws = v ? toConductorWsUrl(v) : undefined
-    if (ws) return ws
-  }
-  return detected?.wsUrl ?? DEFAULT_HUB_WS_URL
-}
-
-/** Resolve the API key: setting, env, MCP config. */
-function resolveApiKey(settings: vscode.WorkspaceConfiguration, detected: HubDetection | undefined): string {
-  const settingsKey = settings.get<string>('apiKey', '')
-  if (settingsKey) return settingsKey
-  return firstEnv(['CORTEX_HUB_API_KEY', 'HUB_API_KEY', 'CORTEX_API_KEY']) ?? detected?.apiKey ?? ''
-}
-
 export function getConfig(): CortexConfig {
   const settings = vscode.workspace.getConfiguration('cortexHub')
   const ide = detectIde()
   const agentId = settings.get<string>('agentId', '') || `${hostname()}-${ide}`
 
   const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-  const detected = detectHub(readText, homedir(), workspace, process.env)
+  // Detection reads config files; run it at most once, and only if setting and env leave a gap.
+  let detection: { value: HubDetection | undefined } | undefined
+  const detect = (): HubDetection | undefined => {
+    detection ??= { value: detectHub(readText, homedir(), workspace, process.env) }
+    return detection.value
+  }
+  const hub = resolveHubUrl(settings.get<string>('hubUrl', ''), process.env, detect)
 
   return {
-    apiKey: resolveApiKey(settings, detected),
-    hubUrl: resolveHubUrl(settings, detected),
+    apiKey: resolveApiKey(settings.get<string>('apiKey', ''), process.env, detect),
+    hubUrl: hub.url,
     agentId,
     ide,
     platform: friendlyPlatform(),
     capabilities: settings.get<string[]>('capabilities', ['code-edit', 'terminal', 'file-read']),
     autoConnect: settings.get<boolean>('autoConnect', true),
-    hubSource: detected?.source ?? 'default',
+    hubSource: hub.source,
   }
 }

@@ -1,11 +1,14 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import type { HubDetection } from './mcp-config.js'
 import {
   DEFAULT_HUB_WS_URL,
   conductorConnectUrl,
   detectHub,
   entryEndpoint,
   mcpSources,
+  resolveApiKey,
+  resolveHubUrl,
   toConductorWsUrl,
 } from './mcp-config.js'
 
@@ -247,5 +250,80 @@ describe('conductorConnectUrl', () => {
     expect([...new URL(out).searchParams.keys()].sort()).toEqual(
       ['agentId', 'apiKey', 'capabilities', 'hostname', 'ide', 'platform'],
     )
+  })
+})
+
+describe('resolveHubUrl / resolveApiKey', () => {
+  const found: HubDetection = {
+    mcpUrl: 'https://d.example.com/mcp',
+    wsUrl: 'wss://d.example.com/ws/conductor',
+    apiKey: 'kd',
+    source: '/h/.claude.json',
+  }
+  const none = (): HubDetection | undefined => undefined
+  const detect = (): HubDetection | undefined => found
+
+  it('url: setting wins', () => {
+    const env = { CORTEX_HUB_WS_URL: 'wss://e.example.com' }
+    expect(resolveHubUrl('https://s.example.com/mcp', env, detect)).toEqual({
+      url: 'wss://s.example.com/ws/conductor',
+      source: 'setting',
+    })
+  })
+  it('url: invalid setting falls through to env', () => {
+    const env = { CORTEX_HUB_WS_URL: 'wss://e.example.com' }
+    expect(resolveHubUrl('not a url', env, detect)).toEqual({
+      url: 'wss://e.example.com/ws/conductor',
+      source: 'env:CORTEX_HUB_WS_URL',
+    })
+  })
+  it('url: CORTEX_HUB_WS_URL beats CORTEX_HUB_URL', () => {
+    const env = { CORTEX_HUB_WS_URL: 'wss://a.example.com', CORTEX_HUB_URL: 'https://b.example.com' }
+    expect(resolveHubUrl('', env, detect).source).toBe('env:CORTEX_HUB_WS_URL')
+  })
+  it('url: CORTEX_HUB_URL next, invalid WS env skipped', () => {
+    const env = { CORTEX_HUB_WS_URL: 'nope', CORTEX_HUB_URL: 'https://b.example.com' }
+    expect(resolveHubUrl('', env, detect)).toEqual({
+      url: 'wss://b.example.com/ws/conductor',
+      source: 'env:CORTEX_HUB_URL',
+    })
+  })
+  it('url: detection, labelled with its source', () => {
+    expect(resolveHubUrl('', {}, detect)).toEqual({ url: found.wsUrl, source: found.source })
+  })
+  it('url: default', () => {
+    expect(resolveHubUrl('', {}, none)).toEqual({ url: DEFAULT_HUB_WS_URL, source: 'default' })
+  })
+
+  it('key: setting, then env order, then detection, then empty', () => {
+    expect(resolveApiKey('ks', { CORTEX_HUB_API_KEY: 'k1' }, detect)).toBe('ks')
+    const env = { CORTEX_API_KEY: 'k3', HUB_API_KEY: 'k2', CORTEX_HUB_API_KEY: 'k1' }
+    expect(resolveApiKey('', env, detect)).toBe('k1')
+    expect(resolveApiKey('', { CORTEX_API_KEY: 'k3', HUB_API_KEY: 'k2' }, detect)).toBe('k2')
+    expect(resolveApiKey('', { CORTEX_API_KEY: 'k3' }, detect)).toBe('k3')
+    expect(resolveApiKey('', {}, detect)).toBe('kd')
+    expect(resolveApiKey('', {}, () => ({ ...found, apiKey: null }))).toBe('')
+    expect(resolveApiKey('', {}, none)).toBe('')
+  })
+
+  it('does not detect when setting and env supply both', () => {
+    let calls = 0
+    const counting = () => { calls++; return found }
+    const env = { CORTEX_HUB_WS_URL: 'wss://e.example.com', CORTEX_API_KEY: 'k3' }
+    resolveHubUrl('', env, counting)
+    resolveApiKey('', env, counting)
+    expect(calls).toBe(0)
+  })
+  it('detects once when both resolvers need it (memoised thunk)', () => {
+    let calls = 0
+    let cached: HubDetection | undefined
+    let done = false
+    const memo = () => {
+      if (!done) { calls++; cached = found; done = true }
+      return cached
+    }
+    resolveHubUrl('', {}, memo)
+    resolveApiKey('', {}, memo)
+    expect(calls).toBe(1)
   })
 })

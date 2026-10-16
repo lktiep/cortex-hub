@@ -184,3 +184,38 @@ export function conductorConnectUrl(
   url.searchParams.set('hostname', p.hostname)
   return url.toString()
 }
+
+const URL_ENV_NAMES = ['CORTEX_HUB_WS_URL', 'CORTEX_HUB_URL']
+const API_KEY_ENV_NAMES = ['CORTEX_HUB_API_KEY', 'HUB_API_KEY', 'CORTEX_API_KEY']
+
+/**
+ * Resolve the conductor URL: setting, env, MCP config, default. `source` is a plain label
+ * ('setting', 'env:<NAME>', the config path or 'default'); it never carries the key.
+ * An invalid setting or env URL falls through. `detect` runs only when needed.
+ */
+export function resolveHubUrl(
+  setting: string,
+  env: Env,
+  detect: () => HubDetection | undefined,
+): { url: string; source: string } {
+  const fromSetting = setting ? toConductorWsUrl(setting) : undefined
+  if (fromSetting) return { url: fromSetting, source: 'setting' }
+  for (const name of URL_ENV_NAMES) {
+    const raw = env[name]
+    const ws = raw ? toConductorWsUrl(raw) : undefined
+    if (ws) return { url: ws, source: `env:${name}` }
+  }
+  const detected = detect()
+  if (detected) return { url: detected.wsUrl, source: detected.source }
+  return { url: DEFAULT_HUB_WS_URL, source: 'default' }
+}
+
+/** Resolve the API key: setting, env, MCP config, ''. `detect` runs only when needed. */
+export function resolveApiKey(setting: string, env: Env, detect: () => HubDetection | undefined): string {
+  if (setting) return setting
+  for (const name of API_KEY_ENV_NAMES) {
+    const v = env[name]
+    if (v) return v
+  }
+  return detect()?.apiKey ?? ''
+}
