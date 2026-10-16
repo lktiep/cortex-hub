@@ -36,7 +36,6 @@ export interface PlanTask {
 }
 
 const RUNNING = new Set(['assigned', 'accepted', 'in_progress', 'analyzing', 'synthesis', 'discussion', 'strategy_review'])
-const STOPPED = new Set(['cancelled', 'failed', 'rejected'])
 const WAIT_REASONS = new Set<string>(['capacity', 'no_worker', 'lock'])
 
 export function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -52,6 +51,11 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
+function isReview(v: unknown): v is TaskReview {
+  return isRecord(v) && typeof v.at === 'string' && typeof v.by === 'string' &&
+    (v.verdict === 'approve' || v.verdict === 'reject') && typeof v.feedback === 'string'
+}
+
 function asWaitReason(v: string | null | undefined): WaitReason | null {
   return v && WAIT_REASONS.has(v) ? (v as WaitReason) : null
 }
@@ -62,16 +66,12 @@ export function deriveState(row: ConductorTask): PlanState {
   if (s === 'review') return 'review'
   if (s === 'pending') {
     if (row.escalated_at) return 'escalated'
-    if (row.kind === 'gate') {
-      if (row.approver === 'user') return 'needs_user'
-      if (row.approver === 'lead') return 'gate_lead'
-    }
+    if (row.kind === 'gate') return row.approver === 'user' ? 'needs_user' : 'gate_lead'
     return asWaitReason(row.wait_reason) ? 'waiting' : 'ready'
   }
   if (RUNNING.has(s)) return 'running'
   if (s === 'blocked') return 'blocked'
-  if (STOPPED.has(s)) return 'stopped'
-  return 'stopped'
+  return 'stopped' // cancelled, failed, rejected and anything unknown
 }
 
 function routeFromColumns(row: ConductorTask): RouteSpec | null {
@@ -124,7 +124,7 @@ function toPlanTask(row: ConductorTask): PlanTask {
     rejectCount: row.reject_count ?? 0,
     failCount: row.fail_count ?? 0,
     agent: row.assigned_to_agent ?? row.last_agent ?? null,
-    reviews: Array.isArray(ctx.reviews) ? (ctx.reviews as TaskReview[]) : [],
+    reviews: Array.isArray(ctx.reviews) ? ctx.reviews.filter(isReview) : [],
     row,
   }
 }
@@ -179,13 +179,22 @@ export function resolveDeps(tasks: PlanTask[]): void {
     return out
   }
 
-  // Leaf ids a dependency on `id` stands for; `visiting` guards group cycles.
+  // Leaf ids a dependency on `id` stands for; `visiting` guards group cycles. A group's sinks are
+  // memoised unless a cycle cut made them incomplete, so a chain of groups is linear.
+  const sinksCache = new Map<string, string[]>()
+  let cuts = 0
   const expand = (id: string, visiting: Set<string>): string[] => {
     const t = byId.get(id)
     if (!t) return []
     if (t.kind !== 'group') return [id]
-    if (visiting.has(id)) return []
+    const cached = sinksCache.get(id)
+    if (cached) return cached
+    if (visiting.has(id)) {
+      cuts++
+      return []
+    }
     visiting.add(id)
+    const cutsBefore = cuts
     const leaves = leavesOf(id)
     const inside = new Set(leaves.map((l) => l.id))
     const needed = new Set<string>()
@@ -196,6 +205,7 @@ export function resolveDeps(tasks: PlanTask[]): void {
     }
     const sinks = leaves.filter((l) => !needed.has(l.id)).map((l) => l.id)
     visiting.delete(id)
+    if (cuts === cutsBefore) sinksCache.set(id, sinks)
     return sinks
   }
 
@@ -249,13 +259,17 @@ export function nodeNote(task: PlanTask, now: Date): string | null {
     if (task.failCount > 0) return `escalated · ${plural(task.failCount, 'failure')}`
     return 'escalated'
   }
+  if (task.state !== 'waiting') return fallbackNote(task)
   if (task.waitReason === 'capacity') {
     return task.waitUntil ? `quota · resets ${formatUntil(task.waitUntil, now)}` : 'quota exhausted'
   }
   if (task.waitReason === 'no_worker') return `no worker for ${routeLabel(task.route ?? task.primary) ?? 'this task'}`
   if (task.waitReason === 'lock') return 'waiting on a file lock'
-  if (task.primary && task.route && task.route.model !== task.primary.model) {
-    return `fallback from ${routeLabel(task.primary)}`
-  }
+  return fallbackNote(task)
+}
+
+function fallbackNote(task: PlanTask): string | null {
+  const from = routeLabel(task.primary)
+  if (from && task.route && routeLabel(task.route) !== from) return `fallback from ${from}`
   return null
 }

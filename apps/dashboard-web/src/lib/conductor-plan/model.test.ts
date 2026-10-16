@@ -69,6 +69,24 @@ describe('toPlanTasks', () => {
     expect(out.map((t) => t.groupId)).toEqual([null, null])
   })
 
+  it('generatePlan has cross-group deps and no duplicated dep', () => {
+    const rows = generatePlan(60)
+    const out = toPlanTasks(rows[0] as (typeof rows)[number], rows)
+    const byId = new Map(out.map((t) => [t.id, t]))
+    let cross = 0
+    for (const t of out) {
+      expect(new Set(t.deps).size).toBe(t.deps.length)
+      for (const d of t.deps) if (byId.get(d)?.groupId !== t.groupId) cross++
+    }
+    expect(cross).toBeGreaterThan(0)
+  })
+
+  it('keeps only well-formed reviews', () => {
+    const good = { at: 'x', by: 'lead', verdict: 'approve', feedback: 'ok' }
+    const t = plan({ id: 'a', context: JSON.stringify({ reviews: [good, null, 'x', { verdict: 'approve' }, 4] }) })
+    expect(t.reviews).toEqual([good])
+  })
+
   it('handles a generated plan', () => {
     const rows = generatePlan(60)
     const out = toPlanTasks(rows[0] as (typeof rows)[number], rows)
@@ -86,6 +104,7 @@ describe('deriveState', () => {
     ['pending+escalated', { id: 'a', status: 'pending', escalated_at: 'x' }, 'escalated'],
     ['gate user', { id: 'a', kind: 'gate', approver: 'user' }, 'needs_user'],
     ['gate lead', { id: 'a', kind: 'gate', approver: 'lead' }, 'gate_lead'],
+    ['gate pending, no approver', { id: 'a', kind: 'gate' }, 'gate_lead'],
     ['gate blocked', { id: 'a', kind: 'gate', approver: 'user', status: 'blocked' }, 'blocked'],
     ['capacity', { id: 'a', wait_reason: 'capacity' }, 'waiting'],
     ['no_worker', { id: 'a', wait_reason: 'no_worker' }, 'waiting'],
@@ -185,6 +204,22 @@ describe('resolveDeps', () => {
     expect(deps(out, 'C')).toEqual(['A'])
   })
 
+  it('resolves a long chain of groups quickly', () => {
+    const rows: Array<Parameters<typeof row>[0]> = []
+    for (let k = 0; k < 20; k++) {
+      rows.push({ id: `G${k}`, kind: 'group', depends_on: k ? JSON.stringify([`G${k - 1}`]) : '[]' })
+      for (const l of ['a', 'b', 'c']) {
+        rows.push({ id: `G${k}${l}`, parent_task_id: `G${k}`, depends_on: k ? JSON.stringify([`G${k - 1}`]) : '[]' })
+      }
+    }
+    rows.push({ id: 'end', depends_on: '["G19"]' })
+    const t0 = Date.now()
+    const out = build(rows)
+    expect(Date.now() - t0).toBeLessThan(500)
+    expect(deps(out, 'end')).toEqual(['G19a', 'G19b', 'G19c'])
+    expect(deps(out, 'G5b')).toEqual(['G4a', 'G4b', 'G4c'])
+  })
+
   it('is exported for in-place use', () => {
     const out = build([{ id: 'A' }])
     resolveDeps(out)
@@ -240,6 +275,21 @@ describe('nodeNote', () => {
       'fallback from agy·argon-low',
     )
     expect(note({})).toBeNull()
+  })
+
+  it('ignores a stale wait reason unless the task is waiting', () => {
+    expect(note({ status: 'in_progress', wait_reason: 'lock' })).toBeNull()
+    expect(note({ status: 'completed', wait_reason: 'capacity', wait_until: NOW.toISOString() })).toBeNull()
+  })
+
+  it('gives a done escalated task no note', () => {
+    expect(note({ status: 'completed', escalated_at: 'x', reject_count: 2 })).toBeNull()
+  })
+
+  it('notes a fallback to another executor on the same model', () => {
+    expect(note({ current_route: JSON.stringify({ executor: 'claude', model: agy.model, effort: null }) })).toBe(
+      'fallback from agy·argon-low',
+    )
   })
 
   it('orders escalated, then wait reason, then fallback', () => {

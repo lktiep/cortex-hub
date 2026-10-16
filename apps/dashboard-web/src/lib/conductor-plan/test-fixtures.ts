@@ -65,7 +65,7 @@ export function session(p: Partial<ConductorSession> = {}): ConductorSession {
 /**
  * Deterministic plan of `n` leaf tasks under root 'root' (returned first) in 3 groups (g0..g2).
  * Roughly every tenth leaf is a gate; leaves chain to their predecessor in the group, every
- * seventh depends across groups, and files are shared in a rotation of five.
+ * seventh depends on a task in another group, and files are shared in a rotation of five.
  */
 export function generatePlan(n: number): ConductorTask[] {
   const rows: ConductorTask[] = [row({ id: 'root', kind: 'group', status: 'in_progress' })]
@@ -78,7 +78,7 @@ export function generatePlan(n: number): ConductorTask[] {
     const deps: string[] = []
     const prev = lastInGroup[g]
     if (prev) deps.push(prev)
-    if (i % 7 === 6 && i >= 3) deps.push(ids[i - 3] as string)
+    if (i % 7 === 6 && i >= 3) deps.push(ids[i - 2] as string)
     const gate = i % 10 === 9
     rows.push(row({
       id,
