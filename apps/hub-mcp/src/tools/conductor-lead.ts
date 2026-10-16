@@ -54,7 +54,7 @@ function workerLine(w: WorkerView): string {
 export function registerConductorLeadTools(server: McpServer, env: Env): void {
   server.tool(
     'cortex_task_tree_create',
-    'Create a whole plan as a tree of tasks in one call. Use this for multi-step plans instead of many cortex_task_create calls. Tasks reference each other by key (parentKey, dependsOn); the hub rejects cycles. Give `files` on work tasks so parallel tasks do not collide (lock safety). reviewRequired defaults to true for work tasks.',
+    'Create a whole plan as a tree of tasks in one call. Use this for multi-step plans instead of many cortex_task_create calls. Tasks reference each other by key (parentKey, dependsOn); the hub rejects cycles. Put the whole plan under ONE root task with kind group and set the key of that root as the parentKey of every top-level item, or the dashboard shows a flat plan as N one-task plans. Give `files` on work tasks so parallel tasks do not collide (lock safety). reviewRequired defaults to true for work tasks.',
     {
       parentId: z.string().optional().describe('Existing task ID to hang the plan under'),
       projectId: z.string().optional().describe('Project the tasks belong to'),
