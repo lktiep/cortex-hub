@@ -1,7 +1,9 @@
-// Worker WebSocket (spec §6.3, §6.5). A worker connects with its API key and
-// agent id in the query string; protocol-2 workers then send `worker.register`,
-// legacy scripts and the extension send `agent.register`. Nothing is dispatched
-// to a socket before it registers. Task outcomes go through the lifecycle
+// Worker WebSocket (spec §6.3, §6.5). A protocol-2 worker connects with its
+// key, agent id and `protocol=2` in the query and is dispatched to once it has
+// sent `worker.register`. A protocol-1 client with its agent id in the query
+// (the extension) is ready on connect. A legacy script that connects with its
+// key only is held under a placeholder id, unannounced and not dispatched to,
+// until its `agent.register` names it. Task outcomes go through the lifecycle
 // module, assignments through the dispatcher; connections live in the registry.
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
 import type { IncomingMessage, Server } from 'http'
@@ -22,10 +24,10 @@ import {
 } from '../conductor/lifecycle.js'
 import { assignedMsg } from '../conductor/messages.js'
 import {
-  addConnection, broadcastToOwner, getByAgent, getConnection, listConnections, removeConnection, sendTo,
-  setStatus, touch, updateConnection, type WorkerConn,
+  addConnection, broadcastToOwner, getByAgent, getConnection, isPlaceholderAgentId, listConnections, placeholderAgentId,
+  rekeyConnection, removeConnection, sendTo, setStatus, touch, updateConnection, type WorkerConn,
 } from '../conductor/registry.js'
-import { ACTIVE_STATUSES, getTask, isoSeconds } from '../conductor/rows.js'
+import { ACTIVE_STATUSES, getTask, isoSeconds, logTask } from '../conductor/rows.js'
 import { findProjectByRepo } from '../lib/project-match.js'
 import { appVersion } from '../version.js'
 
@@ -173,15 +175,42 @@ function applied(agent: WorkerConn, step: string, outcome: Outcome): outcome is 
   return outcome.ok
 }
 
-/** Unregisters the connection; `agent.offline` only when it was still registered (not replaced or dropped already). */
+/**
+ * Unregisters the connection; `agent.offline` only when it was still
+ * registered (not replaced or dropped already) and had been announced (not
+ * under a placeholder id).
+ */
 function dropConnection(conn: WorkerConn): void {
-  if (!removeConnection(conn.connectionId)) return
+  if (!removeConnection(conn.connectionId) || isPlaceholderAgentId(conn.agentId)) return
   broadcastToOwner(conn.apiKeyOwner, {
     type: 'agent.offline',
     agentId: conn.agentId,
     timestamp: new Date().toISOString(),
   })
   console.log(`[ws] Agent disconnected: ${conn.agentId}`)
+}
+
+/** Unregisters the connection, then closes its socket with `code`. */
+function refuse(conn: WorkerConn, code: number, reason: string): void {
+  dropConnection(conn)
+  conn.ws.close(code, reason)
+}
+
+/** `agent.online` to the owner's other sockets. */
+function announce(conn: WorkerConn): void {
+  broadcastToOwner(
+    conn.apiKeyOwner,
+    {
+      type: 'agent.online',
+      agentId: conn.agentId,
+      hostname: conn.hostname || undefined,
+      ide: conn.ide ?? undefined,
+      capabilities: conn.capabilities,
+      platform: conn.platform ?? undefined,
+      timestamp: new Date().toISOString(),
+    },
+    conn.agentId,
+  )
 }
 
 export function setupConductorWebSocket(server: Server): WebSocketServer {
@@ -206,9 +235,12 @@ export function setupConductorWebSocket(server: Server): WebSocketServer {
       return
     }
 
+    // no agent id (a legacy script names itself in agent.register): a placeholder until then
+    const queryAgentId = str(url.searchParams.get('agentId'))
+    const named = queryAgentId !== null && !isPlaceholderAgentId(queryAgentId)
     const added = addConnection({
       ws,
-      agentId: url.searchParams.get('agentId') || 'unknown',
+      agentId: named ? queryAgentId : placeholderAgentId(),
       apiKeyOwner: keyRow.name,
       apiKeyProjectId: keyRow.project_id,
       hostname: url.searchParams.get('hostname') || '',
@@ -221,21 +253,9 @@ export function setupConductorWebSocket(server: Server): WebSocketServer {
       return
     }
     const conn = added.conn
-
-    // Broadcast agent online to same-owner agents (exclude self)
-    broadcastToOwner(
-      conn.apiKeyOwner,
-      {
-        type: 'agent.online',
-        agentId: conn.agentId,
-        hostname: conn.hostname || undefined,
-        ide: conn.ide ?? undefined,
-        capabilities: conn.capabilities,
-        platform: conn.platform ?? undefined,
-        timestamp: new Date().toISOString(),
-      },
-      conn.agentId,
-    )
+    // a protocol-1 client named in the query (the extension) may never register: it is ready now
+    if (named && url.searchParams.get('protocol') !== '2') updateConnection(conn.connectionId, { ready: true })
+    if (named) announce(conn)
 
     // Send welcome with current agent list
     reply(conn, {
@@ -250,6 +270,7 @@ export function setupConductorWebSocket(server: Server): WebSocketServer {
     ws.on('message', (data: RawData) => onMessage(ws, conn.connectionId, data))
     ws.on('close', () => dropConnection(conn))
     ws.on('pong', () => touch(conn.connectionId))
+    if (conn.ready) dispatch()
   })
 
   // Keepalive interval: terminate stale connections, ping active ones
@@ -296,17 +317,22 @@ function onMessage(ws: WebSocket, connectionId: string, data: RawData): void {
 
 /**
  * `worker.register` (protocol 2): resolves the project, records the worker,
- * answers `registered`, then resumes or revokes the task the worker reports,
- * settles the other active tasks the hub still holds for it, and dispatches.
+ * answers `registered`, then (the first time on this connection) resumes or
+ * revokes the task the worker reports and settles the other active tasks the
+ * hub still holds for it; then dispatches.
  */
 function onWorkerRegister(agent: WorkerConn, msg: Record<string, unknown>): void {
+  if (isPlaceholderAgentId(agent.agentId)) {
+    refuse(agent, CLOSE_CODES.missingKey, 'agentId required')
+    return
+  }
   const matched = findProjectByRepo(str(msg['repo']) ?? '')?.id ?? null
   if (matched !== null && agent.apiKeyProjectId !== null && matched !== agent.apiKeyProjectId) {
     console.warn(`[ws] ${agent.agentId}: repo is project ${matched}, its key is scoped to ${agent.apiKeyProjectId}`)
-    dropConnection(agent)
-    agent.ws.close(CLOSE_CODES.badKey, 'key is scoped to another project')
+    refuse(agent, CLOSE_CODES.badKey, 'key is scoped to another project')
     return
   }
+  const reregister = agent.ready && agent.protocol === 2
   const projectId = matched ?? agent.apiKeyProjectId
   updateConnection(agent.connectionId, {
     protocol: 2,
@@ -320,9 +346,17 @@ function onWorkerRegister(agent: WorkerConn, msg: Record<string, unknown>): void
   })
   reply(agent, { type: 'registered', connectionId: agent.connectionId, projectId, hubVersion: appVersion } satisfies RegisteredMsg)
   console.log(`[ws] Worker registered: ${agent.agentId} v${agent.version ?? '?'} project=${projectId ?? 'none'}`)
+  if (!reregister) settleRestart(agent, str(msg['activeTaskId']))
+  dispatch()
+}
 
+/**
+ * A worker that (re)started: the task it reports is resumed or revoked; the
+ * other active tasks the hub still holds for it are returned (not started) or
+ * failed (started).
+ */
+function settleRestart(agent: WorkerConn, activeTaskId: string | null): void {
   let resumed: string | null = null
-  const activeTaskId = str(msg['activeTaskId'])
   if (activeTaskId !== null) {
     const task = getTask(activeTaskId)
     if (task !== undefined && (ACTIVE_STATUSES as readonly string[]).includes(task.status) && task.assigned_to_agent === agent.agentId) {
@@ -342,11 +376,30 @@ function onWorkerRegister(agent: WorkerConn, msg: Record<string, unknown>): void
     if (task.status === 'assigned') returnTask(task.id, 'worker restarted')
     else failAttempt(task.id, agent.agentId, 'worker restarted without the task')
   }
-  dispatch()
 }
 
-/** `agent.register` (protocol 1: cortex-agent.sh, the extension): metadata, then a dispatch. */
+/**
+ * `agent.register` (protocol 1: cortex-agent.sh, cortex-agent.ps1). A socket
+ * under a placeholder takes the agent id and hostname it names, by the
+ * registry's rules (4009 when another host holds the id, 4001 without one),
+ * and is announced. A socket named in the query keeps its identity. Then
+ * metadata, ready, and a dispatch.
+ */
 function onAgentRegister(agent: WorkerConn, msg: Record<string, unknown>): void {
+  const anonymous = isPlaceholderAgentId(agent.agentId)
+  if (anonymous) {
+    const agentId = str(msg['agentId'])
+    if (agentId === null || isPlaceholderAgentId(agentId)) {
+      refuse(agent, CLOSE_CODES.missingKey, 'agentId required')
+      return
+    }
+    const rekeyed = rekeyConnection(agent.connectionId, agentId, str(msg['hostname']) ?? agent.hostname)
+    if (rekeyed === undefined) return
+    if (!rekeyed.ok) {
+      refuse(agent, rekeyed.code, rekeyed.reason)
+      return
+    }
+  }
   const caps = validateCapabilities(msg['capabilities'])
   updateConnection(agent.connectionId, {
     ...(caps.length > 0 ? { capabilities: caps } : {}),
@@ -354,12 +407,16 @@ function onAgentRegister(agent: WorkerConn, msg: Record<string, unknown>): void 
     platform: str(msg['platform']) ?? str(msg['os']) ?? agent.platform,
     ready: true,
   })
-  broadcastToOwner(agent.apiKeyOwner, {
-    type: 'agent.capabilities_updated',
-    agentId: agent.agentId,
-    capabilities: agent.capabilities,
-    timestamp: new Date().toISOString(),
-  }, agent.agentId)
+  if (anonymous) {
+    announce(agent)
+  } else {
+    broadcastToOwner(agent.apiKeyOwner, {
+      type: 'agent.capabilities_updated',
+      agentId: agent.agentId,
+      capabilities: agent.capabilities,
+      timestamp: new Date().toISOString(),
+    }, agent.agentId)
+  }
   console.log(`[ws] Agent registered: ${agent.agentId} capabilities=[${agent.capabilities.join(',')}]`)
   dispatch()
 }
@@ -408,7 +465,7 @@ function handleMessage(agent: WorkerConn, msg: Record<string, unknown>) {
     case 'task.complete': {
       const taskId = str(msg['taskId'])
       if (taskId === null) break
-      // legacy scripts and the extension send no status: theirs is a completion
+      // the extension, cortex-agent.ps1 and older cortex-agent.sh send no status: theirs is a completion
       const status = msg['status'] ?? 'completed'
       if (!COMPLETE_STATUSES.some((s) => s === status)) {
         console.warn(`[ws] task.complete from ${agent.agentId} ignored: unknown status ${JSON.stringify(status)}`)
@@ -766,8 +823,13 @@ function handleMessage(agent: WorkerConn, msg: Record<string, unknown>) {
   }
 }
 
+/** Named connections only: a socket under a placeholder has not said who it is yet. */
+function namedConnections(): WorkerConn[] {
+  return listConnections().filter((c) => !isPlaceholderAgentId(c.agentId))
+}
+
 function getOnlineAgents(owner: string) {
-  return listConnections()
+  return namedConnections()
     .filter((c) => c.apiKeyOwner === owner)
     .map((c) => ({
       agentId: c.agentId,
@@ -783,7 +845,7 @@ function getOnlineAgents(owner: string) {
  * `currentTaskId` and `quota` (the live rows for the worker's host) come from the DB.
  */
 export function getAllConnectedAgents(): WorkerView[] {
-  const conns = listConnections()
+  const conns = namedConnections()
   if (conns.length === 0) return []
   const quota = db.prepare(
     'SELECT host, executor, model, exhausted_until, reason FROM conductor_quota WHERE exhausted_until > ? ORDER BY executor, model',
@@ -815,13 +877,19 @@ export function getAllConnectedAgents(): WorkerView[] {
   }))
 }
 
+function pinTask(taskId: string, agentId: string): void {
+  db.prepare('UPDATE conductor_tasks SET pinned_agent = ? WHERE id = ?').run(agentId, taskId)
+  logTask(taskId, agentId, 'pinned', `pinned to ${agentId}`)
+}
+
 /**
  * Kept for the routes that still assign directly. A task the dispatcher owns
  * (`pending`, or a legacy `assigned` row without a lease) is pinned to the
  * agent and dispatched, so it is pushed once and with a lease; the answer is
- * whether it ended up assigned to that agent. Any other task (the strategy
- * flow, `synthesis`) gets the flat legacy `task.assigned`; the answer is
- * whether it was delivered.
+ * whether it ended up assigned to that agent. A `blocked` task is only
+ * pinned (false): the dispatcher sends it once it unblocks. Any other task
+ * (the strategy flow, `synthesis`) gets the flat legacy `task.assigned`; the
+ * answer is whether it was delivered.
  */
 export function pushTaskToAgent(
   assignedTo: string,
@@ -830,13 +898,17 @@ export function pushTaskToAgent(
   description: string,
 ): boolean {
   const task = getTask(taskId)
+  if (task?.status === 'blocked') {
+    pinTask(taskId, assignedTo)
+    return false
+  }
   const dispatchable = task !== undefined
     && (task.status === 'pending' || (task.status === 'assigned' && task.lease_expires_at === null))
   if (!dispatchable) {
     return sendTo(assignedTo, { type: 'task.assigned', taskId, title, description, timestamp: new Date().toISOString() })
   }
   // pinned first, so that the dispatch pass returnTask runs already respects it
-  db.prepare('UPDATE conductor_tasks SET pinned_agent = ? WHERE id = ?').run(assignedTo, taskId)
+  pinTask(taskId, assignedTo)
   if (task.status === 'assigned') returnTask(taskId, `pinned to ${assignedTo}, handed to the dispatcher`)
   else dispatch()
   const after = getTask(taskId)

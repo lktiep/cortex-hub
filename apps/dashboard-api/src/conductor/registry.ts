@@ -17,25 +17,51 @@ export interface WorkerConn {
 
 export type ConnInit = Pick<WorkerConn, 'ws' | 'agentId' | 'apiKeyOwner' | 'apiKeyProjectId' | 'hostname' | 'ide' | 'platform' | 'capabilities'>
 
+export type AddResult = { ok: true; conn: WorkerConn; replaced: boolean } | { ok: false; code: 4009; reason: string }
+
 const conns = new Map<string, WorkerConn>()
 const byAgent = new Map<string, string>()
 const seen = new Map<string, number>()
 let startedAt = Date.now()
 
-export function addConnection(
-  init: ConnInit,
-  now: number = Date.now(),
-): { ok: true; conn: WorkerConn; replaced: boolean } | { ok: false; code: 4009; reason: string } {
-  const existingId = byAgent.get(init.agentId)
-  const existing = existingId ? conns.get(existingId) : undefined
-  if (existing && existing.hostname !== init.hostname) {
+const PLACEHOLDER = /^anon-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** The agent id a socket holds until it names itself (a legacy script connects with its key only). */
+export function placeholderAgentId(): string {
+  return `anon-${randomUUID()}`
+}
+
+export function isPlaceholderAgentId(agentId: string): boolean {
+  return PLACEHOLDER.test(agentId)
+}
+
+/** A placeholder is never an assignee, so it is not remembered once its socket is gone. */
+function markSeen(agentId: string, now: number): void {
+  if (!isPlaceholderAgentId(agentId)) seen.set(agentId, now)
+}
+
+/**
+ * Makes way for `connectionId` (absent: a new socket) to take `agentId` from
+ * `hostname`: refused while another host holds it; a socket of the same host
+ * is closed 4000 and dropped.
+ */
+function claim(
+  agentId: string, hostname: string, connectionId?: string,
+): { ok: true; replaced: boolean } | { ok: false; code: 4009; reason: string } {
+  const existing = getByAgent(agentId)
+  if (!existing || existing.connectionId === connectionId) return { ok: true, replaced: false }
+  if (existing.hostname !== hostname) {
     return { ok: false, code: CLOSE_CODES.agentIdInUse, reason: `agent id in use on ${existing.hostname}` }
   }
-  if (existing) {
-    conns.delete(existing.connectionId)
-    byAgent.delete(existing.agentId)
-    existing.ws.close(CLOSE_CODES.replaced, 'replaced')
-  }
+  conns.delete(existing.connectionId)
+  byAgent.delete(existing.agentId)
+  existing.ws.close(CLOSE_CODES.replaced, 'replaced')
+  return { ok: true, replaced: true }
+}
+
+export function addConnection(init: ConnInit, now: number = Date.now()): AddResult {
+  const claimed = claim(init.agentId, init.hostname)
+  if (!claimed.ok) return claimed
   const stamp = isoSeconds(now)
   const conn: WorkerConn = {
     ...init,
@@ -54,8 +80,31 @@ export function addConnection(
   }
   conns.set(conn.connectionId, conn)
   byAgent.set(conn.agentId, conn.connectionId)
-  seen.set(conn.agentId, now)
-  return { ok: true, conn, replaced: !!existing }
+  markSeen(conn.agentId, now)
+  return { ok: true, conn, replaced: claimed.replaced }
+}
+
+/**
+ * Gives a connection the identity its register message names, by
+ * `addConnection`'s rules: refused (4009) while another host holds `agentId`;
+ * an older socket of the same host is closed 4000 and replaced. The old id
+ * no longer resolves. Undefined when the connection is unknown.
+ */
+export function rekeyConnection(
+  connectionId: string, agentId: string, hostname: string, now: number = Date.now(),
+): AddResult | undefined {
+  const conn = conns.get(connectionId)
+  if (!conn) return undefined
+  const claimed = claim(agentId, hostname, connectionId)
+  if (!claimed.ok) return claimed
+  if (byAgent.get(conn.agentId) === connectionId) byAgent.delete(conn.agentId)
+  if (isPlaceholderAgentId(conn.agentId)) seen.delete(conn.agentId)
+  else markSeen(conn.agentId, now)
+  conn.agentId = agentId
+  conn.hostname = hostname
+  byAgent.set(agentId, connectionId)
+  markSeen(agentId, now)
+  return { ok: true, conn, replaced: claimed.replaced }
 }
 
 /** Returns false when the connection is unknown (e.g. a late close of a replaced socket). */
@@ -64,7 +113,7 @@ export function removeConnection(connectionId: string, now: number = Date.now())
   if (!conn) return false
   conns.delete(connectionId)
   if (byAgent.get(conn.agentId) === connectionId) byAgent.delete(conn.agentId)
-  seen.set(conn.agentId, now)
+  markSeen(conn.agentId, now)
   return true
 }
 
@@ -95,7 +144,7 @@ export function touch(connectionId: string, now: number = Date.now()): void {
   const conn = conns.get(connectionId)
   if (!conn) return
   conn.lastPing = isoSeconds(now)
-  seen.set(conn.agentId, now)
+  markSeen(conn.agentId, now)
 }
 
 /** Connected now → `now`; otherwise when it was last seen; never seen → registry start. */

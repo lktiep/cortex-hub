@@ -51,13 +51,32 @@ function open(params: Record<string, string>): Client {
   return client
 }
 
-async function connect(agentId: string, hostname = `host-${agentId}`, apiKey = 'sk_test'): Promise<Client> {
-  const client = open({ apiKey, agentId, hostname })
+async function opened(params: Record<string, string>): Promise<Client> {
+  const client = open(params)
   await new Promise<void>((resolve, reject) => {
     client.ws.once('open', () => resolve())
     client.ws.once('error', reject)
   })
   return client
+}
+
+/** A protocol-2 worker: it says so in the query and is not ready before `worker.register`. */
+function connect(agentId: string, hostname = `host-${agentId}`, apiKey = 'sk_test'): Promise<Client> {
+  return opened({ apiKey, agentId, hostname, protocol: '2' })
+}
+
+/** A protocol-1 client with its identity in the query (the extension): ready on connect. */
+function connectLegacy(agentId: string, hostname = `host-${agentId}`, extra: Record<string, string> = {}): Promise<Client> {
+  return opened({ apiKey: 'sk_test', agentId, hostname, ...extra })
+}
+
+/** A script that connects with its key only and names itself in `agent.register`. */
+function connectBare(): Promise<Client> {
+  return opened({ apiKey: 'sk_test' })
+}
+
+function agentRegister(client: Client, agentId: string | undefined, hostname: string): void {
+  send(client, { type: 'agent.register', agentId, hostname, os: 'linux', ide: 'cli', capabilities: [] })
 }
 
 function send(client: Client, msg: object): void {
@@ -94,6 +113,19 @@ function types(client: Client): string[] {
   return client.inbox.map((m) => m.type)
 }
 
+/** Waits for a condition on the hub side (e.g. that it has processed a close). */
+async function until(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('condition not met in time')
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
+
+function connectedIds(): string[] {
+  return getAllConnectedAgents().map((a) => a.agentId).sort()
+}
+
 function row(id: string): TaskRow {
   return testDb.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow
 }
@@ -102,8 +134,6 @@ function logs(taskId: string, action: string): { agent_id: string | null; messag
   return testDb.prepare('SELECT agent_id, message FROM conductor_task_logs WHERE task_id = ? AND action = ? ORDER BY id')
     .all(taskId, action) as { agent_id: string | null; message: string | null }[]
 }
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 beforeEach(async () => {
   // the hub logs every connection; a handler that throws is logged as an error and fails the test
@@ -157,13 +187,36 @@ describe('worker.register', () => {
     expect(row('t1')).toMatchObject({ status: 'assigned', assigned_to_agent: 'w1', attempt: 1 })
   })
 
-  it('does not dispatch or re-push on connect, only after register', async () => {
+  it('a protocol=2 connect gets nothing before worker.register, not even its own task', async () => {
+    const lease = isoSeconds(Date.now() + 3600_000)
+    insertTask(testDb, { id: 'mine', status: 'assigned', assigned_to_agent: 'w1', attempt: 1, lease_expires_at: lease, project_id: 'p1' })
     insertTask(testDb, { id: 't1', status: 'pending', project_id: 'p1' })
+    const before = row('mine')
     const w = await connect('w1')
     await next(w, 'welcome')
     await sync(w)
     expect(types(w)).toEqual([])
     expect(row('t1').status).toBe('pending')
+    expect(row('mine')).toEqual(before)
+    register(w, { activeTaskId: 'mine' })
+    expect(await next(w, 'task.resumed')).toMatchObject({ taskId: 'mine' })
+  })
+
+  it('a repeated worker.register on a registered connection only updates it', async () => {
+    insertTask(testDb, { id: 'gone', status: 'pending', project_id: 'p1', escalated_at: isoSeconds() })
+    const w = await connect('w1')
+    await next(w, 'welcome')
+    register(w)
+    await next(w, 'registered')
+    await sync(w)
+    insertTask(testDb, { id: 'held', status: 'assigned', assigned_to_agent: 'w1', attempt: 1, project_id: 'p1', pinned_agent: 'elsewhere' })
+    const held = row('held')
+    register(w, { activeTaskId: 'gone', version: '2.0.1' })
+    expect(await next(w, 'registered')).toMatchObject({ projectId: 'p1' })
+    await sync(w)
+    expect(types(w)).toEqual([])
+    expect(row('held')).toEqual(held)
+    expect(getAllConnectedAgents()[0]?.version).toBe('2.0.1')
   })
 
   it('stale activeTaskId is revoked and the row is left alone', async () => {
@@ -231,6 +284,45 @@ describe('worker.register', () => {
     expect(await w.closed).toEqual({ code: 4003, reason: 'key is scoped to another project' })
     expect(getAllConnectedAgents()).toEqual([])
   })
+
+  it('scoped key whose project is the repo project is accepted', async () => {
+    addKey('sk_p1', 'p1')
+    const w = await connect('w1', 'host-w1', 'sk_p1')
+    register(w)
+    expect(await next(w, 'registered')).toMatchObject({ projectId: 'p1' })
+  })
+
+  it('falls back to the key project when the repo maps to no project', async () => {
+    testDb.prepare("INSERT INTO projects (id, org_id, name, slug, git_repo_url) VALUES ('p2', 'org-1', 'q', 'q', NULL)").run()
+    addKey('sk_p2', 'p2')
+    const w = await connect('w1', 'host-w1', 'sk_p2')
+    register(w, { repo: 'https://github.com/o/unknown.git' })
+    expect(await next(w, 'registered')).toMatchObject({ projectId: 'p2' })
+  })
+
+  it('a true reconnect resumes once, without a failure or an offline broadcast', async () => {
+    const observer = await connect('obs')
+    insertTask(testDb, { id: 't1', status: 'pending', project_id: 'p1' })
+    const first = await connect('w1', 'host-a')
+    register(first)
+    await next(first, 'task.assigned')
+    send(first, { type: 'task.accept', taskId: 't1' })
+    await sync(first)
+    const before = row('t1')
+    expect(before.status).toBe('accepted')
+
+    const second = await connect('w1', 'host-a')
+    expect(await first.closed).toMatchObject({ code: 4000 })
+    register(second, { activeTaskId: 't1' })
+    expect(await next(second, 'task.resumed')).toMatchObject({ taskId: 't1' })
+    await sync(second)
+    expect(types(second).filter((t) => t.startsWith('task.'))).toEqual([])
+    expect(row('t1')).toEqual(before)
+    expect(logs('t1', 'returned')).toEqual([])
+    await until(() => wss.clients.size === 2)
+    await sync(observer)
+    expect(types(observer)).not.toContain('agent.offline')
+  })
 })
 
 describe('connections', () => {
@@ -239,10 +331,11 @@ describe('connections', () => {
     const first = await connect('w1', 'host-a')
     const second = await connect('w1', 'host-a')
     expect(await first.closed).toMatchObject({ code: 4000 })
-    await sleep(50)
+    // the hub has handled the first socket's close once it has left the server's client set
+    await until(() => wss.clients.size === 2)
     await sync(observer)
     expect(types(observer).filter((t) => t === 'agent.offline')).toEqual([])
-    expect(getAllConnectedAgents().map((a) => a.agentId).sort()).toEqual(['obs', 'w1'])
+    expect(connectedIds()).toEqual(['obs', 'w1'])
 
     second.ws.close()
     const offline = await next(observer, 'agent.offline')
@@ -292,6 +385,24 @@ describe('task messages', () => {
     expect(JSON.parse(row('t1').result ?? '')).toEqual({ summary: 'done' })
   })
 
+  it('ignores a decline or a quota report for a stale attempt', async () => {
+    insertTask(testDb, { id: 't1', status: 'pending', project_id: 'p1' })
+    const w = await connect('w1')
+    register(w)
+    await next(w, 'task.assigned')
+    send(w, { type: 'task.accept', taskId: 't1' })
+    await sync(w)
+    const before = row('t1')
+    send(w, { type: 'task.decline', taskId: 't1', reason: 'not mine', attempt: 0 })
+    send(w, {
+      type: 'task.quota_exhausted', taskId: 't1', executor: 'claude', model: 'opus', raw: 'limit',
+      handoff: { branch: 'cx/t1', commit: null, note: '' }, attempt: 0,
+    })
+    await sync(w)
+    expect(row('t1')).toEqual(before)
+    expect(testDb.prepare('SELECT COUNT(*) AS n FROM conductor_quota').get()).toEqual({ n: 0 })
+  })
+
   it('status.update sets the status and idle dispatches', async () => {
     const w = await connect('w1')
     register(w)
@@ -326,7 +437,7 @@ describe('legacy workers', () => {
   it('legacy worker gets only executor-null tasks with flat fields', async () => {
     insertTask(testDb, { id: 't-agy', title: 'Agy job', status: 'pending', executor: 'agy', created_at: '2026-01-01T00:00:00Z' })
     insertTask(testDb, { id: 't-any', title: 'Any job', description: 'plain', status: 'pending', created_at: '2026-01-02T00:00:00Z' })
-    const legacy = await connect('legacy', 'h-legacy')
+    const legacy = await connectLegacy('legacy', 'h-legacy')
     send(legacy, { type: 'agent.register', capabilities: [], hostname: 'h-legacy', ide: 'cli', os: 'linux' })
     const msg = await next(legacy, 'task.assigned')
     expect(msg).toMatchObject({ taskId: 't-any', title: 'Any job', description: 'plain' })
@@ -346,11 +457,117 @@ describe('legacy workers', () => {
   it('agent.register does not reconcile active tasks', async () => {
     insertTask(testDb, { id: 't1', status: 'in_progress', assigned_to_agent: 'legacy', attempt: 1 })
     const before = row('t1')
-    const legacy = await connect('legacy')
+    const legacy = await connectLegacy('legacy')
     send(legacy, { type: 'agent.register', capabilities: [] })
     await sync(legacy)
     expect(row('t1')).toEqual(before)
     expect(types(legacy)).toEqual(['welcome'])
+  })
+
+  it('extension-style connect with query identity gets an executor-null task without registering', async () => {
+    insertTask(testDb, { id: 't-agy', status: 'pending', executor: 'agy', created_at: '2026-01-01T00:00:00Z' })
+    insertTask(testDb, { id: 't-any', title: 'Any job', description: 'plain', status: 'pending', created_at: '2026-01-02T00:00:00Z' })
+    const ext = await connectLegacy('ext', 'h-ext', {
+      ide: 'vscode', platform: 'darwin', capabilities: encodeURIComponent(JSON.stringify([])),
+    })
+    expect(await next(ext, 'task.assigned')).toMatchObject({ taskId: 't-any', title: 'Any job', description: 'plain' })
+    await sync(ext)
+    expect(types(ext)).not.toContain('task.assigned')
+    expect(row('t-agy').status).toBe('pending')
+    expect(row('t-any')).toMatchObject({ status: 'assigned', assigned_to_agent: 'ext' })
+  })
+
+  it('agent.register ignores identity fields when the query named the agent', async () => {
+    const legacy = await connectLegacy('legacy', 'h-legacy')
+    agentRegister(legacy, 'other', 'h-other')
+    await sync(legacy)
+    expect(getAllConnectedAgents()).toEqual([expect.objectContaining({ agentId: 'legacy', hostname: 'h-legacy', ide: 'cli' })])
+  })
+
+  it('task.create with assignTo pins the task and delivers it through the dispatcher', async () => {
+    const target = await connect('w2')
+    register(target)
+    await next(target, 'registered')
+    await sync(target)
+    const creator = await connectLegacy('creator', 'h-c')
+    send(creator, { type: 'task.create', title: 'Do X', description: 'the thing', assignTo: 'w2' })
+    const created = await next(creator, 'task.created')
+    const msg = await next(target, 'task.assigned')
+    expect(msg).toMatchObject({ taskId: created.taskId, title: 'Do X', task: expect.objectContaining({ id: created.taskId }) })
+    expect(row(created.taskId as string)).toMatchObject({
+      status: 'assigned', assigned_to_agent: 'w2', pinned_agent: 'w2', created_by_agent: 'creator',
+    })
+    await sync(creator)
+    await sync(target)
+    expect(types(creator)).not.toContain('task.assigned')
+    expect(types(target)).not.toContain('task.assigned')
+  })
+})
+
+describe('query-less legacy scripts', () => {
+  it('are not listed or announced until agent.register names them', async () => {
+    const observer = await connect('obs')
+    const bare = await connectBare()
+    const welcome = await next(bare, 'welcome')
+    expect(String(welcome.agentId)).toMatch(/^anon-/)
+    await sync(observer)
+    expect(types(observer)).not.toContain('agent.online')
+    expect(connectedIds()).toEqual(['obs'])
+    agentRegister(bare, 'script', 'h-script')
+    expect(await next(observer, 'agent.online')).toMatchObject({ agentId: 'script', hostname: 'h-script' })
+    expect(connectedIds()).toEqual(['obs', 'script'])
+  })
+
+  it('two scripts on different hosts both stay connected and each gets its own task', async () => {
+    insertTask(testDb, { id: 'ta', status: 'pending', pinned_agent: 'sa' })
+    insertTask(testDb, { id: 'tb', status: 'pending', pinned_agent: 'sb' })
+    const a = await connectBare()
+    const b = await connectBare()
+    await sync(a)
+    await sync(b)
+    expect(row('ta').status).toBe('pending')
+    agentRegister(a, 'sa', 'h-a')
+    agentRegister(b, 'sb', 'h-b')
+    expect(await next(a, 'task.assigned')).toMatchObject({ taskId: 'ta' })
+    expect(await next(b, 'task.assigned')).toMatchObject({ taskId: 'tb' })
+    await sync(a)
+    await sync(b)
+    expect(a.ws.readyState).toBe(WebSocket.OPEN)
+    expect(b.ws.readyState).toBe(WebSocket.OPEN)
+    expect(row('ta')).toMatchObject({ status: 'assigned', assigned_to_agent: 'sa' })
+    expect(row('tb')).toMatchObject({ status: 'assigned', assigned_to_agent: 'sb' })
+    expect(connectedIds()).toEqual(['sa', 'sb'])
+  })
+
+  it('the same agentId from another host is refused with 4009', async () => {
+    const a = await connectBare()
+    agentRegister(a, 'sa', 'h-a')
+    await sync(a)
+    const b = await connectBare()
+    agentRegister(b, 'sa', 'h-b')
+    expect(await b.closed).toEqual({ code: 4009, reason: 'agent id in use on h-a' })
+    await sync(a)
+    expect(a.ws.readyState).toBe(WebSocket.OPEN)
+    expect(connectedIds()).toEqual(['sa'])
+  })
+
+  it('the same agentId from the same host replaces the older socket', async () => {
+    const a = await connectBare()
+    agentRegister(a, 'sa', 'h-a')
+    await sync(a)
+    const b = await connectBare()
+    agentRegister(b, 'sa', 'h-a')
+    expect(await a.closed).toMatchObject({ code: 4000 })
+    await sync(b)
+    expect(connectedIds()).toEqual(['sa'])
+  })
+
+  it('agent.register without an agentId is closed with 4001', async () => {
+    const bare = await connectBare()
+    agentRegister(bare, undefined, 'h-x')
+    expect(await bare.closed).toEqual({ code: 4001, reason: 'agentId required' })
+    await until(() => wss.clients.size === 0)
+    expect(connectedIds()).toEqual([])
   })
 })
 
@@ -368,6 +585,34 @@ describe('pushTaskToAgent', () => {
     const r = row('t1')
     expect(r).toMatchObject({ status: 'assigned', assigned_to_agent: 'w1', pinned_agent: 'w1' })
     expect(r.lease_expires_at).not.toBeNull()
+    expect(logs('t1', 'pinned')).toEqual([{ agent_id: 'w1', message: 'pinned to w1' }])
+  })
+
+  it('pins a pending task and dispatches it to that agent once', async () => {
+    const w = await connect('w1')
+    register(w)
+    await next(w, 'registered')
+    await sync(w)
+    insertTask(testDb, { id: 't1', title: 'Fresh', status: 'pending', project_id: 'p1' })
+    expect(pushTaskToAgent('w1', 't1', 'Fresh', '')).toBe(true)
+    expect(await next(w, 'task.assigned')).toMatchObject({ taskId: 't1', task: expect.objectContaining({ id: 't1' }) })
+    await sync(w)
+    expect(types(w)).not.toContain('task.assigned')
+    expect(row('t1')).toMatchObject({ status: 'assigned', assigned_to_agent: 'w1', pinned_agent: 'w1' })
+    expect(logs('t1', 'pinned')).toEqual([{ agent_id: 'w1', message: 'pinned to w1' }])
+  })
+
+  it('only pins a blocked task: the dispatcher sends it once it unblocks', async () => {
+    const w = await connect('w1')
+    register(w)
+    await next(w, 'registered')
+    await sync(w)
+    insertTask(testDb, { id: 't1', title: 'Later', status: 'blocked', project_id: 'p1' })
+    expect(pushTaskToAgent('w1', 't1', 'Later', '')).toBe(false)
+    await sync(w)
+    expect(types(w)).not.toContain('task.assigned')
+    expect(row('t1')).toMatchObject({ status: 'blocked', pinned_agent: 'w1', assigned_to_agent: null })
+    expect(logs('t1', 'pinned')).toEqual([{ agent_id: 'w1', message: 'pinned to w1' }])
   })
 
   it('sends the flat legacy message for a task outside the dispatcher', async () => {

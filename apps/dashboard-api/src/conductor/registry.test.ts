@@ -6,8 +6,8 @@ let testDb: Database.Database
 vi.mock('../db/client.js', () => ({ get db() { return testDb } }))
 
 import {
-  addConnection, broadcastToOwner, getByAgent, lastSeen, removeConnection, resetRegistry,
-  sendTo, setStatus, updateConnection, type ConnInit,
+  addConnection, broadcastToOwner, getByAgent, getConnection, isPlaceholderAgentId, lastSeen, placeholderAgentId,
+  rekeyConnection, removeConnection, resetRegistry, sendTo, setStatus, updateConnection, type ConnInit,
 } from './registry.js'
 
 beforeAll(() => { testDb = createTestDb() })
@@ -129,5 +129,76 @@ describe('registry', () => {
     expect(a.sent).toEqual([])
     expect(b.sent).toEqual([{ type: 'n' }])
     expect(c.sent).toEqual([])
+  })
+})
+
+describe('rekeyConnection', () => {
+  beforeEach(() => resetRegistry(1_000))
+
+  /** A socket that connected with its key only, under a placeholder id. */
+  function anonymous(hostname = '', ws = fakeSocket()): { id: string; placeholder: string } {
+    const r = addConnection(init(placeholderAgentId(), hostname, ws), 2_000)
+    if (!r.ok) throw new Error('expected ok')
+    return { id: r.conn.connectionId, placeholder: r.conn.agentId }
+  }
+
+  it('placeholder ids are unique and recognised; real ids are not', () => {
+    const a = placeholderAgentId()
+    expect(a).not.toBe(placeholderAgentId())
+    expect(isPlaceholderAgentId(a)).toBe(true)
+    expect(isPlaceholderAgentId('w1')).toBe(false)
+    expect(isPlaceholderAgentId('anon-bot')).toBe(false)
+  })
+
+  it('takes the named id and host; the placeholder no longer resolves', () => {
+    const { id, placeholder } = anonymous()
+    const r = rekeyConnection(id, 'w1', 'h1', 3_000)
+    expect(r).toMatchObject({ ok: true, replaced: false, conn: { connectionId: id, agentId: 'w1', hostname: 'h1' } })
+    expect(getByAgent('w1')?.connectionId).toBe(id)
+    expect(getByAgent(placeholder)).toBeUndefined()
+    expect(getConnection(id)?.agentId).toBe('w1')
+  })
+
+  it('moves the seen bookkeeping to the named id and forgets the placeholder', () => {
+    const { id, placeholder } = anonymous()
+    rekeyConnection(id, 'w1', 'h1', 3_000)
+    expect(lastSeen(placeholder, 9_000)).toBe(1_000) // never seen: registry start
+    removeConnection(id, 5_000)
+    expect(lastSeen('w1', 9_000)).toBe(5_000)
+    expect(lastSeen(placeholder, 9_000)).toBe(1_000)
+  })
+
+  it('a placeholder that closes without naming itself is not remembered', () => {
+    const { id, placeholder } = anonymous()
+    removeConnection(id, 5_000)
+    expect(lastSeen(placeholder, 9_000)).toBe(1_000)
+  })
+
+  it('refuses an id held from another host and leaves both sockets as they were', () => {
+    const held = fakeSocket()
+    addConnection(init('w1', 'h1', held))
+    const { id, placeholder } = anonymous('h2')
+    expect(rekeyConnection(id, 'w1', 'h2')).toEqual({ ok: false, code: 4009, reason: 'agent id in use on h1' })
+    expect(held.closed).toBeNull()
+    expect(getByAgent('w1')?.ws).toBe(held)
+    expect(getByAgent(placeholder)?.connectionId).toBe(id)
+  })
+
+  it('replaces an older socket of the same host', () => {
+    const older = fakeSocket()
+    const o = addConnection(init('w1', 'h1', older))
+    if (!o.ok) throw new Error('expected ok')
+    const { id } = anonymous()
+    expect(rekeyConnection(id, 'w1', 'h1')).toMatchObject({ ok: true, replaced: true })
+    expect(older.closed).toEqual({ code: 4000, reason: 'replaced' })
+    expect(getByAgent('w1')?.connectionId).toBe(id)
+    expect(getConnection(o.conn.connectionId)).toBeUndefined()
+    expect(removeConnection(o.conn.connectionId)).toBe(false) // its late close changes nothing
+    expect(getByAgent('w1')?.connectionId).toBe(id)
+  })
+
+  it('is undefined for an unknown connection', () => {
+    expect(rekeyConnection('nope', 'w1', 'h1')).toBeUndefined()
+    expect(getByAgent('w1')).toBeUndefined()
   })
 })

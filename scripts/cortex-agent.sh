@@ -923,7 +923,7 @@ run_agent() {
               status="completed"
               [ "$exit_code" -ne 0 ] && status="failed"
 
-              echo "{\"type\":\"task.complete\",\"taskId\":\"$task_id\",\"result\":\"$result\",\"timestamp\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"}" >&7
+              echo "{\"type\":\"task.complete\",\"taskId\":\"$task_id\",\"status\":\"$status\",\"result\":\"$result\",\"timestamp\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"}" >&7
 
               log_info "Task $task_id $status (exit=$exit_code)"
             ) &
