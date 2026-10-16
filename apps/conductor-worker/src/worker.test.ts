@@ -787,3 +787,25 @@ describe('engine process group', () => {
     expect(w.registerPayload().activeTaskId).toBe(TASK_A);
   });
 });
+
+describe('a throw before the run', () => {
+  it('releases the slot, so the worker takes the next task', async () => {
+    const h = harness();
+    h.onReliable.fn = (m) => {
+      if (m.type === 'task.accept' && m.taskId === TASK_A) throw new Error('the socket went away');
+    };
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    await vi.waitFor(() => expect(h.logs).toContain(`ERROR task ${TASK_A}: the socket went away`), { timeout: 5_000 });
+    // polled, not awaited through idle(): a slot that is never released would spin idle() forever
+    await vi.waitFor(() => expect(w.busy).toBe(false), { timeout: 2_000 });
+    expect(h.calls).toHaveLength(0);
+
+    w.handle(assigned(makeTask({ id: TASK_B, branch: 'task/k-2' })));
+    const call = await started(h);
+    expect(call.task.id).toBe(TASK_B);
+    call.finish({ kind: 'completed', msg: done(call.task) });
+    await w.idle();
+    expect(w.busy).toBe(false);
+  });
+});

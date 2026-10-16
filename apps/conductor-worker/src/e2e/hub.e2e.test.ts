@@ -388,9 +388,14 @@ describe.skipIf(
     const branch = t.B.branch ?? '';
     expect(originGit(['log', '-1', '--format=%s', branch])).toBe(`B: ${TITLES.B}`);
     expect(originGit(['log', '-1', '--format=%s', `${branch}^1`])).toBe('WIP B: quota handoff');
+    // found by model, not by position: the quota run, then the fallback run right after it
     const runs = readJsonLines<{ model: string; prompt: string }>(agyLog);
-    expect(runs.slice(1, 3).map((r) => r.model)).toEqual([QUOTA_MODEL, FALLBACK.model]);
-    expect(runs[2]?.prompt).toContain('## Handoff from the previous run');
+    const quotaRun = runs.findIndex((r) => r.model === QUOTA_MODEL);
+    expect(quotaRun, JSON.stringify(runs.map((r) => r.model))).toBeGreaterThanOrEqual(0);
+    expect(runs.filter((r) => r.model === QUOTA_MODEL)).toHaveLength(1);
+    const fallbackRun = runs[quotaRun + 1];
+    expect(fallbackRun?.model).toBe(FALLBACK.model);
+    expect(fallbackRun?.prompt).toContain('## Handoff from the previous run');
   }, 105_000); // waits: 90 s
 
   step('5. C runs last: the hub assigned A, B and C in that order', async () => {
