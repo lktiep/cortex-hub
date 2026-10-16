@@ -6,7 +6,7 @@ let testDb: Database.Database
 vi.mock('../db/client.js', () => ({ get db() { return testDb } }))
 
 import {
-  addConnection, broadcastToOwner, getByAgent, getConnection, isPlaceholderAgentId, lastSeen, placeholderAgentId,
+  addConnection, broadcastToOwner, getByAgent, getConnection, isPlaceholderAgentId, lastSeen, markFreed, placeholderAgentId,
   rekeyConnection, removeConnection, resetRegistry, sendTo, setStatus, updateConnection, type ConnInit,
 } from './registry.js'
 
@@ -118,6 +118,16 @@ describe('registry', () => {
     expect(getByAgent('w1')?.idleSince).toBe(7_000)
     setStatus('w1', 'idle', 9_000)
     expect(getByAgent('w1')?.idleSince).toBe(7_000)
+  })
+
+  it('markFreed makes the worker idle from now, even if it never reported busy', () => {
+    addConnection(init('w1', 'h1'), 2_000)
+    markFreed('w1', 5_000)
+    expect(getByAgent('w1')).toMatchObject({ status: 'idle', idleSince: 5_000 })
+    setStatus('w1', 'busy', 6_000)
+    markFreed('w1', 8_000)
+    expect(getByAgent('w1')).toMatchObject({ status: 'idle', idleSince: 8_000 })
+    expect(() => markFreed('nobody', 9_000)).not.toThrow()
   })
 
   it('broadcastToOwner reaches same owner only, minus the excluded agent', () => {

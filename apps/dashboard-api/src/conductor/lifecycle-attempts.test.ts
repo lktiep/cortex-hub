@@ -19,12 +19,12 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
 const CLAUDE: EngineInfo = { executor: 'claude', models: ['opus', 'sonnet'], defaultModel: 'opus' }
 const AGY: EngineInfo = { executor: 'agy', models: ['claude-sonnet-5-5-high', 'claude-sonnet-5-5-low'], defaultModel: null }
 
-function connect(agentId: string, engines: EngineInfo[] = [CLAUDE]): FakeSocket {
+function connect(agentId: string, engines: EngineInfo[] = [CLAUDE], at: number = NOW): FakeSocket {
   const ws = fakeSocket()
   const r = addConnection({
     ws, agentId, apiKeyOwner: 'o1', apiKeyProjectId: null, hostname: `host-${agentId}`,
     ide: null, platform: null, capabilities: [],
-  }, NOW)
+  }, at)
   if (!r.ok) throw new Error(r.reason)
   updateConnection(r.conn.connectionId, { protocol: 2, engines, projectId: null, ready: true })
   return ws
@@ -131,6 +131,24 @@ describe('completion', () => {
     }])
     // the worker is free again and the dispatch pass hands it the next task
     expect(row('t2')).toMatchObject({ status: 'assigned', assigned_to_agent: 'w1' })
+  })
+
+  it('the freed worker is idle from then, so the next task goes to a worker idle longer', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW })
+    try {
+      // a protocol-2 worker sends no status.update while it runs a task: w1 never reported busy
+      connect('w1', [CLAUDE], NOW - 2 * HOUR)
+      connect('w2', [CLAUDE], NOW - HOUR)
+      running('t1', 'w1', { review_required: 1 })
+      insertTask(testDb, { id: 't2', title: 'Next' })
+
+      expect(completeTask('t1', 'w1', 'completed', { summary: 'fixed' }).ok).toBe(true)
+
+      expect(getByAgent('w1')).toMatchObject({ status: 'idle', idleSince: NOW })
+      expect(row('t2')).toMatchObject({ status: 'assigned', assigned_to_agent: 'w2' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a worker reporting review goes to review without review_required, naming the branch', () => {

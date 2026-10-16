@@ -12,7 +12,7 @@ import { db } from '../db/client.js'
 import { getConductorConfig } from './config.js'
 import { dispatch } from './dispatcher.js'
 import { formatNotification, notifyLead } from './notify.js'
-import { getByAgent, sendTo, setStatus } from './registry.js'
+import { getByAgent, markFreed, sendTo, setStatus } from './registry.js'
 import { normalizeFiles } from './files.js'
 import {
   ACTIVE_STATUSES, getTask, isoSeconds, logTask, parseJson, stringList, taskContext, taskLabel, type TaskRow,
@@ -101,8 +101,9 @@ interface Send {
 }
 
 /**
- * What a committed step leaves to do: the messages to send, then the worker to
- * mark (null for none), then the dispatch pass.
+ * What a committed step leaves to do: the messages to send, then the worker
+ * whose task just left it (null for none) — idle from now (`markFreed`), or
+ * busy if `state` says so — then the dispatch pass.
  */
 interface Settled { outcome: Outcome; worker: string | null; state?: 'idle' | 'busy'; sends?: Send[] }
 
@@ -147,7 +148,10 @@ function settle(step: () => Settled, now?: number): Outcome {
   const { outcome, worker, state = 'idle', sends = [] } = db.transaction(step)()
   if (!outcome.ok) return outcome
   flush(sends)
-  if (worker !== null) setStatus(worker, state, now)
+  if (worker !== null) {
+    if (state === 'idle') markFreed(worker, now)
+    else setStatus(worker, state, now)
+  }
   dispatch(now)
   return outcome
 }

@@ -160,6 +160,19 @@ export function setStatus(agentId: string, status: 'idle' | 'busy', now: number 
   conn.status = status
 }
 
+/**
+ * The worker's task has just left it (finished, returned, revoked): idle from
+ * `now`, even if it never reported busy — a protocol-2 worker sends no
+ * `status.update` while it runs a task, so `setStatus` alone would keep the
+ * idle time from its connection and "idle longest" would mean "connected first".
+ */
+export function markFreed(agentId: string, now: number = Date.now()): void {
+  const conn = getByAgent(agentId)
+  if (!conn) return
+  conn.status = 'idle'
+  conn.idleSince = now
+}
+
 /** Sends on an open socket; a throwing send is logged and reported as false. */
 function sendOn(conn: WorkerConn, data: string): boolean {
   try {
