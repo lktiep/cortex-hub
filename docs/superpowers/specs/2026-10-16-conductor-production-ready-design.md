@@ -71,7 +71,7 @@ those decisions and keeps the plan moving when a machine or a model runs out.
 | W3 | `cortex-agent.sh:463-575` | `claude -p` runs with no `--model`. Engines cannot be told which model to use. |
 | W4 | `cortex-agent.sh` (accept path) | Accepts, then runs the engine in a background subshell, so a second push starts a second task on the same checkout. |
 | W5 | `cortex-agent.sh:923-926` | Computes the result status but never sends it. |
-| W6 | `cortex-agent.sh:270-363`, `apps/cortex-extension/src/config.ts:56-80,153-180` | Hub URL detection reads only the `mcp-remote` `args[2]` form. The `url` + `headers` form that Claude Code, Codex and agy now write is ignored. The extension falls back to `ws://localhost:8318` with no `/ws/conductor`. |
+| W6 | `cortex-agent.sh:270-363`, `apps/cortex-extension/src/config.ts:56-80,153-180`, `apps/cortex-extension/src/ws-client.ts:50`, `apps/cortex-extension/package.json` | Hub URL detection reads only the `mcp-remote` `args[2]` form, so Claude Code's `url` + `headers` entry is ignored. In the extension the derived URL already ends in `/ws/conductor` and `ws-client.ts` appends it again, and the `cortexHub.hubUrl` default (`ws://localhost:8318`) means detection never runs. |
 | W7 | — | Nothing does git. Engines edit the user's checkout directly. No branch, PR, or test output reaches the hub. |
 
 ### Antigravity CLI facts (probed on this machine)
@@ -240,7 +240,7 @@ blocked ───────────────▶ pending ─────
   `fail_count` and `reject_count`; `attempt` keeps counting.
 - An attempt never ends in `failed`: a failed attempt returns the task to
   `pending` or escalates it. A task the lead gives up on is `cancelled`
-  (existing cancel route). Rows already `failed` stay terminal. Dependents of
+  (`cortex_task_cancel`, the dashboard, or the existing cancel route). Rows already `failed` stay terminal. Dependents of
   a cancelled or failed task stay `blocked` and appear under "Needs you"; the
   lead unblocks them by editing their `dependsOn` (`cortex_task_route`).
 - `kind = gate` is never dispatched. It is `blocked` until its dependencies
@@ -357,7 +357,7 @@ through the hub-mcp proxy. Messages are JSON with a `type`.
 | Direction | Type | Payload | Hub effect |
 |---|---|---|---|
 | W→H | `worker.register` | `version, hostname, os, repo, capabilities[], engines[], defaultExecutor, activeTaskId?` | Registry update; reply `registered`; then resume, revoke or dispatch. |
-| H→W | `registered` | `connectionId, projectId, hubVersion, workerVersion` | Worker warns if its version differs. |
+| H→W | `registered` | `connectionId, projectId, hubVersion` | Worker warns if its own version differs (the bundle is stamped with the hub's release version at build time). |
 | H→W | `task.assigned` | `task: {id, key, title, description, context, files, branch, baseBranch, route: {executor, model, effort}, attempt, leaseExpiresAt, reviews[], handoff?, testCommand?}` | — |
 | H→W | `task.resumed` | same as `task.assigned` | Sent instead when `activeTaskId` is still assigned to this worker. |
 | H→W | `task.revoked` | `taskId, reason` | Worker stops the engine, pushes WIP, removes the worktree. Sent on cancel, reroute of an active task, reclaim, or a stale `activeTaskId`. |
@@ -377,7 +377,11 @@ existing `task.create`, `task.comment`, `task.strategy`, `task.synthesis` and
 - The worker reports `review` with a PR link and test output. The hub
   notifies the task's creator (`kind = review_ready`).
 - **Approve** (`cortex_task_review`, the dashboard, or legacy `PUT` with
-  `approved`) → `completed`, completion chain, dispatch.
+  `approved`) → `completed`, completion chain, dispatch. Approving does not
+  merge: dependents start from `baseBranch`, so when a dependent needs the
+  approved code the lead merges the PR first, then approves (the orchestrator
+  prompt says so). Stacking a dependent on its dependency's branch is out of
+  scope.
 - **Reject** with feedback → the same task returns to `pending`;
   `reject_count++`; `{at, by, verdict: 'reject', feedback}` is appended to
   `context.reviews`; branch and `last_agent` are kept, so the next attempt
@@ -429,6 +433,7 @@ A worker that reconnects with an `activeTaskId` that was reclaimed receives
 | `cortex_agents` *(new, read-only)* | Workers (host, OS, engines and models, capabilities, idle/busy, current task, quota until per model) plus MCP sessions from `session_handoffs` (agent, IDE, branch, last activity). The lead decides routing from this. |
 | `cortex_task_review` *(new)* | `taskId, verdict: 'approve'\|'reject', feedback?`. Works on `review` tasks and on gates with `approver: 'lead'`; refuses `approver: 'user'` gates (D8). |
 | `cortex_task_route` *(new)* | Change `executor`, `model`, `effort`, `fallback`, `pinnedAgent`, `priority`, `files` or `dependsOn` (cycle-checked) of a not-yet-completed task; `clearEscalation: true` resets the counters. An active task is revoked and returned to `pending` first. |
+| `cortex_task_cancel` *(new)* | `taskId, reason?`. Cancels a task the lead gives up on (revokes it if active). Its dependents stay `blocked` until rerouted. |
 | `cortex_task_create` *(fix)* | Maps priority labels to integers (critical 1, high 3, medium 5, low 8); accepts the routing fields; no longer pushes directly. |
 | `cortex_task_list` *(fix)* | Sends `assigned_to` and `projectId`, which the route now reads; adds `key`, `kind`, `wait_reason`, `escalated` to each row. |
 | `cortex_task_update` *(fix)* | Keeps its statuses; `review`/`completed`/`failed` go through `lifecycle.ts`; `message` is stored as a log row. |
@@ -452,13 +457,14 @@ A worker that reconnects with an `activeTaskId` that was reclaimed receives
 
 | Route | Change |
 |---|---|
-| `GET /api/conductor` | Reads `assigned_to`, `projectId`, `root` (a tree id); returns the new columns. |
+| `GET /api/conductor` | Reads `assigned_to`, `projectId`, `root` (a tree id) and `parent_task_id=none` (top-level only); returns the new columns. |
 | `GET /api/conductor/:id/tree` *(new)* | The whole tree under `:id` (recursive CTE) with logs omitted, plus the workers for its project. |
 | `POST /api/conductor/tree` *(new)* | Backend of `cortex_task_tree_create`. |
 | `POST /api/conductor/:id/review` *(new)* | Approve or reject (tasks and gates). Refuses a `user` gate when `X-API-Key-Owner` is present (D8). |
 | `POST /api/conductor/:id/route` *(new)* | Backend of `cortex_task_route`. |
 | `GET /api/conductor/agents` | Adds engines, models, quota and current task per worker; adds MCP sessions. |
-| `POST /api/conductor`, `PUT /:id`, `/auto-assign` | Go through `lifecycle.ts`; no direct pushes. |
+| `POST /api/conductor`, `PUT /:id`, `/auto-assign`, `/:id/cancel` | Go through `lifecycle.ts`; no direct pushes; cancel revokes an active task. |
+| `/api/tasks` (task board) | `POST` with `assignTo`, `PATCH` status/assignee, `/:id/assign`, `/:id/cancel`, `DELETE` go through `lifecycle.ts` and the dispatcher instead of writing statuses directly. |
 
 ### 6.12 Worker runtime (`apps/conductor-worker`)
 
@@ -467,19 +473,25 @@ vitest. esbuild bundles `src/cli.ts` with `ws` into one
 `dist/cortex-worker.mjs` (Node ≥ 20, no install step). The hub-mcp image builds
 it (`infra/Dockerfile.hub-mcp` adds the package to the deps stage and the turbo
 filter) and serves it at `GET /conductor/worker.mjs` and
-`GET /conductor/worker.version` on the MCP port. The code is public, so these
-routes need no key.
+`GET /conductor/worker.version` on the MCP port, from the Node entry
+(`node.ts`; `index.ts` is also the Cloudflare Workers entry and cannot read
+files). The code is public, so these routes need no key. hub-mcp's WebSocket
+proxy forwards dashboard-api's close code to the worker (today it closes the
+client with none, so 4000/4009 never arrive); a bad key is refused with HTTP
+401 at the handshake, which the worker treats like 4003.
 
 **Bootstraps.** `scripts/run-agent.sh` and `run-agent.ps1` become ~30-line
 scripts: check Node ≥ 20 and git, download
 `<hub>/conductor/worker.mjs` to `~/.cortex/worker/`, and run
 `node cortex-worker.mjs "$@"`. The hub URL comes from `--hub`, then
-`CORTEX_HUB_URL`, then the worker's own config detection.
+`CORTEX_HUB_URL`, then a cached bundle's `cortex-worker hub-url` (the
+worker's config detection exists only once it has been downloaded), else the
+bootstrap stops and asks for `--hub`.
 `cortex-agent.sh/.ps1` print a deprecation notice that points at them.
 
 **Commands.** `start [--daemon] [--agent-id] [--repo <path>] [--engines
-claude,agy] [--capabilities …]`, `stop`, `status`, `logs [-f]`, `doctor`,
-`update`. State and logs live in `~/.cortex/worker/<agentId>/` (PID file,
+claude,agy] [--capabilities …] [--hub] [--api-key]`, `stop`, `status`,
+`logs [-f]`, `doctor [--probe]`, `update`, `hub-url`. State and logs live in `~/.cortex/worker/<agentId>/` (PID file,
 log, config), so several workers on one machine do not collide.
 
 **Configuration detection.** In order: flags; env (`CORTEX_HUB_URL`,
@@ -496,14 +508,17 @@ with `task.decline {reason: 'busy'}`):
 1. `task.accept`.
 2. `git fetch origin`; `git worktree add` under
    `~/.cortex/worker/<agentId>/wt/<taskId>` on the task branch, from
-   `origin/<branch>` if it exists, else from `origin/<baseBranch>`.
+   `origin/<branch>` if it exists, else from `origin/<baseBranch>`. A fresh
+   worktree has no installed dependencies, so an optional setup command
+   (`context.setupCommand`, else `CORTEX_SETUP_CMD`) runs here; its failure is
+   `failed` with its output.
 3. Build the prompt: title, description, `files`, previous review feedback,
    handoff note, and the rules "do not commit, push, or switch branches; the
    worker does that".
 4. Run the engine adapter in the worktree; stream its output as
    `task.progress` (a line at most every 5 s).
 5. If `testCommand` (task context or `CORTEX_TEST_CMD`) is set, run it and keep
-   the last 200 lines.
+   the last 200 lines. A failing test command makes the task `failed`.
 6. If the worktree has changes: commit as `<key>: <title>`, push, and open a
    PR with `gh pr create` when `gh` is authenticated, else report the compare
    URL. No changes → `failed` with "engine made no changes", unless the task
@@ -531,6 +546,13 @@ error`:
 Model lists: `agy models`; for the others, a configurable list with `*`
 meaning "any model id is passed through". Unknown failures are `error`, never
 quota, so a misclassified failure escalates instead of looping.
+
+`claude`, `codex` and `gemini` install as npm `.cmd` shims on Windows, where
+cmd.exe cannot pass a multi-line argument and caps a command line at 8,191
+characters. Those three therefore take the prompt on **stdin** on every OS;
+the table shows the flags, not where the prompt goes. `agy` keeps `-p` (a
+native binary); if a Windows install turns out to be a `.cmd`, it moves to
+stdin too.
 
 **Doctor** prints, per check, ok or the fix: Node version, git, `gh auth
 status`, each engine found and logged in (a 1-token probe where cheap), hub
@@ -621,7 +643,7 @@ Based on the approved mock (`proposed.tsx`, screenshots shot-3/4).
 | agy start-up is ~2 min (MCP servers). | Not a correctness issue; `doctor` reports it; users can trim agy's MCP list. |
 | `--mode auto` soft-denies irreversible actions headless; Windows has no `auto`. | The worker owns git, so the engine never needs to push. Mode is configurable per engine. |
 | Same-file locks are only as good as `files`. | Tasks without `files` never conflict; the dashboard marks them; the orchestrator prompt asks for `files`. |
-| A shared API key splits notifications. | D7: separate keys documented; the dashboard shows everything regardless. |
+| A shared API key splits notifications. | D7: separate keys documented; the dashboard shows everything regardless. A machine that runs both the lead and a worker shares the key unless the worker's engines get their own MCP config; the setup doc says so. |
 | Hub restart forgets `lastSeen`. | Treated as the start time, so reclaim waits the full window. |
 
 ## 12. Plans
