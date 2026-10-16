@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cortex-hub": {
+      "serverUrl": "https://h.example/mcp",
+      "headers": { "Authorization": "Bearer ctx_test_key_6" }
+    }
+  }
+}

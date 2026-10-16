@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cortex-hub": {
+      "url": "http://localhost:8318/mcp",
+      "headers": { "Authorization": "Bearer ctx_test_key_5" }
+    }
+  }
+}

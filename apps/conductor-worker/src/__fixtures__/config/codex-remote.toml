@@ -1,0 +1,8 @@
+model = "gpt-5"
+
+[mcp_servers.cortex-hub]
+command = "npx"
+args = ["-y", "mcp-remote", "https://h.example/mcp", "--header", "Authorization: Bearer ${HUB_API_KEY}"]
+
+[mcp_servers.cortex-hub.env]
+HUB_API_KEY = "ctx_test_key_2"

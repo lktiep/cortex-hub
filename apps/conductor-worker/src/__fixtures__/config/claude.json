@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "cortex-hub": {
+      "type": "http",
+      "url": "https://h.example/mcp",
+      "headers": { "Authorization": "Bearer ctx_test_key_1" }
+    }
+  },
+  "projects": {
+    "__REPO__": {
+      "mcpServers": {
+        "cortex-hub": {
+          "type": "http",
+          "url": "https://p.example/mcp/",
+          "headers": { "Authorization": "Bearer ctx_test_key_proj" }
+        }
+      }
+    },
+    "/somewhere/else": {
+      "mcpServers": {
+        "cortex-hub": {
+          "type": "http",
+          "url": "https://other.example/mcp",
+          "headers": { "Authorization": "Bearer ctx_test_key_other" }
+        }
+      }
+    }
+  }
+}

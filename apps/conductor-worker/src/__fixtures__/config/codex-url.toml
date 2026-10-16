@@ -1,0 +1,3 @@
+[mcp_servers."cortex-hub"]
+url = "https://h.example/mcp"
+http_headers = { Authorization = "Bearer ctx_test_key_3" }
