@@ -1,4 +1,4 @@
-// Stands in for `agy` in worker.e2e.test.ts. It replays the recorded fixtures in
+// Stands in for `agy` in the end-to-end tests. It replays the recorded fixtures in
 // ../engines/__fixtures__/agy/ and never touches the network.
 //
 //   agy --version                     prints a version
@@ -8,6 +8,8 @@
 //   agy -p … (any other model)        appends to README.md and prints success.jsonl
 //
 // $E2E_AGY_LOG, when set, receives one JSON line per run with the model and the prompt.
+// $E2E_AGY_MIN_MS, when set, makes every -p run except `slow` last at least that long: the hub
+// stamps assigned_at to the second, and hub.e2e.test.ts orders tasks by it.
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -65,4 +67,10 @@ function main(args) {
   process.stdout.write(fixture('success.jsonl'));
 }
 
-main(process.argv.slice(2));
+const started = Date.now();
+const argv = process.argv.slice(2);
+main(argv);
+const minMs = Number(process.env.E2E_AGY_MIN_MS ?? 0);
+if (minMs > 0 && argv.includes('-p') && flag(argv, '--model') !== 'slow') {
+  setTimeout(() => undefined, Math.max(0, minMs - (Date.now() - started)));
+}

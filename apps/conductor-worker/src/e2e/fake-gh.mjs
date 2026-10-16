@@ -1,4 +1,4 @@
-// Stands in for `gh` in worker.e2e.test.ts; it never touches the network.
+// Stands in for `gh` in the end-to-end tests; it never touches the network.
 //
 //   gh auth status   exits 0
 //   gh pr create …   reads the body from stdin, prints the pull request URL
