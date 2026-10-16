@@ -5,6 +5,9 @@
       "inputs": ["src/**", "build.mjs", "package.json", "$TURBO_ROOT$/version.json"],
       "env": ["APP_VERSION"],
       "outputs": ["dist/**"]
+    },
+    "test": {
+      "dependsOn": ["^build", "build"]
     }
   }
 }
