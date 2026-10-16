@@ -16,6 +16,7 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY apps/hub-mcp/package.json ./apps/hub-mcp/
+COPY apps/conductor-worker/package.json ./apps/conductor-worker/
 COPY packages/shared-utils/package.json ./packages/shared-utils/
 COPY packages/shared-types/package.json ./packages/shared-types/
 
@@ -30,8 +31,11 @@ WORKDIR /app
 
 COPY . .
 
-RUN rm -rf apps/hub-mcp/dist packages/*/dist && \
-    npx turbo build --force --filter=@cortex/hub-mcp
+# Stamped into the worker bundle; empty falls back to version.json (local builds).
+ARG APP_VERSION=
+
+RUN rm -rf apps/hub-mcp/dist apps/conductor-worker/dist packages/*/dist && \
+    npx turbo build --force --filter=@cortex/hub-mcp --filter=@cortex/conductor-worker
 
 # Stage 4: Production deps only
 FROM base AS prod-deps
@@ -69,6 +73,10 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/apps/hub-mcp/dist ./apps/hub-mcp/dist
 COPY --from=builder /app/packages/shared-utils/dist ./packages/shared-utils/dist
 COPY --from=builder /app/packages/shared-types/dist ./packages/shared-types/dist
+
+# Conductor worker bundle, served by the gateway at /conductor/worker.mjs
+COPY --from=builder /app/apps/conductor-worker/dist/cortex-worker.mjs /app/apps/conductor-worker/dist/cortex-worker.version ./apps/conductor-worker/dist/
+ENV CONDUCTOR_WORKER_PATH=/app/apps/conductor-worker/dist/cortex-worker.mjs
 
 # Create workspace symlinks for ESM resolution
 RUN mkdir -p /app/node_modules/@cortex && \
