@@ -77,6 +77,8 @@
 .side h3 { font-size: .8rem; margin: 0 0 2px; display: flex; align-items: center; gap: 6px; }
 .side .count { font-size: .7rem; background: var(--bg-elevated); border-radius: 10px; padding: 0 7px; color: var(--text-secondary); }
 .need { font-size: .72rem; line-height: 1.35; color: var(--text-secondary); padding-left: 8px; border-left: 2px solid; margin: 0; }
+.needBtn { background: none; border-width: 0 0 0 2px; border-style: solid; text-align: left; cursor: pointer; font: inherit; font-size: .72rem; }
+.needBtn:hover { background: var(--bg-tertiary); }
 .need b { color: var(--text-primary); margin-right: 4px; }
 .red { border-color: #f87171; }
 .amber { border-color: #fbbf24; }

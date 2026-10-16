@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { toPlanTasks } from './model'
 import type { PlanTask } from './model'
-import { awaitingLead, needsYou, progressCounts, routeTally, workerRows } from './summary'
+import { awaitingLead, needsYou, progressCounts, progressSegments, routeTally, workerRows } from './summary'
 import { row, worker } from './test-fixtures'
 import type { ConductorTask } from '../api'
 
@@ -161,5 +161,22 @@ describe('workerRows', () => {
     ], tasks, NOW)
     expect(rows.map((r) => [r.hostname, r.agentId])).toEqual([['same', 'a'], ['same', 'b'], ['z', 'z']])
     expect(rows[0]?.currentTask).toBeNull()
+  })
+})
+
+describe('progressSegments', () => {
+  const zero = { done: 0, review: 0, running: 0, ready: 0, waiting: 0, blocked: 0, total: 0, stopped: 0 }
+
+  it('drops empty buckets and its percentages sum to 100', () => {
+    const segs = progressSegments({ ...zero, done: 3, review: 1, ready: 2, blocked: 4, total: 10 })
+    expect(segs.map((s) => s.bucket)).toEqual(['done', 'review', 'ready', 'blocked'])
+    expect(segs.map((s) => s.count)).toEqual([3, 1, 2, 4])
+    expect(segs.reduce((a, s) => a + s.percent, 0)).toBeCloseTo(100, 2)
+    expect(segs[0]?.color).toBe('#34d399')
+    expect(segs[3]?.color).toBe('#6b7280')
+  })
+
+  it('of an empty plan is []', () => {
+    expect(progressSegments(zero)).toEqual([])
   })
 })

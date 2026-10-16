@@ -1,6 +1,7 @@
 // Plan summaries: progress counts, Needs you, Awaiting lead, fallback tally and worker rows.
 // Pure folds over PlanTask[] — no React, no DOM; anything time-dependent takes `now`.
 import type { ConductorWorker } from '../api'
+import { STATUS_COLOR } from './flow'
 import { nodeNote, routeLabel } from './model'
 import type { PlanTask } from './model'
 
@@ -125,4 +126,13 @@ export function workerRows(workers: ConductorWorker[], tasks: PlanTask[], now: D
       }
     })
     .sort((a, b) => (a.hostname < b.hostname ? -1 : a.hostname > b.hostname ? 1 : a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0))
+}
+
+const BUCKETS: ProgressBucket[] = ['done', 'review', 'running', 'ready', 'waiting', 'blocked']
+
+export function progressSegments(counts: ProgressCounts): { bucket: ProgressBucket; count: number; percent: number; color: string }[] {
+  const sum = BUCKETS.reduce((a, b) => a + counts[b], 0)
+  return BUCKETS
+    .filter((b) => counts[b] > 0)
+    .map((b) => ({ bucket: b, count: counts[b], percent: (counts[b] / sum) * 100, color: STATUS_COLOR[b] }))
 }
