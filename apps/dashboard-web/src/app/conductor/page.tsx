@@ -17,7 +17,6 @@ import {
 } from '@/lib/api'
 import {
   TaskBriefingWizard,
-  PipelineDiagram,
   TaskDetail,
   AgentDetail,
   type StatusFilter,
@@ -39,6 +38,7 @@ import {
 } from './components'
 import { SkeletonCircle } from '@/components/ui/Skeleton'
 import { NumberTransition } from '@/components/ui/NumberTransition'
+import { PlanView } from './plan/PlanView'
 import styles from './page.module.css'
 
 // ── Pipeline Card Component ──
@@ -77,7 +77,7 @@ function PipelineCard({
   allNodes,
   onSelectTask,
   onDeletePipeline,
-  onShowDiagram,
+  onShowPlan,
   onFollowUp,
   onCancel,
 }: {
@@ -85,7 +85,7 @@ function PipelineCard({
   allNodes: TaskTreeNode[]
   onSelectTask: (task: ConductorTask) => void
   onDeletePipeline: (rootTaskId: string) => void
-  onShowDiagram: (rootTaskId: string) => void
+  onShowPlan: (rootTaskId: string) => void
   onFollowUp: (task: ConductorTask) => void
   onCancel: (taskId: string) => void
 }) {
@@ -239,10 +239,10 @@ function PipelineCard({
       <div className={styles.pcActionBar}>
         <button
           className={styles.pcActionBtn}
-          title="View pipeline diagram"
-          onClick={() => onShowDiagram(root.id)}
+          title="View plan"
+          onClick={() => onShowPlan(root.id)}
         >
-          <Link {...ICON_INLINE} /> Diagram
+          <Link {...ICON_INLINE} /> Plan
         </button>
         {isCompleted && (
           <button
@@ -328,14 +328,14 @@ function PipelineGrid({
   tasks,
   onSelectTask,
   onDeletePipeline,
-  onShowDiagram,
+  onShowPlan,
   onFollowUp,
   onCancel,
 }: {
   tasks: ConductorTask[]
   onSelectTask: (task: ConductorTask) => void
   onDeletePipeline: (rootTaskId: string) => void
-  onShowDiagram: (rootTaskId: string) => void
+  onShowPlan: (rootTaskId: string) => void
   onFollowUp: (task: ConductorTask) => void
   onCancel: (taskId: string) => void
 }) {
@@ -367,7 +367,7 @@ function PipelineGrid({
             allNodes={subtreeFlat}
             onSelectTask={onSelectTask}
             onDeletePipeline={onDeletePipeline}
-            onShowDiagram={onShowDiagram}
+            onShowPlan={onShowPlan}
             onFollowUp={onFollowUp}
             onCancel={onCancel}
           />
@@ -392,7 +392,7 @@ export default function ConductorPage() {
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [taskPrefill, setTaskPrefill] = useState<TaskPrefill | undefined>(undefined)
   const [resumeTask, setResumeTask] = useState<ResumeTask | undefined>(undefined)
-  const [diagramPipelineId, setDiagramPipelineId] = useState<string | null>(null)
+  const [planRootId, setPlanRootId] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
 
   const allTasks = data?.tasks ?? []
@@ -484,19 +484,6 @@ export default function ConductorPage() {
     setSelectedTask(null)
     setShowCreateForm(true)
   }, [])
-
-  const diagramTasks = useMemo(() => {
-    if (!diagramPipelineId) return []
-    const ids = new Set<string>()
-    function collect(parentId: string) {
-      ids.add(parentId)
-      for (const t of allTasks) {
-        if (t.parent_task_id === parentId) collect(t.id)
-      }
-    }
-    collect(diagramPipelineId)
-    return allTasks.filter((t) => ids.has(t.id))
-  }, [diagramPipelineId, allTasks])
 
   const filterTabs: { key: StatusFilter; label: string; count: number }[] = [
     { key: 'all', label: 'All', count: counts.all },
@@ -699,34 +686,13 @@ export default function ConductorPage() {
           tasks={filteredTasks}
           onSelectTask={setSelectedTask}
           onDeletePipeline={(rootId: string) => setDeleteConfirm(rootId)}
-          onShowDiagram={(rootId: string) => setDiagramPipelineId(rootId)}
+          onShowPlan={(rootId: string) => setPlanRootId(rootId)}
           onFollowUp={handleNewTaskFromOutcome}
           onCancel={handleCancel}
         />
       </div>
 
-      {/* Pipeline Diagram Modal */}
-      {diagramPipelineId && diagramTasks.length > 0 && (
-        <div className={styles.diagramModalOverlay} onClick={() => setDiagramPipelineId(null)}>
-          <div className={styles.diagramModalPanel} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.diagramModalHeader}>
-              <h2 className={styles.diagramModalTitle}>
-                <Link {...ICON_INLINE} /> Pipeline Diagram
-                <span className={styles.diagramModalSubtitle}>
-                  {diagramTasks.length} tasks
-                </span>
-              </h2>
-              <button className={styles.detailClose} onClick={() => setDiagramPipelineId(null)}>×</button>
-            </div>
-            <div className={styles.diagramModalBody}>
-              <PipelineDiagram
-                tasks={diagramTasks}
-                onNodeClick={(task) => { setDiagramPipelineId(null); setSelectedTask(task) }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      {planRootId && <PlanView rootId={planRootId} onClose={() => setPlanRootId(null)} />}
 
       {/* Delete Pipeline Confirmation */}
       {deleteConfirm && (

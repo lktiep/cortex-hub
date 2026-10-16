@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { toPlanTasks } from './model'
 import type { PlanTask } from './model'
-import { awaitingLead, needsYou, progressCounts, progressSegments, routeTally, workerRows } from './summary'
+import { awaitingLead, groupTabs, needsYou, progressCounts, progressSegments, routeTally, workerRows } from './summary'
 import { row, worker } from './test-fixtures'
 import type { ConductorTask } from '../api'
 
@@ -178,5 +178,28 @@ describe('progressSegments', () => {
 
   it('of an empty plan is []', () => {
     expect(progressSegments(zero)).toEqual([])
+  })
+})
+
+describe('groupTabs', () => {
+  it('lists groups in key order with work-task counts and summed estimates', () => {
+    const tasks = plan([
+      { id: 'p2', kind: 'group', task_key: 'P2', title: 'Second' },
+      { id: 'p1', kind: 'group', task_key: 'P1', title: 'First' },
+      { id: 'p3', kind: 'group', title: 'No key', task_key: null },
+      { id: 'a', parent_task_id: 'p1', context: '{"estimate":2}' },
+      { id: 'b', parent_task_id: 'p1', context: '{"estimate":0.5}' },
+      { id: 'g', parent_task_id: 'p1', kind: 'gate', approver: 'user' },
+      { id: 'c', parent_task_id: 'p2' },
+    ])
+    expect(groupTabs(tasks)).toEqual([
+      { id: 'p1', label: 'P1', count: 2, days: 2.5 },
+      { id: 'p2', label: 'P2', count: 1, days: 1 },
+      { id: 'p3', label: 'No key', count: 0, days: 0 },
+    ])
+  })
+
+  it('gives [] for a legacy tree without groups', () => {
+    expect(groupTabs(plan([{ id: 'a' }, { id: 'b' }]))).toEqual([])
   })
 })

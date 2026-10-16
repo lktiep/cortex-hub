@@ -136,3 +136,14 @@ export function progressSegments(counts: ProgressCounts): { bucket: ProgressBuck
     .filter((b) => counts[b] > 0)
     .map((b) => ({ bucket: b, count: counts[b], percent: (counts[b] / sum) * 100, color: STATUS_COLOR[b] }))
 }
+
+/** One tab per group, in key order: its work-task count and the sum of their estimates (days). */
+export function groupTabs(tasks: PlanTask[]): { id: string; label: string; count: number; days: number }[] {
+  return tasks
+    .filter((t) => t.kind === 'group')
+    .sort(byKey)
+    .map((g) => {
+      const work = tasks.filter((t) => t.kind === 'work' && t.groupId === g.id)
+      return { id: g.id, label: g.row.task_key ?? g.title, count: work.length, days: work.reduce((a, t) => a + t.estimate, 0) }
+    })
+}

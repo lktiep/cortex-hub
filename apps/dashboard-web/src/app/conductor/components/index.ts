@@ -1,6 +1,5 @@
 export { TaskBriefingWizard, type TaskPrefill, type ResumeTask } from './TaskBriefingWizard'
 export { StrategyReview } from './StrategyReview'
-export { PipelineDiagram } from './PipelineDiagram'
 export { TaskDetail } from './TaskDetail'
 export { DecisionMatrix } from './DecisionMatrix'
 export { AgentDetail } from './AgentDetail'

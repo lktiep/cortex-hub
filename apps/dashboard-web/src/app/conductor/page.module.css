@@ -2724,63 +2724,6 @@
   color: white;
 }
 
-/* ══════ Diagram Modal ══════ */
-.diagramModalOverlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(6px);
-  z-index: 1100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: fadeIn 0.15s ease;
-}
-
-.diagramModalPanel {
-  width: min(95vw, 1200px);
-  height: min(85vh, 800px);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  animation: scaleIn 0.2s ease;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.3);
-}
-
-.diagramModalHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--border-subtle);
-  flex-shrink: 0;
-}
-
-.diagramModalTitle {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.diagramModalSubtitle {
-  font-size: 0.75rem;
-  font-weight: 400;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-}
-
-.diagramModalBody {
-  flex: 1;
-  overflow: hidden;
-}
-
 /* ══════ Delete Confirmation ══════ */
 .confirmOverlay {
   position: fixed;
@@ -3410,14 +3353,7 @@
   }
 }
 
-/* ══════ Diagram Modal Responsive ══════ */
 @media (max-width: 768px) {
-  .diagramModalPanel {
-    width: 100vw;
-    height: 100vh;
-    border-radius: 0;
-  }
-
   .pipelineActions {
     flex-direction: row;
   }

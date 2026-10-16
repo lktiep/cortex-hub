@@ -1,0 +1,149 @@
+{
+  "tasks": [
+    {
+      "key": "DEMO",
+      "title": "Plan view demo",
+      "kind": "group"
+    },
+    {
+      "key": "P1",
+      "title": "Phase 1",
+      "kind": "group",
+      "parentKey": "DEMO"
+    },
+    {
+      "key": "P2",
+      "title": "Phase 2",
+      "kind": "group",
+      "parentKey": "DEMO"
+    },
+    {
+      "key": "A1",
+      "title": "Task A1",
+      "kind": "work",
+      "parentKey": "P1",
+      "context": {
+        "estimate": 1
+      },
+      "files": [
+        "src/db/schema.ts"
+      ],
+      "executor": "agy",
+      "model": "gemini-4-argon-low",
+      "fallback": [
+        {
+          "executor": "claude",
+          "model": "opus",
+          "effort": null
+        }
+      ]
+    },
+    {
+      "key": "A2",
+      "title": "Task A2",
+      "kind": "work",
+      "parentKey": "P1",
+      "context": {
+        "estimate": 2
+      },
+      "dependsOn": [
+        "A1"
+      ],
+      "files": [
+        "src/routes/"
+      ],
+      "executor": "codex"
+    },
+    {
+      "key": "A3",
+      "title": "Task A3",
+      "kind": "work",
+      "parentKey": "P1",
+      "context": {
+        "estimate": 1
+      },
+      "dependsOn": [
+        "A1"
+      ],
+      "files": [
+        "src/routes/items.test.ts"
+      ]
+    },
+    {
+      "key": "A4",
+      "title": "Task A4",
+      "kind": "work",
+      "parentKey": "P1",
+      "context": {
+        "estimate": 0.5
+      }
+    },
+    {
+      "key": "G1",
+      "title": "Gate G1",
+      "kind": "gate",
+      "parentKey": "P1",
+      "dependsOn": [
+        "A2",
+        "A3"
+      ],
+      "approver": "user"
+    },
+    {
+      "key": "B1",
+      "title": "Task B1",
+      "kind": "work",
+      "parentKey": "P2",
+      "context": {
+        "estimate": 3
+      },
+      "dependsOn": [
+        "G1"
+      ],
+      "files": [
+        "src/ui/list.tsx"
+      ],
+      "executor": "agy",
+      "model": "gemini-4-argon-low"
+    },
+    {
+      "key": "B2",
+      "title": "Task B2",
+      "kind": "work",
+      "parentKey": "P2",
+      "context": {
+        "estimate": 1
+      },
+      "dependsOn": [
+        "G1"
+      ],
+      "files": [
+        "src/ui/list.tsx"
+      ]
+    },
+    {
+      "key": "B3",
+      "title": "Task B3",
+      "kind": "work",
+      "parentKey": "P2",
+      "context": {
+        "estimate": 1
+      },
+      "dependsOn": [
+        "P1",
+        "B1",
+        "B2"
+      ]
+    },
+    {
+      "key": "G2",
+      "title": "Gate G2",
+      "kind": "gate",
+      "parentKey": "P2",
+      "dependsOn": [
+        "B3"
+      ],
+      "approver": "lead"
+    }
+  ]
+}
