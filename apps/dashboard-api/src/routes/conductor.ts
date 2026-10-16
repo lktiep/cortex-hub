@@ -1,90 +1,107 @@
-import { Hono } from 'hono'
-import { db } from '../db/client.js'
+import { Hono, type Context } from 'hono'
 import { randomUUID } from 'crypto'
+import type { ReviewRequest, RoutePatch, RouteSpec, SessionView, TaskResult, TreeCreateRequest } from '@cortex/shared-types'
+import { db } from '../db/client.js'
+import { getAllConnectedAgents, notifyAgents } from '../ws/conductor.js'
+import { dispatch, pickForPull } from '../conductor/dispatcher.js'
+import { normalizeFiles } from '../conductor/files.js'
 import {
-  getAllConnectedAgents,
-  pushTaskToAgent,
-  notifyAgents,
-  setAgentStatus,
-} from '../ws/conductor.js'
-import { agentMatchesAssignment } from '../conductor/dispatcher.js'
-import { onCompleted } from '../conductor/lifecycle.js'
-import type { TaskRow as ConductorTaskRow } from '../conductor/rows.js'
+  acceptTask, cancelTask, completeTask, onCompleted, recordProgress, rerouteTask, reviewTask, type Outcome,
+} from '../conductor/lifecycle.js'
+import { getByAgent } from '../conductor/registry.js'
+import { ACTIVE_STATUSES, getTask, logTask, parseJson, stringList, taskContext, type TaskRow } from '../conductor/rows.js'
+import { createTree, fallbackProblem, knownExecutor, priorityValue, stringListProblem } from '../conductor/tree.js'
 
 export const conductorRouter = new Hono()
 
-// ── Types (matches schema.sql conductor_tasks) ──
-interface TaskRow {
-  id: string
-  title: string
-  description: string
-  project_id: string | null
-  parent_task_id: string | null
-  created_by_agent: string | null
-  assigned_to_agent: string | null
-  assigned_session_id: string | null
-  status: string
-  priority: number
-  required_capabilities: string
-  depends_on: string
-  notify_on_complete: string
-  notified_agents: string
-  context: string
-  result: string | null
-  completed_by: string | null
-  created_at: string
-  assigned_at: string | null
-  accepted_at: string | null
-  completed_at: string | null
-}
+const MESSAGE_MAX = 4000
+const SESSION_LIMIT = 50
+const KINDS = ['work', 'gate', 'group'] as const
+/** TaskResult fields read as text downstream; a non-string value is dropped. */
+const RESULT_TEXT_FIELDS = ['prUrl', 'branch', 'commit', 'testOutput', 'error'] as const
 
 // ── Helpers ──
-
-/** Parse a JSON string field safely, returning fallback on error */
-function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
-  if (!value) return fallback
-  try {
-    return JSON.parse(value) as T
-  } catch {
-    return fallback
-  }
-}
 
 /** Generate a task ID */
 function generateTaskId(): string {
   return `task_${randomUUID().replace(/-/g, '').slice(0, 16)}`
 }
 
-/** Log a task action */
-function logTaskAction(taskId: string, agentId: string | null, action: string, message?: string): void {
-  db.prepare(
-    'INSERT INTO conductor_task_logs (task_id, agent_id, action, message) VALUES (?, ?, ?, ?)'
-  ).run(taskId, agentId, action, message ?? null)
+/** The JSON body when it is an object; null when it is missing, malformed or anything else. */
+async function readObject(c: Context): Promise<Record<string, unknown> | null> {
+  try {
+    const body: unknown = await c.req.json()
+    return typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
+/** The calling API key's owner, set by hub-mcp; absent for dashboard calls. */
+function headerOwner(c: Context): string | undefined {
+  return c.req.header('X-API-Key-Owner') || undefined
+}
+
+/** A lifecycle refusal as its HTTP answer. */
+function refusal(c: Context, r: { status: 400 | 403 | 404 | 409; error: string; cycle?: string[] }) {
+  return c.json(r.cycle === undefined ? { error: r.error } : { error: r.error, cycle: r.cycle }, r.status)
+}
+
+function isActiveStatus(status: string): boolean {
+  return (ACTIVE_STATUSES as readonly string[]).includes(status)
 }
 
 /**
- * Check if all dependencies of a task are completed.
- * Returns true if all dependency tasks have status='completed'.
+ * A REST `result` as a TaskResult: an object keeps its fields (non-string text
+ * fields dropped) and gets `summary: ''` when it has none; anything else
+ * becomes the summary.
  */
-function allDependenciesMet(dependsOn: string[]): boolean {
-  if (dependsOn.length === 0) return true
-  const placeholders = dependsOn.map(() => '?').join(',')
-  const completedCount = db.prepare(
-    `SELECT COUNT(*) as cnt FROM conductor_tasks WHERE id IN (${placeholders}) AND status = 'completed'`
-  ).get(...dependsOn) as { cnt: number }
-  return completedCount.cnt === dependsOn.length
+function toTaskResult(result: unknown): TaskResult {
+  if (result === undefined || result === null) return { summary: '' }
+  if (typeof result !== 'object') return { summary: String(result) }
+  if (Array.isArray(result)) return { summary: JSON.stringify(result) }
+  const fields: Record<string, unknown> = { ...result }
+  for (const f of RESULT_TEXT_FIELDS) {
+    if (fields[f] !== undefined && typeof fields[f] !== 'string') delete fields[f]
+  }
+  const s = fields.summary
+  fields.summary = typeof s === 'string' ? s : s === undefined || s === null ? '' : JSON.stringify(s)
+  // summary is a string and every text field a string or absent, as TaskResult requires
+  return fields as unknown as TaskResult
 }
 
-// ── Connected agents (real-time from WebSocket) ──
+/** Active sessions, the most recently active first. */
+function activeSessions(): SessionView[] {
+  return db.prepare(`
+    SELECT id AS sessionId, from_agent AS agentId, hostname, ide, branch, project_id AS projectId,
+           api_key_name AS apiKeyName, COALESCE(last_activity, created_at) AS lastActivity
+    FROM session_handoffs
+    WHERE status = 'active'
+    ORDER BY lastActivity DESC
+    LIMIT ?
+  `).all(SESSION_LIMIT) as SessionView[]
+}
+
+function allCompleted(ids: string[]): boolean {
+  if (ids.length === 0) return true
+  const placeholders = ids.map(() => '?').join(',')
+  const done = db.prepare(
+    `SELECT COUNT(*) as cnt FROM conductor_tasks WHERE id IN (${placeholders}) AND status = 'completed'`
+  ).get(...ids) as { cnt: number }
+  return done.cnt === ids.length
+}
+
+// ── Connected agents (real-time from WebSocket) and active sessions ──
 conductorRouter.get('/agents', (c) => {
   try {
     const connected = getAllConnectedAgents()
     return c.json({
       agents: connected,
       online: connected.length,
+      sessions: activeSessions(),
     })
   } catch (error) {
-    return c.json({ agents: [], online: 0, error: String(error) }, 500)
+    return c.json({ agents: [], online: 0, sessions: [], error: String(error) }, 500)
   }
 })
 
@@ -107,90 +124,53 @@ conductorRouter.get('/agents/capabilities', (c) => {
 })
 
 // ── Auto-assign task by capability ──
+// Only a pending task is routed: when one connected agent has every capability
+// the dispatcher assigns it; otherwise it is split into subtasks pinned to the
+// agents that together cover them. Assignment itself is always the dispatcher's.
 conductorRouter.post('/auto-assign', async (c) => {
   try {
-    const body = await c.req.json()
-    const {
-      taskId,
-      requiredCapabilities = [] as string[],
-      preferredPlatform,
-    } = body as {
-      taskId: string
-      requiredCapabilities?: string[]
-      preferredPlatform?: string
-    }
+    const body = await readObject(c)
+    if (body === null) return c.json({ error: 'a JSON object body is required' }, 400)
+    const { taskId, requiredCapabilities } = body
+    if (typeof taskId !== 'string' || taskId === '') return c.json({ error: 'taskId is required' }, 400)
+    const capsProblem = stringListProblem('requiredCapabilities', requiredCapabilities)
+    if (capsProblem !== null) return c.json({ error: capsProblem }, 400)
+    const given = requiredCapabilities as string[] | undefined
 
-    if (!taskId) return c.json({ error: 'taskId is required' }, 400)
-
-    const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(taskId) as TaskRow | undefined
+    const task = getTask(taskId)
     if (!task) return c.json({ error: 'Task not found' }, 404)
 
+    if (isActiveStatus(task.status)) {
+      return c.json({ task, assigned: true, agentId: task.assigned_to_agent })
+    }
+    if (task.status !== 'pending' && task.status !== 'blocked') {
+      return c.json({ error: `Cannot auto-assign a task in status '${task.status}'` }, 409)
+    }
+    if (given !== undefined) {
+      db.prepare('UPDATE conductor_tasks SET required_capabilities = ? WHERE id = ?').run(JSON.stringify(given), taskId)
+    }
+    // a blocked task is dispatched once its dependencies complete
+    if (task.status === 'blocked') return c.json({ task: getTask(taskId), assigned: false })
+
+    const caps = given ?? stringList(task.required_capabilities)
     const connected = getAllConnectedAgents()
     if (connected.length === 0) {
       return c.json({ error: 'No agents online', assigned: false }, 200)
     }
 
-    // Score each agent: +10 per matching capability, +5 for preferred platform, +3 for idle
-    type ScoredAgent = { agentId: string; score: number }
-    const scored: ScoredAgent[] = connected.map((agent) => {
-      let score = 0
-
-      // Check required capabilities
-      const agentCaps = agent.capabilities
-      for (const req of requiredCapabilities) {
-        if (agentCaps.includes(req)) {
-          score += 10
-        }
-      }
-
-      // Must have ALL required capabilities to be eligible
-      const hasAllRequired = requiredCapabilities.every((req) => agentCaps.includes(req))
-      if (!hasAllRequired && requiredCapabilities.length > 0) {
-        return { agentId: agent.agentId, score: -1 }
-      }
-
-      // Prefer matching platform
-      if (preferredPlatform && agent.platform?.toLowerCase() === preferredPlatform.toLowerCase()) {
-        score += 5
-      }
-
-      // Prefer idle agents
-      if (agent.status === 'idle') {
-        score += 3
-      }
-
-      return { agentId: agent.agentId, score }
-    })
-
-    // Filter out ineligible agents (score < 0) and sort by score descending
-    const eligible = scored.filter((a) => a.score >= 0).sort((a, b) => b.score - a.score)
-
-    if (eligible.length > 0) {
-      const bestAgent = eligible[0]!
-
-      // Assign the task
-      db.prepare(`
-        UPDATE conductor_tasks
-        SET assigned_to_agent = ?, assigned_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), status = CASE WHEN status = 'blocked' THEN 'blocked' ELSE 'pending' END
-        WHERE id = ?
-      `).run(bestAgent.agentId, taskId)
-
-      // Push notification via WebSocket
-      pushTaskToAgent(bestAgent.agentId, task.id, task.title, task.description)
-      setAgentStatus(bestAgent.agentId, 'busy')
-
-      logTaskAction(taskId, bestAgent.agentId, 'auto_assigned',
-        `Auto-assigned based on capabilities: ${requiredCapabilities.join(', ')}`)
-
-      const updatedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(taskId) as TaskRow
-      return c.json({ task: updatedTask, assigned: true, agentId: bestAgent.agentId })
+    if (connected.some((agent) => caps.every((req) => agent.capabilities.includes(req)))) {
+      dispatch()
+      const routed = getTask(taskId) ?? task
+      return isActiveStatus(routed.status)
+        ? c.json({ task: routed, assigned: true, agentId: routed.assigned_to_agent })
+        : c.json({ task: routed, assigned: false })
     }
 
     // ── Delegation: no single agent has ALL capabilities → split into subtasks ──
     // Find which capabilities each agent CAN cover
     const capCoverage = new Map<string, { agentId: string; caps: string[]; score: number }>()
     for (const agent of connected) {
-      const matching = requiredCapabilities.filter((req) => agent.capabilities.includes(req))
+      const matching = caps.filter((req) => agent.capabilities.includes(req))
       if (matching.length > 0) {
         capCoverage.set(agent.agentId, {
           agentId: agent.agentId,
@@ -204,21 +184,21 @@ conductorRouter.post('/auto-assign', async (c) => {
       return c.json({
         error: 'No agents match any required capabilities',
         assigned: false,
-        requiredCapabilities,
+        requiredCapabilities: caps,
       }, 200)
     }
 
     // Greedy: assign capabilities to best-scoring agents until all covered
-    const uncovered = new Set(requiredCapabilities)
+    const uncovered = new Set(caps)
     const delegation: { agentId: string; caps: string[] }[] = []
     const sortedAgents = [...capCoverage.values()].sort((a, b) => b.score - a.score)
 
     for (const agent of sortedAgents) {
       if (uncovered.size === 0) break
-      const covers = agent.caps.filter((c) => uncovered.has(c))
+      const covers = agent.caps.filter((cap) => uncovered.has(cap))
       if (covers.length > 0) {
         delegation.push({ agentId: agent.agentId, caps: covers })
-        covers.forEach((c) => uncovered.delete(c))
+        covers.forEach((cap) => uncovered.delete(cap))
       }
     }
 
@@ -227,46 +207,46 @@ conductorRouter.post('/auto-assign', async (c) => {
         error: `Cannot cover all capabilities. Missing: ${[...uncovered].join(', ')}`,
         assigned: false,
         delegation: delegation.length > 0 ? delegation : undefined,
-        requiredCapabilities,
+        requiredCapabilities: caps,
       }, 200)
     }
 
-    // Create subtasks for each delegate agent
-    const subtaskIds: string[] = []
-    for (const del of delegation) {
-      const subId = generateTaskId()
-      db.prepare(`
+    // The parent becomes a group that completes with its subtasks; each subtask
+    // is pinned to its delegate and left to the dispatcher.
+    const subtaskIds = db.transaction((): string[] => {
+      const insert = db.prepare(`
         INSERT INTO conductor_tasks
-          (id, title, description, priority, assigned_to_agent, created_by_agent,
-           project_id, parent_task_id, required_capabilities, status, assigned_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-      `).run(
-        subId,
-        `[Delegated] ${task.title} — ${del.caps.join(', ')}`,
-        `Subtask delegated from ${taskId}. Required capabilities: ${del.caps.join(', ')}`,
-        task.priority,
-        del.agentId,
-        'orchestrator',
-        task.project_id,
-        taskId,
-        JSON.stringify(del.caps),
-      )
+          (id, title, description, priority, pinned_agent, created_by_agent,
+           project_id, parent_task_id, required_capabilities, api_key_owner, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+      `)
+      const created: string[] = []
+      for (const del of delegation) {
+        const subId = generateTaskId()
+        insert.run(
+          subId,
+          `[Delegated] ${task.title} — ${del.caps.join(', ')}`,
+          `Subtask delegated from ${taskId}. Required capabilities: ${del.caps.join(', ')}`,
+          task.priority,
+          del.agentId,
+          'orchestrator',
+          task.project_id,
+          taskId,
+          JSON.stringify(del.caps),
+          task.api_key_owner,
+        )
+        logTask(subId, del.agentId, 'delegated', `Delegated capabilities: ${del.caps.join(', ')}`)
+        created.push(subId)
+      }
+      db.prepare("UPDATE conductor_tasks SET kind = 'group', status = 'pending', context = ? WHERE id = ?")
+        .run(JSON.stringify({ ...taskContext(task), delegatedTo: delegation, subtaskIds: created }), taskId)
+      logTask(taskId, null, 'delegated', `Split into ${delegation.length} subtasks across ${delegation.map((d) => d.agentId).join(', ')}`)
+      return created
+    })()
+    dispatch()
 
-      pushTaskToAgent(del.agentId, subId, `[Delegated] ${task.title}`, `Capabilities: ${del.caps.join(', ')}`)
-      setAgentStatus(del.agentId, 'busy')
-      logTaskAction(subId, del.agentId, 'delegated', `Delegated capabilities: ${del.caps.join(', ')}`)
-      subtaskIds.push(subId)
-    }
-
-    // Mark parent task as in_progress (being orchestrated)
-    db.prepare(`
-      UPDATE conductor_tasks SET status = 'in_progress', context = ? WHERE id = ?
-    `).run(JSON.stringify({ delegatedTo: delegation, subtaskIds }), taskId)
-    logTaskAction(taskId, null, 'delegated', `Split into ${delegation.length} subtasks across ${delegation.map((d) => d.agentId).join(', ')}`)
-
-    const updatedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(taskId) as TaskRow
     return c.json({
-      task: updatedTask,
+      task: getTask(taskId),
       assigned: false,
       delegated: true,
       delegation,
@@ -284,11 +264,21 @@ conductorRouter.get('/', (c) => {
     const status = c.req.query('status')
     const assignedTo = c.req.query('assigned_to')
     const parentTaskId = c.req.query('parent_task_id')
+    const projectId = c.req.query('projectId')
+    const root = c.req.query('root')
 
     let query = 'SELECT * FROM conductor_tasks'
     const conditions: string[] = []
     const params: (string | number)[] = []
 
+    if (root) {
+      // the root and everything below it
+      query = `WITH RECURSIVE subtree(id) AS (
+        SELECT ? UNION SELECT t.id FROM conductor_tasks t JOIN subtree s ON t.parent_task_id = s.id
+      ) ${query}`
+      params.push(root)
+      conditions.push('id IN (SELECT id FROM subtree)')
+    }
     if (status) {
       conditions.push('status = ?')
       params.push(status)
@@ -297,7 +287,13 @@ conductorRouter.get('/', (c) => {
       conditions.push('(assigned_to_agent = ? OR assigned_to_agent IS NULL)')
       params.push(assignedTo)
     }
-    if (parentTaskId) {
+    if (projectId) {
+      conditions.push('project_id = ?')
+      params.push(projectId)
+    }
+    if (parentTaskId === 'none') {
+      conditions.push('parent_task_id IS NULL')
+    } else if (parentTaskId) {
       conditions.push('parent_task_id = ?')
       params.push(parentTaskId)
     }
@@ -315,6 +311,47 @@ conductorRouter.get('/', (c) => {
   }
 })
 
+// ── Plan tree: create (keys, groups, gates, dependencies) ──
+conductorRouter.post('/tree', async (c) => {
+  try {
+    const body = await readObject(c)
+    if (body === null) return c.json({ error: 'a JSON object body is required' }, 400)
+    for (const field of ['parentId', 'projectId'] as const) {
+      if (body[field] !== undefined && typeof body[field] !== 'string') {
+        return c.json({ error: `${field} must be a string` }, 400)
+      }
+    }
+    // createTree validates the tasks themselves
+    const created = createTree(body as unknown as TreeCreateRequest, headerOwner(c) ?? null)
+    if (!created.ok) return c.json(created.err, 400)
+    return c.json(created.res, 201)
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
+// ── Plan tree: a task, its descendants and the workers that can serve it ──
+conductorRouter.get('/:id/tree', (c) => {
+  try {
+    const id = c.req.param('id')
+    const root = getTask(id)
+    if (!root) return c.json({ error: 'Task not found' }, 404)
+
+    const tasks = db.prepare(`
+      WITH RECURSIVE subtree(id) AS (
+        SELECT id FROM conductor_tasks WHERE parent_task_id = ?
+        UNION SELECT t.id FROM conductor_tasks t JOIN subtree s ON t.parent_task_id = s.id
+      )
+      SELECT * FROM conductor_tasks WHERE id IN (SELECT id FROM subtree) ORDER BY created_at ASC, rowid ASC
+    `).all(id) as TaskRow[]
+    const workers = getAllConnectedAgents().filter((w) => w.projectId === null || w.projectId === root.project_id)
+
+    return c.json({ root, tasks, workers })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
 // ── Get single task ──
 conductorRouter.get('/:id', (c) => {
   try {
@@ -322,7 +359,7 @@ conductorRouter.get('/:id', (c) => {
     // Avoid matching route keywords
     if (id === 'agents' || id === 'auto-assign') return c.notFound()
 
-    const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow | undefined
+    const task = getTask(id)
     if (!task) return c.json({ error: 'Task not found' }, 404)
 
     // Include subtasks if this task has children
@@ -345,45 +382,73 @@ conductorRouter.get('/:id', (c) => {
   }
 })
 
+interface CreateBody {
+  title?: string
+  description?: string
+  priority?: number | string
+  /** Pins the task to that agent; `assignTo` is accepted as an alias. */
+  assignedTo?: string
+  assignTo?: string
+  projectId?: string
+  metadata?: Record<string, unknown>
+  parentTaskId?: string
+  dependsOn?: string[]
+  notifyOnComplete?: string[]
+  requiredCapabilities?: string[]
+  // Identity fields for auto-setting created_by_agent
+  agentId?: string
+  apiKeyOwner?: string
+  sessionAgent?: string
+  executor?: string | null
+  model?: string
+  effort?: string
+  fallback?: RouteSpec[] | null
+  files?: string[]
+  branch?: string
+  reviewRequired?: boolean
+  kind?: string
+}
+
+/** The first problem with a create request, or null. */
+function createProblem(b: CreateBody): string | null {
+  if (typeof b.title !== 'string' || b.title === '') return 'Title is required'
+  if (b.kind !== undefined && !(KINDS as readonly string[]).includes(b.kind)) return `unknown kind ${String(b.kind)}`
+  if (priorityValue(b.priority) === null) return `unknown priority ${String(b.priority)}`
+  if (b.executor !== undefined && b.executor !== null && !knownExecutor(b.executor)) return `unknown executor ${String(b.executor)}`
+  const fallback = fallbackProblem(b.fallback)
+  if (fallback !== null) return fallback
+  for (const name of ['model', 'effort', 'branch', 'assignedTo', 'assignTo'] as const) {
+    if (b[name] !== undefined && typeof b[name] !== 'string') return `${name} must be a string`
+  }
+  for (const name of ['dependsOn', 'files', 'requiredCapabilities', 'notifyOnComplete'] as const) {
+    const bad = stringListProblem(name, b[name])
+    if (bad !== null) return bad
+  }
+  return null
+}
+
 // ── Create task (with parent link, dependencies, notify_on_complete) ──
+// An assignee is a pin: the dispatcher hands the task over when that agent is
+// connected and idle.
 conductorRouter.post('/', async (c) => {
   try {
-    const body = await c.req.json()
-    const headerApiKeyOwner = c.req.header('X-API-Key-Owner')
-    const {
-      title,
-      description,
-      priority = 5,
-      assignedTo,
-      projectId,
-      metadata,
-      parentTaskId: requestedParentTaskId,
-      dependsOn,
-      notifyOnComplete,
-      requiredCapabilities,
-      // Identity fields for auto-setting created_by_agent
-      agentId,
-      apiKeyOwner = headerApiKeyOwner,
-      sessionAgent,
-    } = body as {
-      title?: string
-      description?: string
-      priority?: number
-      assignedTo?: string
-      projectId?: string
-      metadata?: Record<string, unknown>
-      parentTaskId?: string
-      dependsOn?: string[]
-      notifyOnComplete?: string[]
-      requiredCapabilities?: string[]
-      agentId?: string
-      apiKeyOwner?: string
-      sessionAgent?: string
+    const body = await readObject(c)
+    if (body === null) return c.json({ error: 'a JSON object body is required' }, 400)
+    const b = body as CreateBody
+    const header = headerOwner(c)
+
+    const problem = createProblem(b)
+    if (problem !== null) return c.json({ error: problem }, 400)
+    let files: string[]
+    try {
+      files = normalizeFiles(b.files ?? [])
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 400)
     }
+    const kind = b.kind ?? 'work'
 
     // Reassigned below when an agent's own active task becomes the parent.
-    let parentTaskId = requestedParentTaskId
-    if (!title) return c.json({ error: 'Title is required' }, 400)
+    let parentTaskId = b.parentTaskId
 
     // Validate parent exists if specified
     if (parentTaskId) {
@@ -392,7 +457,7 @@ conductorRouter.post('/', async (c) => {
     }
 
     // Validate dependency task IDs exist
-    const deps = dependsOn ?? []
+    const deps = [...new Set(b.dependsOn ?? [])]
     if (deps.length > 0) {
       const placeholders = deps.map(() => '?').join(',')
       const found = db.prepare(
@@ -404,7 +469,7 @@ conductorRouter.post('/', async (c) => {
     }
 
     const id = generateTaskId()
-    const createdByAgent = agentId ?? apiKeyOwner ?? sessionAgent ?? 'dashboard'
+    const createdByAgent = b.agentId ?? b.apiKeyOwner ?? header ?? b.sessionAgent ?? 'dashboard'
 
     // Auto-link: if an agent creates a task without parentTaskId, link to their active task
     if (!parentTaskId && createdByAgent !== 'dashboard' && createdByAgent !== 'dashboard-ui') {
@@ -416,113 +481,159 @@ conductorRouter.post('/', async (c) => {
       }
     }
 
-    // Determine initial status: 'blocked' if dependencies are not all met, else 'pending'
-    let initialStatus = 'pending'
-    if (deps.length > 0 && !allDependenciesMet(deps)) {
-      initialStatus = 'blocked'
-    }
+    // 'blocked' until every dependency completes; a group waits through its tasks instead
+    const initialStatus = kind !== 'group' && !allCompleted(deps) ? 'blocked' : 'pending'
 
     db.prepare(`
       INSERT INTO conductor_tasks
-        (id, title, description, priority, assigned_to_agent, created_by_agent,
-         project_id, context, parent_task_id, depends_on, notify_on_complete, required_capabilities, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, title, description, priority, pinned_agent, created_by_agent,
+         project_id, context, parent_task_id, depends_on, notify_on_complete, required_capabilities, status,
+         api_key_owner, kind, approver, executor, model, effort, fallback, files, branch, review_required)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
-      title,
-      description ?? '',
-      priority,
-      assignedTo ?? null,
+      b.title,
+      b.description ?? '',
+      priorityValue(b.priority),
+      b.assignedTo || b.assignTo || null,
       createdByAgent,
-      projectId ?? null,
-      metadata ? JSON.stringify(metadata) : '{}',
+      b.projectId ?? null,
+      b.metadata ? JSON.stringify(b.metadata) : '{}',
       parentTaskId ?? null,
       JSON.stringify(deps),
-      JSON.stringify(notifyOnComplete ?? []),
-      JSON.stringify(requiredCapabilities ?? []),
+      JSON.stringify(b.notifyOnComplete ?? []),
+      JSON.stringify(b.requiredCapabilities ?? []),
       initialStatus,
+      header ?? null,
+      kind,
+      kind === 'gate' ? 'user' : null,
+      b.executor ?? null,
+      b.model ?? null,
+      b.effort ?? null,
+      b.fallback === undefined || b.fallback === null ? null : JSON.stringify(b.fallback),
+      JSON.stringify(files),
+      b.branch ?? null,
+      b.reviewRequired ? 1 : 0,
     )
 
-    logTaskAction(id, createdByAgent, 'created',
-      parentTaskId ? `Subtask of ${parentTaskId}` : undefined)
+    logTask(id, createdByAgent, 'created', parentTaskId ? `Subtask of ${parentTaskId}` : undefined)
+    dispatch()
 
-    // Notify assigned agent via WebSocket (only if not blocked)
-    if (assignedTo && initialStatus !== 'blocked') {
-      pushTaskToAgent(assignedTo, id, title, description ?? '')
-      setAgentStatus(assignedTo, 'busy')
-    }
-
-    const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow
-    return c.json({ task }, 201)
+    return c.json({ task: getTask(id) }, 201)
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
 })
 
-// ── Pickup task (flexible identity matching) ──
+// ── Pickup task (pull mode: pinned to the caller, or open to anyone) ──
 conductorRouter.post('/pickup', async (c) => {
   try {
-    let body: unknown = {}
-    try {
-      body = await c.req.json()
-    } catch { /* no body: pick up with the header identity */ }
-
-    const headerApiKeyOwner = c.req.header('X-API-Key-Owner')
-    const { agentId, apiKeyOwner = headerApiKeyOwner, sessionAgent } = body as {
+    const body = (await readObject(c)) ?? {}
+    const { agentId, apiKeyOwner = headerOwner(c), sessionAgent, projectId } = body as {
       agentId?: string
       apiKeyOwner?: string
       sessionAgent?: string
+      projectId?: string | null
     }
 
     if (!agentId && !apiKeyOwner && !sessionAgent) {
       return c.json({ error: 'At least one identity field required (agentId, apiKeyOwner, or sessionAgent)' }, 400)
     }
 
-    // Fetch all pending tasks, ordered by priority
-    const pendingTasks = db.prepare(
-      "SELECT * FROM conductor_tasks WHERE status = 'pending' ORDER BY priority ASC, created_at ASC"
-    ).all() as TaskRow[]
-
-    // Find first task that matches agent identity
-    const matchedTask = pendingTasks.find((task) =>
-      agentMatchesAssignment(task.assigned_to_agent, agentId, apiKeyOwner, sessionAgent)
-    )
-
-    if (!matchedTask) {
+    const task = pickForPull({
+      agentId: agentId || undefined,
+      apiKeyOwner: apiKeyOwner || undefined,
+      sessionAgent: sessionAgent || undefined,
+      projectId: typeof projectId === 'string' || projectId === null ? projectId : undefined,
+    })
+    if (!task) {
       return c.json({ task: null, message: 'No matching tasks available' })
     }
-
-    // Claim the task
-    const pickedUpBy = agentId ?? apiKeyOwner ?? sessionAgent
-    db.prepare(`
-      UPDATE conductor_tasks
-      SET status = 'accepted', assigned_to_agent = COALESCE(assigned_to_agent, ?), accepted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-      WHERE id = ? AND status = 'pending'
-    `).run(pickedUpBy, matchedTask.id)
-
-    logTaskAction(matchedTask.id, pickedUpBy ?? null, 'picked_up', 'Agent picked up task')
-
-    const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(matchedTask.id) as TaskRow
     return c.json({ task })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
 })
 
-// ── Update task (status, result, context) with chain resolution and review loop ──
+interface UpdateBody {
+  status?: string
+  result?: unknown
+  context?: Record<string, unknown>
+  completedBy?: string
+  reviewerAgent?: string
+  message?: string
+  parentTaskId?: string
+}
+
+/** Context merge and re-parenting, written after the status step. */
+function applyFields(id: string, context: Record<string, unknown> | undefined, parentTaskId: string | undefined): void {
+  if (context !== undefined) {
+    const current = getTask(id)
+    if (current) {
+      db.prepare('UPDATE conductor_tasks SET context = ? WHERE id = ?')
+        .run(JSON.stringify({ ...taskContext(current), ...context }), id)
+    }
+  }
+  if (parentTaskId !== undefined) {
+    db.prepare('UPDATE conductor_tasks SET parent_task_id = ? WHERE id = ?').run(parentTaskId || null, id)
+  }
+}
+
+/** Fire-and-forget recipe capture (OpenSpace-inspired auto-learning). */
+function captureRecipe(task: TaskRow): void {
+  import('../services/recipe-capture.js').then(({ captureFromTask }) =>
+    captureFromTask(task).catch(e => {
+      console.warn('[recipe-capture] Task capture error:', (e as Error).message)
+      try {
+        db.prepare(
+          `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, error_message, created_at)
+           VALUES ('task', ?, ?, ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
+        ).run(task.id, task.assigned_to_agent ?? null, task.project_id ?? null, (e as Error).message?.slice(0, 500))
+      } catch { /* ignore */ }
+    })
+  ).catch((e) => {
+    console.warn('[recipe-capture] Module load error:', (e as Error).message)
+    try {
+      db.prepare(
+        `INSERT INTO recipe_capture_log (source, source_id, status, error_message, created_at)
+         VALUES ('task', ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
+      ).run(task.id, `Module load: ${(e as Error).message}`.slice(0, 500))
+    } catch { /* ignore */ }
+  })
+}
+
+/** The legacy notices after a lifecycle step: review requests and approvals to the reviewer and the parent's creator. */
+function notifyAfter(status: string, before: TaskRow, after: TaskRow, reviewerAgent: string | undefined): void {
+  const parent = before.parent_task_id ? getTask(before.parent_task_id) : undefined
+  const timestamp = new Date().toISOString()
+  if (after.status === 'review') {
+    const msg = { type: 'task.review_requested', taskId: after.id, title: before.title, submittedBy: before.assigned_to_agent, timestamp }
+    if (reviewerAgent) notifyAgents([reviewerAgent], msg)
+    if (parent?.created_by_agent) notifyAgents([parent.created_by_agent], { ...msg, parentTaskId: parent.id })
+  }
+  if (status === 'approved' && after.status === 'completed' && parent?.created_by_agent) {
+    notifyAgents([parent.created_by_agent], {
+      type: 'task.approved', taskId: after.id, title: before.title, parentTaskId: parent.id, timestamp,
+    })
+  }
+}
+
+// ── Update task ──
+// Status changes the lifecycle owns go through it: approved/rejected → review,
+// review/completed/failed → completion, in_progress on an assigned task →
+// accept and progress. Any other status is written as given. `message` is
+// always logged.
 conductorRouter.put('/:id', async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json()
-    const { status, result, context, completedBy, reviewerAgent } = body as {
-      status?: string
-      result?: unknown
-      context?: Record<string, unknown>
-      completedBy?: string
-      reviewerAgent?: string
+    const body = await readObject(c)
+    if (body === null) return c.json({ error: 'a JSON object body is required' }, 400)
+    const { status, result, context, completedBy, reviewerAgent, message, parentTaskId } = body as UpdateBody
+    if (context !== undefined && (typeof context !== 'object' || context === null || Array.isArray(context))) {
+      return c.json({ error: 'context must be an object' }, 400)
     }
 
-    const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow | undefined
+    const existing = getTask(id)
     if (!existing) return c.json({ error: 'Task not found' }, 404)
 
     // Block agents from completing/progressing a task that awaits user strategy approval
@@ -530,15 +641,50 @@ conductorRouter.put('/:id', async (c) => {
       return c.json({ error: 'Task is awaiting strategy approval — only the dashboard can change its status' }, 403)
     }
 
+    const note = typeof message === 'string' && message !== '' ? message.slice(0, MESSAGE_MAX) : undefined
+    const header = headerOwner(c)
+    let outcome: Outcome | null = null
+    // whether the lifecycle step already logged the message (as feedback or progress)
+    let noted = false
+
+    if (status === 'approved' || status === 'rejected') {
+      if (status === 'rejected' && note === undefined) {
+        return c.json({ error: 'a rejection needs the feedback in message' }, 400)
+      }
+      const req: ReviewRequest = { verdict: status === 'approved' ? 'approve' : 'reject' }
+      if (note !== undefined) req.feedback = note
+      const by = completedBy ?? header
+      if (by) req.by = by
+      outcome = reviewTask(id, req, header ? 'mcp' : 'dashboard')
+      noted = note !== undefined
+    } else if (status === 'review' || status === 'completed' || status === 'failed') {
+      outcome = completeTask(id, null, status, toTaskResult(result))
+    } else if (status === 'in_progress' && existing.status === 'assigned' && existing.assigned_to_agent) {
+      const agent = existing.assigned_to_agent
+      outcome = acceptTask(id, agent)
+      if (outcome.ok) {
+        outcome = recordProgress(id, agent, note ?? 'started')
+        noted = true
+      }
+    }
+
+    if (outcome !== null) {
+      if (!outcome.ok) return refusal(c, outcome)
+      applyFields(id, context, parentTaskId)
+      if (note !== undefined && !noted) logTask(id, completedBy ?? existing.assigned_to_agent, 'message', note)
+      const task = getTask(id) ?? outcome.task
+      notifyAfter(status ?? '', existing, task, reviewerAgent)
+      if (status === 'completed' && task.status === 'completed' && task.result) captureRecipe(task)
+      return c.json({ task })
+    }
+
+    // ── Any other status, or none: written as given ──
     const updates: string[] = []
     const params: (string | number | null)[] = []
 
     if (status !== undefined) {
       updates.push('status = ?')
       params.push(status)
-      if (status === 'completed' || status === 'failed') {
-        updates.push("completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
-      }
       if (status === 'in_progress' && !existing.accepted_at) {
         updates.push("accepted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
       }
@@ -551,175 +697,68 @@ conductorRouter.put('/:id', async (c) => {
       updates.push('completed_by = ?')
       params.push(completedBy)
     }
-    if (context !== undefined) {
-      const existingCtx = safeJsonParse<Record<string, unknown>>(existing.context, {})
+    // Taken without a connected worker (pull mode): the scheduler does not reclaim it as offline.
+    const assignee = existing.assigned_to_agent
+    const pull = (status === 'accepted' || status === 'in_progress') && (!assignee || getByAgent(assignee) === undefined)
+    if (context !== undefined || pull) {
+      const merged = { ...parseJson<Record<string, unknown>>(existing.context, {}), ...(context ?? {}), ...(pull ? { pull: true } : {}) }
       updates.push('context = ?')
-      params.push(JSON.stringify({ ...existingCtx, ...context }))
+      params.push(JSON.stringify(merged))
     }
 
     // Allow re-parenting tasks (fix orphans)
-    const parentTaskId = (body as Record<string, unknown>).parentTaskId as string | undefined
     if (parentTaskId !== undefined) {
       updates.push('parent_task_id = ?')
       params.push(parentTaskId || null)
     }
 
-    if (updates.length === 0) {
-      return c.json({ task: existing })
+    if (updates.length > 0) {
+      params.push(id)
+      db.prepare(`UPDATE conductor_tasks SET ${updates.join(', ')} WHERE id = ?`).run(...params)
     }
+    if (note !== undefined) logTask(id, completedBy ?? assignee, 'message', note)
 
-    params.push(id)
-    db.prepare(`UPDATE conductor_tasks SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+    return c.json({ task: getTask(id) })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
 
-    const updatedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow
+// ── Review: the lead's verdict on work in review, or on a gate ──
+conductorRouter.post('/:id/review', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await readObject(c)
+    if (body === null) return c.json({ error: 'a JSON object body is required' }, 400)
+    const { verdict, feedback, by } = body
+    if (verdict !== 'approve' && verdict !== 'reject') return c.json({ error: "verdict must be 'approve' or 'reject'" }, 400)
+    if (feedback !== undefined && typeof feedback !== 'string') return c.json({ error: 'feedback must be a string' }, 400)
+    if (by !== undefined && typeof by !== 'string') return c.json({ error: 'by must be a string' }, 400)
 
-    // ── Post-update chain logic ──
+    const header = headerOwner(c)
+    const req: ReviewRequest = { verdict }
+    if (feedback !== undefined) req.feedback = feedback
+    const reviewer = by ?? header
+    if (reviewer !== undefined) req.by = reviewer
 
-    // Handle completion → resolve dependency chain + set agent idle + recipe capture
-    if (status === 'completed') {
-      logTaskAction(id, completedBy ?? null, 'completed', undefined)
-      if (existing.assigned_to_agent) {
-        setAgentStatus(existing.assigned_to_agent, 'idle')
-      }
-      onCompleted(updatedTask as ConductorTaskRow)
+    const outcome = reviewTask(id, req, header ? 'mcp' : 'dashboard')
+    if (!outcome.ok) return refusal(c, outcome)
+    return c.json({ task: outcome.task })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
 
-      // Fire-and-forget recipe capture (OpenSpace-inspired auto-learning)
-      if (updatedTask.result) {
-        import('../services/recipe-capture.js').then(({ captureFromTask }) =>
-          captureFromTask(updatedTask).catch(e => {
-            console.warn('[recipe-capture] Task capture error:', (e as Error).message)
-            try {
-              db.prepare(
-                `INSERT INTO recipe_capture_log (source, source_id, agent_id, project_id, status, error_message, created_at)
-                 VALUES ('task', ?, ?, ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
-              ).run(id, existing.assigned_to_agent ?? null, existing.project_id ?? null, (e as Error).message?.slice(0, 500))
-            } catch { /* ignore */ }
-          })
-        ).catch((e) => {
-          console.warn('[recipe-capture] Module load error:', (e as Error).message)
-          try {
-            db.prepare(
-              `INSERT INTO recipe_capture_log (source, source_id, status, error_message, created_at)
-               VALUES ('task', ?, 'error', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
-            ).run(id, `Module load: ${(e as Error).message}`.slice(0, 500))
-          } catch { /* ignore */ }
-        })
-      }
-    }
-    if (status === 'failed') {
-      if (existing.assigned_to_agent) {
-        setAgentStatus(existing.assigned_to_agent, 'idle')
-      }
-    }
-
-    // Handle review submission
-    if (status === 'review') {
-      logTaskAction(id, existing.assigned_to_agent, 'submitted_for_review', undefined)
-      // Notify reviewer if specified
-      if (reviewerAgent) {
-        notifyAgents([reviewerAgent], {
-          type: 'task.review_requested',
-          taskId: id,
-          title: existing.title,
-          submittedBy: existing.assigned_to_agent,
-          timestamp: new Date().toISOString(),
-        })
-      }
-      // Also notify parent creator/orchestrator
-      if (existing.parent_task_id) {
-        const parent = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(existing.parent_task_id) as TaskRow | undefined
-        if (parent?.created_by_agent) {
-          notifyAgents([parent.created_by_agent], {
-            type: 'task.review_requested',
-            taskId: id,
-            title: existing.title,
-            parentTaskId: parent.id,
-            submittedBy: existing.assigned_to_agent,
-            timestamp: new Date().toISOString(),
-          })
-        }
-      }
-    }
-
-    // Handle rejection → create revision subtask for original agent
-    if (status === 'rejected') {
-      logTaskAction(id, completedBy ?? null, 'rejected', typeof result === 'string' ? result : JSON.stringify(result))
-
-      const feedback = typeof result === 'string' ? result : JSON.stringify(result ?? 'Revision needed')
-      const originalAgent = existing.assigned_to_agent
-
-      // Create a revision subtask linked to the rejected task
-      const revisionId = generateTaskId()
-      db.prepare(`
-        INSERT INTO conductor_tasks
-          (id, title, description, priority, assigned_to_agent, created_by_agent,
-           project_id, context, parent_task_id, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-      `).run(
-        revisionId,
-        `Revision: ${existing.title}`,
-        `Review feedback for task ${id}:\n\n${feedback}`,
-        Math.max(1, existing.priority - 1), // bump priority
-        originalAgent,
-        completedBy ?? 'reviewer',
-        existing.project_id,
-        JSON.stringify({
-          originalTaskId: id,
-          feedback,
-          revisionOf: id,
-        }),
-        existing.parent_task_id ?? id, // link to parent or original
-      )
-
-      logTaskAction(revisionId, completedBy ?? null, 'created',
-        `Revision subtask from rejected task ${id}`)
-
-      // Notify original agent about the revision
-      if (originalAgent) {
-        pushTaskToAgent(originalAgent, revisionId, `Revision: ${existing.title}`, feedback)
-      }
-    }
-
-    // Handle approval → notify parent/orchestrator
-    if (status === 'approved') {
-      logTaskAction(id, completedBy ?? null, 'approved', undefined)
-
-      // Mark as completed as well (only if not already completed, prevents double processing)
-      const currentStatus = db.prepare('SELECT status FROM conductor_tasks WHERE id = ?').get(id) as { status: string } | undefined
-      if (currentStatus && currentStatus.status !== 'completed') {
-        db.prepare(`
-          UPDATE conductor_tasks
-          SET status = 'completed', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), completed_by = COALESCE(completed_by, ?)
-          WHERE id = ? AND status != 'completed'
-        `).run(completedBy ?? existing.assigned_to_agent, id)
-
-        const finalTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow
-
-        // Notify orchestrator/parent creator
-        if (existing.parent_task_id) {
-          const parent = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(existing.parent_task_id) as TaskRow | undefined
-          if (parent?.created_by_agent) {
-            notifyAgents([parent.created_by_agent], {
-              type: 'task.approved',
-              taskId: id,
-              title: existing.title,
-              parentTaskId: parent.id,
-              timestamp: new Date().toISOString(),
-            })
-          }
-        }
-
-        // Resolve completion chain since approved = completed
-        onCompleted(finalTask as ConductorTaskRow)
-
-        return c.json({ task: finalTask })
-      }
-
-      // Already completed — just return current state
-      return c.json({ task: db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow })
-    }
-
-    return c.json({ task: updatedTask })
+// ── Route: change a task's executor, model, priority, files or dependencies ──
+conductorRouter.post('/:id/route', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await readObject(c)
+    if (body === null) return c.json({ error: 'a JSON object body is required' }, 400)
+    // rerouteTask validates the patch before writing
+    const outcome = rerouteTask(id, body as RoutePatch, headerOwner(c) ?? 'dashboard')
+    if (!outcome.ok) return refusal(c, outcome)
+    return c.json({ task: outcome.task })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -743,11 +782,11 @@ conductorRouter.put('/:id/strategy', async (c) => {
       return c.json({ error: 'Invalid strategy: requires summary, roles[], and subtasks[]' }, 400)
     }
 
-    const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow | undefined
+    const existing = getTask(id)
     if (!existing) return c.json({ error: 'Task not found' }, 404)
 
     // Save strategy into context and set status to strategy_review
-    const existingCtx = safeJsonParse<Record<string, unknown>>(existing.context, {})
+    const existingCtx = parseJson<Record<string, unknown>>(existing.context, {})
     const updatedCtx = { ...existingCtx, strategy, phase: 'strategy_review' }
 
     db.prepare(`
@@ -756,15 +795,14 @@ conductorRouter.put('/:id/strategy', async (c) => {
       WHERE id = ?
     `).run(JSON.stringify(updatedCtx), id)
 
-    logTaskAction(id, existing.assigned_to_agent, 'strategy_submitted',
+    logTask(id, existing.assigned_to_agent, 'strategy_submitted',
       `Strategy: ${strategy.roles.length} roles, ${strategy.subtasks.length} subtasks`)
 
     // Broadcast to dashboard via WS
     const { broadcastStrategyReady } = await import('../ws/conductor.js')
     broadcastStrategyReady(id, existing.title, strategy)
 
-    const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow
-    return c.json({ task })
+    return c.json({ task: getTask(id) })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
@@ -774,14 +812,14 @@ conductorRouter.put('/:id/strategy', async (c) => {
 conductorRouter.post('/:id/strategy/approve', async (c) => {
   try {
     const id = c.req.param('id')
-    const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow | undefined
+    const existing = getTask(id)
     if (!existing) return c.json({ error: 'Task not found' }, 404)
 
     if (existing.status !== 'strategy_review') {
       return c.json({ error: `Cannot approve strategy: task status is '${existing.status}', expected 'strategy_review'` }, 400)
     }
 
-    const existingCtx = safeJsonParse<Record<string, unknown>>(existing.context, {})
+    const existingCtx = parseJson<Record<string, unknown>>(existing.context, {})
     const updatedCtx = { ...existingCtx, phase: 'execution', strategyApprovedAt: new Date().toISOString() }
 
     db.prepare(`
@@ -790,33 +828,25 @@ conductorRouter.post('/:id/strategy/approve', async (c) => {
       WHERE id = ?
     `).run(JSON.stringify(updatedCtx), id)
 
-    logTaskAction(id, null, 'strategy_approved', 'Strategy approved by user')
+    logTask(id, null, 'strategy_approved', 'Strategy approved by user')
 
-    const task = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow
-    return c.json({ task })
+    return c.json({ task: getTask(id) })
   } catch (error) {
     return c.json({ error: String(error) }, 500)
   }
 })
 
-// ── Cancel task ──
-conductorRouter.post('/:id/cancel', (c) => {
+// ── Cancel task (an active one is revoked from its worker first) ──
+conductorRouter.post('/:id/cancel', async (c) => {
   try {
     const id = c.req.param('id')
-    const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow | undefined
-    if (!existing) return c.json({ error: 'Task not found' }, 404)
+    const body = (await readObject(c)) ?? {}
+    const reason = typeof body.reason === 'string' && body.reason !== '' ? body.reason.slice(0, MESSAGE_MAX) : undefined
+    const by = headerOwner(c) ?? 'dashboard'
 
-    if (existing.status === 'completed' || existing.status === 'cancelled') {
-      return c.json({ error: `Cannot cancel task with status '${existing.status}'` }, 400)
-    }
-
-    db.prepare(`
-      UPDATE conductor_tasks
-      SET status = 'cancelled', completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-      WHERE id = ?
-    `).run(id)
-
-    logTaskAction(id, null, 'cancelled', undefined)
+    const outcome = cancelTask(id, by)
+    if (!outcome.ok) return refusal(c, outcome)
+    if (reason !== undefined) logTask(id, by, 'message', reason)
 
     return c.json({ success: true, id })
   } catch (error) {
@@ -889,7 +919,7 @@ conductorRouter.put('/:id/matrix/:findingId', async (c) => {
     const taskId = c.req.param('id')
     const findingId = c.req.param('findingId')
 
-    const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(taskId) as TaskRow | undefined
+    const existing = getTask(taskId)
     if (!existing) return c.json({ error: 'Task not found' }, 404)
 
     const body = await c.req.json()
@@ -900,14 +930,14 @@ conductorRouter.put('/:id/matrix/:findingId', async (c) => {
     }
 
     // Update context.decisions
-    const ctx = safeJsonParse<Record<string, unknown>>(existing.context, {})
+    const ctx = parseJson<Record<string, unknown>>(existing.context, {})
     const decisions = (ctx['decisions'] ?? {}) as Record<string, { status: string; reason?: string; decidedAt: string }>
     decisions[findingId] = { status, reason, decidedAt: new Date().toISOString() }
     ctx['decisions'] = decisions
 
     db.prepare('UPDATE conductor_tasks SET context = ? WHERE id = ?').run(JSON.stringify(ctx), taskId)
 
-    logTaskAction(taskId, null, `finding_${status}`, `Finding ${findingId} ${status}${reason ? ': ' + reason : ''}`)
+    logTask(taskId, null, `finding_${status}`, `Finding ${findingId} ${status}${reason ? ': ' + reason : ''}`)
 
     return c.json({ success: true, findingId, status, decisions })
   } catch (error) {
@@ -920,14 +950,14 @@ conductorRouter.post('/:id/finalize', async (c) => {
   try {
     const taskId = c.req.param('id')
 
-    const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(taskId) as TaskRow | undefined
+    const existing = getTask(taskId)
     if (!existing) return c.json({ error: 'Task not found' }, 404)
 
-    const ctx = safeJsonParse<Record<string, unknown>>(existing.context, {})
+    const ctx = parseJson<Record<string, unknown>>(existing.context, {})
     const decisions = (ctx['decisions'] ?? {}) as Record<string, { status: string; reason?: string; decidedAt: string }>
 
     // Parse result to get findings
-    const resultObj = safeJsonParse<{ summary?: string; findings?: Array<{ id: string; [k: string]: unknown }> }>(existing.result, {})
+    const resultObj = parseJson<{ summary?: string; findings?: Array<{ id: string; [k: string]: unknown }> }>(existing.result, {})
     const allFindings = resultObj.findings ?? []
 
     // Filter to only approved findings
@@ -950,11 +980,11 @@ conductorRouter.post('/:id/finalize', async (c) => {
       WHERE id = ?
     `).run(JSON.stringify(finalResult), taskId)
 
-    logTaskAction(taskId, null, 'finalized',
+    logTask(taskId, null, 'finalized',
       `Finalized with ${approvedFindings.length}/${allFindings.length} findings approved`)
 
-    const updatedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(taskId) as TaskRow
-    onCompleted(updatedTask as ConductorTaskRow)
+    const updatedTask = getTask(taskId)
+    if (updatedTask) onCompleted(updatedTask)
 
     return c.json({ task: updatedTask })
   } catch (error) {
@@ -966,7 +996,7 @@ conductorRouter.post('/:id/finalize', async (c) => {
 conductorRouter.delete('/:id', (c) => {
   try {
     const id = c.req.param('id')
-    const existing = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow | undefined
+    const existing = getTask(id)
     if (!existing) return c.json({ error: 'Task not found' }, 404)
 
     db.prepare('DELETE FROM conductor_tasks WHERE id = ?').run(id)
