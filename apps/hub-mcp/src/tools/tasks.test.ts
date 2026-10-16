@@ -36,13 +36,13 @@ describe('cortex_task_create', () => {
     const h = tool('cortex_task_create', { task: { id: 't1', title: 'x', status: 'pending' } })
     await h(parsed('cortex_task_create', {
       title: 'x', assignTo: 'agent-a', priority: 'high', executor: 'codex', model: 'm', effort: 'high',
-      fallback: [{ executor: 'claude', model: 'opus' }], files: ['a.ts'], branch: 'cx/x', reviewRequired: false,
+      fallback: [{ executor: 'claude', model: 'opus' }], files: ['a.ts'], branch: 'cx/x', reviewRequired: false, projectId: 'proj-1',
     }))
     expect(calls).toHaveLength(1)
     expect(calls[0]!.url).toBe('http://api/api/conductor')
     expect(calls[0]!.body).toEqual({
       title: 'x', assignedTo: 'agent-a', priority: 3, executor: 'codex', model: 'm', effort: 'high',
-      fallback: [{ executor: 'claude', model: 'opus' }], files: ['a.ts'], branch: 'cx/x', reviewRequired: false,
+      fallback: [{ executor: 'claude', model: 'opus' }], files: ['a.ts'], branch: 'cx/x', reviewRequired: false, projectId: 'proj-1',
     })
   })
 
@@ -51,15 +51,15 @@ describe('cortex_task_create', () => {
     await h(parsed('cortex_task_create', { title: 'x', priority: 7 }))
     const body = calls[0]!.body as Record<string, unknown>
     expect(body.priority).toBe(7)
-    for (const k of ['executor', 'model', 'effort', 'fallback', 'files', 'branch', 'reviewRequired']) expect(body).not.toHaveProperty(k)
+    for (const k of ['executor', 'model', 'effort', 'fallback', 'files', 'branch', 'reviewRequired', 'projectId']) expect(body).not.toHaveProperty(k)
   })
 })
 
 describe('cortex_task_pickup', () => {
   it('sends projectId when given and omits it otherwise', async () => {
-    await tool('cortex_task_pickup', { task: null })({ projectId: 'proj-1' })
+    await tool('cortex_task_pickup', { task: null })(parsed('cortex_task_pickup', { projectId: 'proj-1' }))
     expect(calls[0]!.body).toEqual({ agentId: 'lead-key', apiKeyOwner: 'lead-key', projectId: 'proj-1' })
-    await tool('cortex_task_pickup', { task: null })({})
+    await tool('cortex_task_pickup', { task: null })(parsed('cortex_task_pickup', {}))
     expect(calls[0]!.body).toEqual({ agentId: 'lead-key', apiKeyOwner: 'lead-key' })
     expect(calls[0]!.body).not.toHaveProperty('projectId')
   })

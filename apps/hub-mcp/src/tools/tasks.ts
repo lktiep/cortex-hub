@@ -31,8 +31,9 @@ export function registerTaskTools(server: McpServer, env: Env) {
       files: z.array(z.string()).optional().describe('Files the task will touch (used for locks)'),
       branch: z.string().optional().describe('Branch the task works on'),
       reviewRequired: z.boolean().optional().describe('Whether the result needs review before completing'),
+      projectId: z.string().optional().describe('Project ID from cortex_session_start — workers and pickup in other projects will not see it'),
     },
-    async ({ title, description, assignTo, priority, requiredCapabilities, dependsOn, notifyOnComplete, context, parentTaskId, executor, model, effort, fallback, files, branch, reviewRequired }) => {
+    async ({ title, description, assignTo, priority, requiredCapabilities, dependsOn, notifyOnComplete, context, parentTaskId, executor, model, effort, fallback, files, branch, reviewRequired, projectId }) => {
       try {
         const response = await apiCall(env, '/api/conductor', {
           method: 'POST',
@@ -54,6 +55,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
             ...(files !== undefined && { files }),
             ...(branch !== undefined && { branch }),
             ...(reviewRequired !== undefined && { reviewRequired }),
+            ...(projectId !== undefined && { projectId }),
           }),
           signal: AbortSignal.timeout(10000),
         })
@@ -107,7 +109,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
           body: JSON.stringify({
             agentId: effectiveAgentId,
             apiKeyOwner: env.API_KEY_OWNER,
-            ...(projectId && { projectId }),
+            ...(projectId !== undefined && { projectId }),
           }),
           signal: AbortSignal.timeout(10000),
         })
