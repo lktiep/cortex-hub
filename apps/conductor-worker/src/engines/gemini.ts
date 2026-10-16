@@ -1,10 +1,9 @@
 import { parseResetsIn } from './quota.js';
-import { cliPlumbing, errorMessage, plainProgress, tailSummary } from './common.js';
+import { RAW_MAX, cliPlumbing, errorMessage, plainProgress, stderrTail, tailSummary } from './common.js';
 import type { CliAdapterOpts } from './common.js';
 import type { Classification, EngineAdapter } from './types.js';
 
-const QUOTA = /RESOURCE_EXHAUSTED|\b429\b/;
-const RAW_MAX = 2000;
+const QUOTA = /RESOURCE_EXHAUSTED|429 Too Many Requests/;
 
 export function createGeminiAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
   const buildArgs: EngineAdapter['buildArgs'] = (i) => {
@@ -21,7 +20,7 @@ export function createGeminiAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
 
     classify(exitCode, stdout, stderr, ctx): Classification {
       if (exitCode === 0) return { kind: 'ok' };
-      const text = [stderr, stdout].filter((t) => t.trim() !== '').join('\n');
+      const text = stderrTail(stderr);
       if (QUOTA.test(text)) {
         const q: Classification = { kind: 'quota', raw: text.slice(0, RAW_MAX) };
         const resetAt = parseResetsIn(text, ctx?.now ?? new Date());

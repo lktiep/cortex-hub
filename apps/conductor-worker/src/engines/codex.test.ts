@@ -46,6 +46,17 @@ describe('codex classify', () => {
     expect(codex.classify(1, 'compile failed', 'tests broke')).toEqual({ kind: 'error', message: 'tests broke' });
     expect(codex.classify(null, '', '').kind).toBe('error');
   });
+  it('does not treat stdout or incidental text as quota', () => {
+    expect(codex.classify(1, 'edited line 429 of foo.ts', '').kind).toBe('error');
+    expect(codex.classify(1, '', 'read src/rate-limit.ts\nexit 1').kind).toBe('error');
+    expect(codex.classify(1, 'usage limit reached', 'plain failure').kind).toBe('error');
+  });
+  it('only scans the last 40 lines of stderr', () => {
+    const quota = fx('synthetic-quota.stderr.txt').trim();
+    const filler = Array.from({ length: 40 }, (_, i) => `line ${String(i)}`);
+    expect(codex.classify(1, '', [quota, ...filler].join('\n')).kind).toBe('error');
+    expect(codex.classify(1, '', [quota, ...filler.slice(1)].join('\n')).kind).toBe('quota');
+  });
   it('classifies exit 0 as ok', () => {
     expect(codex.classify(0, 'rate limit mentioned in docs', '')).toEqual({ kind: 'ok' });
   });

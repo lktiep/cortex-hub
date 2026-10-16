@@ -1,12 +1,10 @@
-import { cliPlumbing, errorMessage, tail, tailSummary } from './common.js';
+import { PROGRESS_MAX, RAW_MAX, SUMMARY_MAX, cliPlumbing, errorMessage, tail, tailSummary } from './common.js';
 import type { CliAdapterOpts } from './common.js';
 import type { Classification, EngineAdapter } from './types.js';
 
-const QUOTA = /usage limit|rate limit|hit your limit/i;
+const RESULT_QUOTA = /usage limit|rate limit|hit your limit/i;
+const STDERR_QUOTA = /usage limit|hit your limit/i;
 const EPOCH_SUFFIX = /\|(\d{10})(?!\d)/;
-const SUMMARY_MAX = 4000;
-const PROGRESS_MAX = 500;
-const RAW_MAX = 2000;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -48,7 +46,7 @@ export function createClaudeAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
       const result = lastResult(stdout);
       const resultText = result?.is_error === true && typeof result.result === 'string' ? result.result : '';
       const sources = [resultText, stderr].filter((t) => t.trim() !== '');
-      const hit = sources.find((t) => QUOTA.test(t));
+      const hit = RESULT_QUOTA.test(resultText) ? resultText : STDERR_QUOTA.test(stderr) ? stderr : undefined;
       if (hit !== undefined) {
         const q: Classification = { kind: 'quota', raw: sources.join('\n').slice(0, RAW_MAX) };
         const epoch = EPOCH_SUFFIX.exec(hit)?.[1];

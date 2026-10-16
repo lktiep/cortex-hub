@@ -51,6 +51,9 @@ describe('claude classify', () => {
     const out = '{"type":"result","is_error":false,"result":"usage limit docs"}\n';
     expect(claude.classify(1, out, 'boom').kind).toBe('error');
   });
+  it('does not treat a bare rate limit on stderr as quota', () => {
+    expect(claude.classify(1, '', 'retrying after rate limit\u2026 failed: ENOENT').kind).toBe('error');
+  });
   it('classifies unknown failure as error, never quota', () => {
     expect(claude.classify(2, 'garbage', 'segfault in tool')).toEqual({ kind: 'error', message: 'segfault in tool' });
   });
@@ -67,11 +70,18 @@ describe('claude progressText and summary', () => {
     expect(claude.progressText(lines[2]!)).toBeNull();
     expect(claude.progressText('not json')).toBeNull();
     expect(claude.progressText('{"type":"assistant","message":{"content":"str"}}')).toBeNull();
+    for (const l of ['null', '[]', '5', '{"type":"assistant","message":null}']) {
+      expect(claude.progressText(l)).toBeNull();
+    }
   });
   it('summary reads the last result event, capped at 4000', () => {
     expect(claude.summary(fx('synthetic-success.stream.jsonl'))).toBe('All done.');
     const big = JSON.stringify({ type: 'result', result: 'x'.repeat(5000) });
     expect(claude.summary(big).length).toBe(4000);
+  });
+  it('summary survives malformed lines and a non-string result', () => {
+    const out = '{bad json\n{"type":"result","result":5}\n';
+    expect(claude.summary(out)).toBe(out.trim());
   });
   it('summary falls back to the stdout tail', () => {
     expect(claude.summary('  plain output \n')).toBe('plain output');

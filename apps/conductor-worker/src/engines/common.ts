@@ -4,9 +4,11 @@ import { runCli } from './run.js';
 import type { EngineAdapter, RunInput, RunOutput } from './types.js';
 
 const VERSION_TIMEOUT_MS = 15_000;
-const SUMMARY_MAX = 4000;
-const PROGRESS_MAX = 500;
+export const SUMMARY_MAX = 4000;
+export const PROGRESS_MAX = 500;
+export const RAW_MAX = 2000;
 const ERROR_MAX = 300;
+const STDERR_TAIL_LINES = 40;
 
 export interface CliAdapterOpts {
   bin?: string;
@@ -22,6 +24,11 @@ export function firstLine(text: string): string {
 export function tail(text: string, max: number): string {
   const t = text.trim();
   return t.length > max ? t.slice(t.length - max) : t;
+}
+
+/** The last `STDERR_TAIL_LINES` lines of stderr: the only place a quota notice is looked for. */
+export function stderrTail(stderr: string): string {
+  return stderr.trimEnd().split('\n').slice(-STDERR_TAIL_LINES).join('\n');
 }
 
 export function tailSummary(stdout: string): string {

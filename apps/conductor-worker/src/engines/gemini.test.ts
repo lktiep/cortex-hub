@@ -38,7 +38,7 @@ describe('gemini classify', () => {
     }
   });
   it('classifies a bare RESOURCE_EXHAUSTED or 429 as quota without resetAt', () => {
-    for (const s of ['RESOURCE_EXHAUSTED', 'HTTP 429']) {
+    for (const s of ['RESOURCE_EXHAUSTED', 'HTTP 429 Too Many Requests']) {
       const c = gemini.classify(1, '', s, { model: null, now });
       expect(c.kind).toBe('quota');
       if (c.kind === 'quota') expect(c.resetAt).toBeUndefined();
@@ -49,6 +49,11 @@ describe('gemini classify', () => {
       kind: 'error',
       message: 'usage limit rate limit 4290',
     });
+  });
+  it('does not treat stdout or a bare 429 as quota', () => {
+    expect(gemini.classify(1, 'see issue 429', '').kind).toBe('error');
+    expect(gemini.classify(1, 'RESOURCE_EXHAUSTED', 'failed').kind).toBe('error');
+    expect(gemini.classify(1, '', 'port 429').kind).toBe('error');
   });
   it('classifies exit 0 as ok', () => {
     expect(gemini.classify(0, '429', '')).toEqual({ kind: 'ok' });

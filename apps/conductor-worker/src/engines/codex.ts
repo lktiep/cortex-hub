@@ -1,9 +1,8 @@
-import { cliPlumbing, errorMessage, plainProgress, tailSummary } from './common.js';
+import { RAW_MAX, cliPlumbing, errorMessage, plainProgress, stderrTail, tailSummary } from './common.js';
 import type { CliAdapterOpts } from './common.js';
 import type { Classification, EngineAdapter } from './types.js';
 
-const QUOTA = /usage limit|429|rate limit/i;
-const RAW_MAX = 2000;
+const QUOTA = /usage limit|429 Too Many Requests|rate limit (?:reached|exceeded)/i;
 
 export function createCodexAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
   const buildArgs: EngineAdapter['buildArgs'] = (i) => {
@@ -19,7 +18,7 @@ export function createCodexAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
 
     classify(exitCode, stdout, stderr): Classification {
       if (exitCode === 0) return { kind: 'ok' };
-      const text = [stderr, stdout].filter((t) => t.trim() !== '').join('\n');
+      const text = stderrTail(stderr);
       if (QUOTA.test(text)) return { kind: 'quota', raw: text.slice(0, RAW_MAX) };
       return { kind: 'error', message: errorMessage(exitCode, stderr, stdout, 'codex') };
     },

@@ -28,6 +28,19 @@ describe('describeEngines', () => {
     const a = fake('agy', true, () => Promise.reject(new Error('boom')));
     expect((await describeEngines([a])).engines[0]?.models).toEqual(['*']);
   });
+  it('treats a rejecting or throwing detect() as not found and keeps order', async () => {
+    const bad = { ...fake('claude', true, () => Promise.resolve([])), detect: () => Promise.reject(new Error('x')) };
+    const thrower = {
+      ...fake('codex', true, () => Promise.resolve([])),
+      detect: (): never => {
+        throw new Error('sync');
+      },
+    };
+    const ok1 = fake('gemini', true, () => Promise.resolve(['g']));
+    const ok2 = fake('agy', true, () => Promise.resolve(['a']));
+    const r = await describeEngines([ok1, bad, thrower, ok2]);
+    expect(r.engines.map((e) => e.executor)).toEqual(['gemini', 'agy']);
+  });
   it('reports no default when nothing is found', async () => {
     const r = await describeEngines([fake('claude', false, () => Promise.resolve([]))]);
     expect(r).toEqual({ available: [], engines: [], defaultExecutor: null });
