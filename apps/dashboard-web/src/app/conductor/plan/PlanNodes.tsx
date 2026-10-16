@@ -83,7 +83,7 @@ function tooltip(key: string, title: string, status: string, note: string | null
 }
 
 export function GateNode({ data }: NodeProps<Node<GateNodeData>>) {
-  const { task, mode, critical, selected, blocks } = data
+  const { task, mode, critical, selected, blocks, ghost } = data
   const detail = mode === 'detail'
   const done = task.state === 'done'
   const who = task.approver === 'lead' ? 'lead' : 'user'
@@ -93,12 +93,14 @@ export function GateNode({ data }: NodeProps<Node<GateNodeData>>) {
         styles.gate,
         detail ? styles.gateDetail : styles.gateCompact,
         done && styles.gateDone,
+        ghost && styles.gateGhost,
         critical && styles.gateCritical,
         selected && styles.gateSelected,
       )}
       title={tooltip(task.key, task.title, STATUS_LABEL[task.state], null)}
     >
       <Handle type="target" position={Position.Left} className={styles.h} />
+      {ghost && <div className={styles.tnGhostTag}>{ghost}</div>}
       <span className={styles.gateId}>{task.key}</span>
       <span className={styles.gateTitle}>{task.title}</span>
       <span className={styles.gateText}>

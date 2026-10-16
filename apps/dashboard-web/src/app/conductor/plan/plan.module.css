@@ -45,8 +45,9 @@
 .tnGhostTag { position: absolute; right: 6px; top: -9px; font-size: 9px; background: var(--bg-elevated); padding: 0 5px; border-radius: 6px; color: var(--text-secondary); }
 
 /* gates */
-.gate { box-sizing: border-box; border: 1px dashed #fbbf24; background: rgba(251,191,36,.08); border-radius: 14px; display: flex; align-items: center; gap: 6px; color: var(--text-primary); cursor: pointer; }
-.gateDone { border-color: #34d399; background: rgba(52,211,153,.08); }
+.gate { position: relative; box-sizing: border-box; border: 1px dashed #fbbf24; background: linear-gradient(rgba(251,191,36,.08), rgba(251,191,36,.08)), var(--bg-secondary); border-radius: 14px; display: flex; align-items: center; gap: 6px; color: var(--text-primary); cursor: pointer; }
+.gateDone { border-color: #34d399; background: linear-gradient(rgba(52,211,153,.08), rgba(52,211,153,.08)), var(--bg-secondary); }
+.gateGhost { opacity: .45; }
 .gateCompact { height: 34px; padding: 0 10px; font-size: 11px; }
 .gateDetail { min-height: 52px; padding: 6px 12px; font-size: 11px; flex-wrap: wrap; }
 .gateId { font-family: var(--font-mono); font-weight: 700; flex-shrink: 0; }
@@ -120,3 +121,7 @@
   .viewDiagram { flex: none; height: 60vh; }
   .side { width: auto; overflow: visible; }
 }
+
+.actionError { color: var(--status-error); font-size: .75rem; display: flex; align-items: center; gap: 6px; }
+.actionError button { background: none; border: 0; color: inherit; cursor: pointer; font: inherit; }
+.note { color: var(--text-tertiary); font-size: .72rem; white-space: nowrap; }

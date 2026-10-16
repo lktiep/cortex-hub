@@ -1,9 +1,11 @@
 'use client'
 
 // Plan view: full-screen overlay for one plan tree — phase tabs, progress, diagram, side panel and task detail.
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import useSWR from 'swr'
 import { cancelConductorTask, deleteConductorTask, getConductorTree } from '@/lib/api'
+import { actionErrorMessage } from '@/lib/conductor-plan/actions'
 import { criticalPath } from '@/lib/conductor-plan/analysis'
 import { computeDepths, selectPhase } from '@/lib/conductor-plan/layout'
 import { toPlanTasks } from '@/lib/conductor-plan/model'
@@ -30,13 +32,19 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
     () => getConductorTree(rootId),
     { refreshInterval: 5000, keepPreviousData: true },
   )
-  const [groupId, setGroupId] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | undefined>(undefined)
+  const [pickedGroup, setGroupId] = useState<string | null>(null)
+  const [pickedId, setSelectedId] = useState<string | undefined>(undefined)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
   const tasks = useMemo(() => (data ? toPlanTasks(data.root, data.tasks) : []), [data])
   const workers = useMemo(() => data?.workers ?? [], [data])
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks])
   const tabs = useMemo(() => groupTabs(tasks), [tasks])
+  // A tab or selection that vanished from a refreshed tree falls back to All / no selection.
+  const groupId = pickedGroup !== null && tabs.some((t) => t.id === pickedGroup) ? pickedGroup : null
+  const selectedId = pickedId !== undefined && byId.has(pickedId) ? pickedId : undefined
   const phase = useMemo(() => (groupId ? selectPhase(tasks, groupId) : undefined), [tasks, groupId])
   const side = useMemo(() => {
     const { cyclic } = computeDepths(tasks)
@@ -55,24 +63,36 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
   const title = data?.root.title ?? 'Plan'
 
   const handleCancel = async (id: string) => {
-    await cancelConductorTask(id)
+    setActionError(null)
+    try {
+      await cancelConductorTask(id)
+    } catch (err) {
+      setActionError(actionErrorMessage(err))
+    }
     void mutate()
   }
   const handleDelete = async (id: string) => {
     if (!window.confirm('Delete this task permanently?')) return
-    await deleteConductorTask(id)
-    setSelectedId(undefined)
+    setActionError(null)
+    try {
+      await deleteConductorTask(id)
+      setSelectedId(undefined)
+    } catch (err) {
+      setActionError(actionErrorMessage(err))
+    }
     void mutate()
   }
 
   let body: React.ReactNode
-  if (error && !data) {
-    body = isNotFound(error) ? (
+  if (error && isNotFound(error)) {
+    body = (
       <div className={styles.state}>
         <p>This plan no longer exists</p>
         <button type="button" className={styles.btn} onClick={onClose}>Close</button>
       </div>
-    ) : (
+    )
+  } else if (error && !data) {
+    body = (
       <div className={styles.state}>
         <p>{error instanceof Error ? error.message : 'Failed to load the plan'}</p>
         <button type="button" className={styles.btn} onClick={() => void mutate()}>Retry</button>
@@ -111,7 +131,8 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
     )
   }
 
-  return (
+  if (!mounted) return null
+  return createPortal(
     <div className={styles.viewOverlay}>
       <header className={styles.viewHeader}>
         <h2>{title}</h2>
@@ -134,6 +155,13 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
             </button>
           ))}
         </div>
+        {error && !isNotFound(error) && data && <span className={styles.note}>Refresh failed — retrying</span>}
+        {actionError && (
+          <span className={styles.actionError} role="alert">
+            {actionError}
+            <button type="button" aria-label="Dismiss error" onClick={() => setActionError(null)}>×</button>
+          </span>
+        )}
         <button type="button" className={styles.btn} onClick={onClose}>× Close</button>
       </header>
       {body}
@@ -148,6 +176,7 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
           }
         />
       )}
-    </div>
+    </div>,
+    document.body,
   )
 }

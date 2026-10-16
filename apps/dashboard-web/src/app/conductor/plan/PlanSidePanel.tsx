@@ -79,6 +79,7 @@ export function PlanSidePanel({ needs, awaiting, workers, tally, critical, byId,
       </section>
       <section>
         <h3>Fallback tally</h3>
+        {tally.length === 0 && <p className={styles.muted}>No completed tasks yet</p>}
         {tally.map((t) => (
           <div key={t.label} className={styles.routeRow}>
             <span>{t.label}</span>
@@ -92,7 +93,7 @@ export function PlanSidePanel({ needs, awaiting, workers, tally, critical, byId,
       <section>
         <h3>Critical path</h3>
         <p className={styles.muted}>
-          {path.length === 0 ? 'No remaining work' : `${path.join(' → ')} · ${days} d`}
+          {path.length === 0 ? 'No remaining work' : `${path.join(' → ')} · ≈ ${days} d`}
         </p>
       </section>
     </aside>
