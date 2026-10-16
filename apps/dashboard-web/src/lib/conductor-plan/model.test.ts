@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  deriveState, formatUntil, nodeNote, parseJson, resolveDeps, routeLabel, shortModel, toPlanTasks,
+  compareText, deriveState, formatClock, formatUntil, nodeNote, parseJson, resolveDeps, routeLabel, shortModel, toPlanTasks,
 } from './model'
 import type { PlanTask } from './model'
 import { generatePlan, row } from './test-fixtures'
@@ -313,5 +313,16 @@ describe('nodeNote', () => {
     const fb = JSON.stringify({ executor: 'claude', model: 'opus', effort: null })
     expect(note({ escalated_at: 'x', reject_count: 1, wait_reason: 'lock', current_route: fb })).toBe('escalated · 1 rejection')
     expect(note({ wait_reason: 'lock', current_route: fb })).toBe('waiting on a file lock')
+  })
+})
+
+describe('compareText and formatClock', () => {
+  it('compareText orders by code unit', () => {
+    expect(['b', 'a', 'B'].sort(compareText)).toEqual(['B', 'a', 'b'])
+    expect(compareText('a', 'a')).toBe(0)
+  })
+  it('formatClock is zero-padded local HH:MM', () => {
+    expect(formatClock(new Date(2026, 9, 16, 9, 5).toISOString())).toBe('09:05')
+    expect(formatClock(new Date(2026, 9, 16, 21, 45).toISOString())).toBe('21:45')
   })
 })

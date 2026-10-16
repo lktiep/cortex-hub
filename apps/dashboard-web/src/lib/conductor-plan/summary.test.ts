@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { toPlanTasks } from './model'
 import type { PlanTask } from './model'
-import { agentsOnline, awaitingLead, groupTabs, needsYou, progressCounts, progressSegments, routeTally, workerRows } from './summary'
+import { agentsOnline, awaitingLead, formatDays, groupTabs, needsYou, progressPercent, progressCounts, progressSegments, routeTally, workerRows } from './summary'
 import { row, session, worker } from './test-fixtures'
 import type { ConductorTask } from '../api'
 
@@ -50,7 +50,7 @@ describe('needsYou', () => {
   ])
 
   it('lists escalations, user gates, no_worker tasks and dependents of a stopped task', () => {
-    const out = needsYou(tasks)
+    const out = needsYou(tasks, NOW)
     expect(out.map((n) => [n.key, n.kind, n.tone])).toEqual([
       ['B1', 'blocked_by_stopped', 'red'],
       ['B2', 'blocked_by_stopped', 'red'],
@@ -67,17 +67,22 @@ describe('needsYou', () => {
   })
 
   it('uses the stopped dependency with the smallest key and its real status', () => {
-    const b2 = needsYou(tasks).find((n) => n.key === 'B2')
+    const b2 = needsYou(tasks, NOW).find((n) => n.key === 'B2')
     expect(b2?.detail).toBe('depends on failed TT1')
     const solo = plan([
       { id: 'f', task_key: 'F', status: 'failed' },
       { id: 'b', task_key: 'B', status: 'blocked', depends_on: '["f"]' },
     ])
-    expect(needsYou(solo)[0]?.detail).toBe('depends on failed F')
+    expect(needsYou(solo, NOW)[0]?.detail).toBe('depends on failed F')
+  })
+
+  it('does not list a blocked task whose dependency id is unknown', () => {
+    const out = needsYou(plan([{ id: 'b', status: 'blocked', depends_on: '["ghost"]' }]), NOW)
+    expect(out).toEqual([])
   })
 
   it('leaves out lead gates and reviews', () => {
-    const keys = needsYou(tasks).map((n) => n.key)
+    const keys = needsYou(tasks, NOW).map((n) => n.key)
     expect(keys).not.toContain('T0')
     expect(keys).not.toContain('T00')
   })
@@ -120,6 +125,46 @@ describe('routeTally', () => {
       { label: 'claude·opus', count: 1 },
       { label: 'unrouted', count: 1 },
     ])
+  })
+})
+
+describe('legacy rows', () => {
+  it('a row with no kind counts as a work task', () => {
+    const legacy = plan([{ id: 'l1', status: 'completed' }, { id: 'l2' }].map((r) => ({ ...r, kind: undefined })))
+    expect(progressCounts(legacy)).toMatchObject({ done: 1, ready: 1, total: 2 })
+    expect(routeTally(legacy)).toEqual([{ label: 'unrouted', count: 1 }])
+  })
+})
+
+describe('formatting helpers', () => {
+  it('progressPercent rounds done over total and is 0 for an empty plan', () => {
+    const base = { review: 0, running: 0, ready: 0, waiting: 0, blocked: 0, stopped: 0 }
+    expect(progressPercent({ ...base, done: 1, total: 3 })).toBe(33)
+    expect(progressPercent({ ...base, done: 2, total: 3 })).toBe(67)
+    expect(progressPercent({ ...base, done: 0, total: 0 })).toBe(0)
+  })
+  it('formatDays keeps one decimal and drops a trailing .0', () => {
+    expect(formatDays(2)).toBe('2')
+    expect(formatDays(2.25)).toBe('2.3')
+    expect(formatDays(0.04)).toBe('0')
+  })
+})
+
+describe('routeTally ties', () => {
+  it('orders equal counts by label whatever the input order', () => {
+    const route = (executor: string) => JSON.stringify({ executor, model: null, effort: null })
+    const mk = (order: string[]) => plan(order.map((e, i) => ({ id: `t${i}`, status: 'completed', current_route: route(e) })))
+    const want = [{ label: 'agy', count: 1 }, { label: 'claude', count: 1 }, { label: 'codex', count: 1 }]
+    expect(routeTally(mk(['codex', 'claude', 'agy']))).toEqual(want)
+    expect(routeTally(mk(['agy', 'claude', 'codex']))).toEqual(want)
+  })
+})
+
+describe('workerRows quota boundary', () => {
+  const q = (exhaustedUntil: string) => worker({ agentId: 'w', quota: [{ executor: 'claude', model: 'opus', exhaustedUntil, reason: null }] })
+  it('drops a quota that ends exactly now and keeps one that ends a millisecond later', () => {
+    expect(workerRows([q(NOW.toISOString())], [], NOW)[0]?.quota).toEqual([])
+    expect(workerRows([q(new Date(NOW.getTime() + 1).toISOString())], [], NOW)[0]?.quota).toHaveLength(1)
   })
 })
 
@@ -205,6 +250,12 @@ describe('groupTabs', () => {
 })
 
 describe('agentsOnline', () => {
+  it('lists two sessions of one agent as two rows and counts the agent once', () => {
+    const r = agentsOnline([], [session({ sessionId: 's1', agentId: 'a' }), session({ sessionId: 's2', agentId: 'a' })])
+    expect(r.sessions.map((x) => x.sessionId)).toEqual(['s1', 's2'])
+    expect(r.total).toBe(1)
+  })
+
   it('counts an agent that is both a worker and a session once', () => {
     const r = agentsOnline([worker({ agentId: 'a' })], [session({ agentId: 'a' }), session({ sessionId: 's2', agentId: 'b' })])
     expect(r.workers.map((w) => w.agentId)).toEqual(['a'])
@@ -219,7 +270,7 @@ describe('agentsOnline', () => {
   })
 
   it('tolerates a missing sessions array', () => {
-    const r = agentsOnline([worker({ agentId: 'a' })], undefined as unknown as [])
+    const r = agentsOnline([worker({ agentId: 'a' })], undefined)
     expect(r.sessions).toEqual([])
     expect(r.total).toBe(1)
   })

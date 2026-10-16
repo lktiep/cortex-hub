@@ -2,12 +2,12 @@
 
 // Plan progress: a stacked bar by status bucket plus a legend with done/total and percent.
 import { STATUS_COLOR, STATUS_LABEL } from '@/lib/conductor-plan/status'
-import { progressSegments, type ProgressCounts } from '@/lib/conductor-plan/summary'
+import { progressPercent, progressSegments, type ProgressCounts } from '@/lib/conductor-plan/summary'
 import styles from './plan.module.css'
 
 export function PlanProgress({ counts }: { counts: ProgressCounts }) {
   const segments = progressSegments(counts)
-  const percent = counts.total === 0 ? 0 : Math.round((counts.done / counts.total) * 100)
+  const percent = progressPercent(counts)
   return (
     <div className={styles.progress}>
       <div className={styles.bar}>

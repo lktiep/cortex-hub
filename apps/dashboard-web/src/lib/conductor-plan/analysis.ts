@@ -1,5 +1,6 @@
 // Plan analysis: critical path (red outline) and same-file conflicts (dashed orange edges).
 // Pure module — no React, no DOM.
+import { compareText as cmp } from './model'
 import type { PlanTask } from './model'
 import { computeDepths } from './layout'
 
@@ -22,10 +23,6 @@ export function pathsOverlap(a: string, b: string): boolean {
   if (a.endsWith('/') && b.startsWith(a)) return true
   if (b.endsWith('/') && a.startsWith(b)) return true
   return false
-}
-
-function cmp(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0
 }
 
 /**

@@ -236,6 +236,18 @@ export function resolveDeps(tasks: PlanTask[]): void {
   }
 }
 
+/** Shared string comparator (code-unit order) for deterministic sorting by key, label or id. */
+export function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/** Local wall-clock time as HH:MM. */
+export function formatClock(iso: string): string {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 /** Strips a vendor prefix: gemini-4-argon-low → argon-low, claude-opus-5-5 → opus-5-5. */
 export function shortModel(model: string): string {
   return model.replace(/^gemini-\d+(?:\.\d+)*-/, '').replace(/^claude-/, '')

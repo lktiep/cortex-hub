@@ -1,7 +1,7 @@
 // Plan summaries: progress counts, Needs you, Awaiting lead, fallback tally and worker rows.
 // Pure folds over PlanTask[] — no React, no DOM; anything time-dependent takes `now`.
 import type { ConductorSession, ConductorWorker } from '../api'
-import { nodeNote, routeLabel } from './model'
+import { compareText, nodeNote, routeLabel } from './model'
 import type { PlanTask } from './model'
 import { STATUS_COLOR } from './status'
 
@@ -28,7 +28,7 @@ export interface WorkerRow {
   quota: { label: string; until: string }[]
 }
 
-const byKey = (a: { key: string }, b: { key: string }) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+const byKey = (a: { key: string }, b: { key: string }) => compareText(a.key, b.key)
 
 export function progressCounts(tasks: PlanTask[]): ProgressCounts {
   const out: ProgressCounts = { done: 0, review: 0, running: 0, ready: 0, waiting: 0, blocked: 0, total: 0, stopped: 0 }
@@ -57,17 +57,16 @@ function item(t: PlanTask, kind: NeedItem['kind'], tone: NeedItem['tone'], detai
   return { kind, taskId: t.id, key: t.key, title: t.title, detail, tone }
 }
 
-export function needsYou(tasks: PlanTask[]): NeedItem[] {
+export function needsYou(tasks: PlanTask[], now: Date): NeedItem[] {
   const byId = new Map(tasks.map((t) => [t.id, t]))
-  const now = new Date()
   const out: NeedItem[] = []
   for (const t of tasks) {
     if (t.state === 'escalated') {
-      out.push(item(t, 'escalated', 'red', nodeNote(t, now) ?? 'escalated'))
+      out.push(item(t, 'escalated', 'red', nodeNote(t, now) as string)) // an escalated task always has a note
     } else if (t.state === 'needs_user') {
       out.push(item(t, 'user_gate', 'amber', nodeNote(t, now) ?? 'awaiting your approval'))
     } else if (t.state === 'waiting' && t.waitReason === 'no_worker') {
-      out.push(item(t, 'no_worker', 'amber', nodeNote(t, now) ?? 'no worker available'))
+      out.push(item(t, 'no_worker', 'amber', nodeNote(t, now) as string)) // a no_worker wait always has a note
     } else if (t.state === 'blocked') {
       const stopped = t.deps
         .map((id) => byId.get(id))
@@ -100,7 +99,7 @@ export function routeTally(tasks: PlanTask[]): { label: string; count: number }[
   }
   return [...counts.entries()]
     .map(([label, count]) => ({ label, count }))
-    .sort((a, b) => b.count - a.count || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
+    .sort((a, b) => b.count - a.count || compareText(a.label, b.label))
 }
 
 export function workerRows(workers: ConductorWorker[], tasks: PlanTask[], now: Date): WorkerRow[] {
@@ -125,7 +124,17 @@ export function workerRows(workers: ConductorWorker[], tasks: PlanTask[], now: D
           .map((q) => ({ label: routeLabel({ executor: q.executor, model: q.model, effort: null }) ?? q.executor, until: q.exhaustedUntil })),
       }
     })
-    .sort((a, b) => (a.hostname < b.hostname ? -1 : a.hostname > b.hostname ? 1 : a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0))
+    .sort((a, b) => compareText(a.hostname, b.hostname) || compareText(a.agentId, b.agentId))
+}
+
+/** Whole-number percent of work tasks done. */
+export function progressPercent(counts: ProgressCounts): number {
+  return counts.total === 0 ? 0 : Math.round((counts.done / counts.total) * 100)
+}
+
+/** Days to one decimal place, without a trailing .0. */
+export function formatDays(days: number): string {
+  return String(Math.round(days * 10) / 10)
 }
 
 const BUCKETS: ProgressBucket[] = ['done', 'review', 'running', 'ready', 'waiting', 'blocked']

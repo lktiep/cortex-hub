@@ -58,7 +58,7 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
     const { cyclic } = computeDepths(tasks)
     return {
       counts: progressCounts(tasks),
-      needs: needsYou(tasks),
+      needs: needsYou(tasks, new Date()),
       awaiting: awaitingLead(tasks),
       tally: routeTally(tasks),
       critical: criticalPath(tasks, cyclic),

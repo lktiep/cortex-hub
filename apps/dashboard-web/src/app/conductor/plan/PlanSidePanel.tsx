@@ -2,8 +2,8 @@
 
 // Plan side panel: Needs you, Awaiting lead, Workers, Fallback tally and Critical path.
 import type { CriticalPath } from '@/lib/conductor-plan/analysis'
-import { formatUntil, type PlanTask } from '@/lib/conductor-plan/model'
-import type { NeedItem, WorkerRow } from '@/lib/conductor-plan/summary'
+import { formatClock, formatUntil, type PlanTask } from '@/lib/conductor-plan/model'
+import { formatDays, type NeedItem, type WorkerRow } from '@/lib/conductor-plan/summary'
 import styles from './plan.module.css'
 
 const IDLE_COLOR = '#34d399'
@@ -18,12 +18,6 @@ interface Props {
   critical: CriticalPath
   byId: Map<string, PlanTask>
   onSelect: (taskId: string) => void
-}
-
-function hhmm(iso: string): string {
-  const d = new Date(iso)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function NeedButton({ item, onSelect }: { item: NeedItem; onSelect: (taskId: string) => void }) {
@@ -43,7 +37,7 @@ export function PlanSidePanel({ needs, awaiting, workers, tally, critical, byId,
   const now = new Date()
   const max = Math.max(1, ...tally.map((t) => t.count))
   const path = critical.ids.map((id) => byId.get(id)?.key ?? id)
-  const days = String(Math.round(critical.days * 10) / 10)
+  const days = formatDays(critical.days)
   return (
     <aside className={styles.side}>
       <section>
@@ -71,7 +65,7 @@ export function PlanSidePanel({ needs, awaiting, workers, tally, critical, byId,
             </p>
             {w.quota.map((q) => (
               <p key={`${q.label}:${q.until}`} className={styles.muted}>
-                {q.label} until {hhmm(q.until)} ({formatUntil(q.until, now)})
+                {q.label} until {formatClock(q.until)} ({formatUntil(q.until, now)})
               </p>
             ))}
           </div>

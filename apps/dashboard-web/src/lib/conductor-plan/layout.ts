@@ -1,6 +1,7 @@
 // Plan layout: depth columns, machine lanes and the phase view as plain geometry.
 // Pure module — no React, no DOM; the diagram only renders what this returns.
 import type { ConductorWorker } from '../api'
+import { compareText } from './model'
 import type { PlanTask } from './model'
 
 export interface Size {
@@ -58,7 +59,7 @@ export interface PlanLayout {
 
 const drawable = (t: PlanTask) => t.kind !== 'group'
 
-const byKey = (a: PlanTask, b: PlanTask) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+const byKey = (a: PlanTask, b: PlanTask) => compareText(a.key, b.key)
 
 /**
  * Column of every work/gate task: the length of its longest dependency chain. Kahn's algorithm

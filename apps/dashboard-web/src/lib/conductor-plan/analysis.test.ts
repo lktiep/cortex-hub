@@ -79,6 +79,18 @@ describe('fileConflicts', () => {
     expect(conflicts(tasks(
       { id: 'a', files: files('x.ts') }, { id: 'b', files: files('x.ts'), status: 'failed' },
     ))).toEqual([])
+    // a group that lists the same file is not a participant either
+    expect(conflicts(tasks(
+      { id: 'a', files: files('x.ts') }, { id: 'g', kind: 'group', files: files('x.ts') },
+    ))).toEqual([])
+  })
+
+  it('treats a task missing from the depth map as depth 0', () => {
+    const ts = tasks({ id: 'p', task_key: 'b', files: files('x.ts') }, { id: 'q', task_key: 'a', files: files('x.ts') })
+    expect(fileConflicts(ts, new Map())).toEqual([{ from: 'q', to: 'p', file: 'x.ts' }])
+    // p is deeper by the map, so the order flips even though q's depth is missing (0)
+    expect(fileConflicts(ts, new Map([['p', 1]]))).toEqual([{ from: 'q', to: 'p', file: 'x.ts' }])
+    expect(fileConflicts(ts, new Map([['q', 1]]))).toEqual([{ from: 'p', to: 'q', file: 'x.ts' }])
   })
 })
 
@@ -120,25 +132,24 @@ describe('criticalPath', () => {
     const r = path(tasks(
       { id: 'A', depends_on: deps('B') }, { id: 'B', depends_on: deps('A') }, { id: 'C', depends_on: deps('A') },
     ))
-    expect(r.ids.length).toBeGreaterThan(0)
+    // C leaves the cycle: the edge out of it is kept, the edges inside it are not
+    expect(r.ids).toEqual(['A', 'C'])
+    expect(r.edges).toEqual(new Set(['A>C']))
     expect(r.edges.has('B>A')).toBe(false)
     expect(r.edges.has('A>B')).toBe(false)
   })
 
   it('breaks ties by key regardless of input order', () => {
+    // keys run against ids and input order, so a flipped tie-break picks the other branch
     const specs = [
-      { id: 'A' }, { id: 'X', task_key: 'x', depends_on: deps('A') }, { id: 'Y', task_key: 'y', depends_on: deps('A') },
+      { id: 'A' }, { id: 'X', task_key: 'b', depends_on: deps('A') }, { id: 'Y', task_key: 'a', depends_on: deps('A') },
       { id: 'J', depends_on: deps('X', 'Y') },
-      { id: 'P', task_key: 'p' }, { id: 'Q', task_key: 'q' },
     ]
-    const fwd = path(tasks(...specs))
-    const rev = path(tasks(...[...specs].reverse()))
-    expect(fwd.ids).toEqual(['A', 'X', 'J'])
-    expect(rev.ids).toEqual(fwd.ids)
+    expect(path(tasks(...specs)).ids).toEqual(['A', 'Y', 'J'])
+    expect(path(tasks(...[...specs].reverse())).ids).toEqual(['A', 'Y', 'J'])
     // end-node tie: two independent single tasks of equal weight
-    const ends = (s: typeof specs) => path(tasks(...s)).ids
-    const two = [{ id: 'P', task_key: 'p' }, { id: 'Q', task_key: 'q' }]
-    expect(ends(two)).toEqual(['P'])
-    expect(ends([...two].reverse())).toEqual(['P'])
+    const two = [{ id: 'P', task_key: 'q' }, { id: 'Q', task_key: 'p' }]
+    expect(path(tasks(...two)).ids).toEqual(['Q'])
+    expect(path(tasks(...[...two].reverse())).ids).toEqual(['Q'])
   })
 })
