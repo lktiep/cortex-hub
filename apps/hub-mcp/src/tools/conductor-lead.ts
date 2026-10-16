@@ -7,12 +7,13 @@ import { apiCall } from '../api-call.js'
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
 
+// z.enum needs a non-empty tuple; EXECUTORS is typed readonly Executor[] but is non-empty by definition.
 const executorEnum = z.enum(EXECUTORS as unknown as [Executor, ...Executor[]])
 const priorityField = z.union([z.enum(['critical', 'high', 'medium', 'low']), z.number().int().min(1).max(10)])
 const routeSpec = z.object({
   executor: executorEnum.nullable(),
-  model: z.string().nullable(),
-  effort: z.string().nullable(),
+  model: z.string().nullable().optional(),
+  effort: z.string().nullable().optional(),
 })
 
 const ok = (text: string): ToolResult => ({ content: [{ type: 'text', text }] })
@@ -62,7 +63,7 @@ export function registerConductorLeadTools(server: McpServer, env: Env): void {
         title: z.string(),
         description: z.string().optional(),
         kind: z.enum(['work', 'gate', 'group']).optional(),
-        parentKey: z.string().optional(),
+        parentKey: z.string().optional().describe("Key of a task with kind 'group' in this same call"),
         dependsOn: z.array(z.string()).optional().describe('Keys of tasks that must finish first'),
         requiredCapabilities: z.array(z.string()).optional(),
         priority: priorityField.optional().describe('critical|high|medium|low or 1-10 (lower runs first)'),
@@ -117,7 +118,7 @@ export function registerConductorLeadTools(server: McpServer, env: Env): void {
 
   server.tool(
     'cortex_task_review',
-    'Approve or reject a task in review, or decide a gate whose approver is the lead. User gates are dashboard-only and are refused with 403.',
+    'Approve or reject a task whose status is `review`, or decide a lead gate (kind `gate`, approver `lead`). User gates are dashboard-only and are refused with 403.',
     {
       taskId: z.string().describe('Task ID'),
       verdict: z.enum(['approve', 'reject']),
@@ -147,7 +148,7 @@ export function registerConductorLeadTools(server: McpServer, env: Env): void {
       pinnedAgent: z.string().nullable().optional(),
       priority: priorityField.optional(),
       files: z.array(z.string()).optional(),
-      dependsOn: z.array(z.string()).optional(),
+      dependsOn: z.array(z.string()).optional().describe('Stored task IDs (not plan keys); unknown IDs are rejected'),
       clearEscalation: z.boolean().optional(),
     },
     async ({ taskId, ...patch }) => {
