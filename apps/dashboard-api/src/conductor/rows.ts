@@ -64,6 +64,34 @@ export function getTask(id: string): TaskRow | undefined {
   return db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow | undefined
 }
 
+/** The ids among `ids` that name no task, each once, in the order given. */
+export function missingTasks(ids: readonly string[]): string[] {
+  const unique = [...new Set(ids)]
+  if (unique.length === 0) return []
+  const found = db.prepare(`SELECT id FROM conductor_tasks WHERE id IN (${unique.map(() => '?').join(', ')})`)
+    .all(...unique) as { id: string }[]
+  const known = new Set(found.map((r) => r.id))
+  return unique.filter((id) => !known.has(id))
+}
+
+/** The 409 both delete routes answer while `dependentsOf` the task is not empty. */
+export const HAS_DEPENDENTS = 'task has dependents; cancel it, or reroute its dependents first'
+
+/**
+ * The unfinished tasks (not completed, cancelled or failed) that list `id` in
+ * their dependencies, oldest first: deleting `id` would leave them waiting on
+ * a task that no longer exists.
+ */
+export function dependentsOf(id: string): string[] {
+  // instr narrows to rows whose JSON names the id; stringList confirms it is an entry
+  const rows = db.prepare(`
+    SELECT id, depends_on FROM conductor_tasks
+    WHERE status NOT IN ('completed', 'cancelled', 'failed') AND instr(depends_on, ?) > 0
+    ORDER BY rowid
+  `).all(JSON.stringify(id)) as Pick<TaskRow, 'id' | 'depends_on'>[]
+  return rows.filter((r) => stringList(r.depends_on).includes(id)).map((r) => r.id)
+}
+
 export function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   if (raw === null || raw === undefined || raw === '') return fallback
   try { return JSON.parse(raw) as T } catch { return fallback }

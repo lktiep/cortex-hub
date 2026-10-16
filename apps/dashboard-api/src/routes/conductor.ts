@@ -3,13 +3,16 @@ import { randomUUID } from 'crypto'
 import type { ReviewRequest, RoutePatch, RouteSpec, SessionView, TaskResult, TreeCreateRequest } from '@cortex/shared-types'
 import { db } from '../db/client.js'
 import { getAllConnectedAgents, notifyAgents } from '../ws/conductor.js'
-import { dispatch, pickForPull } from '../conductor/dispatcher.js'
+import { dispatch, pickForPull, servesProject } from '../conductor/dispatcher.js'
 import { normalizeFiles } from '../conductor/files.js'
 import {
-  acceptTask, cancelTask, completeTask, onCompleted, recordProgress, rerouteTask, reviewTask, type Outcome,
+  acceptTask, cancelTask, completeTask, onCompleted, recordProgress, rerouteTask, reviewTask, revokeTask, type Outcome,
 } from '../conductor/lifecycle.js'
 import { getByAgent } from '../conductor/registry.js'
-import { ACTIVE_STATUSES, getTask, logTask, parseJson, stringList, taskContext, toTaskResult, type TaskRow } from '../conductor/rows.js'
+import {
+  ACTIVE_STATUSES, HAS_DEPENDENTS, dependentsOf, getTask, logTask, missingTasks, parseJson, stringList, taskContext,
+  toTaskResult, type TaskRow,
+} from '../conductor/rows.js'
 import { createTree, fallbackProblem, knownExecutor, priorityValue, stringListProblem } from '../conductor/tree.js'
 
 export const conductorRouter = new Hono()
@@ -332,7 +335,11 @@ conductorRouter.get('/:id/tree', (c) => {
       )
       SELECT * FROM conductor_tasks WHERE id IN (SELECT id FROM subtree) ORDER BY created_at ASC, rowid ASC
     `).all(id) as TaskRow[]
-    const workers = getAllConnectedAgents().filter((w) => w.projectId === null || w.projectId === root.project_id)
+    // the workers the dispatcher would give the root's project to
+    const workers = getAllConnectedAgents().filter((w) => {
+      const conn = getByAgent(w.agentId)
+      return conn !== undefined && servesProject(conn, { projectId: root.project_id })
+    })
 
     return c.json({ root, tasks, workers })
   } catch (error) {
@@ -450,14 +457,8 @@ conductorRouter.post('/', async (c) => {
 
     // Validate dependency task IDs exist
     const deps = [...new Set(b.dependsOn ?? [])]
-    if (deps.length > 0) {
-      const placeholders = deps.map(() => '?').join(',')
-      const found = db.prepare(
-        `SELECT COUNT(*) as cnt FROM conductor_tasks WHERE id IN (${placeholders})`
-      ).get(...deps) as { cnt: number }
-      if (found.cnt !== deps.length) {
-        return c.json({ error: 'One or more dependency task IDs not found' }, 400)
-      }
+    if (missingTasks(deps).length > 0) {
+      return c.json({ error: 'One or more dependency task IDs not found' }, 400)
     }
 
     const id = generateTaskId()
@@ -1053,12 +1054,18 @@ conductorRouter.post('/:id/finalize', async (c) => {
 })
 
 // ── Delete task ──
+// Refused while an unfinished task depends on it; an active task is revoked
+// through the lifecycle first; its logs go with it.
 conductorRouter.delete('/:id', (c) => {
   try {
     const id = c.req.param('id')
     const existing = getTask(id)
     if (!existing) return c.json({ error: 'Task not found' }, 404)
+    const dependents = dependentsOf(id)
+    if (dependents.length > 0) return c.json({ error: HAS_DEPENDENTS, dependents }, 409)
 
+    if (isActiveStatus(existing.status)) revokeTask(id, 'deleted')
+    db.prepare('DELETE FROM conductor_task_logs WHERE task_id = ?').run(id)
     db.prepare('DELETE FROM conductor_tasks WHERE id = ?').run(id)
     return c.json({ success: true, id })
   } catch (error) {

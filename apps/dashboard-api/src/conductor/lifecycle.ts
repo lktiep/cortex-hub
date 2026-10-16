@@ -92,6 +92,17 @@ function saveContext(task: TaskRow, patch: Record<string, unknown>): void {
   db.prepare('UPDATE conductor_tasks SET context = ? WHERE id = ?').run(JSON.stringify({ ...taskContext(task), ...patch }), task.id)
 }
 
+/**
+ * The quota handoff points at the WIP commit of an attempt that has now
+ * finished: kept across fail, decline and return, dropped once the work is
+ * done or handed to review, so a later attempt (a rework) does not resume from it.
+ */
+function dropHandoff(task: TaskRow): void {
+  const { handoff, ...rest } = taskContext(task)
+  if (handoff === undefined) return
+  db.prepare('UPDATE conductor_tasks SET context = ? WHERE id = ?').run(JSON.stringify(rest), task.id)
+}
+
 /** A WebSocket message held back until the transaction that produced it has committed. */
 interface Send {
   agentId: string
@@ -105,7 +116,7 @@ interface Send {
  * whose task just left it (null for none) — idle from now (`markFreed`), or
  * busy if `state` says so — then the dispatch pass.
  */
-interface Settled { outcome: Outcome; worker: string | null; state?: 'idle' | 'busy'; sends?: Send[] }
+interface Settled<O extends { ok: boolean } = Outcome> { outcome: O; worker: string | null; state?: 'idle' | 'busy'; sends?: Send[] }
 
 /**
  * Pushes to workers (revokes, the dispatch pass) must follow a commit. Inside a
@@ -143,7 +154,7 @@ function flush(sends: Send[]): void {
 }
 
 /** Runs `step` in one transaction; after a successful commit, sends, marks the worker and dispatches. */
-function settle(step: () => Settled, now?: number): Outcome {
+function settle<O extends { ok: boolean } = Outcome>(step: () => Settled<O>, now?: number): O {
   assertOutsideTransaction()
   const { outcome, worker, state = 'idle', sends = [] } = db.transaction(step)()
   if (!outcome.ok) return outcome
@@ -174,9 +185,11 @@ function refused(outcome: Outcome): Settled {
 }
 
 /** Sets `escalated_at` and tells the lead, at the second failure or rejection and only once (spec §6.6). */
-function escalate(task: TaskRow, by: string | null, count: number, of: 'failures' | 'rejections', reason: string): void {
+function escalate(
+  task: TaskRow, by: string | null, count: number, of: 'failures' | 'rejections', reason: string, now: number,
+): void {
   if (count < ESCALATE_AT || task.escalated_at !== null) return
-  db.prepare('UPDATE conductor_tasks SET escalated_at = ? WHERE id = ?').run(isoSeconds(Date.now()), task.id)
+  db.prepare('UPDATE conductor_tasks SET escalated_at = ? WHERE id = ?').run(isoSeconds(now), task.id)
   logTask(task.id, by, 'escalated', `${count} ${of}`)
   const updated = current(task.id)
   notifyLead(updated, 'escalated', formatNotification('escalated', updated, { count, of, reason }))
@@ -294,7 +307,7 @@ function checkLegacyParent(parent: TaskRow, subtasks: TaskRow[], sends: Send[]):
       saveContext(parent, { subtaskResults, phase: 'synthesis' })
       db.prepare("UPDATE conductor_tasks SET status = 'synthesis' WHERE id = ?").run(parent.id)
       logTask(parent.id, null, 'synthesis_ready', `All ${counted.length} subtasks completed. Awaiting Lead Agent synthesis.`)
-      // the message `pushTaskToAgent` (ws/conductor.ts) sent
+      // the flat legacy `task.assigned` (no `task` object) asking the lead to synthesize
       sends.push({
         agentId: parent.assigned_to_agent,
         msg: {
@@ -401,6 +414,7 @@ export function completeTask(
     if (status === 'review' || task.review_required === 1) {
       db.prepare("UPDATE conductor_tasks SET status = 'review', result = ?, lease_expires_at = NULL WHERE id = ?")
         .run(JSON.stringify(result), taskId)
+      dropHandoff(task)
       logTask(taskId, by, 'review', result.summary.slice(0, LOG_MESSAGE_MAX))
       const updated = current(taskId)
       notifyLead(updated, 'review_ready', formatNotification('review_ready', updated, {
@@ -413,6 +427,7 @@ export function completeTask(
       UPDATE conductor_tasks SET status = 'completed', result = ?, completed_at = ?, completed_by = ?, lease_expires_at = NULL
       WHERE id = ?
     `).run(JSON.stringify(result), isoSeconds(Date.now()), by, taskId)
+    dropHandoff(task)
     logTask(taskId, by, 'completed', result.summary.slice(0, LOG_MESSAGE_MAX))
     const updated = current(taskId)
     const sends: Send[] = []
@@ -426,11 +441,11 @@ export function completeTask(
  * the task returns to `pending`; the second failure sets `escalated_at` (the
  * dispatcher then skips the task) and tells the lead, once.
  */
-function countFailure(task: TaskRow, error: string): Settled {
+function countFailure(task: TaskRow, error: string, now: number = Date.now()): Settled {
   const failCount = task.fail_count + 1
   db.prepare('UPDATE conductor_tasks SET fail_count = ? WHERE id = ?').run(failCount, task.id)
   toPending(task, `failed: ${error}`)
-  escalate(task, task.assigned_to_agent, failCount, 'failures', error)
+  escalate(task, task.assigned_to_agent, failCount, 'failures', error, now)
   return { outcome: { ok: true, task: current(task.id) }, worker: task.assigned_to_agent }
 }
 
@@ -458,7 +473,7 @@ export function reclaimTask(taskId: string, reason: string, attempt?: number, no
   return settle((): Settled => {
     const loaded = load(taskId, null, 'reclaim', (t) => isActive(t.status), attempt)
     if (!loaded.ok) return refused(loaded)
-    return countFailure(loaded.task, reason)
+    return countFailure(loaded.task, reason, now)
   }, now)
 }
 
@@ -572,7 +587,7 @@ function rejectWork(task: TaskRow, by: string, feedback: string, now: number): v
   db.prepare(`UPDATE conductor_tasks SET ${BACK_TO_PENDING}, completed_at = NULL, completed_by = NULL, reject_count = ? WHERE id = ?`)
     .run(rejectCount, task.id)
   logTask(task.id, by, 'rejected', feedback.slice(0, LOG_MESSAGE_MAX))
-  escalate(task, by, rejectCount, 'rejections', feedback)
+  escalate(task, by, rejectCount, 'rejections', feedback, now)
 }
 
 /**
@@ -702,6 +717,15 @@ function rerouteCycle(task: TaskRow, dependsOn: string[]): string[] | null {
   return cycle.map((id) => labels.get(id) ?? id)
 }
 
+/** The 400 for a patch that cannot apply to `task` (its shape, its dependencies, a cycle it would close), or null. */
+function rerouteProblem(task: TaskRow, patch: RoutePatch): RerouteOutcome | null {
+  const problem = routeProblem(task, patch)
+  if (problem !== null) return problem
+  if (patch.dependsOn === undefined) return null
+  const cycle = rerouteCycle(task, patch.dependsOn)
+  return cycle === null ? null : badRoute(`dependency cycle: ${cycle.join(' -> ')}`, cycle)
+}
+
 /** The columns a patch sets, in `column = ?` order with their values. */
 function patchColumns(patch: RoutePatch): { sets: string[]; values: (string | number | null)[] } {
   const sets: string[] = []
@@ -729,17 +753,17 @@ export function rerouteTask(taskId: string, patch: RoutePatch, by: string | null
   const before = getTask(taskId)
   if (before === undefined) return { ok: false, status: 404, error: `task ${taskId} not found` }
   if (isTerminal(before.status)) return { ok: false, status: 409, error: `reroute ignored: task is ${before.status}` }
-  const problem = routeProblem(before, patch)
+  // checked ahead too, so that a patch that is refused does not revoke the worker
+  const problem = rerouteProblem(before, patch)
   if (problem !== null) return problem
-  if (patch.dependsOn !== undefined) {
-    const cycle = rerouteCycle(before, patch.dependsOn)
-    if (cycle !== null) return badRoute(`dependency cycle: ${cycle.join(' -> ')}`, cycle)
-  }
   revokeBefore(taskId, 'rerouted')
-  return settle((): Settled => {
+  return settle((): Settled<RerouteOutcome> => {
     const loaded = load(taskId, by, 'reroute', (t) => !isTerminal(t.status))
     if (!loaded.ok) return refused(loaded)
     const { task } = loaded
+    // against the row as this transaction reads it: what it writes is what was checked
+    const late = rerouteProblem(task, patch)
+    if (late !== null) return { outcome: late, worker: null }
     const wasActive = isActive(task.status)
     if (wasActive) toPending(task, 'rerouted')
     const { sets, values } = patchColumns(patch)

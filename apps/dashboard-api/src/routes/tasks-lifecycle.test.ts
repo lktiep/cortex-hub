@@ -98,6 +98,17 @@ describe('POST /', () => {
     expect(res.status).toBe(400)
     expect(testDb.prepare('SELECT COUNT(*) AS n FROM conductor_tasks').get()).toEqual({ n: 0 })
   })
+
+  it.each([
+    ['a string', 'abc', 'dependsOn must be a list of strings'],
+    ['a number', 7, 'dependsOn must be a list of strings'],
+    ['an unknown id', ['nope'], 'One or more dependency task IDs not found'],
+  ])('refuses dependsOn as %s with 400 and inserts nothing', async (_label, dependsOn, error) => {
+    const res = await call('POST', '', { title: 'T', dependsOn })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe(error)
+    expect(testDb.prepare('SELECT COUNT(*) AS n FROM conductor_tasks').get()).toEqual({ n: 0 })
+  })
 })
 
 describe('PATCH /:id', () => {
@@ -191,6 +202,32 @@ describe('PATCH /:id', () => {
     expect(row('t1')?.title).toBe('N')
     expect(row('t1')?.priority).toBe(8)
   })
+
+  it('merges context into the stored context, top-level keys only', async () => {
+    insertTask(testDb, { id: 't1', status: 'pending', context: JSON.stringify({ pull: true, a: 1, b: { x: 1 } }) })
+    const res = await call('PATCH', '/t1', { context: { b: { y: 2 }, c: 3 } })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(row('t1')?.context ?? '')).toEqual({ pull: true, a: 1, b: { y: 2 }, c: 3 })
+  })
+
+  it('refuses context keys the lifecycle owns with 400 and writes nothing', async () => {
+    const stored = JSON.stringify({ declined: ['w1'] })
+    insertTask(testDb, { id: 't1', status: 'pending', title: 'old', context: stored })
+    const res = await call('PATCH', '/t1', { title: 'new', context: { handoff: null, note: 'n', reviews: [] } })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('context keys owned by the lifecycle: reviews, handoff')
+    expect(row('t1')).toMatchObject({ title: 'old', context: stored })
+  })
+
+  it('refuses a context that is not an object with 400', async () => {
+    insertTask(testDb, { id: 't1', status: 'pending', context: '{"a":1}' })
+    for (const context of ['text', [1], null]) {
+      const res = await call('PATCH', '/t1', { context })
+      expect(res.status).toBe(400)
+      expect(res.body.error).toBe('context must be an object')
+    }
+    expect(row('t1')?.context).toBe('{"a":1}')
+  })
 })
 
 describe('ruling paths', () => {
@@ -283,5 +320,33 @@ describe('DELETE /:id', () => {
 
   it('answers 404 for a missing task', async () => {
     expect((await call('DELETE', '/nope')).status).toBe(404)
+  })
+
+  it('deletes the task logs with it', async () => {
+    insertTask(testDb, { id: 't1', status: 'pending' })
+    testDb.prepare("INSERT INTO conductor_task_logs (task_id, action) VALUES ('t1', 'created')").run()
+    expect((await call('DELETE', '/t1')).status).toBe(200)
+    expect(testDb.prepare('SELECT COUNT(*) AS n FROM conductor_task_logs').get()).toEqual({ n: 0 })
+  })
+
+  it('refuses with 409 while an unfinished task depends on it, revoking nothing', async () => {
+    const w1 = connect('w1')
+    active('dep', 'w1')
+    insertTask(testDb, { id: 'waits', status: 'blocked', depends_on: JSON.stringify(['dep']) })
+    insertTask(testDb, { id: 'done', status: 'completed', depends_on: JSON.stringify(['dep']) })
+    const res = await call('DELETE', '/dep')
+    expect(res.status).toBe(409)
+    expect(res.body).toEqual({ error: 'task has dependents; cancel it, or reroute its dependents first', dependents: ['waits'] })
+    expect(sentOf(w1, 'task.revoked')).toHaveLength(0)
+    expect(row('dep')?.status).toBe('in_progress')
+    expect(row('waits')?.depends_on).toBe(JSON.stringify(['dep']))
+  })
+
+  it('deletes once every dependent has finished', async () => {
+    insertTask(testDb, { id: 'dep', status: 'pending' })
+    insertTask(testDb, { id: 'gone', status: 'cancelled', depends_on: JSON.stringify(['dep']) })
+    insertTask(testDb, { id: 'failed', status: 'failed', depends_on: JSON.stringify(['other', 'dep']) })
+    expect((await call('DELETE', '/dep')).status).toBe(200)
+    expect(row('dep')).toBeUndefined()
   })
 })

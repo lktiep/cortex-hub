@@ -29,9 +29,7 @@ vi.mock('../db/client.js', () => ({
 // ── Mock ws/conductor (not needed for these tests) ──
 vi.mock('../ws/conductor.js', () => ({
   getAllConnectedAgents: vi.fn(() => []),
-  pushTaskToAgent: vi.fn(),
   notifyAgents: vi.fn(),
-  setAgentStatus: vi.fn(),
 }))
 
 // ── Import after mocks ──

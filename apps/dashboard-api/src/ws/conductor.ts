@@ -27,7 +27,7 @@ import {
   addConnection, broadcastToOwner, getByAgent, getConnection, isPlaceholderAgentId, listConnections, placeholderAgentId,
   rekeyConnection, removeConnection, sendTo, setStatus, touch, updateConnection, type WorkerConn,
 } from '../conductor/registry.js'
-import { ACTIVE_STATUSES, getTask, isoSeconds, logTask } from '../conductor/rows.js'
+import { ACTIVE_STATUSES, getTask, isoSeconds, type TaskRow } from '../conductor/rows.js'
 import { findProjectByRepo } from '../lib/project-match.js'
 import { appVersion } from '../version.js'
 
@@ -253,8 +253,11 @@ export function setupConductorWebSocket(server: Server): WebSocketServer {
       return
     }
     const conn = added.conn
+    // a key scoped to a project scopes its worker: a protocol-1 client serves only that project
+    if (keyRow.project_id !== null) updateConnection(conn.connectionId, { projectId: keyRow.project_id })
     // a protocol-1 client named in the query (the extension) may never register: it is ready now
-    if (named && url.searchParams.get('protocol') !== '2') updateConnection(conn.connectionId, { ready: true })
+    const legacyNamed = named && url.searchParams.get('protocol') !== '2'
+    if (legacyNamed) updateConnection(conn.connectionId, { ready: true })
     if (named) announce(conn)
 
     // Send welcome with current agent list
@@ -270,6 +273,7 @@ export function setupConductorWebSocket(server: Server): WebSocketServer {
     ws.on('message', (data: RawData) => onMessage(ws, conn.connectionId, data))
     ws.on('close', () => dropConnection(conn))
     ws.on('pong', () => touch(conn.connectionId))
+    if (legacyNamed) resendAssigned(conn)
     if (conn.ready) dispatch()
   })
 
@@ -313,6 +317,17 @@ function onMessage(ws: WebSocket, connectionId: string, data: RawData): void {
   } catch (err) {
     console.error(`[ws] ${String(msg['type'])} from ${agent.agentId} failed:`, err)
   }
+}
+
+/**
+ * A protocol-1 client has no `activeTaskId` to report: on connecting (or, for
+ * a script, on naming itself) it is sent again each task still `assigned` to
+ * it, which it may never have received. An accepted task is not re-sent.
+ */
+function resendAssigned(agent: WorkerConn): void {
+  const rows = db.prepare("SELECT * FROM conductor_tasks WHERE assigned_to_agent = ? AND status = 'assigned' ORDER BY rowid")
+    .all(agent.agentId) as TaskRow[]
+  for (const task of rows) reply(agent, assignedMsg(task, baseBranchFor(task.project_id), 'task.assigned'))
 }
 
 /**
@@ -409,6 +424,7 @@ function onAgentRegister(agent: WorkerConn, msg: Record<string, unknown>): void 
   })
   if (anonymous) {
     announce(agent)
+    resendAssigned(agent)
   } else {
     broadcastToOwner(agent.apiKeyOwner, {
       type: 'agent.capabilities_updated',
@@ -678,10 +694,10 @@ function handleMessage(agent: WorkerConn, msg: Record<string, unknown>) {
       db.prepare(`
         INSERT INTO conductor_tasks
           (id, title, description, priority, pinned_agent, created_by_agent,
-           parent_task_id, context, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+           parent_task_id, context, api_key_owner, project_id, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
       `).run(newId, title, description, priority, assignTo ?? null, agent.agentId,
-        parentTaskId ?? null, context)
+        parentTaskId ?? null, context, agent.apiKeyOwner, agent.projectId ?? agent.apiKeyProjectId ?? null)
 
       console.log(`[ws] task.create: ${newId} "${title}" by ${agent.agentId} → ${assignTo ?? 'unassigned'}`)
 
@@ -877,44 +893,6 @@ export function getAllConnectedAgents(): WorkerView[] {
   }))
 }
 
-function pinTask(taskId: string, agentId: string): void {
-  db.prepare('UPDATE conductor_tasks SET pinned_agent = ? WHERE id = ?').run(agentId, taskId)
-  logTask(taskId, agentId, 'pinned', `pinned to ${agentId}`)
-}
-
-/**
- * Kept for the routes that still assign directly. A task the dispatcher owns
- * (`pending`, or a legacy `assigned` row without a lease) is pinned to the
- * agent and dispatched, so it is pushed once and with a lease; the answer is
- * whether it ended up assigned to that agent. A `blocked` task is only
- * pinned (false): the dispatcher sends it once it unblocks. Any other task
- * (the strategy flow, `synthesis`) gets the flat legacy `task.assigned`; the
- * answer is whether it was delivered.
- */
-export function pushTaskToAgent(
-  assignedTo: string,
-  taskId: string,
-  title: string,
-  description: string,
-): boolean {
-  const task = getTask(taskId)
-  if (task?.status === 'blocked') {
-    pinTask(taskId, assignedTo)
-    return false
-  }
-  const dispatchable = task !== undefined
-    && (task.status === 'pending' || (task.status === 'assigned' && task.lease_expires_at === null))
-  if (!dispatchable) {
-    return sendTo(assignedTo, { type: 'task.assigned', taskId, title, description, timestamp: new Date().toISOString() })
-  }
-  // pinned first, so that the dispatch pass returnTask runs already respects it
-  pinTask(taskId, assignedTo)
-  if (task.status === 'assigned') returnTask(taskId, `pinned to ${assignedTo}, handed to the dispatcher`)
-  else dispatch()
-  const after = getTask(taskId)
-  return after?.status === 'assigned' && after.assigned_to_agent === assignedTo
-}
-
 /** Notify specific agents about a task event via WebSocket */
 export function notifyAgents(
   agentIds: string[],
@@ -945,9 +923,4 @@ export function broadcastComment(taskId: string, comment: {
     comment,
     timestamp: new Date().toISOString(),
   })
-}
-
-/** Mark an agent as busy/idle */
-export function setAgentStatus(agentId: string, status: 'idle' | 'busy'): void {
-  setStatus(agentId, status)
 }

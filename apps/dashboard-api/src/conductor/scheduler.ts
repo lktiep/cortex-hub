@@ -31,6 +31,17 @@ function reclaim(row: TaskRow, reason: string, now: number): boolean {
 }
 
 /**
+ * A parent whose strategy was approved waits on its subtasks, which can take
+ * longer than a lease and need no connection from its assignee: neither its
+ * lease nor its assignee going offline reclaims it, which would re-run the
+ * whole parent as plain work.
+ */
+function awaitsSubtasks(row: TaskRow): boolean {
+  if (taskContext(row).phase !== 'execution') return false
+  return db.prepare('SELECT 1 FROM conductor_tasks WHERE parent_task_id = ? LIMIT 1').get(row.id) !== undefined
+}
+
+/**
  * (0) An active task without a lease (made active before leases existed, or by
  * a legacy route that sets none) gets the lease a dispatch would give it, so that it can expire.
  */
@@ -39,12 +50,16 @@ function backfillLeases(now: number, cfg: ConductorConfig): number {
     .run(leaseUntil(now, cfg), ...ACTIVE_STATUSES).changes
 }
 
-/** (1) Active tasks whose lease has passed: the worker, if connected, is told to stop and the failure counted. */
+/**
+ * (1) Active tasks whose lease has passed: the worker, if connected, is told
+ * to stop and the failure counted. A parent awaiting its subtasks is skipped.
+ */
 function reclaimExpiredLeases(now: number): string[] {
   const rows = db.prepare(`SELECT * FROM conductor_tasks WHERE status IN (${ACTIVE_IN}) AND lease_expires_at <= ? ORDER BY rowid`)
     .all(...ACTIVE_STATUSES, isoSeconds(now)) as TaskRow[]
   const reclaimed: string[] = []
   for (const row of rows) {
+    if (awaitsSubtasks(row)) continue
     if (reclaim(row, 'lease expired', now)) reclaimed.push(row.id)
   }
   return reclaimed
@@ -54,8 +69,9 @@ function reclaimExpiredLeases(now: number): string[] {
  * (2) Active tasks whose assignee is not connected and was last seen more than
  * `offlineReclaimMinutes` ago. A pull-mode task has no worker connection to
  * lose, and a task without an assignee no one to be offline: only their
- * lease applies. After a restart an unknown worker counts from the registry's
- * start, so it gets the full window to reconnect.
+ * lease applies. A parent awaiting its subtasks is skipped. After a restart
+ * an unknown worker counts from the registry's start, so it gets the full
+ * window to reconnect.
  */
 function reclaimOffline(now: number, offlineMinutes: number, skip: ReadonlySet<string>): string[] {
   const seenBefore = now - offlineMinutes * 60_000
@@ -65,7 +81,7 @@ function reclaimOffline(now: number, offlineMinutes: number, skip: ReadonlySet<s
   for (const row of rows) {
     const agent = row.assigned_to_agent
     if (agent === null || skip.has(row.id) || getByAgent(agent) !== undefined || taskContext(row).pull) continue
-    if (lastSeen(agent, now) >= seenBefore) continue
+    if (lastSeen(agent, now) >= seenBefore || awaitsSubtasks(row)) continue
     if (reclaim(row, 'worker offline', now)) reclaimed.push(row.id)
   }
   return reclaimed

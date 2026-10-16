@@ -380,6 +380,22 @@ describe('quota', () => {
     expect(row('t1')).toMatchObject({ status: 'pending', fail_count: 0 })
     expect(context('t1').handoff).toEqual(quotaMsg('t1').handoff)
   })
+
+  it('completion and review drop the handoff; fail, decline and return keep it', () => {
+    const handedOff = (): string => JSON.stringify({ note: 'x', handoff: quotaMsg('t').handoff })
+    for (const id of ['done', 'review', 'failed', 'declined', 'returned']) running(id, `w-${id}`, { context: handedOff() })
+
+    expect(completeTask('done', 'w-done', 'completed', { summary: 'ok' }).ok).toBe(true)
+    expect(completeTask('review', 'w-review', 'review', { summary: 'ok' }).ok).toBe(true)
+    expect(failAttempt('failed', 'w-failed', 'boom').ok).toBe(true)
+    expect(declineTask('declined', 'w-declined', 'no gpu here').ok).toBe(true)
+    expect(returnTask('returned', 'send failed').ok).toBe(true)
+
+    expect([row('done').status, row('review').status]).toEqual(['completed', 'review'])
+    expect(context('done')).toEqual({ note: 'x' })
+    expect(context('review')).toEqual({ note: 'x' })
+    for (const id of ['failed', 'declined', 'returned']) expect(context(id).handoff).toEqual(quotaMsg('t').handoff)
+  })
 })
 
 describe('decline', () => {

@@ -13,9 +13,7 @@ const mockBroadcastComment = vi.fn()
 
 vi.mock('../ws/conductor.js', () => ({
   getAllConnectedAgents: vi.fn(() => []),
-  pushTaskToAgent: vi.fn(() => false),
   notifyAgents: vi.fn(() => []),
-  setAgentStatus: vi.fn(),
   broadcastComment: (...args: unknown[]) => mockBroadcastComment(...args),
   broadcastStrategyReady: vi.fn(),
 }))

@@ -7,7 +7,7 @@ let testDb: Database.Database
 vi.mock('../db/client.js', () => ({ get db() { return testDb } }))
 
 import {
-  quotaModelMatches, routeChain, selectAssignments,
+  quotaModelMatches, routeChain, selectAssignments, servesProject,
   type CandidateTask, type CandidateWorker, type QuotaRow, type SelectionInput,
 } from './dispatcher.js'
 
@@ -259,6 +259,25 @@ describe('selectAssignments', () => {
     const typed = select({ pending: [task('b', { routes: [route('claude', null)] })], workers: [legacy] })
     expect(typed.assign).toEqual([])
     expect(typed.wait).toEqual([{ taskId: 'b', reason: 'no_worker', until: null }])
+  })
+
+  it('a legacy worker on a project-scoped key serves only its project and project-less tasks', () => {
+    const scoped = worker('old', { protocol: 1, engines: [], projectId: 'p1' })
+    const free = (projectId: string | null) => task('a', { projectId, routes: [route(null, null)] })
+    expect(select({ pending: [free('p1')], workers: [scoped] }).assign).toHaveLength(1)
+    expect(select({ pending: [free(null)], workers: [scoped] }).assign).toHaveLength(1)
+    expect(select({ pending: [free('p2')], workers: [scoped] }).wait).toEqual([{ taskId: 'a', reason: 'no_worker', until: null }])
+  })
+})
+
+describe('servesProject', () => {
+  it('an unscoped legacy worker serves any project; a scoped one or a v2 worker its own and project-less tasks', () => {
+    expect(servesProject({ protocol: 1, projectId: null }, { projectId: 'p1' })).toBe(true)
+    expect(servesProject({ protocol: 1, projectId: 'p1' }, { projectId: 'p2' })).toBe(false)
+    expect(servesProject({ protocol: 1, projectId: 'p1' }, { projectId: null })).toBe(true)
+    expect(servesProject({ protocol: 2, projectId: null }, { projectId: 'p1' })).toBe(false)
+    expect(servesProject({ protocol: 2, projectId: null }, { projectId: null })).toBe(true)
+    expect(servesProject({ protocol: 2, projectId: 'p1' }, { projectId: 'p1' })).toBe(true)
   })
 })
 

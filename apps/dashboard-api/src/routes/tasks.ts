@@ -5,8 +5,11 @@ import { dispatch } from '../conductor/dispatcher.js'
 import {
   acceptTask, cancelTask, completeTask, recordProgress, rerouteTask, reviewTask, revokeTask, type Outcome,
 } from '../conductor/lifecycle.js'
-import { ACTIVE_STATUSES, getTask, logTask, parseJson, toTaskResult, type TaskRow } from '../conductor/rows.js'
-import { priorityValue } from '../conductor/tree.js'
+import {
+  ACTIVE_STATUSES, HAS_DEPENDENTS, dependentsOf, getTask, logTask, missingTasks, parseJson, taskContext, toTaskResult,
+  type TaskRow,
+} from '../conductor/rows.js'
+import { priorityValue, stringListProblem } from '../conductor/tree.js'
 
 export const tasksRouter = new Hono()
 
@@ -16,6 +19,8 @@ function generateTaskId(): string {
 
 const USE_ASSIGN = 'use /assign or the dispatcher'
 const COMPLETING = ['completed', 'failed', 'review'] as const
+/** Context keys only the lifecycle writes: a PATCH that names one is refused. */
+const LIFECYCLE_CONTEXT_KEYS = ['pull', 'declined', 'reviews', 'handoff'] as const
 type Completing = (typeof COMPLETING)[number]
 
 function allCompleted(ids: string[]): boolean {
@@ -129,9 +134,14 @@ tasksRouter.post('/', async (c) => {
     if (priorityInt === null) {
       return c.json({ error: `unknown priority ${String(priority)}` }, 400)
     }
+    const depsProblem = stringListProblem('dependsOn', dependsOn)
+    if (depsProblem !== null) return c.json({ error: depsProblem }, 400)
+    const deps = [...new Set(dependsOn ?? [])]
+    if (missingTasks(deps).length > 0) {
+      return c.json({ error: 'One or more dependency task IDs not found' }, 400)
+    }
 
     const id = generateTaskId()
-    const deps = [...new Set(dependsOn ?? [])]
     // 'blocked' until every dependency completes
     const initialStatus = allCompleted(deps) ? 'pending' : 'blocked'
     const owner = c.req.header('X-API-Key-Owner') || null
@@ -287,6 +297,14 @@ tasksRouter.patch('/:id', async (c) => {
     if ('assignedToAgent' in body && pinned !== null && typeof pinned !== 'string') {
       return c.json({ error: 'assignedToAgent must be a string or null' }, 400)
     }
+    // a context is merged into the stored one (top-level keys); the keys the lifecycle keeps are refused
+    const contextPatch = body.context
+    const merging = 'context' in body
+    if (merging && (typeof contextPatch !== 'object' || contextPatch === null || Array.isArray(contextPatch))) {
+      return c.json({ error: 'context must be an object' }, 400)
+    }
+    const owned = merging ? LIFECYCLE_CONTEXT_KEYS.filter((k) => k in (contextPatch as object)) : []
+    if (owned.length > 0) return c.json({ error: `context keys owned by the lifecycle: ${owned.join(', ')}` }, 400)
 
     const fields: Record<string, string> = {
       title: 'title',
@@ -294,7 +312,6 @@ tasksRouter.patch('/:id', async (c) => {
       assignedSessionId: 'assigned_session_id',
       requiredCapabilities: 'required_capabilities',
       notifyOnComplete: 'notify_on_complete',
-      context: 'context',
     }
     // a result sent with a completing status is the completion's; on its own it is stored as given
     if (!(COMPLETING as readonly string[]).includes(status ?? '')) fields.result = 'result'
@@ -315,7 +332,7 @@ tasksRouter.patch('/:id', async (c) => {
     if ('dependsOn' in body) route.dependsOn = body.dependsOn as string[]
     if ('assignedToAgent' in body) route.pinnedAgent = (pinned as string | null) || null
     const rerouting = Object.keys(route).length > 0
-    if (setClauses.length === 0 && !rerouting && status === undefined) {
+    if (setClauses.length === 0 && !merging && !rerouting && status === undefined) {
       return c.json({ error: 'No valid fields to update' }, 400)
     }
 
@@ -324,9 +341,18 @@ tasksRouter.patch('/:id', async (c) => {
       const moved = rerouteTask(id, route, agentId ?? 'dashboard')
       if (!moved.ok) return refusal(c, moved)
     }
+    if (merging) {
+      // merged into the context as it is now, after the reroute
+      setClauses.push('context = ?')
+      values.push(JSON.stringify({ ...taskContext(getTask(id) ?? existing), ...(contextPatch as Record<string, unknown>) }))
+    }
     if (setClauses.length > 0) {
       db.prepare(`UPDATE conductor_tasks SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, id)
-      const changed = [...Object.keys(fields).filter((k) => k in body), ...(priority !== undefined ? ['priority'] : [])]
+      const changed = [
+        ...Object.keys(fields).filter((k) => k in body),
+        ...(merging ? ['context'] : []),
+        ...(priority !== undefined ? ['priority'] : []),
+      ]
       logTask(id, agentId ?? null, 'updated', `Updated: ${changed.join(', ')}`)
     }
 
@@ -425,11 +451,14 @@ tasksRouter.post('/:id/logs', async (c) => {
   }
 })
 
-// DELETE /api/tasks/:id — delete task (an active one is revoked first)
+// DELETE /api/tasks/:id — delete task (an active one is revoked first); refused
+// while an unfinished task depends on it
 tasksRouter.delete('/:id', (c) => {
   const id = c.req.param('id')
   try {
     const existing = getTask(id)
+    const dependents = existing ? dependentsOf(id) : []
+    if (dependents.length > 0) return c.json({ error: HAS_DEPENDENTS, dependents }, 409)
     if (existing && isActive(existing.status)) revokeTask(id, 'deleted')
     db.prepare('DELETE FROM conductor_task_logs WHERE task_id = ?').run(id)
     const result = db.prepare('DELETE FROM conductor_tasks WHERE id = ?').run(id)

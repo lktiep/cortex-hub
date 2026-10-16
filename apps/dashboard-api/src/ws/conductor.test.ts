@@ -13,7 +13,7 @@ vi.mock('../db/client.js', () => ({ get db() { return testDb } }))
 import { resetRegistry } from '../conductor/registry.js'
 import { isoSeconds, type TaskRow } from '../conductor/rows.js'
 import { appVersion } from '../version.js'
-import { getAllConnectedAgents, pushTaskToAgent, setupConductorWebSocket } from './conductor.js'
+import { getAllConnectedAgents, setupConductorWebSocket } from './conductor.js'
 
 const REPO = 'https://github.com/o/r.git'
 const CLAUDE: EngineInfo = { executor: 'claude', models: ['*'], defaultModel: 'opus' }
@@ -502,6 +502,57 @@ describe('legacy workers', () => {
     expect(types(creator)).not.toContain('task.assigned')
     expect(types(target)).not.toContain('task.assigned')
   })
+
+  it('task.create records the key owner and the key project', async () => {
+    addKey('sk_p1', 'p1')
+    const scoped = await connectLegacy('scoped', 'h-s', { apiKey: 'sk_p1' })
+    send(scoped, { type: 'task.create', title: 'Scoped job', description: 'd' })
+    const fromScoped = await next(scoped, 'task.created')
+    expect(row(fromScoped.taskId as string)).toMatchObject({ api_key_owner: 'owner', project_id: 'p1' })
+
+    const plain = await connectLegacy('plain', 'h-p')
+    send(plain, { type: 'task.create', title: 'Plain job', description: 'd' })
+    const fromPlain = await next(plain, 'task.created')
+    expect(row(fromPlain.taskId as string)).toMatchObject({ api_key_owner: 'owner', project_id: null })
+  })
+
+  it('a legacy client on a project-scoped key gets only that project and project-less tasks', async () => {
+    addKey('sk_p1', 'p1')
+    insertTask(testDb, { id: 't-p2', status: 'pending', project_id: 'p2', created_at: '2026-01-01T00:00:00Z' })
+    insertTask(testDb, { id: 't-p1', status: 'pending', project_id: 'p1', created_at: '2026-01-02T00:00:00Z' })
+    const ext = await connectLegacy('ext', 'h-ext', { apiKey: 'sk_p1' })
+    expect(await next(ext, 'task.assigned')).toMatchObject({ taskId: 't-p1' })
+    expect(row('t-p2').status).toBe('pending')
+    expect(getAllConnectedAgents()).toEqual([expect.objectContaining({ agentId: 'ext', projectId: 'p1' })])
+  })
+
+  it('a legacy client that reconnects is sent its never-accepted task again, not an accepted one', async () => {
+    const lease = isoSeconds(Date.now() + 3600_000)
+    insertTask(testDb, { id: 'sent', title: 'Sent', description: 'once', status: 'assigned', assigned_to_agent: 'ext', attempt: 1, lease_expires_at: lease })
+    insertTask(testDb, { id: 'taken', status: 'accepted', assigned_to_agent: 'ext', attempt: 1, lease_expires_at: lease })
+    insertTask(testDb, { id: 'free', status: 'pending' })
+    const before = [row('sent'), row('taken')]
+    const ext = await connectLegacy('ext', 'h-ext')
+    const msg = await next(ext, 'task.assigned')
+    expect(msg).toMatchObject({ taskId: 'sent', title: 'Sent', description: 'once', task: expect.objectContaining({ id: 'sent' }) })
+    await sync(ext)
+    expect(types(ext)).not.toContain('task.assigned')
+    expect([row('sent'), row('taken')]).toEqual(before)
+    expect(row('free').status).toBe('pending')
+  })
+
+  it('a script that names itself in agent.register is sent its never-accepted task again', async () => {
+    insertTask(testDb, { id: 'sent', status: 'assigned', assigned_to_agent: 'sa', attempt: 1, lease_expires_at: isoSeconds(Date.now() + 3600_000) })
+    const before = row('sent')
+    const bare = await connectBare()
+    await sync(bare)
+    expect(types(bare)).not.toContain('task.assigned')
+    agentRegister(bare, 'sa', 'h-a')
+    expect(await next(bare, 'task.assigned')).toMatchObject({ taskId: 'sent', task: expect.objectContaining({ id: 'sent' }) })
+    await sync(bare)
+    expect(types(bare)).not.toContain('task.assigned')
+    expect(row('sent')).toEqual(before)
+  })
 })
 
 describe('query-less legacy scripts', () => {
@@ -568,62 +619,5 @@ describe('query-less legacy scripts', () => {
     expect(await bare.closed).toEqual({ code: 4001, reason: 'agentId required' })
     await until(() => wss.clients.size === 0)
     expect(connectedIds()).toEqual([])
-  })
-})
-
-describe('pushTaskToAgent', () => {
-  it('pins and dispatches instead of sending twice', async () => {
-    const w = await connect('w1')
-    register(w)
-    await next(w, 'registered')
-    await sync(w)
-    insertTask(testDb, { id: 't1', title: 'Legacy', status: 'assigned', assigned_to_agent: 'w1', project_id: 'p1' })
-    expect(pushTaskToAgent('w1', 't1', 'Legacy', '')).toBe(true)
-    expect(await next(w, 'task.assigned')).toMatchObject({ taskId: 't1', task: expect.objectContaining({ id: 't1' }) })
-    await sync(w)
-    expect(types(w)).not.toContain('task.assigned')
-    const r = row('t1')
-    expect(r).toMatchObject({ status: 'assigned', assigned_to_agent: 'w1', pinned_agent: 'w1' })
-    expect(r.lease_expires_at).not.toBeNull()
-    expect(logs('t1', 'pinned')).toEqual([{ agent_id: 'w1', message: 'pinned to w1' }])
-  })
-
-  it('pins a pending task and dispatches it to that agent once', async () => {
-    const w = await connect('w1')
-    register(w)
-    await next(w, 'registered')
-    await sync(w)
-    insertTask(testDb, { id: 't1', title: 'Fresh', status: 'pending', project_id: 'p1' })
-    expect(pushTaskToAgent('w1', 't1', 'Fresh', '')).toBe(true)
-    expect(await next(w, 'task.assigned')).toMatchObject({ taskId: 't1', task: expect.objectContaining({ id: 't1' }) })
-    await sync(w)
-    expect(types(w)).not.toContain('task.assigned')
-    expect(row('t1')).toMatchObject({ status: 'assigned', assigned_to_agent: 'w1', pinned_agent: 'w1' })
-    expect(logs('t1', 'pinned')).toEqual([{ agent_id: 'w1', message: 'pinned to w1' }])
-  })
-
-  it('only pins a blocked task: the dispatcher sends it once it unblocks', async () => {
-    const w = await connect('w1')
-    register(w)
-    await next(w, 'registered')
-    await sync(w)
-    insertTask(testDb, { id: 't1', title: 'Later', status: 'blocked', project_id: 'p1' })
-    expect(pushTaskToAgent('w1', 't1', 'Later', '')).toBe(false)
-    await sync(w)
-    expect(types(w)).not.toContain('task.assigned')
-    expect(row('t1')).toMatchObject({ status: 'blocked', pinned_agent: 'w1', assigned_to_agent: null })
-    expect(logs('t1', 'pinned')).toEqual([{ agent_id: 'w1', message: 'pinned to w1' }])
-  })
-
-  it('sends the flat legacy message for a task outside the dispatcher', async () => {
-    const w = await connect('w1')
-    register(w)
-    await next(w, 'registered')
-    insertTask(testDb, { id: 't1', title: 'Synthesize', status: 'synthesis', assigned_to_agent: 'w1' })
-    expect(pushTaskToAgent('w1', 't1', 'Synthesize', 'merge results')).toBe(true)
-    const msg = await next(w, 'task.assigned')
-    expect(msg).toMatchObject({ taskId: 't1', title: 'Synthesize', description: 'merge results' })
-    expect(msg.task).toBeUndefined()
-    expect(row('t1').status).toBe('synthesis')
   })
 })

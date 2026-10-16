@@ -25,7 +25,7 @@ interface Body {
   ids?: Record<string, string>; rootIds?: string[]; ready?: number
   error?: string; cycle?: string[]; message?: string; success?: boolean; id?: string
   assigned?: boolean; agentId?: string | null; delegated?: boolean; subtaskIds?: string[]
-  delegation?: { agentId: string; caps: string[] }[]; requiredCapabilities?: string[]
+  delegation?: { agentId: string; caps: string[] }[]; requiredCapabilities?: string[]; dependents?: string[]
 }
 
 async function call(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: Body }> {
@@ -40,14 +40,18 @@ async function call(method: string, path: string, body?: unknown, headers: Recor
   }
 }
 
-function connect(agentId: string, opts: { engines?: EngineInfo[]; projectId?: string | null; capabilities?: string[] } = {}): FakeSocket {
+function connect(
+  agentId: string, opts: { engines?: EngineInfo[]; projectId?: string | null; capabilities?: string[]; protocol?: 1 | 2 } = {},
+): FakeSocket {
   const ws = fakeSocket()
   const r = addConnection({
     ws, agentId, apiKeyOwner: 'o1', apiKeyProjectId: null, hostname: `host-${agentId}`,
     ide: 'vscode', platform: 'darwin', capabilities: opts.capabilities ?? [],
   })
   if (!r.ok) throw new Error(r.reason)
-  updateConnection(r.conn.connectionId, { protocol: 2, engines: opts.engines ?? [CLAUDE], projectId: opts.projectId ?? null, ready: true })
+  updateConnection(r.conn.connectionId, {
+    protocol: opts.protocol ?? 2, engines: opts.engines ?? [CLAUDE], projectId: opts.projectId ?? null, ready: true,
+  })
   return ws
 }
 
@@ -120,7 +124,21 @@ describe('POST /tree and GET /:id/tree', () => {
     expect(tree.status).toBe(200)
     expect(tree.body.root?.id).toBe(keyIds.G)
     expect(ids(tree.body.tasks)).toEqual([keyIds.A, keyIds.IN, keyIds.LEAF].sort())
-    expect((tree.body.workers ?? []).map((w) => w.agentId).sort()).toEqual(['w1', 'w3'])
+    expect((tree.body.workers ?? []).map((w) => w.agentId).sort()).toEqual(['w1'])
+  })
+
+  it('lists the workers the dispatcher would give the root project to', async () => {
+    connect('v2-p1', { projectId: 'p1' })
+    connect('v2-none', { projectId: null })
+    connect('v1-any', { protocol: 1, projectId: null })
+    connect('v1-p1', { protocol: 1, projectId: 'p1' })
+    connect('v1-p2', { protocol: 1, projectId: 'p2' })
+    insertTask(testDb, { id: 'root', project_id: 'p1' })
+    insertTask(testDb, { id: 'loose' })
+    const scoped = await call('GET', '/root/tree')
+    expect((scoped.body.workers ?? []).map((w) => w.agentId).sort()).toEqual(['v1-any', 'v1-p1', 'v2-p1'])
+    const unscoped = await call('GET', '/loose/tree')
+    expect((unscoped.body.workers ?? []).map((w) => w.agentId).sort()).toEqual(['v1-any', 'v1-p1', 'v1-p2', 'v2-none', 'v2-p1'])
   })
 
   it('answers 404 for a missing root', async () => {
@@ -774,5 +792,40 @@ describe('POST /auto-assign', () => {
       expect(sub.assigned_at).toBeNull()
       expect(JSON.parse(sub.required_capabilities)).toEqual([sub.pinned_agent === 'w1' ? 'a' : 'b'])
     }
+  })
+})
+
+describe('DELETE /:id', () => {
+  it('revokes an active task first, then deletes it and its logs', async () => {
+    const w1 = connect('w1')
+    insertTask(testDb, { id: 't1', status: 'in_progress', assigned_to_agent: 'w1', assigned_at: isoSeconds() })
+    testDb.prepare("INSERT INTO conductor_task_logs (task_id, action) VALUES ('t1', 'created')").run()
+    const res = await call('DELETE', '/t1')
+    expect(res.status).toBe(200)
+    expect(sentOf(w1, 'task.revoked')).toEqual([{ type: 'task.revoked', taskId: 't1', reason: 'deleted' }])
+    expect(count()).toBe(0)
+    expect(testDb.prepare('SELECT COUNT(*) AS n FROM conductor_task_logs').get()).toEqual({ n: 0 })
+  })
+
+  it('refuses with 409 while an unfinished task depends on it, revoking nothing', async () => {
+    const w1 = connect('w1')
+    insertTask(testDb, { id: 'dep', status: 'in_progress', assigned_to_agent: 'w1', assigned_at: isoSeconds() })
+    insertTask(testDb, { id: 'waits', status: 'blocked', depends_on: JSON.stringify(['dep']) })
+    insertTask(testDb, { id: 'review', status: 'review', depends_on: JSON.stringify(['other', 'dep']) })
+    insertTask(testDb, { id: 'done', status: 'completed', depends_on: JSON.stringify(['dep']) })
+    const res = await call('DELETE', '/dep')
+    expect(res.status).toBe(409)
+    expect(res.body).toEqual({ error: 'task has dependents; cancel it, or reroute its dependents first', dependents: ['waits', 'review'] })
+    expect(sentOf(w1, 'task.revoked')).toEqual([])
+    expect(row('dep').status).toBe('in_progress')
+    expect(row('waits').depends_on).toBe(JSON.stringify(['dep']))
+  })
+
+  it('deletes once every dependent has finished; 404 for a missing task', async () => {
+    insertTask(testDb, { id: 'dep', status: 'pending' })
+    insertTask(testDb, { id: 'gone', status: 'cancelled', depends_on: JSON.stringify(['dep']) })
+    expect((await call('DELETE', '/dep')).status).toBe(200)
+    expect(count()).toBe(1)
+    expect((await call('DELETE', '/nope')).status).toBe(404)
   })
 })

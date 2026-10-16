@@ -177,6 +177,35 @@ describe('runSchedulerTick', () => {
     expect(notifications()).toHaveLength(1)
   })
 
+  it('a parent in its execution phase with subtasks is not reclaimed for its lease or as offline', () => {
+    const execution = JSON.stringify({ phase: 'execution' })
+    running('lead', 'w1', { context: execution, lease_expires_at: isoSeconds(START + HOUR) })
+    insertTask(testDb, { id: 'sub', status: 'blocked', parent_task_id: 'lead' })
+    const before = row('lead')
+    // the same state without subtasks, and without the phase: both are reclaimed
+    running('alone', 'w2', { context: execution, lease_expires_at: isoSeconds(START + HOUR) })
+    running('plain', 'w3', { lease_expires_at: isoSeconds(START + HOUR) })
+    // no assignee is connected: all three are offline, and all three leases have passed
+    expect(runSchedulerTick(START + 2 * HOUR)).toEqual({ ...NOTHING, reclaimed: ['alone', 'plain'] })
+    expect(row('lead')).toEqual(before)
+    expect(logs('lead', 'returned')).toEqual([])
+    expect([row('alone').status, row('plain').status]).toEqual(['pending', 'pending'])
+
+    // offline alone, its lease still running
+    running('lead2', 'w4', { context: execution })
+    insertTask(testDb, { id: 'sub2', status: 'blocked', parent_task_id: 'lead2' })
+    running('plain2', 'w5')
+    expect(runSchedulerTick(START + 3 * HOUR)).toEqual({ ...NOTHING, reclaimed: ['plain2'] })
+    expect(row('lead2')).toMatchObject({ status: 'in_progress', assigned_to_agent: 'w4', fail_count: 0 })
+  })
+
+  it('escalates at the tick clock', () => {
+    const at = Date.UTC(2031, 0, 1, 0, 0, 0)
+    running('t1', 'w1', { fail_count: 1, lease_expires_at: isoSeconds(START + HOUR) })
+    expect(runSchedulerTick(at)).toEqual({ ...NOTHING, reclaimed: ['t1'] })
+    expect(row('t1').escalated_at).toBe(isoSeconds(at))
+  })
+
   it('expired quota rows are deleted and the waiting task dispatches', () => {
     insertTask(testDb, { id: 't1', title: 'Fix login', executor: 'claude', model: 'opus', fallback: '[]' })
     const { ws } = connect('w1')

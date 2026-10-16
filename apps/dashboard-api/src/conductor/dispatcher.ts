@@ -56,9 +56,15 @@ function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
 }
 
-/** A legacy (protocol 1) worker takes any project; otherwise its own project's tasks and project-less ones. */
-function servesProject(worker: CandidateWorker, task: CandidateTask): boolean {
-  if (worker.protocol === 1) return true
+/**
+ * A legacy (protocol 1) worker on a key scoped to no project takes any
+ * project; any other worker (protocol 2, or a key scoped to a project) takes
+ * its own project's tasks and project-less ones. Also the `GET /:id/tree` worker filter.
+ */
+export function servesProject(
+  worker: Pick<CandidateWorker, 'protocol' | 'projectId'>, task: Pick<CandidateTask, 'projectId'>,
+): boolean {
+  if (worker.protocol === 1 && worker.projectId === null) return true
   return task.projectId === null || task.projectId === worker.projectId
 }
 
@@ -187,24 +193,6 @@ export function selectAssignments(input: SelectionInput): { assign: Assignment[]
 export function normalizeIdentity(id: string | null | undefined): string {
   if (!id) return ''
   return id.toLowerCase().trim()
-}
-
-/**
- * Check if a requesting agent matches a task's assigned_to field.
- * Matches on agentId, apiKeyOwner, or sessionAgent (any of them).
- */
-export function agentMatchesAssignment(
-  assignedTo: string | null,
-  agentId?: string | null,
-  apiKeyOwner?: string | null,
-  sessionAgent?: string | null
-): boolean {
-  if (!assignedTo) return true // unassigned tasks can be picked up by anyone
-  const target = normalizeIdentity(assignedTo)
-  const candidates = [agentId, apiKeyOwner, sessionAgent]
-    .map(normalizeIdentity)
-    .filter(Boolean)
-  return candidates.some((c) => c === target || target.includes(c) || c.includes(target))
 }
 
 // ── DB half: load state, apply the selection, push the assignments ──
