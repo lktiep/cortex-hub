@@ -210,8 +210,11 @@ export async function runTask(
     verdict: Extract<Classification, { kind: 'quota' }>,
   ): Promise<RunOutcome> => {
     const wip = await saveWip(worktree, 'quota handoff');
-    const model = task.route.model ?? adapter.defaultModel() ?? 'default';
-    const lines = [`${adapter.executor} (${model}) ran out of quota.`];
+    // Without a route model or an adapter default, the model the engine used is unknown. The hub
+    // checks a model-null route only against '*' rows, so send '*' and no narrower model scope.
+    const known = task.route.model ?? adapter.defaultModel();
+    const model = known ?? '*';
+    const lines = [`${adapter.executor} (${known ?? 'default model'}) ran out of quota.`];
     if (wip.pushed) lines.push(`Its work in progress is committed on ${task.branch} as ${wip.commit ?? ''}.`);
     else if (wip.problem === null) lines.push('It left no uncommitted changes.');
     else lines.push(wip.problem);
@@ -220,7 +223,7 @@ export async function runTask(
       taskId: task.id,
       executor: adapter.executor,
       model,
-      ...(verdict.modelScope !== undefined ? { modelScope: verdict.modelScope } : {}),
+      ...(known !== null && verdict.modelScope !== undefined ? { modelScope: verdict.modelScope } : {}),
       ...(verdict.resetAt !== undefined ? { resetAt: verdict.resetAt } : {}),
       raw: verdict.raw,
       handoff: { branch: task.branch, commit: wip.pushed ? wip.commit : null, note: lines.join(' ') },

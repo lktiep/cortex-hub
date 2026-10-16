@@ -4,6 +4,7 @@
 //   agy --version                     prints a version
 //   agy models                        prints models.txt
 //   agy -p … --model claude-sonnet-*  edits a file, prints the quota transcript, exits 3
+//   agy -p … (prompt with [e2e-quota]) the same, whatever the model: for a route without a model
 //   agy -p … --model slow             writes SLOW.md, then its pid to $E2E_AGY_PID_FILE, then sleeps
 //   agy -p … (any other model)        appends to README.md and prints success.jsonl
 //
@@ -18,6 +19,8 @@ const FIXTURES = fileURLToPath(new URL('../engines/__fixtures__/agy/', import.me
 /** The revoke kills the slow run within seconds; this only bounds a test that failed before it. */
 const SLOW_MAX_MS = 60_000;
 const QUOTA_EXIT_CODE = 3;
+/** QUOTA_MARKER in harness.ts. */
+const QUOTA_MARKER = '[e2e-quota]';
 
 function fixture(name) {
   return readFileSync(path.join(FIXTURES, name), 'utf8');
@@ -39,9 +42,10 @@ function main(args) {
   }
 
   const model = flag(args, '--model') ?? '';
+  const prompt = flag(args, '-p') ?? '';
   const cwd = process.cwd();
   const log = process.env.E2E_AGY_LOG;
-  if (log) appendFileSync(log, `${JSON.stringify({ model, prompt: flag(args, '-p') ?? '' })}\n`);
+  if (log) appendFileSync(log, `${JSON.stringify({ model, prompt })}\n`);
 
   if (model === 'slow') {
     // the work in progress exists before the pid does, so the revoke always has something to commit
@@ -55,7 +59,7 @@ function main(args) {
     return;
   }
 
-  if (model.startsWith('claude-sonnet-')) {
+  if (model.startsWith('claude-sonnet-') || prompt.includes(QUOTA_MARKER)) {
     appendFileSync(path.join(cwd, 'QUOTA.md'), 'partial work before the quota ran out\n');
     process.stdout.write(fixture('quota.stream.jsonl'));
     process.stderr.write(fixture('quota.stderr.txt'));

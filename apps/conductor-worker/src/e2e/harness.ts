@@ -17,6 +17,8 @@ const FAKE_GH = path.join(HERE, 'fake-gh.mjs');
 /** What fake-gh prints for `gh pr create`. */
 export const PR_URL = 'https://github.com/acme/demo/pull/1';
 export const TEST_CMD = `node -e "console.log('tests ok')"`;
+/** A prompt holding this makes fake-agy.mjs run out of quota whatever the model (its QUOTA_MARKER). */
+export const QUOTA_MARKER = '[e2e-quota]';
 /** "Resets in 89h3m4s" in quota.stderr.txt. */
 export const QUOTA_RESET_MS = ((89 * 60 + 3) * 60 + 4) * 1000;
 export const RESET_TOLERANCE_MS = 5 * 60_000;

@@ -389,11 +389,27 @@ describe('runTask', () => {
     const out = await run(makeTask(), h);
 
     const msg = quotaOf(out);
-    expect(msg.handoff).toEqual({ branch: BRANCH, commit: null, note: expect.any(String) as string });
-    // no route model and no adapter default
-    expect(msg.model).toBe('default');
+    expect(msg.handoff).toEqual({
+      branch: BRANCH,
+      commit: null,
+      note: 'claude (default model) ran out of quota. It left no uncommitted changes.',
+    });
+    // no route model and no adapter default: '*', the row the hub checks a model-null route against
+    expect(msg.model).toBe('*');
+    expect(msg).not.toHaveProperty('modelScope');
     expect(msg.attempt).toBe(3);
     expect(remoteHas(BRANCH)).toBe(false);
+  });
+
+  it('quota with an unknown model reports * and drops a model scope', async () => {
+    const engine = fakeEngine({
+      run: () => ({ exitCode: 1 }),
+      classify: { kind: 'quota', modelScope: 'gemini-4-argon-*', raw: '429' },
+      defaultModel: null,
+    });
+    const msg = quotaOf(await run(makeTask(), harness(engine.adapter)));
+    expect(msg.model).toBe('*');
+    expect(msg).not.toHaveProperty('modelScope');
   });
 
   it('engine error returns failed with the classifier message', async () => {

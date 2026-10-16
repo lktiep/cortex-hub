@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type Database from 'better-sqlite3'
-import type { EngineInfo, TaskAssignedMsg } from '@cortex/shared-types'
+import type { EngineInfo, Executor, TaskAssignedMsg } from '@cortex/shared-types'
 import { createTestDb, fakeSocket, insertTask, type FakeSocket } from './testing.js'
 
 let testDb: Database.Database
@@ -17,14 +17,18 @@ const IN_2H = '2026-10-16T14:00:00Z'
 const IN_24H = '2026-10-17T12:00:00Z'
 const CLAUDE: EngineInfo = { executor: 'claude', models: ['opus', 'sonnet'], defaultModel: 'opus' }
 
-function connect(agentId: string, opts: { ws?: FakeSocket; ready?: boolean; connectedAt?: number } = {}): FakeSocket {
+function connect(
+  agentId: string, opts: { ws?: FakeSocket; ready?: boolean; connectedAt?: number; defaultExecutor?: Executor | null } = {},
+): FakeSocket {
   const ws = opts.ws ?? fakeSocket()
   const r = addConnection({
     ws, agentId, apiKeyOwner: 'o1', apiKeyProjectId: null, hostname: `host-${agentId}`,
     ide: null, platform: null, capabilities: [],
   }, opts.connectedAt ?? NOW)
   if (!r.ok) throw new Error(r.reason)
-  updateConnection(r.conn.connectionId, { protocol: 2, engines: [CLAUDE], projectId: null, ready: opts.ready ?? true })
+  updateConnection(r.conn.connectionId, {
+    protocol: 2, engines: [CLAUDE], defaultExecutor: opts.defaultExecutor ?? null, projectId: null, ready: opts.ready ?? true,
+  })
   return ws
 }
 
@@ -287,7 +291,7 @@ describe('loadSelectionInput', () => {
     insertTask(testDb, { id: 'gate', title: 'Gate', kind: 'gate' })
     insertTask(testDb, { id: 'esc', title: 'Escalated', escalated_at: NOW_ISO })
     insertTask(testDb, { id: 'act', title: 'Active', status: 'accepted', assigned_to_agent: 'w2', files: '["src/y/"]' })
-    connect('w1')
+    connect('w1', { defaultExecutor: 'claude' })
     connect('w2')
     connect('w3', { ready: false })
     testDb.prepare('INSERT INTO conductor_quota (host, executor, model, exhausted_until) VALUES (?, ?, ?, ?), (?, ?, ?, ?)')
@@ -304,6 +308,8 @@ describe('loadSelectionInput', () => {
     expect([...input.completedIds]).toEqual(['dep'])
     expect(input.lockedFiles).toEqual([['src/y/']])
     expect(input.workers.map((w) => [w.agentId, w.host, w.busy])).toEqual([['w1', 'host-w1', false], ['w2', 'host-w2', true]])
+    // the executor the worker runs a route without one on (review C-1)
+    expect(input.workers.map((w) => w.defaultExecutor)).toEqual(['claude', null])
     expect(input.quota).toEqual([{ host: 'host-w1', executor: 'claude', model: 'opus', exhaustedUntil: IN_1H }])
   })
 })

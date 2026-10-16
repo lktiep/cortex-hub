@@ -37,7 +37,7 @@ function task(id: string, over: Partial<CandidateTask> = {}): CandidateTask {
 function worker(agentId: string, over: Partial<CandidateWorker> = {}): CandidateWorker {
   return {
     agentId, host: `host-${agentId}`, projectId: null, protocol: 2,
-    capabilities: [], engines: [CLAUDE], busy: false, idleSince: 0,
+    capabilities: [], engines: [CLAUDE], defaultExecutor: null, busy: false, idleSince: 0,
     ...over,
   }
 }
@@ -213,6 +213,71 @@ describe('selectAssignments', () => {
     })
     expect(r.assign).toEqual([])
     expect(r.wait).toEqual([{ taskId: 'a', reason: 'capacity', until: T1 }])
+  })
+
+  // The A2 worker runs `route.executor ?? defaultExecutor`, and an agy engine reports no default
+  // model, so a quota on a model-null route arrives as (host, agy, '*') (review C-1).
+  describe('a route without an executor runs on the worker\'s default executor', () => {
+    const AGY_NO_DEFAULT: EngineInfo = { ...AGY, defaultModel: null }
+    const both = worker('w1', { host: 'h1', engines: [AGY_NO_DEFAULT, CLAUDE], defaultExecutor: 'agy' })
+    const agyOnly = worker('w1', { host: 'h1', engines: [AGY_NO_DEFAULT], defaultExecutor: 'agy' })
+    const starAgy = [quota('h1', 'agy', '*', T1)]
+
+    it('scenario C: a * row on the default engine blocks the route, though another engine is free', () => {
+      const alone = select({ pending: [task('a', { routes: [route(null, null)] })], workers: [both], quota: starAgy })
+      expect(alone.assign).toEqual([])
+      expect(alone.wait).toEqual([{ taskId: 'a', reason: 'capacity', until: T1 }])
+
+      const chained = select({
+        pending: [task('a', { routes: [route(null, null), route('claude', 'opus')] })], workers: [both], quota: starAgy,
+      })
+      expect(chained.assign).toEqual([{ taskId: 'a', agentId: 'w1', route: route('claude', 'opus') }])
+    })
+
+    it('scenarios A and D: a * row skips an agy route without a model, and an unrouted task, on that host', () => {
+      for (const r of [route('agy', null), route(null, null)]) {
+        const blocked = select({ pending: [task('a', { routes: [r] })], workers: [agyOnly], quota: starAgy })
+        expect(blocked.assign, JSON.stringify(r)).toEqual([])
+        expect(blocked.wait, JSON.stringify(r)).toEqual([{ taskId: 'a', reason: 'capacity', until: T1 }])
+
+        const elsewhere = worker('w2', { host: 'h2', engines: [AGY_NO_DEFAULT], defaultExecutor: 'agy' })
+        const moved = select({ pending: [task('a', { routes: [r] })], workers: [agyOnly, elsewhere], quota: starAgy })
+        expect(moved.assign, JSON.stringify(r)).toEqual([{ taskId: 'a', agentId: 'w2', route: r }])
+      }
+    })
+
+    it('a model the default engine does not list does not fit, whatever the other engines list', () => {
+      const r = select({ pending: [task('a', { routes: [route(null, 'opus')] })], workers: [both] })
+      expect(r.assign).toEqual([])
+      expect(r.wait).toEqual([{ taskId: 'a', reason: 'no_worker', until: null }])
+
+      const listed = select({ pending: [task('a', { routes: [route(null, 'gemini-4-argon-low')] })], workers: [both] })
+      expect(listed.assign).toEqual([{ taskId: 'a', agentId: 'w1', route: route(null, 'gemini-4-argon-low') }])
+    })
+
+    it('a quota on another engine does not block the default engine', () => {
+      const r = select({
+        pending: [task('a', { routes: [route(null, null)] })], workers: [both], quota: [quota('h1', 'claude', '*', T1)],
+      })
+      expect(r.assign).toEqual([{ taskId: 'a', agentId: 'w1', route: route(null, null) }])
+    })
+
+    it('a worker without a default executor still counts every engine', () => {
+      const r = select({
+        pending: [task('a', { routes: [route(null, null)] })],
+        workers: [{ ...both, defaultExecutor: null }],
+        quota: starAgy,
+      })
+      expect(r.assign).toEqual([{ taskId: 'a', agentId: 'w1', route: route(null, null) }])
+    })
+
+    it('an unrouted task still fits a worker whose default executor has no engine', () => {
+      const r = select({
+        pending: [task('a', { routes: [route(null, null)] })],
+        workers: [worker('w1', { engines: [], defaultExecutor: 'agy' })],
+      })
+      expect(r.assign).toEqual([{ taskId: 'a', agentId: 'w1', route: route(null, null) }])
+    })
   })
 
   it('pins and declines', () => {

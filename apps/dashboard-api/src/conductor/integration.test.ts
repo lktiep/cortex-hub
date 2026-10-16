@@ -11,7 +11,7 @@ import { getRequestListener } from '@hono/node-server'
 import { Hono } from 'hono'
 import { WebSocket, type WebSocketServer } from 'ws'
 import type {
-  AssignedTask, EngineInfo, TaskCompleteMsg, TaskHandoff, TaskQuotaExhaustedMsg, TaskResult, TreeCreateRequest,
+  AssignedTask, EngineInfo, RouteSpec, TaskCompleteMsg, TaskHandoff, TaskQuotaExhaustedMsg, TaskResult, TreeCreateRequest,
   TreeCreateResponse, WorkerRegisterMsg,
 } from '@cortex/shared-types'
 import { createTestDb } from './testing.js'
@@ -32,6 +32,8 @@ const WORKER_KEY = 'sk_workers'
 const LEAD = 'lead-key'
 const AGY: EngineInfo = { executor: 'agy', models: ['gemini-4-argon-low'], defaultModel: 'gemini-4-argon-low' }
 const CLAUDE: EngineInfo = { executor: 'claude', models: ['*'], defaultModel: 'opus' }
+/** What the A2 worker registers for agy: no adapter reports a default model. */
+const AGY_NO_DEFAULT: EngineInfo = { ...AGY, defaultModel: null }
 
 type Msg = { type: string; [k: string]: unknown }
 interface Worker {
@@ -344,5 +346,77 @@ describe('conductor end to end', () => {
     expect(consoleWarn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('[ws]') && m.includes(' ignored'))).toEqual([])
     expect(startLogs(A)).toEqual(['accepted', 'progress', 'accepted', 'progress', 'accepted', 'progress'])
     expect(startLogs(B)).toEqual(['accepted', 'progress'])
+  })
+
+  // Review C-1: when the route names no model the A2 worker reports the quota as model '*', and
+  // without an executor it ran its default executor; the next pass must not hand the route back.
+  it('a quota on a route without a model or executor falls back or waits instead of looping', async () => {
+    // w-mac runs agy for a route without an executor (engines[0] is its default executor)
+    const mac = await startWorker('w-mac', 'h-mac', [AGY_NO_DEFAULT, CLAUDE])
+    const agyA = await startWorker('w-agy-a', 'h-agy-a', [AGY_NO_DEFAULT])
+    const agyD = await startWorker('w-agy-d', 'h-agy-d', [AGY_NO_DEFAULT])
+
+    const plan: TreeCreateRequest = {
+      projectId: 'p1',
+      tasks: [
+        // scenario C: unrouted, with the default fallback (claude/opus)
+        { key: 'C', title: 'Unrouted on two engines', pinnedAgent: 'w-mac' },
+        // scenario A: agy without a model, nothing to fall back to
+        { key: 'A', title: 'Agy without a model', executor: 'agy', fallback: [], pinnedAgent: 'w-agy-a' },
+        // scenario D: unrouted on an agy-only machine, nothing to fall back to
+        { key: 'D', title: 'Unrouted on agy only', fallback: [], pinnedAgent: 'w-agy-d' },
+      ],
+    }
+    const created = await api('POST', '/api/conductor/tree', plan)
+    expect(created.status).toBe(201)
+    const { ids } = created.body as unknown as TreeCreateResponse
+    const [C, A, D] = [ids['C'], ids['A'], ids['D']] as [string, string, string]
+    const resetAt = isoSeconds(Date.now() + 89 * 3600_000)
+
+    /** Runs the assignment and reports the quota exactly as the A2 worker does for a model-null route. */
+    const quotaOnUnknownModel = async (w: Worker, id: string, route: RouteSpec): Promise<AssignedTask> => {
+      const task = await assigned(w)
+      expect(task).toMatchObject({ id, attempt: 1, route })
+      start(w, task)
+      report(w, {
+        type: 'task.quota_exhausted', taskId: id, executor: 'agy', model: '*', resetAt,
+        raw: 'RESOURCE_EXHAUSTED: Resets in 89h0m0s',
+        handoff: { branch: task.branch, commit: null, note: 'agy (default model) ran out of quota.' },
+        attempt: task.attempt,
+      })
+      await sync(w)
+      return task
+    }
+
+    // C: the hub must not give the unrouted task back to w-mac's agy; it moves on to claude/opus
+    const firstC = await quotaOnUnknownModel(mac, C, { executor: null, model: null, effort: null })
+    const secondC = await assigned(mac)
+    expect(secondC).toMatchObject({ id: C, attempt: 2, branch: firstC.branch, route: { executor: 'claude', model: 'opus', effort: null } })
+    start(mac, secondC)
+    complete(mac, secondC, { summary: 'done on claude', branch: secondC.branch })
+    await sync(mac)
+    expect(row(C).status).toBe('review')
+
+    // A and D: no fallback, so each waits for capacity until the reset instead of running agy again
+    await quotaOnUnknownModel(agyA, A, { executor: 'agy', model: null, effort: null })
+    await quotaOnUnknownModel(agyD, D, { executor: null, model: null, effort: null })
+    for (const id of [A, D]) {
+      expect(row(id)).toMatchObject({ status: 'pending', attempt: 1, wait_reason: 'capacity', wait_until: resetAt })
+    }
+    expect(assignedTypes(agyA)).toEqual([])
+    expect(assignedTypes(agyD)).toEqual([])
+
+    expect(testDb.prepare('SELECT host, executor, model, exhausted_until FROM conductor_quota ORDER BY host').all()).toEqual([
+      { host: 'h-agy-a', executor: 'agy', model: '*', exhausted_until: resetAt },
+      { host: 'h-agy-d', executor: 'agy', model: '*', exhausted_until: resetAt },
+      { host: 'h-mac', executor: 'agy', model: '*', exhausted_until: resetAt },
+    ])
+    expect(doubleHeld).toEqual([])
+    expect(events.filter((e) => e.includes('task.assigned'))).toEqual([
+      `w-mac task.assigned ${C}`,
+      `w-agy-a task.assigned ${A}`,
+      `w-agy-d task.assigned ${D}`,
+      `w-mac task.assigned ${C}`,
+    ])
   })
 })

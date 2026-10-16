@@ -19,6 +19,7 @@ import {
   killQuietly,
   portOf,
   PR_URL,
+  QUOTA_MARKER,
   QUOTA_RESET_MS,
   readJsonLines,
   readPidFile,
@@ -356,7 +357,31 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
     await idleAfter(done.index);
   }, 135_000); // waits: 30 + 20 + 20 + 30 + 20 = 120 s
 
-  step('5. reconnects and registers again after the connection drops (1006)', async () => {
+  // review C-1: with no route model and no adapter default the hub must get '*', the row it checks
+  // a model-null route against, so that it does not hand the route straight back
+  step("5. reports a quota on T5, a route without a model, as model '*' with no model scope", async () => {
+    const t5 = makeTask(5, `Run out of quota on the default model ${QUOTA_MARKER}`, {});
+    expect(t5.route).toEqual({ executor: 'agy', model: null, effort: null });
+    const quota = await next('task.quota_exhausted', (m) => m.taskId === t5.id, assign(t5), 30_000);
+    const q = quota.msg;
+    expect(q.executor).toBe('agy');
+    expect(q.model).toBe('*');
+    expect(q).not.toHaveProperty('modelScope');
+    expect(q.attempt).toBe(1);
+    expect(q.handoff.note).toMatch(/^agy \(default model\) ran out of quota\. /);
+    const resetAt = Date.parse(q.resetAt ?? '');
+    expect(Math.abs(resetAt - (quota.at + QUOTA_RESET_MS))).toBeLessThanOrEqual(RESET_TOLERANCE_MS);
+    await idleAfter(quota.index);
+
+    expect(q.handoff.commit).toBe(originGit(['rev-parse', t5.branch]));
+    expect(originGit(['log', '-1', '--format=%s', t5.branch])).toBe('WIP T5: quota handoff');
+    // agy ran without --model: the quota came from the marker in the prompt, not from a model name
+    const lastRun = readJsonLines<{ model: string; prompt: string }>(agyLog).at(-1);
+    expect(lastRun?.model).toBe('');
+    expect(lastRun?.prompt).toContain(QUOTA_MARKER);
+  }, 65_000); // waits: 30 + 20 = 50 s
+
+  step('6. reconnects and registers again after the connection drops (1006)', async () => {
     const before = conns.length;
     const from = received.length;
     const last = conns[before - 1];
@@ -376,7 +401,7 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
     hubSend({ type: 'registered', connectionId: 'conn-2', projectId: 'project-e2e', hubVersion: reg.msg.version }, reg.conn);
   }, 40_000); // waits: 20 + 5 = 25 s
 
-  step('6. `cortex-worker stop` stops it: the worker exits 0 within 10 s', async () => {
+  step('7. `cortex-worker stop` stops it: the worker exits 0 within 10 s', async () => {
     if (worker === null || workerExit === null) throw new Error('the worker never started');
     const started = Date.now();
     const stop = spawn(process.execPath, [BUNDLE, 'stop', '--agent-id', AGENT_ID], {

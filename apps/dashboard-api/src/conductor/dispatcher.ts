@@ -23,6 +23,8 @@ export interface CandidateTask {
 export interface CandidateWorker {
   agentId: string; host: string; projectId: string | null; protocol: 1 | 2
   capabilities: string[]; engines: EngineInfo[]; busy: boolean; idleSince: number
+  /** The executor the worker runs a route without one on (`worker.register.defaultExecutor`). */
+  defaultExecutor: Executor | null
 }
 export interface QuotaRow { host: string; executor: string; model: string; exhaustedUntil: string }
 export interface SelectionInput {
@@ -72,14 +74,23 @@ function listsModel(engine: EngineInfo, model: string): boolean {
   return engine.models.includes(model) || engine.models.includes('*')
 }
 
-/** The worker's engines that can run the route. */
+/**
+ * The worker's engines that can run the route. A route without an executor
+ * runs on the worker's default executor, so only that engine fits; a worker
+ * without a default executor keeps the old reading, where any engine fits.
+ */
 function fittingEngines(worker: CandidateWorker, route: RouteSpec): EngineInfo[] {
-  const { executor, model } = route
+  const executor = route.executor ?? worker.defaultExecutor
+  const { model } = route
   return worker.engines.filter((e) =>
     (executor === null || e.executor === executor) && (model === null || listsModel(e, model)))
 }
 
-/** An executor-null, model-null route fits any worker, even one without engines. */
+/**
+ * An executor-null, model-null route fits any worker, even one without
+ * engines or without an engine for its default executor; any other route
+ * needs a fitting engine (see `fittingEngines`).
+ */
 function fitsRoute(worker: CandidateWorker, route: RouteSpec): boolean {
   if (route.executor === null && route.model === null) return true
   return fittingEngines(worker, route).length > 0
@@ -96,8 +107,11 @@ function staticallyEligible(task: CandidateTask, route: RouteSpec, worker: Candi
 /**
  * The rows that keep the worker off this route, or null when it is free.
  * The worker is blocked only when it has a fitting engine and every fitting
- * engine is blocked. A model-null route is checked against each engine's
- * `defaultModel`; an engine without one is blocked only by `*` rows.
+ * engine is blocked. A route without an executor counts only the engine of
+ * the worker's default executor, the one the worker would run; every engine
+ * only when the worker has no default executor. A model-null route is checked
+ * against each engine's `defaultModel`; an engine without one is blocked only
+ * by `*` rows, which is what a worker reports when it cannot name the model.
  * `activeQuota` holds only rows with `exhaustedUntil > now`.
  */
 function quotaBlock(worker: CandidateWorker, route: RouteSpec, activeQuota: QuotaRow[]): QuotaRow[] | null {
@@ -272,7 +286,7 @@ function loadWorkers(): CandidateWorker[] {
     .filter((c) => c.ready && c.ws.readyState === WS_OPEN)
     .map((c) => ({
       agentId: c.agentId, host: c.hostname, projectId: c.projectId, protocol: c.protocol,
-      capabilities: c.capabilities, engines: c.engines,
+      capabilities: c.capabilities, engines: c.engines, defaultExecutor: c.defaultExecutor,
       busy: c.status === 'busy' || active.has(c.agentId), idleSince: c.idleSince,
     }))
 }
