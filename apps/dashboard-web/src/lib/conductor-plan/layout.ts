@@ -105,21 +105,15 @@ export function computeDepths(tasks: PlanTask[]): { depth: Map<string, number>; 
   const onStack = new Set<string>()
   const stack: string[] = []
   let counter = 0
-  const visit = (id: string): void => {
+  const open = (id: string, frames: { id: string; next: number }[]): void => {
     index.set(id, counter)
     low.set(id, counter)
     counter++
     stack.push(id)
     onStack.add(id)
-    for (const dep of depsOf.get(id) ?? []) {
-      if (!inRest.has(dep)) continue
-      if (!index.has(dep)) {
-        visit(dep)
-        low.set(id, Math.min(low.get(id) as number, low.get(dep) as number))
-      } else if (onStack.has(dep)) {
-        low.set(id, Math.min(low.get(id) as number, index.get(dep) as number))
-      }
-    }
+    frames.push({ id, next: 0 })
+  }
+  const close = (id: string): void => {
     if (low.get(id) !== index.get(id)) return
     const comp: string[] = []
     let top: string
@@ -136,11 +130,34 @@ export function computeDepths(tasks: PlanTask[]): { depth: Map<string, number>; 
     for (const m of comp) depth.set(m, d)
     if (comp.length > 1 || selfLoop.has(id)) for (const m of comp) cyclic.add(m)
   }
+  // Iterative (explicit frames): a long ring must not overflow the call stack.
+  const visit = (start: string): void => {
+    const frames: { id: string; next: number }[] = []
+    open(start, frames)
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1] as { id: string; next: number }
+      const deps = depsOf.get(frame.id) ?? []
+      if (frame.next < deps.length) {
+        const dep = deps[frame.next++] as string
+        if (!inRest.has(dep)) continue
+        if (!index.has(dep)) open(dep, frames)
+        else if (onStack.has(dep)) low.set(frame.id, Math.min(low.get(frame.id) as number, index.get(dep) as number))
+        continue
+      }
+      frames.pop()
+      close(frame.id)
+      const parent = frames[frames.length - 1]
+      if (parent) low.set(parent.id, Math.min(low.get(parent.id) as number, low.get(frame.id) as number))
+    }
+  }
   for (const id of rest) if (!index.has(id)) visit(id)
   return { depth, cyclic }
 }
 
-/** Machine lanes: online hosts by name, then offline agents, then the queue; only lanes in use. */
+/**
+ * Machine lanes: online hosts by name, then offline agents, then the queue; only lanes in use.
+ * Lane ids are namespaced (`host:`, `agent:`, `queue`) so a host, an agent and the queue never collide.
+ */
 export function assignLanes(
   tasks: PlanTask[],
   workers: ConductorWorker[],
@@ -161,9 +178,9 @@ export function assignLanes(
   const laneOfWork = (t: PlanTask): string => {
     if (!t.agent) return QUEUE
     const host = hostOf.get(t.agent)
-    if (host !== undefined) return host
+    if (host !== undefined) return `host:${host}`
     offline.add(t.agent)
-    return t.agent
+    return `agent:${t.agent}`
   }
   for (const t of nodes) if (t.kind === 'work') laneOf.set(t.id, laneOfWork(t))
 
@@ -191,15 +208,15 @@ export function assignLanes(
 
   const used = new Set(laneOf.values())
   const lanes: Lane[] = []
-  const onlineHosts = [...hosts.keys()].filter((h) => used.has(h)).sort()
+  const onlineHosts = [...hosts.keys()].filter((h) => used.has(`host:${h}`)).sort()
   for (const host of onlineHosts) {
     const ws = hosts.get(host) as ConductorWorker[]
     const agentIds = ws.map((w) => w.agentId).sort()
     const os = ws.find((w) => w.os)?.os
-    lanes.push({ id: host, label: host, sub: [os, agentIds.join(', ')].filter(Boolean).join(' · '), online: true, agentIds })
+    lanes.push({ id: `host:${host}`, label: host, sub: [os, agentIds.join(', ')].filter(Boolean).join(' · '), online: true, agentIds })
   }
   for (const agent of [...offline].sort()) {
-    if (used.has(agent) && !hosts.has(agent)) lanes.push({ id: agent, label: agent, sub: 'offline', online: false, agentIds: [agent] })
+    if (used.has(`agent:${agent}`)) lanes.push({ id: `agent:${agent}`, label: agent, sub: 'offline', online: false, agentIds: [agent] })
   }
   if (used.has(QUEUE)) lanes.push({ id: QUEUE, label: 'Queue', sub: 'unassigned', online: true, agentIds: [] })
   return { lanes, laneOf }

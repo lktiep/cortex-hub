@@ -47,32 +47,58 @@ describe('computeDepths', () => {
   })
 })
 
+describe('computeDepths on cycles', () => {
+  it('survives a 5,000-task ring and reports every member as cyclic', () => {
+    const n = 5000
+    const ring = tasks(...Array.from({ length: n }, (_, i) => ({ id: `r${i}`, depends_on: deps(`r${(i + 1) % n}`) })))
+    const out = computeDepths(ring)
+    expect(out.cyclic.size).toBe(n)
+    expect(out.depth.size).toBe(n)
+  })
+})
+
 describe('assignLanes', () => {
   it('groups workers by hostname', () => {
     const ws = [worker({ agentId: 'w1', hostname: 'mac-1', os: 'darwin' }), worker({ agentId: 'w2', hostname: 'mac-1' })]
     const { lanes, laneOf } = assignLanes(tasks({ id: 'a', assigned_to_agent: 'w1' }, { id: 'b', assigned_to_agent: 'w2' }), ws)
     expect(lanes).toHaveLength(1)
-    expect(lanes[0]).toMatchObject({ id: 'mac-1', label: 'mac-1', online: true, agentIds: ['w1', 'w2'] })
+    expect(lanes[0]).toMatchObject({ id: 'host:mac-1', label: 'mac-1', online: true, agentIds: ['w1', 'w2'] })
     expect(lanes[0]?.sub).toBe('darwin · w1, w2')
-    expect(laneOf.get('a')).toBe('mac-1')
-    expect(laneOf.get('b')).toBe('mac-1')
+    expect(laneOf.get('a')).toBe('host:mac-1')
+    expect(laneOf.get('b')).toBe('host:mac-1')
   })
 
   it('uses last_agent when nothing is assigned', () => {
     const { laneOf } = assignLanes(tasks({ id: 'a', last_agent: 'w1' }), [worker({ agentId: 'w1', hostname: 'h' })])
-    expect(laneOf.get('a')).toBe('h')
+    expect(laneOf.get('a')).toBe('host:h')
   })
 
   it('falls back to the agent id when a worker has no hostname', () => {
     const { lanes } = assignLanes(tasks({ id: 'a', assigned_to_agent: 'w9' }), [worker({ agentId: 'w9' })])
-    expect(lanes[0]).toMatchObject({ id: 'w9', label: 'w9', online: true })
+    expect(lanes[0]).toMatchObject({ id: 'host:w9', label: 'w9', online: true })
   })
 
   it('gives a task held by an agent that is not online its own lane marked offline', () => {
     const { lanes, laneOf } = assignLanes(tasks({ id: 'a', assigned_to_agent: 'gone' }), [worker({ agentId: 'w1', hostname: 'h' })])
     expect(lanes).toHaveLength(1)
-    expect(lanes[0]).toMatchObject({ id: 'gone', online: false, sub: 'offline' })
-    expect(laneOf.get('a')).toBe('gone')
+    expect(lanes[0]).toMatchObject({ id: 'agent:gone', online: false, sub: 'offline' })
+    expect(laneOf.get('a')).toBe('agent:gone')
+  })
+
+  it('keeps an offline agent named queue apart from the Queue lane', () => {
+    const { lanes, laneOf } = assignLanes(tasks({ id: 'a', assigned_to_agent: 'queue' }, { id: 'b' }), [])
+    expect(lanes.map((l) => l.id)).toEqual(['agent:queue', 'queue'])
+    expect(new Set(lanes.map((l) => l.id)).size).toBe(2)
+    expect(laneOf.get('a')).toBe('agent:queue')
+    expect(laneOf.get('b')).toBe('queue')
+  })
+
+  it('gives an offline agent whose id equals an online hostname its own lane', () => {
+    const ws = [worker({ agentId: 'w1', hostname: 'box' })]
+    const { lanes, laneOf } = assignLanes(tasks({ id: 'a', assigned_to_agent: 'w1' }, { id: 'b', assigned_to_agent: 'box' }), ws)
+    expect(lanes.map((l) => l.id)).toEqual(['host:box', 'agent:box'])
+    expect(laneOf.get('a')).toBe('host:box')
+    expect(laneOf.get('b')).toBe('agent:box')
   })
 
   it('puts unassigned tasks in the queue lane, which is last', () => {
@@ -81,7 +107,7 @@ describe('assignLanes', () => {
       { id: 'q' }, { id: 'off', assigned_to_agent: 'gone' },
       { id: 'z', assigned_to_agent: 'w1' }, { id: 'a', assigned_to_agent: 'w2' },
     ), ws)
-    expect(lanes.map((l) => l.id)).toEqual(['alpha', 'zeta', 'gone', 'queue'])
+    expect(lanes.map((l) => l.id)).toEqual(['host:alpha', 'host:zeta', 'agent:gone', 'queue'])
     expect(lanes.map((l) => l.online)).toEqual([true, true, false, true])
   })
 
@@ -93,7 +119,7 @@ describe('assignLanes', () => {
       { id: 'a', task_key: 'A', depends_on: deps('g'), assigned_to_agent: 'w1' },
       { id: 'lonely', kind: 'gate', approver: 'user' },
     ), ws)
-    expect(laneOf.get('g')).toBe('h1')
+    expect(laneOf.get('g')).toBe('host:h1')
     expect(laneOf.get('lonely')).toBe('queue')
   })
 
@@ -138,6 +164,35 @@ describe('selectPhase', () => {
 })
 
 describe('layoutPlan', () => {
+  it('lays out an A<->B cycle: both get a cell and cyclic is populated', () => {
+    const ts = tasks({ id: 'a', depends_on: deps('b') }, { id: 'b', depends_on: deps('a') }, { id: 'c', depends_on: deps('a') })
+    const out = layoutPlan(ts, [], { mode: 'compact' })
+    expect([...out.cyclic].sort()).toEqual(['a', 'b'])
+    expect(out.cells.map((c) => c.id).sort()).toEqual(['a', 'b', 'c'])
+    expect(out.cells.find((c) => c.id === 'c')?.col).toBe(1)
+  })
+
+  it('stacks five independent tasks of one worker without overlap', () => {
+    const ws = [worker({ agentId: 'w1', hostname: 'h1' })]
+    const ts = tasks(...[1, 2, 3, 4, 5].map((i) => ({ id: `t${i}`, assigned_to_agent: 'w1' })))
+    const s = SIZES.compact
+    const out = layoutPlan(ts, ws, { mode: 'compact' })
+    expect(out.lanes).toHaveLength(1)
+    expect(out.lanes[0]?.height).toBe(5 * s.ROW_H + 24)
+    const ys = out.cells.map((c) => c.y).sort((a, b) => a - b)
+    for (let i = 1; i < ys.length; i++) expect((ys[i] as number) - (ys[i - 1] as number)).toBeGreaterThanOrEqual(s.H)
+    expect(new Set(ys).size).toBe(5)
+  })
+
+  it('puts inputs in column 0 and outputs in column 1 for a phase with no members', () => {
+    const ts = tasks({ id: 'g1', kind: 'group' }, { id: 'in' }, { id: 'out' })
+    const phase = { groupId: 'g1', members: new Set<string>(), inputs: new Set(['in']), outputs: new Set(['out']) }
+    const out = layoutPlan(ts, [], { mode: 'detail', phase })
+    expect(out.cells.find((c) => c.id === 'in')).toMatchObject({ col: 0, ghost: 'input' })
+    expect(out.cells.find((c) => c.id === 'out')).toMatchObject({ col: 1, ghost: 'output' })
+    expect(out.columns.map((c) => c.label)).toEqual(['Inputs', 'Unlocks next'])
+  })
+
   it('lays a legacy tree with no deps out in one column', () => {
     const legacy = tasks(...[1, 2, 3, 4, 5].map((i) => ({ id: `l${i}` })))
     const out = layoutPlan(legacy, [], { mode: 'compact' })
