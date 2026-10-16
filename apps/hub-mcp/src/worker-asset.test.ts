@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -58,6 +58,32 @@ describe('serveWorkerAsset', () => {
     expect(res?.status).toBe(404)
   })
 
+  it('answers HEAD 404 with an empty body', async () => {
+    const res = await serveWorkerAsset(get('/conductor/worker.mjs', 'HEAD'), { bundlePath })
+    expect(res?.status).toBe(404)
+    expect(await res?.text()).toBe('')
+  })
+
+  it('returns 500 and logs when the bundle cannot be read', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const res = await serveWorkerAsset(get('/conductor/worker.mjs'), { bundlePath: dir })
+      expect(res?.status).toBe(500)
+      expect(await res?.text()).toBe('worker bundle unreadable')
+      expect(spy).toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('never serves the bundle as the version when the path has no .mjs suffix', async () => {
+    const odd = join(dir, 'worker.js')
+    await writeFile(odd, 'SOURCE')
+    await writeFile(`${odd}.version`, '1.2.3\n')
+    const res = await serveWorkerAsset(get('/conductor/worker.version'), { bundlePath: odd })
+    expect(await res?.text()).toBe('1.2.3')
+  })
+
   it('reads the file on every request', async () => {
     await writeFile(bundlePath, 'one')
     await serveWorkerAsset(get('/conductor/worker.mjs'), { bundlePath })
@@ -76,6 +102,12 @@ describe('serveWorkerAsset', () => {
 describe('defaultBundlePath', () => {
   it('honours CONDUCTOR_WORKER_PATH', () => {
     expect(defaultBundlePath({ CONDUCTOR_WORKER_PATH: '/x/w.mjs' }, 'file:///a/b/node.js')).toBe('/x/w.mjs')
+  })
+
+  it('falls back to the default when CONDUCTOR_WORKER_PATH is empty', () => {
+    expect(defaultBundlePath({ CONDUCTOR_WORKER_PATH: '' }, 'file:///repo/apps/hub-mcp/dist/node.js')).toBe(
+      '/repo/apps/conductor-worker/dist/cortex-worker.mjs',
+    )
   })
 
   it('falls back to the sibling conductor-worker dist', () => {

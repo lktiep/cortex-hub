@@ -9,9 +9,13 @@ export interface WorkerAssetOptions {
 
 export function defaultBundlePath(env: NodeJS.ProcessEnv, moduleUrl: string): string {
   return (
-    env.CONDUCTOR_WORKER_PATH ??
+    env.CONDUCTOR_WORKER_PATH?.trim() ||
     resolve(dirname(fileURLToPath(moduleUrl)), '../../conductor-worker/dist/cortex-worker.mjs')
   )
+}
+
+function versionPath(bundlePath: string): string {
+  return bundlePath.endsWith('.mjs') ? bundlePath.replace(/\.mjs$/, '.version') : `${bundlePath}.version`
 }
 
 const TEXT = 'text/plain; charset=utf-8'
@@ -31,7 +35,7 @@ export async function serveWorkerAsset(req: Request, opts: WorkerAssetOptions): 
   if (!isBundle && pathname !== '/conductor/worker.version') return null
 
   const head = req.method === 'HEAD'
-  const file = isBundle ? opts.bundlePath : opts.bundlePath.replace(/\.mjs$/, '.version')
+  const file = isBundle ? opts.bundlePath : versionPath(opts.bundlePath)
   try {
     const text = await readFile(file, 'utf8')
     return isBundle
