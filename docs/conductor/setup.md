@@ -186,7 +186,19 @@ Codex can also reach a remote server directly with `url = "https://<your-mcp-hos
 
 #### Cursor
 
-`~/.cursor/mcp.json` uses the same `mcp-remote` entry as the agy snippet above.
+`~/.cursor/mcp.json`, in the form `scripts/onboard.sh` writes:
+
+```json
+{
+  "mcpServers": {
+    "cortex-hub": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://<your-mcp-host>/mcp", "--header", "Authorization: Bearer <worker-api-key>"],
+      "env": { "HUB_API_KEY": "<worker-api-key>" }
+    }
+  }
+}
+```
 
 > **Warning.** `agy mcp list` prints MCP server secrets in plain text. Never run it where others
 > can see the screen, and never paste its output anywhere.
@@ -198,6 +210,9 @@ Codex can also reach a remote server directly with `url = "https://<your-mcp-hos
 > ```
 >
 > If it is not the current hub, edit the file, or rerun `scripts/onboard.sh`.
+>
+> This reads `~/.gemini/antigravity/mcp_config.json`. If your agy build keeps its config at the
+> vendor path, it reports no entry; in that case pass `--api-key` or set `CORTEX_API_KEY`.
 
 The worker takes the hub URL from `--hub`, then `CORTEX_HUB_URL`, then the first `cortex-hub` entry
 it finds in `~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/antigravity/mcp_config.json`
