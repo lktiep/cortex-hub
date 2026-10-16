@@ -1,17 +1,27 @@
 // Task file paths: normalisation and conflict tests for the dispatcher's file locks (spec §6.4).
 
-/** `\` → `/`, runs of `/` collapsed, leading `./` removed. A trailing `/` (a directory) is kept. */
+/** `\` → `/`, runs of `/` collapsed, leading `./` and `/` removed (`.` alone becomes ''). A trailing `/` (a directory) is kept. */
 export function normalizePath(p: string): string {
   let out = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/')
-  while (out.startsWith('./')) out = out.slice(2)
-  return out
+  for (;;) {
+    if (out.startsWith('./')) out = out.slice(2)
+    else if (out.startsWith('/')) out = out.slice(1)
+    else break
+  }
+  return out === '.' ? '' : out
 }
 
-/** Normalises every path; globs are refused because a lock must name real paths. */
+/**
+ * Normalises every path. Globs are refused because a lock must name real
+ * paths; an empty or root path, or one with a `..` segment, is refused because
+ * it does not name a path inside the repo.
+ */
 export function normalizeFiles(paths: string[]): string[] {
   return paths.map((p) => {
     if (/[*?[]/.test(p)) throw new Error(`globs are not supported: ${p}`)
-    return normalizePath(p)
+    const out = normalizePath(p)
+    if (out === '' || out.split('/').includes('..')) throw new Error(`invalid path: ${p}`)
+    return out
   })
 }
 

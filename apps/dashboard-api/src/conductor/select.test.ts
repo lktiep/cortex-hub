@@ -184,6 +184,29 @@ describe('selectAssignments', () => {
     expect(r.wait).toEqual([{ taskId: 'a', reason: 'no_worker', until: null }])
   })
 
+  it('an engine must list the route model', () => {
+    const opusOnly: EngineInfo = { executor: 'claude', models: ['opus'], defaultModel: 'opus' }
+    const r = select({ pending: [task('a', { routes: [route('claude', 'haiku')] })], workers: [worker('w1', { engines: [opusOnly] })] })
+    expect(r.assign).toEqual([])
+    expect(r.wait).toEqual([{ taskId: 'a', reason: 'no_worker', until: null }])
+  })
+
+  it('an engine listing * fits any model', () => {
+    const anyCodex: EngineInfo = { executor: 'codex', models: ['*'], defaultModel: null }
+    const r = select({ pending: [task('a', { routes: [route('codex', 'x')] })], workers: [worker('w1', { engines: [anyCodex] })] })
+    expect(r.assign).toEqual([{ taskId: 'a', agentId: 'w1', route: route('codex', 'x') }])
+  })
+
+  it('an executor-null route with a model counts only engines that list it for quota', () => {
+    const r = select({
+      pending: [task('a', { routes: [route(null, 'opus')] })],
+      workers: [worker('w1', { host: 'h1', engines: [CLAUDE, AGY] })],
+      quota: [quota('h1', 'claude', 'opus', T1)],
+    })
+    expect(r.assign).toEqual([])
+    expect(r.wait).toEqual([{ taskId: 'a', reason: 'capacity', until: T1 }])
+  })
+
   it('pins and declines', () => {
     const pinned = select({
       pending: [task('a', { pinnedAgent: 'w2' })],
@@ -246,5 +269,11 @@ describe('routeChain', () => {
   it('drops duplicates', () => {
     const chain = routeChain(route('claude', 'opus'), [route('claude', 'opus'), route('agy', null), route('agy', null)], defaults)
     expect(chain).toEqual([route('claude', 'opus'), route('agy', null)])
+  })
+
+  it('keeps routes that differ only in effort', () => {
+    const high: RouteSpec = { executor: 'claude', model: 'opus', effort: 'high' }
+    const low: RouteSpec = { executor: 'claude', model: 'opus', effort: 'low' }
+    expect(routeChain(high, [low], defaults)).toEqual([high, low])
   })
 })
