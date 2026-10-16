@@ -122,6 +122,6 @@
   .side { width: auto; overflow: visible; }
 }
 
-.actionError { color: var(--status-error); font-size: .75rem; display: flex; align-items: center; gap: 6px; }
-.actionError button { background: none; border: 0; color: inherit; cursor: pointer; font: inherit; }
+.headerError { color: var(--status-error); font-size: .75rem; display: flex; align-items: center; gap: 6px; }
+.headerError button { background: none; border: 0; color: inherit; cursor: pointer; font: inherit; }
 .note { color: var(--text-tertiary); font-size: .72rem; white-space: nowrap; }

@@ -60,7 +60,8 @@ export function TaskDetail({
   task: ConductorTask
   onClose: () => void
   onCancel: () => void
-  onDelete: () => void
+  /** May resolve false when nothing was deleted (cancelled prompt, refusal): the drawer then stays open. */
+  onDelete: () => void | boolean | Promise<void | boolean>
   onMarkDone?: () => void
   onNewTaskFromOutcome?: (task: ConductorTask) => void
   actions?: React.ReactNode
@@ -320,7 +321,7 @@ export function TaskDetail({
           )}
           <button
             className={`${styles.detailActionBtn} ${styles.detailActionBtnDanger}`}
-            onClick={() => { onDelete(); onClose() }}
+            onClick={() => { void Promise.resolve(onDelete()).then((deleted) => { if (deleted !== false) onClose() }) }}
           >
             <Trash2 size={14} strokeWidth={1.5} />
             Delete

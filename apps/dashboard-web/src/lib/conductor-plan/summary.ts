@@ -151,7 +151,7 @@ export function groupTabs(tasks: PlanTask[]): { id: string; label: string; count
 /** Workers plus the MCP sessions whose agent is not already a worker; `total` counts unique agent ids. */
 export function agentsOnline(
   workers: ConductorWorker[],
-  sessions: ConductorSession[],
+  sessions?: ConductorSession[],
 ): { workers: ConductorWorker[]; sessions: ConductorSession[]; total: number } {
   const workerIds = new Set(workers.map((w) => w.agentId))
   const extra = (sessions ?? []).filter((s) => !workerIds.has(s.agentId))

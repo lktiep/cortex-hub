@@ -37,6 +37,14 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
   const [actionError, setActionError] = useState<string | null>(null)
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
+  // The overlay covers the page; keep the page from scrolling underneath it.
+  useEffect(() => {
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = previous
+    }
+  }, [])
 
   const tasks = useMemo(() => (data ? toPlanTasks(data.root, data.tasks) : []), [data])
   const workers = useMemo(() => data?.workers ?? [], [data])
@@ -71,16 +79,20 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
     }
     void mutate()
   }
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Delete this task permanently?')) return
+  /** Resolves true only when the task was actually deleted (not cancelled at the prompt, not refused). */
+  const handleDelete = async (id: string): Promise<boolean> => {
+    if (!window.confirm('Delete this task permanently?')) return false
     setActionError(null)
     try {
       await deleteConductorTask(id)
       setSelectedId(undefined)
+      void mutate()
+      return true
     } catch (err) {
       setActionError(actionErrorMessage(err))
+      void mutate()
+      return false
     }
-    void mutate()
   }
 
   let body: React.ReactNode
@@ -144,7 +156,7 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
           >
             All
           </button>
-          {tabs.map((tab) => (
+          {!isNotFound(error) && tabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -157,7 +169,7 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
         </div>
         {error && !isNotFound(error) && data && <span className={styles.note}>Refresh failed — retrying</span>}
         {actionError && (
-          <span className={styles.actionError} role="alert">
+          <span className={styles.headerError} role="alert">
             {actionError}
             <button type="button" aria-label="Dismiss error" onClick={() => setActionError(null)}>×</button>
           </span>
@@ -170,7 +182,7 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
           task={selected.row}
           onClose={() => setSelectedId(undefined)}
           onCancel={() => void handleCancel(selected.id)}
-          onDelete={() => void handleDelete(selected.id)}
+          onDelete={() => handleDelete(selected.id)}
           actions={
             <PlanTaskActions key={selected.id} task={selected} workers={workers} onDone={() => void mutate()} />
           }

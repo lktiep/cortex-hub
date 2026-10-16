@@ -595,7 +595,7 @@ export default function ConductorPage() {
                       <div className={styles.agentDetailRow}>
                         <span className={styles.agentDetailLabel}>Engines</span>
                         <span className={styles.agentDetailValue}>
-                          {agent.engines.map((e) => `${e.executor} (${e.models.length} models)`).join(', ') || '-'}
+                          {agent.engines.map((e) => `${e.executor} (${e.models.length} ${e.models.length === 1 ? 'model' : 'models'})`).join(', ') || '-'}
                         </span>
                       </div>
                       <div className={styles.agentDetailRow}>
