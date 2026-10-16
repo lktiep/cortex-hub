@@ -506,6 +506,16 @@ describe('attempt fence', () => {
     ])
   })
 
+  it('a stale-attempt outcome leaves idleSince alone', () => {
+    connect('w1', [CLAUDE], NOW - HOUR)
+    running('t1', 'w1', { attempt: 2 })
+
+    expect(completeTask('t1', 'w1', 'completed', { summary: 'late' }, 1)).toMatchObject({ ok: false, status: 409 })
+
+    expect(row('t1').status).toBe('in_progress')
+    expect(getByAgent('w1')).toMatchObject({ status: 'idle', idleSince: NOW - HOUR })
+  })
+
   it('a matching attempt still works', () => {
     for (const id of ['a', 'b', 'c', 'd']) running(id, 'w1', { attempt: 2 })
     connect('w1')

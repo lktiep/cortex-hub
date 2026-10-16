@@ -46,6 +46,7 @@ let wss: WebSocketServer
 let port: number
 let workers: Worker[] = []
 let consoleError: MockInstance<typeof console.error>
+let consoleWarn: MockInstance<typeof console.warn>
 /** Arrival order across workers and lead calls: `w-mac task.assigned <id>`, `lead approve <id>`. */
 let events: string[] = []
 /** taskId → the worker that has received it and not yet reported an outcome. */
@@ -178,6 +179,13 @@ function row(id: string): TaskRow {
   return testDb.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow
 }
 
+/** The task's `accepted` and `progress` log rows, oldest first: one pair per attempt the worker started. */
+function startLogs(taskId: string): string[] {
+  const rows = testDb.prepare("SELECT action FROM conductor_task_logs WHERE task_id = ? AND action IN ('accepted', 'progress') ORDER BY id")
+    .all(taskId) as { action: string }[]
+  return rows.map((r) => r.action)
+}
+
 function logId(taskId: string, action: string, order: 'ASC' | 'DESC'): number {
   const found = testDb.prepare(`SELECT id FROM conductor_task_logs WHERE task_id = ? AND action = ? ORDER BY id ${order} LIMIT 1`)
     .get(taskId, action) as { id: number } | undefined
@@ -186,9 +194,10 @@ function logId(taskId: string, action: string, order: 'ASC' | 'DESC'): number {
 }
 
 beforeEach(async () => {
-  // the hub logs every connection; a handler that throws is logged as an error and fails the test
+  // the hub logs every connection; a worker message it ignores is a warning, checked at the end of the test;
+  // a handler that throws is logged as an error and fails the test
   vi.spyOn(console, 'log').mockImplementation(() => {})
-  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   consoleError = vi.spyOn(console, 'error')
   testDb = createTestDb()
   resetRegistry()
@@ -329,5 +338,11 @@ describe('conductor end to end', () => {
     ])
     expect(logId(B, 'assigned', 'ASC')).toBeGreaterThan(logId(A, 'approved', 'DESC'))
     expect(row(B)).toMatchObject({ status: 'completed', attempt: 1 })
+
+    // every worker message was applied: no refusal logged or warned, and each attempt was accepted and progressed
+    expect(testDb.prepare("SELECT task_id, message FROM conductor_task_logs WHERE action = 'ignored'").all()).toEqual([])
+    expect(consoleWarn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith('[ws]') && m.includes(' ignored'))).toEqual([])
+    expect(startLogs(A)).toEqual(['accepted', 'progress', 'accepted', 'progress', 'accepted', 'progress'])
+    expect(startLogs(B)).toEqual(['accepted', 'progress'])
   })
 })
