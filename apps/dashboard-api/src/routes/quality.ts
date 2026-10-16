@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
+import { findProjectByRepo, normalizeRepo } from '../lib/project-match.js'
 import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
 import { getMem9 } from './mem9-proxy.js'
 import {
@@ -344,38 +345,14 @@ sessionsRouter.post('/start', async (c) => {
       return c.json({ error: 'agentId is required. Identify your agent (e.g., "claude-code", "antigravity", "cursor").' }, 400)
     }
 
-    const normalizedRepo = repo
-      ? (repo as string).replace(/\.git$/, '').replace(/\/$/, '')
-      : 'unknown'
+    const normalizedRepo = repo ? normalizeRepo(repo as string) : 'unknown'
 
-    // Extract repo name from URL for fuzzy matching: https://github.com/org/name → name
-    const repoName = normalizedRepo !== 'unknown'
-      ? normalizedRepo.split('/').pop() ?? normalizedRepo
-      : null
-
-    let project: Record<string, unknown> | undefined
-    if (repo) {
-      // Try exact URL match first
-      project = db.prepare(
-        `SELECT * FROM projects
-         WHERE git_repo_url IN (?, ?, ?, ?)`
-      ).get(
-        normalizedRepo,
-        `${normalizedRepo}.git`,
-        `${normalizedRepo}/`,
-        repo,
-      ) as Record<string, unknown> | undefined
-
-      // Fallback: match by repo name (case-insensitive) against slug or name
-      if (!project && repoName) {
-        project = db.prepare(
-          `SELECT * FROM projects
-           WHERE slug = ? COLLATE NOCASE
-              OR name = ? COLLATE NOCASE
-              OR slug LIKE ? COLLATE NOCASE`
-        ).get(repoName, repoName, `%${repoName}%`) as Record<string, unknown> | undefined
-      }
-    }
+    // Shared with worker registration: git URL match, then slug/name/LIKE fallback.
+    // The response below reads more columns than ProjectMatch carries, so load the row.
+    const match = repo ? findProjectByRepo(repo as string) : null
+    const project = match
+      ? db.prepare('SELECT * FROM projects WHERE id = ?').get(match.id) as Record<string, unknown> | undefined
+      : undefined
 
     const projectName = (project?.name as string) ?? 'Unknown Project'
     const projectDesc = (project?.description as string) ?? ''
