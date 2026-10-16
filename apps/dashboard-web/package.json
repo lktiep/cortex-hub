@@ -8,6 +8,7 @@
     "start": "next start --port 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "clean": "rm -rf .next"
   },
   "dependencies": {
@@ -27,6 +28,7 @@
     "@types/react-dom": "^19.0.0",
     "eslint-plugin-next-on-pages": "^1.13.16",
     "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
     "wrangler": "^4.75.0"
   }
 }

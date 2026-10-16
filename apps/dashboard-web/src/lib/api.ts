@@ -906,7 +906,35 @@ export interface ConductorTask {
   assigned_at: string | null
   accepted_at: string | null
   completed_at: string | null
+  // Plan-tree columns (hub plan A1); absent on rows from an older hub
+  task_key?: string | null
+  kind?: string | null
+  approver?: string | null
+  executor?: string | null
+  model?: string | null
+  effort?: string | null
+  fallback?: string | null // JSON
+  files?: string | null // JSON
+  branch?: string | null
+  pinned_agent?: string | null
+  review_required?: number | null
+  attempt?: number | null
+  fail_count?: number | null
+  reject_count?: number | null
+  current_route?: string | null // JSON
+  lease_expires_at?: string | null
+  wait_reason?: string | null
+  wait_until?: string | null
+  escalated_at?: string | null
+  last_agent?: string | null
+  api_key_owner?: string | null
 }
+
+export type Executor = 'claude' | 'codex' | 'agy' | 'gemini'
+export const EXECUTORS: readonly Executor[] = ['claude', 'codex', 'agy', 'gemini']
+export interface RouteSpec { executor: Executor | null; model: string | null; effort: string | null }
+export interface EngineInfo { executor: Executor; models: string[]; defaultModel: string | null } // models may contain '*'
+export interface TaskReview { at: string; by: string; verdict: 'approve' | 'reject'; feedback: string }
 
 export interface ConductorTaskLog {
   id: number
@@ -980,8 +1008,73 @@ export interface ConductorAgent {
   sessionId?: string | null
 }
 
+// Mirrors WorkerView in packages/shared-types/src/conductor.ts
+export interface ConductorWorker {
+  agentId: string
+  apiKeyOwner: string
+  hostname?: string
+  ide?: string
+  platform?: string
+  capabilities: string[]
+  status: 'idle' | 'busy'
+  connectedAt: string
+  lastPing: string
+  connectionId: string
+  os: string | null
+  version: string | null
+  projectId: string | null
+  engines: EngineInfo[]
+  defaultExecutor: Executor | null
+  currentTaskId: string | null
+  quota: Array<{ executor: Executor; model: string; exhaustedUntil: string; reason: string | null }>
+}
+
+// Mirrors SessionView in packages/shared-types/src/conductor.ts
+export interface ConductorSession {
+  sessionId: string
+  agentId: string
+  hostname: string | null
+  ide: string | null
+  branch: string | null
+  projectId: string | null
+  apiKeyName: string | null
+  lastActivity: string
+}
+
+export interface ConductorTree {
+  root: ConductorTask
+  tasks: ConductorTask[]
+  workers: ConductorWorker[]
+}
+
+export interface ReviewBody { verdict: 'approve' | 'reject'; feedback?: string; by?: string }
+
+export interface RouteBody {
+  executor?: Executor | null
+  model?: string | null
+  effort?: string | null
+  fallback?: RouteSpec[] | null
+  pinnedAgent?: string | null
+  priority?: number
+  files?: string[]
+  dependsOn?: string[]
+  clearEscalation?: boolean
+}
+
 export async function getConductorAgents() {
-  return apiFetch<{ agents: ConductorAgent[]; online: number }>('/api/conductor/agents')
+  return apiFetch<{ agents: ConductorWorker[]; online: number; sessions: ConductorSession[] }>('/api/conductor/agents')
+}
+
+export async function getConductorTree(id: string) {
+  return apiFetch<ConductorTree>(`/api/conductor/${encodeURIComponent(id)}/tree`)
+}
+
+export async function reviewConductorTask(id: string, body: ReviewBody) {
+  return apiFetch<{ task: ConductorTask }>(`/api/conductor/${encodeURIComponent(id)}/review`, { method: 'POST', body })
+}
+
+export async function routeConductorTask(id: string, body: RouteBody) {
+  return apiFetch<{ task: ConductorTask }>(`/api/conductor/${encodeURIComponent(id)}/route`, { method: 'POST', body })
 }
 
 export async function getConductorTasks(options?: { limit?: number; status?: string; assignedTo?: string }) {
