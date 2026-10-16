@@ -190,7 +190,21 @@ export async function killTree(
   }
 }
 
-function exitCodeOf(code: number | null, signal: NodeJS.Signals | null): number {
+/**
+ * SIGKILLs the process group led by `pid`, so background grandchildren do not outlive it.
+ * Best effort; a no-op on win32 and for any pid that is not a positive integer
+ * (`-0` would signal our own process group).
+ */
+export function reapGroup(pid: number, platform: NodeJS.Platform = process.platform): void {
+  if (platform === 'win32' || !Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    // ESRCH or anything else
+  }
+}
+
+export function exitCodeOf(code: number | null, signal: NodeJS.Signals | null): number {
   if (code !== null) return code;
   if (signal !== null) return 128 + (os.constants.signals[signal] ?? 0);
   return 1;
@@ -256,14 +270,8 @@ export async function runShell(
   if (timer) clearTimeout(timer);
   opts.signal?.removeEventListener('abort', stop);
 
-  if (!win && tracked.pid > 0) {
-    try {
-      // background grandchildren of the command must not outlive it
-      process.kill(-tracked.pid, 'SIGKILL');
-    } catch {
-      // best effort: ESRCH or anything else
-    }
-  }
+  // background grandchildren of the command must not outlive it
+  reapGroup(tracked.pid, platform);
   // let the last buffered chunks arrive, but never wait on a grandchild holding the pipe
   let drainTimer: NodeJS.Timeout | undefined;
   await Promise.race([

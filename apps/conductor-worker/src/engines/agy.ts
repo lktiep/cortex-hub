@@ -1,0 +1,194 @@
+import os from 'node:os';
+import { resolveCommand } from '../process.js';
+import { agyModelScope, parseResetsIn } from './quota.js';
+import { runCli } from './run.js';
+import type { Classification, EngineAdapter, RunInput, RunOutput } from './types.js';
+
+const MODEL_ID = /^[a-z0-9][a-z0-9.-]*-(low|medium|high)$|^[a-z0-9][a-z0-9.-]*$/;
+const MODELS_TIMEOUT_MS = 60_000;
+const VERSION_TIMEOUT_MS = 15_000;
+const SUMMARY_MAX = 4000;
+const RAW_MAX = 2000;
+const QUOTA_EXIT_CODE = 3;
+
+interface AgyResult {
+  status?: unknown;
+  response?: unknown;
+  error?: unknown;
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * The final result of a run: the last `result` event of a stream-json transcript, or the
+ * single object printed by `--output-format json`. Unparseable lines are skipped.
+ */
+function findResult(stdout: string): AgyResult | undefined {
+  let found: AgyResult | undefined;
+  for (const raw of stdout.split('\n')) {
+    const line = raw.trim();
+    if (!line.startsWith('{')) continue;
+    const obj = parseJson(line);
+    if (!isRecord(obj)) continue;
+    if (obj.event === 'result' && isRecord(obj.result)) found = obj.result;
+    else if (obj.event === undefined && typeof obj.status === 'string') found = obj;
+  }
+  if (found) return found;
+  const whole = parseJson(stdout.trim());
+  return isRecord(whole) && typeof whole.status === 'string' ? whole : undefined;
+}
+
+function findAgyError(stderr: string): Record<string, unknown> | undefined {
+  for (const raw of stderr.split('\n')) {
+    const line = raw.trim();
+    if (!line.startsWith('AGY_ERROR:')) continue;
+    const obj = parseJson(line.slice('AGY_ERROR:'.length).trim());
+    if (isRecord(obj)) return obj;
+  }
+  return undefined;
+}
+
+function firstLine(text: string): string {
+  return text.split('\n').find((l) => l.trim() !== '')?.trim() ?? '';
+}
+
+function parseModels(stdout: string): string[] {
+  const ids: string[] = [];
+  for (const raw of stdout.split('\n')) {
+    const token = raw.replace(/^\s*[-*•]?\s*/, '').split(/\s+/)[0] ?? '';
+    if (token !== '' && MODEL_ID.test(token) && !ids.includes(token)) ids.push(token);
+  }
+  return ids;
+}
+
+export function createAgyAdapter(
+  opts: {
+    bin?: string;
+    mode?: string;
+    printTimeout?: string;
+    platform?: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): EngineAdapter {
+  const platform = opts.platform ?? process.platform;
+  const env = opts.env ?? process.env;
+  const resolveBin = (): string | null =>
+    opts.bin ?? (env.CORTEX_AGY_BIN || null) ?? resolveCommand('agy', platform, env);
+
+  const quiet = (over: Partial<RunInput> = {}): RunInput => ({
+    prompt: '',
+    cwd: os.tmpdir(),
+    model: null,
+    effort: null,
+    signal: new AbortController().signal,
+    timeoutMs: VERSION_TIMEOUT_MS,
+    onLine: () => undefined,
+    ...over,
+  });
+
+  return {
+    executor: 'agy',
+
+    async detect() {
+      const bin = resolveBin();
+      if (bin === null) return { found: false };
+      const r = await runCli(bin, { args: ['--version'] }, quiet(), { platform, env });
+      if (r.exitCode !== 0) return { found: false, path: bin };
+      const version = firstLine(r.stdout);
+      return version === '' ? { found: true, path: bin } : { found: true, path: bin, version };
+    },
+
+    async models() {
+      const bin = resolveBin() ?? 'agy';
+      const r = await runCli(bin, { args: ['models'] }, quiet({ timeoutMs: MODELS_TIMEOUT_MS }), {
+        platform,
+        env,
+      });
+      if (r.exitCode !== 0) {
+        const why = r.timedOut ? 'timed out' : firstLine(r.stderr);
+        throw new Error(`agy models failed (exit ${String(r.exitCode)})${why === '' ? '' : `: ${why}`}`);
+      }
+      const ids = parseModels(r.stdout);
+      return ids.length > 0 ? ids : ['*'];
+    },
+
+    defaultModel() {
+      return null;
+    },
+
+    buildArgs(i, targetPlatform) {
+      const mode =
+        opts.mode ?? (env.CORTEX_AGY_MODE || undefined) ?? (targetPlatform === 'win32' ? 'accept-edits' : 'auto');
+      const args = ['-p', i.prompt, '--output-format', 'stream-json', '--mode', mode];
+      if (i.model !== null) args.push('--model', i.model);
+      if (i.effort !== null) args.push('--effort', i.effort);
+      if (opts.printTimeout) args.push('--print-timeout', opts.printTimeout);
+      return { args };
+    },
+
+    run(input: RunInput): Promise<RunOutput> {
+      const built = this.buildArgs(
+        { prompt: input.prompt, model: input.model, effort: input.effort },
+        platform,
+      );
+      return runCli(resolveBin() ?? 'agy', built, input, { platform, env });
+    },
+
+    classify(exitCode, stdout, stderr, ctx): Classification {
+      const result = findResult(stdout);
+      if (exitCode === 0 && result?.status === 'SUCCESS') return { kind: 'ok' };
+
+      const resultError = typeof result?.error === 'string' ? result.error : '';
+      const agyError = findAgyError(stderr);
+      const isQuota =
+        exitCode === QUOTA_EXIT_CODE ||
+        (result?.status === 'ERROR' && /quota/i.test(resultError)) ||
+        agyError?.status === 'RESOURCE_EXHAUSTED' ||
+        agyError?.error_code === 429;
+      if (isQuota) {
+        const raw = [stderr.trim(), resultError].filter((t) => t !== '').join('\n').slice(0, RAW_MAX);
+        const q: Classification = { kind: 'quota', raw };
+        const resetAt = parseResetsIn(raw, ctx?.now ?? new Date());
+        if (resetAt !== undefined) q.resetAt = resetAt;
+        const modelScope = agyModelScope(ctx?.model ?? null);
+        if (modelScope !== undefined) q.modelScope = modelScope;
+        return q;
+      }
+
+      const message =
+        firstLine(resultError) ||
+        firstLine(stderr) ||
+        (exitCode === 0 ? 'agy finished without a SUCCESS result' : `agy exited with code ${String(exitCode)}`);
+      return { kind: 'error', message };
+    },
+
+    progressText(line) {
+      const obj = parseJson(line.trim());
+      if (!isRecord(obj)) return null;
+      if (obj.event === 'init') {
+        const model = isRecord(obj.init) ? obj.init.model : undefined;
+        return typeof model === 'string' ? `agy started (${model})` : 'agy started';
+      }
+      if (obj.event === 'step_update' && isRecord(obj.step_update)) {
+        const delta = obj.step_update.text_delta;
+        if (typeof delta === 'string' && delta.trim() !== '') return delta.trim();
+      }
+      return null;
+    },
+
+    summary(stdout) {
+      const response = findResult(stdout)?.response;
+      return typeof response === 'string' ? response.slice(0, SUMMARY_MAX) : '';
+    },
+  };
+}

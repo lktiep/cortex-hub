@@ -8,6 +8,7 @@ import {
   killTree,
   lastLines,
   needsShell,
+  reapGroup,
   resolveCommand,
   runShell,
   spawnTracked,
@@ -263,6 +264,29 @@ describe('runShell', () => {
   it.skipIf(process.platform === 'win32')('maps a signal death to 128 + signo', async () => {
     const r = await runShell('kill -TERM $$', dir);
     expect(r.exitCode).toBe(128 + os.constants.signals.SIGTERM);
+  });
+});
+
+describe('reapGroup', () => {
+  it.skipIf(process.platform === 'win32')('kills the whole process group of a pid', async () => {
+    const t = spawnTracked('sh', ['-c', 'sleep 30 & echo $!; wait'], { cwd: dir });
+    let out = '';
+    t.stdout.setEncoding('utf8');
+    t.stdout.on('data', (c: string) => (out += c));
+    const end = Date.now() + 5000;
+    while (!out.includes('\n') && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
+    const grandchild = Number(out.trim());
+    expect(alive(grandchild)).toBe(true);
+    reapGroup(t.pid);
+    await t.exited;
+    expect(await waitDead(grandchild, 3000)).toBe(true);
+  });
+
+  it('ignores pid 0, negatives, non-integers and win32', () => {
+    expect(() => reapGroup(0)).not.toThrow();
+    expect(() => reapGroup(-5)).not.toThrow();
+    expect(() => reapGroup(1.5)).not.toThrow();
+    expect(() => reapGroup(2147483000, 'win32')).not.toThrow();
   });
 });
 

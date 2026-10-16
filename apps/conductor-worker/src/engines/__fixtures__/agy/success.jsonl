@@ -1,0 +1,5 @@
+{"event":"init","conversation_id":"00000000-0000-0000-0000-000000000000","init":{"model":"gemini-4-argon-low","cwd":"/work","tools":["ask_custom_permission","ask_permission","ask_question"],"permission_mode":"request-review"}}
+{"event":"step_update","step_update":{"conversation_id":"00000000-0000-0000-0000-000000000000","step_index":0,"state":"DONE","step_type":"user_input"}}
+{"event":"step_update","step_update":{"conversation_id":"00000000-0000-0000-0000-000000000000","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"OK"}}
+{"event":"step_update","step_update":{"conversation_id":"00000000-0000-0000-0000-000000000000","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"\n","duration_seconds":3.455184,"usage":{"input_tokens":13526,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":13531}}}
+{"event":"result","result":{"conversation_id":"00000000-0000-0000-0000-000000000000","status":"SUCCESS","response":"OK\n","duration_seconds":115.523649,"num_turns":1,"usage":{"input_tokens":13526,"output_tokens":5,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":13531}}}
