@@ -6,16 +6,18 @@
 // sent, the worker it freed is marked idle and a dispatch pass runs, so every
 // push follows committed state.
 import type {
-  ReviewRequest, TaskQuotaExhaustedMsg, TaskResult, TaskReview, TaskRevokedMsg,
+  ReviewRequest, RoutePatch, TaskQuotaExhaustedMsg, TaskResult, TaskReview, TaskRevokedMsg,
 } from '@cortex/shared-types'
 import { db } from '../db/client.js'
 import { getConductorConfig } from './config.js'
 import { dispatch } from './dispatcher.js'
 import { formatNotification, notifyLead } from './notify.js'
 import { getByAgent, sendTo, setStatus } from './registry.js'
+import { normalizeFiles } from './files.js'
 import {
   ACTIVE_STATUSES, getTask, isoSeconds, logTask, parseJson, stringList, taskContext, taskLabel, type TaskRow,
 } from './rows.js'
+import { fallbackProblem, findCycle, knownExecutor, priorityValue } from './tree.js'
 
 export type Outcome = { ok: true; task: TaskRow } | { ok: false; status: 403 | 404 | 409; error: string }
 
@@ -185,6 +187,12 @@ function allCompleted(ids: string[]): boolean {
   return n === unique.length
 }
 
+/** Tells the lead a gate is now `pending`, awaiting approval. */
+function notifyGateReady(gateId: string): void {
+  const gate = current(gateId)
+  notifyLead(gate, 'gate_ready', formatNotification('gate_ready', gate, {}))
+}
+
 /** `blocked` tasks that depend on `completedId` and whose dependencies are now all completed → `pending`. */
 function unblockDependents(completedId: string): void {
   const blocked = db.prepare("SELECT * FROM conductor_tasks WHERE status = 'blocked'").all() as TaskRow[]
@@ -193,10 +201,7 @@ function unblockDependents(completedId: string): void {
     if (!deps.includes(completedId) || !allCompleted(deps)) continue
     db.prepare("UPDATE conductor_tasks SET status = 'pending' WHERE id = ?").run(dependent.id)
     logTask(dependent.id, null, 'unblocked', `All dependencies met after ${completedId} completed`)
-    if (dependent.kind === 'gate') {
-      const gate = current(dependent.id)
-      notifyLead(gate, 'gate_ready', formatNotification('gate_ready', gate, {}))
-    }
+    if (dependent.kind === 'gate') notifyGateReady(dependent.id)
   }
 }
 
@@ -645,5 +650,99 @@ export function reviewTask(taskId: string, req: ReviewRequest, via: 'mcp' | 'das
       unwindCompletion(dep, task, by)
     }
     return { outcome: { ok: true, task: current(taskId) }, worker: null }
+  })
+}
+
+export type RerouteOutcome = Outcome | { ok: false; status: 400; error: string; cycle?: string[] }
+
+function badRoute(error: string, cycle?: string[]): RerouteOutcome {
+  return cycle === undefined ? { ok: false, status: 400, error } : { ok: false, status: 400, error, cycle }
+}
+
+/** The first problem in a route patch, before anything is written. */
+function routeProblem(taskId: string, patch: RoutePatch): RerouteOutcome | null {
+  if (patch.executor !== undefined && patch.executor !== null && !knownExecutor(patch.executor)) {
+    return badRoute(`unknown executor ${String(patch.executor)}`)
+  }
+  const fallback = fallbackProblem(patch.fallback)
+  if (fallback !== null) return badRoute(fallback)
+  if (patch.priority !== undefined && priorityValue(patch.priority) === null) return badRoute(`unknown priority ${String(patch.priority)}`)
+  if (patch.files !== undefined) {
+    try { normalizeFiles(patch.files) } catch (e) { return badRoute((e as Error).message) }
+  }
+  for (const dep of patch.dependsOn ?? []) {
+    if (dep === taskId) return badRoute(`dependency cycle: ${taskId} -> ${taskId}`, [taskId, taskId])
+    if (getTask(dep) === undefined) return badRoute(`unknown dependency ${dep}`)
+  }
+  return null
+}
+
+/** A cycle that `dependsOn` would close in the stored graph (dependencies, and each group → its children), as keys or ids. */
+function rerouteCycle(task: TaskRow, dependsOn: string[]): string[] | null {
+  const rows = db.prepare("SELECT id, task_key, kind, parent_task_id, depends_on FROM conductor_tasks WHERE status NOT IN ('completed', 'cancelled', 'failed')")
+    .all() as Pick<TaskRow, 'id' | 'task_key' | 'kind' | 'parent_task_id' | 'depends_on'>[]
+  const edges = new Map<string, string[]>()
+  for (const r of rows) {
+    edges.set(r.id, [...(edges.get(r.id) ?? []), ...(r.id === task.id ? dependsOn : stringList(r.depends_on))])
+    if (r.parent_task_id !== null) edges.set(r.parent_task_id, [...(edges.get(r.parent_task_id) ?? []), r.id])
+  }
+  const cycle = findCycle([task.id], edges)
+  if (cycle === null) return null
+  const labels = new Map(rows.map((r) => [r.id, r.task_key ?? r.id]))
+  return cycle.map((id) => labels.get(id) ?? id)
+}
+
+/** The columns a patch sets, in `column = ?` order with their values. */
+function patchColumns(patch: RoutePatch): { sets: string[]; values: (string | number | null)[] } {
+  const sets: string[] = []
+  const values: (string | number | null)[] = []
+  const put = (column: string, value: string | number | null): void => { sets.push(`${column} = ?`); values.push(value) }
+  if (patch.executor !== undefined) put('executor', patch.executor)
+  if (patch.model !== undefined) put('model', patch.model)
+  if (patch.effort !== undefined) put('effort', patch.effort)
+  if (patch.fallback !== undefined) put('fallback', patch.fallback === null ? null : JSON.stringify(patch.fallback))
+  if (patch.pinnedAgent !== undefined) put('pinned_agent', patch.pinnedAgent)
+  if (patch.priority !== undefined) put('priority', priorityValue(patch.priority))
+  if (patch.files !== undefined) put('files', JSON.stringify(normalizeFiles(patch.files)))
+  if (patch.dependsOn !== undefined) put('depends_on', JSON.stringify([...new Set(patch.dependsOn)]))
+  if (patch.clearEscalation === true) { sets.push('escalated_at = NULL', 'fail_count = 0', 'reject_count = 0') }
+  return { sets, values }
+}
+
+/**
+ * Changes a task's route, priority, files or dependencies (spec §6.9). An
+ * active task is revoked first and returned to `pending` in the same step as
+ * the patch, so the one dispatch pass after the commit sees the new route. A
+ * `pending` or `blocked` task is re-sorted by its dependencies.
+ */
+export function rerouteTask(taskId: string, patch: RoutePatch, by: string | null): RerouteOutcome {
+  const before = getTask(taskId)
+  if (before === undefined) return { ok: false, status: 404, error: `task ${taskId} not found` }
+  if (isTerminal(before.status)) return { ok: false, status: 409, error: `reroute ignored: task is ${before.status}` }
+  const problem = routeProblem(taskId, patch)
+  if (problem !== null) return problem
+  if (patch.dependsOn !== undefined) {
+    const cycle = rerouteCycle(before, patch.dependsOn)
+    if (cycle !== null) return badRoute(`dependency cycle: ${cycle.join(' -> ')}`, cycle)
+  }
+  revokeBefore(taskId, 'rerouted')
+  return settle((): Settled => {
+    const loaded = load(taskId, by, 'reroute', (t) => !isTerminal(t.status))
+    if (!loaded.ok) return refused(loaded)
+    const { task } = loaded
+    const wasActive = isActive(task.status)
+    if (wasActive) toPending(task, 'rerouted')
+    const { sets, values } = patchColumns(patch)
+    if (sets.length > 0) db.prepare(`UPDATE conductor_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values, taskId)
+    const patched = current(taskId)
+    if (patched.status === 'pending' || patched.status === 'blocked') {
+      const next = allCompleted(stringList(patched.depends_on)) ? 'pending' : 'blocked'
+      if (next !== patched.status) {
+        db.prepare('UPDATE conductor_tasks SET status = ? WHERE id = ?').run(next, taskId)
+        if (next === 'pending' && patched.kind === 'gate') notifyGateReady(taskId)
+      }
+    }
+    logTask(taskId, by, 'rerouted', JSON.stringify(patch))
+    return { outcome: { ok: true, task: current(taskId) }, worker: wasActive ? task.assigned_to_agent : null }
   })
 }
