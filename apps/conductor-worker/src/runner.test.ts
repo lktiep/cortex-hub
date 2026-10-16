@@ -493,7 +493,7 @@ describe('runTask', () => {
     expect(existsSync(dirOf())).toBe(false);
   });
 
-  posixOnly('an abort during commit, push and PR lets git finish, then returns aborted', async () => {
+  posixOnly('a revoke during commit, push and PR lets git finish, then returns aborted', async () => {
     const ac = new AbortController();
     const entered = path.join(fx.root, 'hook-entered');
     const go = path.join(fx.root, 'hook-go');
@@ -502,13 +502,66 @@ describe('runTask', () => {
     const h = harness(fakeEngine().adapter);
     const pending = run(makeTask(), h, ac.signal);
     await waitFor(() => existsSync(entered));
+    ac.abort('revoked');
+    writeFileSync(go, '');
+    const out = await pending;
+
+    expect(out).toEqual({ kind: 'aborted', reason: 'revoked' });
+    expect(remoteSubject()).toBe('K-1: Add a file');
+    expect(existsSync(dirOf())).toBe(false);
+  });
+
+  posixOnly('a stop once the work is committed lets push and PR finish and reports the result', async () => {
+    const ac = new AbortController();
+    const entered = path.join(fx.root, 'hook-entered');
+    const go = path.join(fx.root, 'hook-go');
+    gatedHook('pre-push', entered, go);
+    const h = harness(fakeEngine().adapter);
+    const pending = run(makeTask(), h, ac.signal);
+    await waitFor(() => existsSync(entered));
     ac.abort('stopping');
     writeFileSync(go, '');
     const out = await pending;
 
-    expect(out).toEqual({ kind: 'aborted', reason: 'stopping' });
+    expect(out.kind).toBe('completed');
+    expect(msgOf(out).result).toMatchObject({ branch: BRANCH, commit: remoteSha(), prUrl: PR_URL });
     expect(remoteSubject()).toBe('K-1: Add a file');
     expect(existsSync(dirOf())).toBe(false);
+  });
+
+  posixOnly('a revoke once the work is committed lets the push finish, then returns aborted', async () => {
+    const ac = new AbortController();
+    const entered = path.join(fx.root, 'hook-entered');
+    const go = path.join(fx.root, 'hook-go');
+    gatedHook('pre-push', entered, go);
+    const h = harness(fakeEngine().adapter);
+    const pending = run(makeTask(), h, ac.signal);
+    await waitFor(() => existsSync(entered));
+    ac.abort('revoked');
+    writeFileSync(go, '');
+    const out = await pending;
+
+    expect(out).toEqual({ kind: 'aborted', reason: 'revoked' });
+    expect(remoteSubject()).toBe('K-1: Add a file');
+    expect(existsSync(dirOf())).toBe(false);
+  });
+
+  it('a stop while the PR opens for commits already on the branch reports them', async () => {
+    const prior = pushPriorCommit();
+    const ac = new AbortController();
+    const engine = fakeEngine({ run: () => ({ exitCode: 0, stdout: 'already done' }) });
+    const gh = fakeGh({
+      onCall: (args) => {
+        if (args[0] === 'pr') ac.abort('stopping');
+      },
+    });
+    const h = harness(engine.adapter, { gh });
+    const task = makeTask({ handoff: { branch: BRANCH, commit: prior, note: 'ran out of quota' } });
+    const out = await run(task, h, ac.signal, { resumed: true });
+
+    expect(ac.signal.aborted).toBe(true);
+    expect(out.kind).toBe('completed');
+    expect(msgOf(out).result).toMatchObject({ branch: BRANCH, commit: prior, prUrl: PR_URL });
   });
 
   it('declines with branch-in-use when the branch is checked out elsewhere', async () => {

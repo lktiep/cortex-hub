@@ -152,7 +152,8 @@ export class Worker {
 
   private onResumed(task: AssignedTask): void {
     if (this.current?.task.id === task.id) {
-      this.log(task.id, 'already running; ignored task.resumed');
+      // the task held here: onAssigned tells a duplicate from a new attempt
+      this.onAssigned(task, true);
       return;
     }
     const unconfirmed = this.state.unconfirmed;
@@ -173,23 +174,34 @@ export class Worker {
 
   private onAssigned(task: AssignedTask, resumed: boolean): void {
     // read here, so a message without a task throws inside handle() rather than in the run
-    const { id } = task;
+    const { id, attempt } = task;
     const current = this.current;
-    if (current !== null && current.task.id === id) {
-      this.log(id, `already running; ignored ${resumed ? 'task.resumed' : 'task.assigned'}`);
+    // a duplicate is the same attempt; a new attempt of the held task waits like any other task
+    if (current !== null && current.task.id === id && current.task.attempt === attempt) {
+      this.log(id, `already running attempt ${attempt}; ignored ${resumed ? 'task.resumed' : 'task.assigned'}`);
       return;
     }
     if (current !== null || this.stopping) {
-      this.log(id, `declined as busy (${current !== null ? `holding ${current.task.id}` : 'stopping'})`);
+      const holding =
+        current === null
+          ? 'stopping'
+          : current.task.id === id
+            ? `still holding attempt ${current.task.attempt}`
+            : `holding ${current.task.id}`;
+      this.log(id, `attempt ${attempt} declined as busy (${holding})`);
       this.decline(task, 'busy');
       return;
     }
     const slot: Slot = { task, controller: new AbortController(), done: Promise.resolve() };
     this.current = slot;
-    slot.done = this.execute(slot, resumed).catch((err: unknown) => {
-      this.release(slot);
-      this.deps.logger.error(`task ${id}: ${messageOf(err)}`);
-    });
+    // released here whatever execute does; it also releases before sending the outcome
+    slot.done = this.execute(slot, resumed)
+      .catch((err: unknown) => {
+        this.deps.logger.error(`task ${id}: ${messageOf(err)}`);
+      })
+      .finally(() => {
+        this.release(slot);
+      });
   }
 
   private onRevoked(taskId: string): void {
@@ -208,9 +220,12 @@ export class Worker {
     const host = this.deps.hostname;
     try {
       const executor = task.route.executor ?? this.deps.defaultExecutor;
-      if (executor === null) return { refusal: `no engine available on ${host}` };
-      const adapter = this.deps.adapters.find((a) => a.executor === executor);
-      if (adapter === undefined) return { refusal: `executor ${executor} not available on ${host}` };
+      const adapter = executor === null ? undefined : this.deps.adapters.find((a) => a.executor === executor);
+      if (adapter === undefined) {
+        // only a route that names an engine is refused for that engine; otherwise the host has none to offer
+        const named = task.route.executor;
+        return { refusal: named !== null ? `executor ${named} not available on ${host}` : `no engine available on ${host}` };
+      }
       // declined before accepting: spec §6.5 does not say a decline after task.accept is valid
       const own = worktreePath(this.deps.paths, task.id);
       const elsewhere = await branchCheckedOutAt(this.deps.repo, task.branch, own);
@@ -229,7 +244,12 @@ export class Worker {
       this.release(slot);
       const reason = abortReason(signal);
       this.log(task.id, `${reason} before it was accepted; not started`);
-      if (reason === 'revoked') this.forget(task.id);
+      if (reason === 'revoked') {
+        this.forget(task.id);
+        // the hub may still count the offered task against this worker until it hears idle
+        this.deps.send(IDLE);
+      }
+      // 'stopping' sends nothing: the next start registers with whatever the state file holds
       return;
     }
     if ('refusal' in checked) {
@@ -239,11 +259,11 @@ export class Worker {
       return;
     }
 
+    // persisted before task.accept, so a restart after the hub saw it registers with this task;
     // the hub has moved on from any outcome it had not confirmed
-    this.state = { ...this.state, unconfirmed: null };
+    this.update({ activeTaskId: task.id, unconfirmed: null });
     this.deps.sendReliable({ type: 'task.accept', taskId: task.id });
     this.deps.send(BUSY);
-    this.update({ activeTaskId: task.id });
     this.log(task.id, `accepted attempt ${task.attempt} on ${checked.adapter.executor}${resumed ? ' (resumed)' : ''}`);
 
     let outcome: RunOutcome;

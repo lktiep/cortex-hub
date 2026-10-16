@@ -130,7 +130,8 @@ interface Wip {
 
 /**
  * Runs one accepted task end to end and returns its outcome. Never throws, and never
- * sends the outcome itself.
+ * sends the outcome itself. An abort returns `aborted`, unless it is a stop that lands
+ * once the final commit exists: the run then finishes and returns its outcome.
  *
  * The worktree is removed at the end, except when work would be lost with it: a commit
  * or push that failed, an unexpected throw once the engine started, or a worktree kept
@@ -151,6 +152,8 @@ export async function runTask(
   let reused = false;
   let engineStarted = false;
   let keepWorktree = false;
+  /** The task's final commit exists: a stop no longer hides the outcome, only a revoke does. */
+  let committed = false;
   let engineSummary = '';
 
   const log = (level: 'info' | 'warn' | 'error', m: string): void => logger[level](`task ${task.id}: ${m}`);
@@ -323,7 +326,8 @@ export async function runTask(
     };
     if (!changes.dirty && !changes.ahead) return noChanges();
 
-    // 6. commit; from here on an abort lets git finish
+    // 6. commit; from here on an abort lets git finish, and once the commit exists a stop
+    //    reports the outcome as usual (a revoke still reports nothing)
     let commit: string | null = null;
     if (changes.dirty) {
       try {
@@ -335,6 +339,7 @@ export async function runTask(
     }
     commit ??= changes.ahead ? await headCommit(worktree) : null;
     if (commit === null) return noChanges();
+    committed = true;
 
     // 7. push and pull request
     try {
@@ -382,7 +387,11 @@ export async function runTask(
     return complete('failed', { ...result, summary: summary === '' ? testError : summary, error: testError });
   };
 
-  /** Removes the worktree unless something in it must survive; an aborted run reports nothing. */
+  /**
+   * Removes the worktree unless something in it must survive. An aborted run reports
+   * nothing, except a stop that came after the final commit: that work is reported
+   * rather than left for a resumed run to find.
+   */
   const settle = async (outcome: RunOutcome): Promise<RunOutcome> => {
     if (dir !== null) {
       if (keepWorktree || (reused && !engineStarted)) {
@@ -395,7 +404,8 @@ export async function runTask(
         }
       }
     }
-    const result = signal.aborted ? aborted() : outcome;
+    const keep = committed && signal.reason !== 'revoked';
+    const result = signal.aborted && !keep ? aborted() : outcome;
     log('info', result.kind === 'aborted' ? `aborted (${result.reason})` : result.kind);
     return result;
   };

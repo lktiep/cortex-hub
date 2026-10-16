@@ -136,8 +136,11 @@ interface Harness {
   onReliable: { fn: ((m: WorkerToHubMsg) => void) | null };
 }
 
-/** A run that waits for `finish`; an abort ends it with the signal's reason, as the runner does. */
-function harness(over: Partial<WorkerDeps> = {}): Harness {
+/**
+ * A run that waits for `finish`. An abort ends it with the signal's reason, as the runner
+ * does, unless `abortEnds` is false: the run then unwinds only when `finish` is called.
+ */
+function harness(over: Partial<WorkerDeps> = {}, o: { abortEnds?: boolean } = {}): Harness {
   const sent: Sent[] = [];
   const logs: string[] = [];
   const calls: RunCall[] = [];
@@ -178,6 +181,7 @@ function harness(over: Partial<WorkerDeps> = {}): Harness {
     run: (task, runDeps, signal, opts) =>
       new Promise<RunOutcome>((resolve) => {
         calls.push({ task, deps: runDeps, signal, opts, finish: resolve });
+        if (o.abortEnds === false) return;
         signal.addEventListener(
           'abort',
           () => resolve({ kind: 'aborted', reason: signal.reason === 'revoked' ? 'revoked' : 'stopping' }),
@@ -195,7 +199,7 @@ const state = (): WorkerState => readState(paths.stateFile);
 const accept = (taskId = TASK_A): Sent => ({ via: 'reliable', msg: { type: 'task.accept', taskId } });
 
 async function started(h: Harness, n = 1): Promise<RunCall> {
-  await vi.waitFor(() => expect(h.calls).toHaveLength(n));
+  await vi.waitFor(() => expect(h.calls).toHaveLength(n), { timeout: 5_000 });
   const call = h.calls[n - 1];
   if (call === undefined) throw new Error('no run call');
   return call;
@@ -341,6 +345,60 @@ describe('task.assigned', () => {
     expect(h.logs.some((l) => l.startsWith('INFO') && l.includes(TASK_A) && l.includes('already running'))).toBe(true);
   });
 
+  it.each(['task.assigned', 'task.resumed'] as const)(
+    'declines a new attempt of the task it still holds as busy (%s)',
+    async (type) => {
+      const h = harness({}, { abortEnds: false });
+      const w = new Worker(h.deps);
+      w.handle(assigned(makeTask()));
+      const call = await started(h);
+      w.handle(revoked(TASK_A));
+      // the hub reassigned the task before this worker finished unwinding it
+      w.handle(assigned(makeTask({ attempt: 4 }), type));
+      call.finish({ kind: 'aborted', reason: 'revoked' });
+      await w.idle();
+      expect(h.sent).toEqual([
+        accept(),
+        { via: 'send', msg: BUSY },
+        { via: 'reliable', msg: { type: 'task.decline', taskId: TASK_A, reason: 'busy', attempt: 4 } },
+        { via: 'send', msg: IDLE },
+      ]);
+      expect(h.calls).toHaveLength(1);
+      expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null });
+    },
+  );
+
+  it('declines a new attempt of a task revoked while it is still being checked as busy', async () => {
+    const h = harness();
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    w.handle(revoked(TASK_A));
+    w.handle(assigned(makeTask({ attempt: 4 })));
+    await w.idle();
+    expect(h.sent).toEqual([
+      { via: 'reliable', msg: { type: 'task.decline', taskId: TASK_A, reason: 'busy', attempt: 4 } },
+      { via: 'send', msg: IDLE },
+    ]);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('persists the active task before sending task.accept', async () => {
+    const h = harness();
+    writeState(paths.stateFile, {
+      activeTaskId: null,
+      unconfirmed: { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) },
+      lastRegistered: null,
+    });
+    const seen: WorkerState[] = [];
+    h.onReliable.fn = (m) => {
+      if (m.type === 'task.accept') seen.push(state());
+    };
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    await started(h);
+    expect(seen).toEqual([{ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null }]);
+  });
+
   it("declines when the route's executor is not available", async () => {
     const h = harness();
     const unconfirmed = { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) };
@@ -361,6 +419,17 @@ describe('task.assigned', () => {
 
   it('declines when there is no route executor and no default engine', async () => {
     const h = harness({ adapters: [], engines: [], defaultExecutor: null });
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    await w.idle();
+    expect(h.sent).toEqual([
+      { via: 'reliable', msg: { type: 'task.decline', taskId: TASK_A, reason: `no engine available on ${HOST}`, attempt: 3 } },
+    ]);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('declines with no engine when the route names none and the default engine is missing', async () => {
+    const h = harness({ adapters: [] });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask()));
     await w.idle();
@@ -565,9 +634,21 @@ describe('task.revoked', () => {
     w.handle(assigned(makeTask(), 'task.resumed'));
     w.handle(revoked(TASK_A));
     await w.idle();
-    expect(h.sent).toEqual([]);
+    expect(h.sent).toEqual([{ via: 'send', msg: IDLE }]);
     expect(h.calls).toHaveLength(0);
     expect(state().activeTaskId).toBeNull();
+  });
+
+  it('sends idle, and never task.accept, for a fresh task revoked before it was accepted', async () => {
+    const h = harness();
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    w.handle(revoked(TASK_A));
+    await w.idle();
+    expect(h.sent).toEqual([{ via: 'send', msg: IDLE }]);
+    expect(h.calls).toHaveLength(0);
+    expect(w.busy).toBe(false);
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null });
   });
 });
 
@@ -610,6 +691,23 @@ describe('stop', () => {
     expect(new Worker(h.deps).registerPayload().activeTaskId).toBe(TASK_A);
   });
 
+  it('stop during the pre-accept check sends nothing and leaves the state alone', async () => {
+    const h = harness();
+    const before: WorkerState = {
+      activeTaskId: null,
+      unconfirmed: { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) },
+      lastRegistered: null,
+    };
+    writeState(paths.stateFile, before);
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    await w.stop();
+    expect(h.sent).toEqual([]);
+    expect(h.calls).toHaveLength(0);
+    expect(w.busy).toBe(false);
+    expect(state()).toEqual(before);
+  });
+
   it('declines a task offered after stop as busy', async () => {
     const h = harness();
     const w = new Worker(h.deps);
@@ -637,6 +735,21 @@ describe('onRegistered', () => {
     ]);
     expect(state().lastRegistered).toMatchObject({ projectId: null, hubVersion: '9.9.9' });
     expect(Number.isNaN(Date.parse(state().lastRegistered?.at ?? ''))).toBe(false);
+  });
+
+  it('warns again when the hub version changes or the project mapping is lost again', () => {
+    const h = harness();
+    const w = new Worker(h.deps);
+    const version = (v: string): string => `WARN hub is v${v}, worker is v${WORKER_VERSION} — run \`cortex-worker update\``;
+    const noProject = "WARN this repo's origin maps to no hub project";
+    const warns = (): string[] => h.logs.filter((l) => l.startsWith('WARN'));
+    const reg: RegisteredMsg = { type: 'registered', connectionId: 'c1', projectId: null, hubVersion: '9.9.9' };
+    w.onRegistered(reg);
+    expect(warns()).toEqual([version('9.9.9'), noProject]);
+    w.onRegistered({ ...reg, connectionId: 'c2', projectId: 'proj-1', hubVersion: '9.9.10' });
+    expect(warns()).toEqual([version('9.9.9'), noProject, version('9.9.10')]);
+    w.onRegistered({ ...reg, connectionId: 'c3', hubVersion: '9.9.10' });
+    expect(warns()).toEqual([version('9.9.9'), noProject, version('9.9.10'), noProject]);
   });
 
   it('does not warn when the versions match and the repo maps to a project', () => {
