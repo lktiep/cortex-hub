@@ -1,4 +1,6 @@
-import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CONDUCTOR_PROTOCOL_VERSION } from '@cortex/shared-types';
 import { WORKER_VERSION } from './version.js';
 
@@ -26,6 +28,26 @@ function helpText(): string {
   ].join('\n');
 }
 
+function canonical(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/** True when this module is the process entry script (follows symlinks; win32 paths compare case-insensitively). */
+export function isEntrypoint(
+  metaUrl: string,
+  argv1: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (!argv1) return false;
+  const self = canonical(fileURLToPath(metaUrl));
+  const entry = canonical(argv1);
+  return platform === 'win32' ? self.toLowerCase() === entry.toLowerCase() : self === entry;
+}
+
 export async function main(argv: string[]): Promise<number> {
   const args = parseCli(argv);
   if ('error' in args) {
@@ -37,6 +59,6 @@ export async function main(argv: string[]): Promise<number> {
   return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isEntrypoint(import.meta.url, process.argv[1])) {
   process.exitCode = await main(process.argv.slice(2));
 }
