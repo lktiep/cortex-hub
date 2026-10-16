@@ -322,7 +322,8 @@ export function loadSelectionInput(now: number): SelectionInput {
   return loadState(now, getConductorConfig()).input
 }
 
-function leaseUntil(now: number, cfg: ConductorConfig): string {
+/** A new lease: now + `leaseHours`, as `lease_expires_at` stores it. */
+export function leaseUntil(now: number, cfg: ConductorConfig): string {
   return isoSeconds(now + cfg.leaseHours * 3600_000)
 }
 

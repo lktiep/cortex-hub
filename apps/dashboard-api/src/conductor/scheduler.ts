@@ -4,8 +4,8 @@
 // reclaimed, (3) expired quota rows are deleted, (4) a dispatch pass runs.
 // Leases and quota resets are `isoSeconds` text and are compared as such.
 import { db } from '../db/client.js'
-import { getConductorConfig } from './config.js'
-import { dispatch } from './dispatcher.js'
+import { getConductorConfig, type ConductorConfig } from './config.js'
+import { dispatch, leaseUntil } from './dispatcher.js'
 import { reclaimTask } from './lifecycle.js'
 import { getByAgent, lastSeen } from './registry.js'
 import { ACTIVE_STATUSES, isoSeconds, taskContext, type TaskRow } from './rows.js'
@@ -32,11 +32,11 @@ function reclaim(row: TaskRow, reason: string, now: number): boolean {
 
 /**
  * (0) An active task without a lease (made active before leases existed, or by
- * a legacy route that sets none) gets now + `leaseHours`, so that it can expire.
+ * a legacy route that sets none) gets the lease a dispatch would give it, so that it can expire.
  */
-function backfillLeases(now: number, leaseHours: number): number {
+function backfillLeases(now: number, cfg: ConductorConfig): number {
   return db.prepare(`UPDATE conductor_tasks SET lease_expires_at = ? WHERE status IN (${ACTIVE_IN}) AND lease_expires_at IS NULL`)
-    .run(isoSeconds(now + leaseHours * 3600_000), ...ACTIVE_STATUSES).changes
+    .run(leaseUntil(now, cfg), ...ACTIVE_STATUSES).changes
 }
 
 /** (1) Active tasks whose lease has passed: the worker, if connected, is told to stop and the failure counted. */
@@ -74,7 +74,7 @@ function reclaimOffline(now: number, offlineMinutes: number, skip: ReadonlySet<s
 /** One scheduler pass (spec §6.8). Each step reads its rows afresh. */
 export function runSchedulerTick(now: number = Date.now()): TickResult {
   const cfg = getConductorConfig()
-  const leasesBackfilled = backfillLeases(now, cfg.leaseHours)
+  const leasesBackfilled = backfillLeases(now, cfg)
   const expired = reclaimExpiredLeases(now)
   const offline = reclaimOffline(now, cfg.offlineReclaimMinutes, new Set(expired))
   // (3) the dispatcher already ignores these rows; deleting them keeps the table to live quota

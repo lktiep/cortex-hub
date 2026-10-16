@@ -45,6 +45,11 @@ function logs(taskId: string, action: string): { agent_id: string | null; messag
     .all(taskId, action) as { agent_id: string | null; message: string | null }[]
 }
 
+function notifications(): { recipient: string; task_id: string; kind: string; message: string }[] {
+  return testDb.prepare('SELECT recipient, task_id, kind, message FROM conductor_notifications ORDER BY id')
+    .all() as { recipient: string; task_id: string; kind: string; message: string }[]
+}
+
 function quotaRows(): { host: string; model: string }[] {
   return testDb.prepare('SELECT host, model FROM conductor_quota ORDER BY host').all() as { host: string; model: string }[]
 }
@@ -80,14 +85,15 @@ describe('runSchedulerTick', () => {
   it('offline worker loses its task after 30 min', () => {
     running('t1', 'w1')
     running('t2', 'w2')
-    removeConnection(connect('w1').connectionId, START)
+    // the 30 min count from the disconnect, not from the registry's start
+    removeConnection(connect('w1').connectionId, START + 10 * MIN)
     // a connected worker is never offline, however quiet
     connect('w2')
 
-    expect(runSchedulerTick(START + 29 * MIN)).toEqual(NOTHING)
+    expect(runSchedulerTick(START + 31 * MIN)).toEqual(NOTHING)
     expect(row('t1').status).toBe('in_progress')
 
-    expect(runSchedulerTick(START + 31 * MIN)).toEqual({ ...NOTHING, reclaimed: ['t1'] })
+    expect(runSchedulerTick(START + 41 * MIN)).toEqual({ ...NOTHING, reclaimed: ['t1'] })
 
     expect(row('t1')).toMatchObject({ status: 'pending', assigned_to_agent: null, fail_count: 1 })
     expect(logs('t1', 'returned')).toEqual([{ agent_id: 'w1', message: 'failed: worker offline' }])
@@ -131,6 +137,7 @@ describe('runSchedulerTick', () => {
 
     expect(runSchedulerTick(T + 31 * MIN)).toEqual({ ...NOTHING, reclaimed: ['t1'] })
     expect(row('t1')).toMatchObject({ status: 'pending', fail_count: 1 })
+    expect(logs('t1', 'returned')).toEqual([{ agent_id: 'w1', message: 'failed: worker offline' }])
   })
 
   it('a task reclaimed for its lease is not reclaimed again as offline', () => {
@@ -139,6 +146,35 @@ describe('runSchedulerTick', () => {
     expect(runSchedulerTick(START + HOUR)).toEqual({ ...NOTHING, reclaimed: ['t1'] })
     expect(row('t1')).toMatchObject({ status: 'pending', fail_count: 1 })
     expect(logs('t1', 'returned').map((l) => l.message)).toEqual(['failed: lease expired'])
+  })
+
+  it('a second reclaim escalates once', () => {
+    running('t1', 'w1', { task_key: 'T1', lease_expires_at: isoSeconds(START + HOUR) })
+    const { ws } = connect('w1')
+
+    // the first reclaim's dispatch pass hands t1 straight back to w1, with a new lease
+    expect(runSchedulerTick(START + HOUR)).toEqual({ ...NOTHING, reclaimed: ['t1'] })
+    expect(row('t1')).toMatchObject({
+      status: 'assigned', assigned_to_agent: 'w1', attempt: 2, fail_count: 1, escalated_at: null,
+      lease_expires_at: isoSeconds(START + 25 * HOUR),
+    })
+
+    expect(runSchedulerTick(START + 25 * HOUR)).toEqual({ ...NOTHING, reclaimed: ['t1'] })
+
+    // escalated, so the dispatch pass leaves it pending
+    expect(row('t1')).toMatchObject({ status: 'pending', assigned_to_agent: null, attempt: 2, fail_count: 2 })
+    expect(row('t1').escalated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+    expect(logs('t1', 'escalated')).toEqual([{ agent_id: 'w1', message: '2 failures' }])
+    expect(notifications()).toEqual([{
+      recipient: 'lead', task_id: 't1', kind: 'escalated',
+      message: 'T1 "Fix login" needs you: 2 failures — last: lease expired. Clear with cortex_task_route clearEscalation.',
+    }])
+    expect(ws.sent.map((m) => (m as { type: string }).type)).toEqual(['task.revoked', 'task.assigned', 'task.revoked'])
+
+    // nothing left to reclaim, so nothing more is counted or sent
+    expect(runSchedulerTick(START + 26 * HOUR)).toEqual(NOTHING)
+    expect(row('t1').fail_count).toBe(2)
+    expect(notifications()).toHaveLength(1)
   })
 
   it('expired quota rows are deleted and the waiting task dispatches', () => {
