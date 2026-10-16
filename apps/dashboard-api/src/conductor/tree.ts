@@ -110,6 +110,7 @@ function plan(req: TreeCreateRequest, existingKeys: Set<string>): { plans: Map<s
   for (const input of req.tasks) {
     if (typeof input !== 'object' || input === null) return { err: { error: 'every task must be an object' } }
     if (typeof input.key !== 'string' || input.key === '') return { err: { error: 'every task needs a non-empty key' } }
+    if (typeof input.title !== 'string' || input.title === '') return { err: { error: `${input.key}: title must be a non-empty string` } }
     if (plans.has(input.key)) return { err: { error: `duplicate key ${input.key}` } }
     if (existingKeys.has(input.key)) return { err: { error: `key ${input.key} is already used in that tree` } }
     for (const [name, value] of [['dependsOn', input.dependsOn], ['files', input.files]] as const) {

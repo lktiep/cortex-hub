@@ -163,6 +163,15 @@ describe('createTree', () => {
     expect(count()).toBe(0)
   })
 
+  it('refuses a missing or non-string title or key with an error and writes nothing', () => {
+    expect(failure(tree({ key: 'A' } as never)).error).toMatch(/^A: .*title/)
+    expect(failure(tree(work('A'), work('B', { title: 5 as never }))).error).toMatch(/^B: .*title/)
+    expect(failure(tree(work('A', { title: '' }))).error).toMatch(/title/)
+    expect(failure(tree({ title: 'T' } as never)).error).toMatch(/key/)
+    expect(failure(tree(work(5 as never))).error).toMatch(/key/)
+    expect(count()).toBe(0)
+  })
+
   it('maps priority labels and normalizes files', () => {
     success(tree(work('A', { priority: 'high', files: ['./src//a.ts'] }), work('B', { priority: 2 }), work('C')))
     expect(byKey('A').priority).toBe(3)

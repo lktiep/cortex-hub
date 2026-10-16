@@ -309,6 +309,17 @@ describe('loadSelectionInput', () => {
 })
 
 describe('pickForPull', () => {
+  it('with taskId considers only that task', () => {
+    insertTask(testDb, { id: 'first', priority: 1 })
+    insertTask(testDb, { id: 'second', priority: 5 })
+    insertTask(testDb, { id: 'pinned', pinned_agent: 'someone-else' })
+
+    expect(pickForPull({ apiKeyOwner: 'o1', taskId: 'pinned' }, NOW)).toBeNull()
+    expect(pickForPull({ apiKeyOwner: 'o1', taskId: 'second' }, NOW)?.id).toBe('second')
+    expect(pickForPull({ apiKeyOwner: 'o1', taskId: 'second' }, NOW)).toBeNull()
+    expect(row('first').status).toBe('pending')
+  })
+
   it('returns the task pinned to the caller as accepted, never an executor-bound unpinned one', () => {
     insertTask(testDb, { id: 'agy', title: 'Agy work', executor: 'agy', priority: 1 })
     insertTask(testDb, { id: 'pin', task_key: 'P1', title: 'Pinned work', pinned_agent: 'claude-code', executor: 'claude', context: '{"note":"x"}' })

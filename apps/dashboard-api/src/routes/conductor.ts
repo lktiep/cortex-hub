@@ -16,6 +16,8 @@ export const conductorRouter = new Hono()
 
 const MESSAGE_MAX = 4000
 const SESSION_LIMIT = 50
+const LIST_LIMIT = 50
+const LIST_LIMIT_MAX = 1000
 const KINDS = ['work', 'gate', 'group'] as const
 /** TaskResult fields read as text downstream; a non-string value is dropped. */
 const RESULT_TEXT_FIELDS = ['prUrl', 'branch', 'commit', 'testOutput', 'error'] as const
@@ -260,12 +262,19 @@ conductorRouter.post('/auto-assign', async (c) => {
 // ── List tasks ──
 conductorRouter.get('/', (c) => {
   try {
-    const limit = Number(c.req.query('limit') ?? '50')
+    const root = c.req.query('root')
+    // a subtree is answered whole (up to the cap); a plain list pages by default
+    let limit = root ? LIST_LIMIT_MAX : LIST_LIMIT
+    const rawLimit = c.req.query('limit')
+    if (rawLimit !== undefined) {
+      const n = Number(rawLimit)
+      if (!Number.isInteger(n) || n < 1) return c.json({ error: 'limit must be a positive integer' }, 400)
+      limit = Math.min(n, LIST_LIMIT_MAX)
+    }
     const status = c.req.query('status')
     const assignedTo = c.req.query('assigned_to')
     const parentTaskId = c.req.query('parent_task_id')
     const projectId = c.req.query('projectId')
-    const root = c.req.query('root')
 
     let query = 'SELECT * FROM conductor_tasks'
     const conditions: string[] = []
@@ -417,9 +426,13 @@ function createProblem(b: CreateBody): string | null {
   if (b.executor !== undefined && b.executor !== null && !knownExecutor(b.executor)) return `unknown executor ${String(b.executor)}`
   const fallback = fallbackProblem(b.fallback)
   if (fallback !== null) return fallback
-  for (const name of ['model', 'effort', 'branch', 'assignedTo', 'assignTo'] as const) {
+  for (const name of ['description', 'projectId', 'parentTaskId', 'model', 'effort', 'branch', 'assignedTo', 'assignTo'] as const) {
     if (b[name] !== undefined && typeof b[name] !== 'string') return `${name} must be a string`
   }
+  if (b.metadata !== undefined && (typeof b.metadata !== 'object' || b.metadata === null || Array.isArray(b.metadata))) {
+    return 'metadata must be an object'
+  }
+  if (b.reviewRequired !== undefined && typeof b.reviewRequired !== 'boolean') return 'reviewRequired must be a boolean'
   for (const name of ['dependsOn', 'files', 'requiredCapabilities', 'notifyOnComplete'] as const) {
     const bad = stringListProblem(name, b[name])
     if (bad !== null) return bad
@@ -618,11 +631,76 @@ function notifyAfter(status: string, before: TaskRow, after: TaskRow, reviewerAg
   }
 }
 
+/** A stored result column as a TaskResult, read with the same rule as a REST `result`. */
+function storedResult(raw: string | null): TaskResult {
+  return toTaskResult(raw === null || raw === '' ? undefined : parseJson<unknown>(raw, raw))
+}
+
+/** Marks a task taken without a live worker, so the scheduler does not reclaim it as offline. */
+function markPull(id: string): void {
+  const current = getTask(id)
+  if (current) {
+    db.prepare('UPDATE conductor_tasks SET context = ? WHERE id = ?').run(JSON.stringify({ ...taskContext(current), pull: true }), id)
+  }
+}
+
+/**
+ * PUT accepted/in_progress. A task held by an assignee is accepted when still
+ * `assigned`, and `in_progress` then records progress (moving it on and
+ * extending the lease); `accepted` on a task already accepted or running
+ * changes nothing. A pending task is claimed for the calling key owner through
+ * pull mode, restricted to that task. Anything else is a 409.
+ */
+function acceptOrProgress(
+  existing: TaskRow, status: 'accepted' | 'in_progress', note: string | undefined, header: string | undefined,
+): { outcome: Outcome; noted: boolean } {
+  const id = existing.id
+  const held = existing.assigned_to_agent
+  let agent: string
+  let outcome: Outcome
+  let changed: boolean
+  if (held && (existing.status === 'assigned' || existing.status === 'accepted' || existing.status === 'in_progress')) {
+    agent = held
+    changed = existing.status === 'assigned'
+    outcome = changed ? acceptTask(id, agent) : { ok: true, task: existing }
+  } else if (existing.status === 'pending') {
+    if (header === undefined) {
+      return { outcome: { ok: false, status: 409, error: 'claiming a pending task needs the X-API-Key-Owner header' }, noted: false }
+    }
+    const picked = pickForPull({ apiKeyOwner: header, taskId: id })
+    if (picked === null) {
+      return {
+        outcome: {
+          ok: false, status: 409,
+          error: `${header} cannot claim this task: it is pinned elsewhere, routed by executor or capabilities, waiting on dependencies or files, or was declined`,
+        },
+        noted: false,
+      }
+    }
+    agent = picked.assigned_to_agent ?? header
+    changed = true
+    outcome = { ok: true, task: picked }
+  } else {
+    return { outcome: { ok: false, status: 409, error: `cannot move a ${existing.status} task to ${status}` }, noted: false }
+  }
+  if (!outcome.ok) return { outcome, noted: false }
+
+  let noted = false
+  if (status === 'in_progress') {
+    outcome = recordProgress(id, agent, note ?? 'started')
+    noted = true
+    changed = true
+  }
+  if (outcome.ok && changed && getByAgent(agent) === undefined) markPull(id)
+  return { outcome, noted }
+}
+
 // ── Update task ──
 // Status changes the lifecycle owns go through it: approved/rejected → review,
-// review/completed/failed → completion, in_progress on an assigned task →
-// accept and progress. Any other status is written as given. `message` is
-// always logged.
+// review/completed/failed → completion, cancelled → cancel, accepted/in_progress
+// → accept, claim and progress. pending/assigned/blocked belong to the
+// dispatcher (409). Any other status is written as given. `message` is always
+// logged.
 conductorRouter.put('/:id', async (c) => {
   try {
     const id = c.req.param('id')
@@ -631,6 +709,9 @@ conductorRouter.put('/:id', async (c) => {
     const { status, result, context, completedBy, reviewerAgent, message, parentTaskId } = body as UpdateBody
     if (context !== undefined && (typeof context !== 'object' || context === null || Array.isArray(context))) {
       return c.json({ error: 'context must be an object' }, 400)
+    }
+    if (completedBy !== undefined && typeof completedBy !== 'string') {
+      return c.json({ error: 'completedBy must be a string' }, 400)
     }
 
     const existing = getTask(id)
@@ -647,6 +728,9 @@ conductorRouter.put('/:id', async (c) => {
     // whether the lifecycle step already logged the message (as feedback or progress)
     let noted = false
 
+    if (status === 'pending' || status === 'assigned' || status === 'blocked') {
+      return c.json({ error: `status ${status} is not set through PUT: use /assign, /route or the dispatcher` }, 409)
+    }
     if (status === 'approved' || status === 'rejected') {
       if (status === 'rejected' && note === undefined) {
         return c.json({ error: 'a rejection needs the feedback in message' }, 400)
@@ -658,36 +742,37 @@ conductorRouter.put('/:id', async (c) => {
       outcome = reviewTask(id, req, header ? 'mcp' : 'dashboard')
       noted = note !== undefined
     } else if (status === 'review' || status === 'completed' || status === 'failed') {
-      outcome = completeTask(id, null, status, toTaskResult(result))
-    } else if (status === 'in_progress' && existing.status === 'assigned' && existing.assigned_to_agent) {
-      const agent = existing.assigned_to_agent
-      outcome = acceptTask(id, agent)
-      if (outcome.ok) {
-        outcome = recordProgress(id, agent, note ?? 'started')
-        noted = true
+      // without a result the stored one stands, so marking work done keeps the worker's summary
+      outcome = completeTask(id, null, status, result === undefined ? storedResult(existing.result) : toTaskResult(result))
+      const by = completedBy ?? header
+      if (outcome.ok && status === 'completed' && outcome.task.status === 'completed' && by !== undefined) {
+        db.prepare('UPDATE conductor_tasks SET completed_by = ? WHERE id = ?').run(by, id)
       }
+    } else if (status === 'cancelled') {
+      outcome = cancelTask(id, header ?? 'dashboard')
+    } else if (status === 'accepted' || status === 'in_progress') {
+      const step = acceptOrProgress(existing, status, note, header)
+      outcome = step.outcome
+      noted = step.noted
     }
 
     if (outcome !== null) {
       if (!outcome.ok) return refusal(c, outcome)
       applyFields(id, context, parentTaskId)
-      if (note !== undefined && !noted) logTask(id, completedBy ?? existing.assigned_to_agent, 'message', note)
+      if (note !== undefined && !noted) logTask(id, completedBy ?? existing.assigned_to_agent ?? header ?? null, 'message', note)
       const task = getTask(id) ?? outcome.task
       notifyAfter(status ?? '', existing, task, reviewerAgent)
       if (status === 'completed' && task.status === 'completed' && task.result) captureRecipe(task)
       return c.json({ task })
     }
 
-    // ── Any other status, or none: written as given ──
+    // ── Any other status (the strategy flow and the like), or none: written as given ──
     const updates: string[] = []
     const params: (string | number | null)[] = []
 
     if (status !== undefined) {
       updates.push('status = ?')
       params.push(status)
-      if (status === 'in_progress' && !existing.accepted_at) {
-        updates.push("accepted_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')")
-      }
     }
     if (result !== undefined) {
       updates.push('result = ?')
@@ -697,13 +782,9 @@ conductorRouter.put('/:id', async (c) => {
       updates.push('completed_by = ?')
       params.push(completedBy)
     }
-    // Taken without a connected worker (pull mode): the scheduler does not reclaim it as offline.
-    const assignee = existing.assigned_to_agent
-    const pull = (status === 'accepted' || status === 'in_progress') && (!assignee || getByAgent(assignee) === undefined)
-    if (context !== undefined || pull) {
-      const merged = { ...parseJson<Record<string, unknown>>(existing.context, {}), ...(context ?? {}), ...(pull ? { pull: true } : {}) }
+    if (context !== undefined) {
       updates.push('context = ?')
-      params.push(JSON.stringify(merged))
+      params.push(JSON.stringify({ ...taskContext(existing), ...context }))
     }
 
     // Allow re-parenting tasks (fix orphans)
@@ -716,7 +797,7 @@ conductorRouter.put('/:id', async (c) => {
       params.push(id)
       db.prepare(`UPDATE conductor_tasks SET ${updates.join(', ')} WHERE id = ?`).run(...params)
     }
-    if (note !== undefined) logTask(id, completedBy ?? assignee, 'message', note)
+    if (note !== undefined) logTask(id, completedBy ?? existing.assigned_to_agent, 'message', note)
 
     return c.json({ task: getTask(id) })
   } catch (error) {

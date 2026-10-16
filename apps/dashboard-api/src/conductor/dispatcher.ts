@@ -424,13 +424,14 @@ export function dispatch(now: number = Date.now()): Assignment[] {
  * A pin matches when it equals one of the caller's ids after normalizing both
  * (no substring match); an empty pin means unpinned. With `projectId` given,
  * only that project's tasks and project-less ones are eligible; without it
- * there is no project filter, as for a protocol-1 worker.
+ * there is no project filter, as for a protocol-1 worker. With `taskId` given,
+ * only that task is considered (claiming one task by id).
  */
 export function pickForPull(
-  identity: { agentId?: string; apiKeyOwner?: string; sessionAgent?: string; projectId?: string | null },
+  identity: { agentId?: string; apiKeyOwner?: string; sessionAgent?: string; projectId?: string | null; taskId?: string },
   now: number = Date.now(),
 ): TaskRow | null {
-  const { agentId, apiKeyOwner, sessionAgent, projectId } = identity
+  const { agentId, apiKeyOwner, sessionAgent, projectId, taskId } = identity
   const assignee = agentId ?? apiKeyOwner ?? sessionAgent
   if (!assignee) return null
   const callerIds = [agentId, apiKeyOwner, sessionAgent].map(normalizeIdentity).filter(Boolean)
@@ -442,6 +443,7 @@ export function pickForPull(
     const locks = lockedFiles()
     const nowIso = isoSeconds(now)
     for (const row of rows) {
+      if (taskId !== undefined && row.id !== taskId) continue
       if (projectId !== undefined && row.project_id !== null && row.project_id !== projectId) continue
       const pinned = row.pinned_agent || null
       const takes = pinned !== null

@@ -141,6 +141,13 @@ describe('POST /tree and GET /:id/tree', () => {
     expect((await call('POST', '/tree', '[1]')).status).toBe(400)
     expect((await call('POST', '/tree', 'not json')).status).toBe(400)
   })
+
+  it('refuses a task without a string title with 400, not 500', async () => {
+    const res = await call('POST', '/tree', { tasks: [{ key: 'A' }] })
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/title/)
+    expect(count()).toBe(0)
+  })
 })
 
 describe('POST /', () => {
@@ -220,6 +227,21 @@ describe('POST /', () => {
       { title: 'T', fallback: [{ executor: 'vim', model: null }] },
       { title: 'T', files: ['src/*.ts'] },
       { title: 'T', dependsOn: 'x' },
+    ]) {
+      const res = await call('POST', '', body)
+      expect(res.status, JSON.stringify(body)).toBe(400)
+    }
+    expect(count()).toBe(0)
+  })
+
+  it('refuses a mistyped description, projectId, parentTaskId, metadata or reviewRequired', async () => {
+    for (const body of [
+      { title: 'T', description: 5 },
+      { title: 'T', projectId: 5 },
+      { title: 'T', parentTaskId: 5 },
+      { title: 'T', metadata: 'x' },
+      { title: 'T', metadata: ['x'] },
+      { title: 'T', reviewRequired: 'yes' },
     ]) {
       const res = await call('POST', '', body)
       expect(res.status, JSON.stringify(body)).toBe(400)
@@ -347,6 +369,140 @@ describe('PUT /:id', () => {
     expect((await call('PUT', '/t1', { context: { more: 2 } })).status).toBe(200)
     expect(ctx('t1')).toEqual({ keep: 1, more: 2 })
   })
+
+  it('/pickup then PUT in_progress extends the lease and logs progress', async () => {
+    insertTask(testDb, { id: 't1', status: 'pending' })
+    expect((await call('POST', '/pickup', {}, { 'X-API-Key-Owner': 'o1' })).body.task?.id).toBe('t1')
+    const stale = isoSeconds(Date.now() + 60_000)
+    testDb.prepare('UPDATE conductor_tasks SET lease_expires_at = ? WHERE id = ?').run(stale, 't1')
+    const res = await call('PUT', '/t1', { status: 'in_progress', message: 'working' }, { 'X-API-Key-Owner': 'o1' })
+    expect(res.status).toBe(200)
+    expect(row('t1').status).toBe('in_progress')
+    expect(logs('t1', 'progress')).toEqual([{ agent_id: 'o1', message: 'working' }])
+    expect(Date.parse(row('t1').lease_expires_at ?? '')).toBeGreaterThan(Date.parse(stale))
+    expect(logs('t1', 'message')).toEqual([])
+  })
+
+  it('PUT accepted on a pending task claims it for the key owner', async () => {
+    insertTask(testDb, { id: 't1', status: 'pending' })
+    // claiming needs an identity
+    expect((await call('PUT', '/t1', { status: 'accepted' })).status).toBe(409)
+    expect(row('t1').status).toBe('pending')
+
+    const res = await call('PUT', '/t1', { status: 'accepted' }, { 'X-API-Key-Owner': 'o1' })
+    expect(res.status).toBe(200)
+    expect(res.body.task?.status).toBe('accepted')
+    expect(row('t1').assigned_to_agent).toBe('o1')
+    expect(logs('t1', 'accepted').map((l) => l.agent_id)).toEqual(['o1'])
+    expect(ctx('t1').pull).toBe(true)
+  })
+
+  it('PUT accepted on a task pinned to someone else → 409', async () => {
+    insertTask(testDb, { id: 't1', status: 'pending', pinned_agent: 'w9' })
+    const res = await call('PUT', '/t1', { status: 'accepted' }, { 'X-API-Key-Owner': 'o1' })
+    expect(res.status).toBe(409)
+    expect(row('t1').status).toBe('pending')
+    expect(row('t1').assigned_to_agent).toBeNull()
+
+    insertTask(testDb, { id: 't2', status: 'pending', executor: 'codex' })
+    expect((await call('PUT', '/t2', { status: 'in_progress' }, { 'X-API-Key-Owner': 'o1' })).status).toBe(409)
+    expect(row('t2').status).toBe('pending')
+  })
+
+  it('in_progress on an in_progress task records progress; accepted on it is a no-op', async () => {
+    insertTask(testDb, { id: 't1', status: 'in_progress', assigned_to_agent: 'w1' })
+    expect((await call('PUT', '/t1', { status: 'in_progress', message: 'more' })).status).toBe(200)
+    expect(logs('t1', 'progress')).toEqual([{ agent_id: 'w1', message: 'more' }])
+    const res = await call('PUT', '/t1', { status: 'accepted' })
+    expect(res.status).toBe(200)
+    expect(res.body.task?.status).toBe('in_progress')
+    expect(row('t1').status).toBe('in_progress')
+  })
+
+  it('marks context.pull on in_progress only when the assignee has no live connection', async () => {
+    insertTask(testDb, { id: 't1', status: 'assigned', assigned_to_agent: 'offline' })
+    await call('PUT', '/t1', { status: 'in_progress' })
+    expect(row('t1').status).toBe('in_progress')
+    expect(ctx('t1').pull).toBe(true)
+
+    connect('w1')
+    insertTask(testDb, { id: 't2', status: 'assigned', assigned_to_agent: 'w1' })
+    await call('PUT', '/t2', { status: 'in_progress' })
+    expect(row('t2').status).toBe('in_progress')
+    expect(ctx('t2').pull).toBeUndefined()
+  })
+
+  it('PUT pending on an in_progress task → 409, unchanged', async () => {
+    insertTask(testDb, { id: 't1', status: 'in_progress', assigned_to_agent: 'w1' })
+    for (const status of ['pending', 'assigned', 'blocked']) {
+      const res = await call('PUT', '/t1', { status, message: 'x' })
+      expect(res.status, status).toBe(409)
+      expect(res.body.error).toContain('use /assign, /route or the dispatcher')
+    }
+    expect(row('t1').status).toBe('in_progress')
+    expect(row('t1').assigned_to_agent).toBe('w1')
+    expect(logs('t1', 'message')).toEqual([])
+  })
+
+  it('PUT completed without result keeps the stored result', async () => {
+    insertTask(testDb, { id: 't1', status: 'review', assigned_to_agent: 'w1', result: '{"summary":"worker summary","prUrl":"https://x/pr/1"}' })
+    const res = await call('PUT', '/t1', { status: 'completed' })
+    expect(res.status).toBe(200)
+    expect(row('t1').status).toBe('completed')
+    expect(JSON.parse(row('t1').result ?? 'null')).toEqual({ summary: 'worker summary', prUrl: 'https://x/pr/1' })
+
+    // a legacy plain-text result is wrapped as the summary
+    insertTask(testDb, { id: 't2', status: 'in_progress', assigned_to_agent: 'w1', result: 'plain text' })
+    await call('PUT', '/t2', { status: 'completed' })
+    expect(JSON.parse(row('t2').result ?? 'null')).toEqual({ summary: 'plain text' })
+  })
+
+  it('a completion records completedBy, else the key owner, as completed_by', async () => {
+    insertTask(testDb, { id: 't1', status: 'in_progress', assigned_to_agent: 'w1' })
+    await call('PUT', '/t1', { status: 'completed', result: 'r', completedBy: 'lead' }, { 'X-API-Key-Owner': 'o1' })
+    expect(row('t1').completed_by).toBe('lead')
+
+    insertTask(testDb, { id: 't2', status: 'in_progress', assigned_to_agent: 'w1' })
+    await call('PUT', '/t2', { status: 'completed', result: 'r' }, { 'X-API-Key-Owner': 'o1' })
+    expect(row('t2').completed_by).toBe('o1')
+
+    insertTask(testDb, { id: 't3', status: 'in_progress', assigned_to_agent: 'w1' })
+    await call('PUT', '/t3', { status: 'completed', result: 'r' })
+    expect(row('t3').completed_by).toBe('w1')
+  })
+
+  it('cancelled goes through the lifecycle and revokes an active task', async () => {
+    const ws = connect('w1')
+    insertTask(testDb, { id: 't1', status: 'in_progress', assigned_to_agent: 'w1' })
+    const res = await call('PUT', '/t1', { status: 'cancelled', message: 'not needed' })
+    expect(res.status).toBe(200)
+    expect(row('t1').status).toBe('cancelled')
+    expect(sentOf(ws, 'task.revoked')).toEqual([{ type: 'task.revoked', taskId: 't1', reason: 'cancelled' }])
+    expect(logs('t1', 'message').map((l) => l.message)).toEqual(['not needed'])
+
+    insertTask(testDb, { id: 't2', status: 'completed' })
+    expect((await call('PUT', '/t2', { status: 'cancelled' })).status).toBe(409)
+  })
+
+  it('sends task.review_requested to the reviewer and the parent creator, then task.approved', async () => {
+    const lead = connect('lead')
+    const rev = connect('rev')
+    insertTask(testDb, { id: 'p', kind: 'group', created_by_agent: 'lead' })
+    insertTask(testDb, { id: 't1', status: 'in_progress', assigned_to_agent: 'w1', parent_task_id: 'p' })
+
+    await call('PUT', '/t1', { status: 'review', result: 'r', reviewerAgent: 'rev' })
+    expect(sentOf(rev, 'task.review_requested')).toEqual([
+      expect.objectContaining({ taskId: 't1', title: 't1', submittedBy: 'w1' }),
+    ])
+    expect(sentOf(lead, 'task.review_requested')).toEqual([
+      expect.objectContaining({ taskId: 't1', title: 't1', parentTaskId: 'p', submittedBy: 'w1' }),
+    ])
+
+    await call('PUT', '/t1', { status: 'approved' })
+    expect(sentOf(lead, 'task.approved')).toEqual([
+      expect.objectContaining({ taskId: 't1', title: 't1', parentTaskId: 'p' }),
+    ])
+  })
 })
 
 describe('GET /', () => {
@@ -373,6 +529,23 @@ describe('GET /', () => {
   it('parent_task_id=none returns only top-level tasks', async () => {
     expect(ids((await call('GET', '?parent_task_id=none')).body.tasks)).toEqual(['a', 'b', 'c', 'd'])
     expect(ids((await call('GET', '?parent_task_id=a')).body.tasks)).toEqual(['a1'])
+  })
+
+  it('root ignores the default limit; an explicit limit is honoured up to 1000', async () => {
+    const add = (from: number, n: number): void => {
+      testDb.transaction(() => {
+        for (let i = from; i < from + n; i++) insertTask(testDb, { id: `r${i}`, parent_task_id: 'a2' })
+      })()
+    }
+    add(0, 60)
+    expect((await call('GET', '?root=a')).body.tasks).toHaveLength(63)
+    expect((await call('GET', '?root=a&limit=10')).body.tasks).toHaveLength(10)
+    expect((await call('GET', '')).body.tasks).toHaveLength(50)
+
+    add(60, 1000)
+    expect((await call('GET', '?limit=5000')).body.tasks).toHaveLength(1000)
+    expect((await call('GET', '?root=a')).body.tasks).toHaveLength(1000)
+    expect((await call('GET', '?limit=abc')).status).toBe(400)
   })
 })
 
