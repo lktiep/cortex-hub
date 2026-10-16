@@ -9,7 +9,7 @@ import {
   acceptTask, cancelTask, completeTask, onCompleted, recordProgress, rerouteTask, reviewTask, type Outcome,
 } from '../conductor/lifecycle.js'
 import { getByAgent } from '../conductor/registry.js'
-import { ACTIVE_STATUSES, getTask, logTask, parseJson, stringList, taskContext, type TaskRow } from '../conductor/rows.js'
+import { ACTIVE_STATUSES, getTask, logTask, parseJson, stringList, taskContext, toTaskResult, type TaskRow } from '../conductor/rows.js'
 import { createTree, fallbackProblem, knownExecutor, priorityValue, stringListProblem } from '../conductor/tree.js'
 
 export const conductorRouter = new Hono()
@@ -19,8 +19,6 @@ const SESSION_LIMIT = 50
 const LIST_LIMIT = 50
 const LIST_LIMIT_MAX = 1000
 const KINDS = ['work', 'gate', 'group'] as const
-/** TaskResult fields read as text downstream; a non-string value is dropped. */
-const RESULT_TEXT_FIELDS = ['prUrl', 'branch', 'commit', 'testOutput', 'error'] as const
 
 // ── Helpers ──
 
@@ -51,25 +49,6 @@ function refusal(c: Context, r: { status: 400 | 403 | 404 | 409; error: string; 
 
 function isActiveStatus(status: string): boolean {
   return (ACTIVE_STATUSES as readonly string[]).includes(status)
-}
-
-/**
- * A REST `result` as a TaskResult: an object keeps its fields (non-string text
- * fields dropped) and gets `summary: ''` when it has none; anything else
- * becomes the summary.
- */
-function toTaskResult(result: unknown): TaskResult {
-  if (result === undefined || result === null) return { summary: '' }
-  if (typeof result !== 'object') return { summary: String(result) }
-  if (Array.isArray(result)) return { summary: JSON.stringify(result) }
-  const fields: Record<string, unknown> = { ...result }
-  for (const f of RESULT_TEXT_FIELDS) {
-    if (fields[f] !== undefined && typeof fields[f] !== 'string') delete fields[f]
-  }
-  const s = fields.summary
-  fields.summary = typeof s === 'string' ? s : s === undefined || s === null ? '' : JSON.stringify(s)
-  // summary is a string and every text field a string or absent, as TaskResult requires
-  return fields as unknown as TaskResult
 }
 
 /** Active sessions, the most recently active first. */

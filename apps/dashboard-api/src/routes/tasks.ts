@@ -1,11 +1,11 @@
 import { Hono, type Context } from 'hono'
 import { db } from '../db/client.js'
-import type { ReviewRequest, RoutePatch, TaskResult } from '@cortex/shared-types'
+import type { ReviewRequest, RoutePatch } from '@cortex/shared-types'
 import { dispatch } from '../conductor/dispatcher.js'
 import {
   acceptTask, cancelTask, completeTask, recordProgress, rerouteTask, reviewTask, revokeTask, type Outcome,
 } from '../conductor/lifecycle.js'
-import { ACTIVE_STATUSES, getTask, logTask, parseJson, type TaskRow } from '../conductor/rows.js'
+import { ACTIVE_STATUSES, getTask, logTask, parseJson, toTaskResult, type TaskRow } from '../conductor/rows.js'
 import { priorityValue } from '../conductor/tree.js'
 
 export const tasksRouter = new Hono()
@@ -18,6 +18,14 @@ const USE_ASSIGN = 'use /assign or the dispatcher'
 const COMPLETING = ['completed', 'failed', 'review'] as const
 type Completing = (typeof COMPLETING)[number]
 
+function allCompleted(ids: string[]): boolean {
+  if (ids.length === 0) return true
+  const done = db.prepare(
+    `SELECT COUNT(*) AS cnt FROM conductor_tasks WHERE id IN (${ids.map(() => '?').join(',')}) AND status = 'completed'`,
+  ).get(...ids) as { cnt: number }
+  return done.cnt === ids.length
+}
+
 /** A lifecycle refusal as its HTTP answer. */
 function refusal(c: Context, r: { status: 400 | 403 | 404 | 409; error: string; cycle?: string[] }) {
   return c.json(r.cycle === undefined ? { error: r.error } : { error: r.error, cycle: r.cycle }, r.status)
@@ -27,21 +35,16 @@ function isActive(status: string): boolean {
   return (ACTIVE_STATUSES as readonly string[]).includes(status)
 }
 
-/** A request `result` (or the stored column) as a TaskResult; anything but an object becomes the summary. */
-function toTaskResult(result: unknown): TaskResult {
-  if (result === undefined || result === null || result === '') return { summary: '' }
-  if (typeof result !== 'object') return { summary: String(result) }
-  if (Array.isArray(result)) return { summary: JSON.stringify(result) }
-  const fields: Record<string, unknown> = { ...result }
-  const s = fields.summary
-  fields.summary = typeof s === 'string' ? s : s === undefined || s === null ? '' : JSON.stringify(s)
-  return fields as unknown as TaskResult // summary is a string, as TaskResult requires
+/** The refusal for PATCH accepted/in_progress on a row that cannot take it, or null. */
+function acceptRefusal(row: TaskRow): Outcome | null {
+  return row.assigned_to_agent && isActive(row.status) ? null : { ok: false, status: 409, error: USE_ASSIGN }
 }
 
 /** PATCH accepted/in_progress: the assignee accepts (when `assigned`) and in_progress records progress. */
 function acceptOrStart(row: TaskRow, status: 'accepted' | 'in_progress'): Outcome {
-  const agent = row.assigned_to_agent
-  if (!agent || !isActive(row.status)) return { ok: false, status: 409, error: USE_ASSIGN }
+  const refused = acceptRefusal(row)
+  if (refused) return refused
+  const agent = row.assigned_to_agent as string // acceptRefusal ensured an assignee
   let outcome: Outcome = { ok: true, task: row }
   if (row.status === 'assigned') outcome = acceptTask(row.id, agent)
   if (outcome.ok && status === 'in_progress') outcome = recordProgress(row.id, agent, 'started')
@@ -128,6 +131,9 @@ tasksRouter.post('/', async (c) => {
     }
 
     const id = generateTaskId()
+    const deps = [...new Set(dependsOn ?? [])]
+    // 'blocked' until every dependency completes
+    const initialStatus = allCompleted(deps) ? 'pending' : 'blocked'
     const owner = c.req.header('X-API-Key-Owner') || null
 
     db.prepare(`
@@ -135,7 +141,7 @@ tasksRouter.post('/', async (c) => {
         (id, title, description, project_id, parent_task_id, created_by_agent,
          pinned_agent, status, priority, required_capabilities,
          depends_on, notify_on_complete, context, api_key_owner)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       title,
@@ -144,9 +150,10 @@ tasksRouter.post('/', async (c) => {
       parentTaskId ?? null,
       createdByAgent ?? null,
       assignTo || null,
+      initialStatus,
       priorityInt,
       JSON.stringify(requiredCapabilities ?? []),
-      JSON.stringify(dependsOn ?? []),
+      JSON.stringify(deps),
       JSON.stringify(notifyOnComplete ?? []),
       JSON.stringify(context ?? {}),
       owner,
@@ -272,6 +279,10 @@ tasksRouter.patch('/:id', async (c) => {
     }
     const known = ['accepted', 'in_progress', 'approved', 'rejected', 'cancelled', ...COMPLETING]
     if (status !== undefined && !known.includes(status)) return c.json({ error: `unsupported status ${status}` }, 400)
+    if (status === 'accepted' || status === 'in_progress') {
+      const refused = acceptRefusal(existing)
+      if (refused && !refused.ok) return refusal(c, refused)
+    }
     const pinned = body.assignedToAgent
     if ('assignedToAgent' in body && pinned !== null && typeof pinned !== 'string') {
       return c.json({ error: 'assignedToAgent must be a string or null' }, 400)

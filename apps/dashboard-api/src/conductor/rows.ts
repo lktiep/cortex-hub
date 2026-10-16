@@ -1,5 +1,5 @@
 import { db } from '../db/client.js'
-import type { TaskReview, TaskHandoff } from '@cortex/shared-types'
+import type { TaskReview, TaskHandoff, TaskResult } from '@cortex/shared-types'
 
 export interface TaskRow {
   id: string
@@ -92,4 +92,26 @@ export function logTask(taskId: string, agentId: string | null, action: string, 
 
 export function taskLabel(row: TaskRow): string {
   return row.task_key ?? row.id
+}
+
+/** TaskResult fields read as text downstream; a non-string value is dropped. */
+const RESULT_TEXT_FIELDS = ['prUrl', 'branch', 'commit', 'testOutput', 'error'] as const
+
+/**
+ * A REST `result` as a TaskResult: an object keeps its fields (non-string text
+ * fields dropped) and gets `summary: ''` when it has none; anything else
+ * becomes the summary.
+ */
+export function toTaskResult(result: unknown): TaskResult {
+  if (result === undefined || result === null) return { summary: '' }
+  if (typeof result !== 'object') return { summary: String(result) }
+  if (Array.isArray(result)) return { summary: JSON.stringify(result) }
+  const fields: Record<string, unknown> = { ...result }
+  for (const f of RESULT_TEXT_FIELDS) {
+    if (fields[f] !== undefined && typeof fields[f] !== 'string') delete fields[f]
+  }
+  const s = fields.summary
+  fields.summary = typeof s === 'string' ? s : s === undefined || s === null ? '' : JSON.stringify(s)
+  // summary is a string and every text field a string or absent, as TaskResult requires
+  return fields as unknown as TaskResult
 }

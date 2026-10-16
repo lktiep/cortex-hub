@@ -42,6 +42,10 @@ function row(id: string): TaskRow | undefined {
   return testDb.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(id) as TaskRow | undefined
 }
 
+function logCount(taskId: string, action: string): number {
+  return (testDb.prepare('SELECT COUNT(*) AS n FROM conductor_task_logs WHERE task_id = ? AND action = ?').get(taskId, action) as { n: number }).n
+}
+
 function sentOf(ws: FakeSocket, type: string): { type: string; taskId?: string; reason?: string }[] {
   return (ws.sent as { type: string; taskId?: string; reason?: string }[]).filter((m) => m.type === type)
 }
@@ -78,6 +82,15 @@ describe('POST /', () => {
     expect(res.status).toBe(201)
     expect(res.body.task?.status).toBe('pending')
     expect(res.body.task?.pinned_agent).toBe('ghost')
+  })
+
+  it('inserts blocked while a dependency is uncompleted, pending once all are completed', async () => {
+    insertTask(testDb, { id: 'open', status: 'pending' })
+    insertTask(testDb, { id: 'done', status: 'completed' })
+    const blocked = await call('POST', '', { title: 'B', dependsOn: ['open', 'done'] })
+    expect(blocked.body.task?.status).toBe('blocked')
+    const ready = await call('POST', '', { title: 'R', dependsOn: ['done'] })
+    expect(ready.body.task?.status).toBe('pending')
   })
 
   it('refuses an unknown priority label with 400', async () => {
@@ -177,6 +190,52 @@ describe('PATCH /:id', () => {
     expect(res.status).toBe(200)
     expect(row('t1')?.title).toBe('N')
     expect(row('t1')?.priority).toBe(8)
+  })
+})
+
+describe('ruling paths', () => {
+  it('cancels an active task through PATCH status, revoking the worker', async () => {
+    const w1 = connect('w1')
+    insertTask(testDb, { id: 't1', status: 'assigned', assigned_to_agent: 'w1' })
+    expect((await call('PATCH', '/t1', { status: 'cancelled' })).status).toBe(200)
+    expect(sentOf(w1, 'task.revoked')).toHaveLength(1)
+    expect(row('t1')?.status).toBe('cancelled')
+  })
+
+  it('in_progress on an assigned row accepts it and logs progress', async () => {
+    insertTask(testDb, { id: 't1', status: 'assigned', assigned_to_agent: 'w1' })
+    expect((await call('PATCH', '/t1', { status: 'in_progress' })).status).toBe(200)
+    expect(row('t1')?.status).toBe('in_progress')
+    expect(row('t1')?.accepted_at).not.toBeNull()
+    expect(logCount('t1', 'progress')).toBe(1)
+  })
+
+  it('in_progress on an accepted row does not re-accept', async () => {
+    insertTask(testDb, { id: 't1', status: 'accepted', assigned_to_agent: 'w1', accepted_at: '2026-01-01T00:00:00Z' })
+    expect((await call('PATCH', '/t1', { status: 'in_progress' })).status).toBe(200)
+    expect(row('t1')?.status).toBe('in_progress')
+    expect(row('t1')?.accepted_at).toBe('2026-01-01T00:00:00Z')
+    expect(logCount('t1', 'progress')).toBe(1)
+  })
+
+  it.each(['in_progress', 'accepted'])('%s without an assignee is 409 and writes nothing', async (status) => {
+    insertTask(testDb, { id: 't1', status: 'pending', title: 'old' })
+    const res = await call('PATCH', '/t1', { status, title: 'changed' })
+    expect(res.status).toBe(409)
+    expect(row('t1')?.title).toBe('old')
+    expect(row('t1')?.status).toBe('pending')
+  })
+
+  it('refuses an unsupported status with 400 and leaves the row', async () => {
+    insertTask(testDb, { id: 't1', status: 'pending' })
+    expect((await call('PATCH', '/t1', { status: 'blocked' })).status).toBe(400)
+    expect(row('t1')?.status).toBe('pending')
+  })
+
+  it('rejection without feedback writes no other field', async () => {
+    insertTask(testDb, { id: 't1', status: 'review', title: 'old' })
+    expect((await call('PATCH', '/t1', { status: 'rejected', title: 'changed' })).status).toBe(400)
+    expect(row('t1')?.title).toBe('old')
   })
 })
 
