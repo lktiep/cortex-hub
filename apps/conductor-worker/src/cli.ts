@@ -15,14 +15,17 @@ import {
   statusText,
   stopWorker,
 } from './commands/daemon.js';
+import { runDoctor, formatChecks } from './commands/doctor.js';
+import type { DoctorContext } from './commands/doctor.js';
 import { updateBundle } from './commands/update.js';
 import { detectHubBase, detectHubConfig } from './config.js';
 import { createAdapters, describeEngines } from './engines/index.js';
+import { installHint } from './engines/install.js';
 import type { EngineAdapter } from './engines/types.js';
 import { createGh, originUrl } from './git.js';
 import { HubClient } from './hub-client.js';
 import type { FatalReason } from './hub-client.js';
-import { createLogger } from './logger.js';
+import { createLogger, redact } from './logger.js';
 import type { Logger } from './logger.js';
 import { defaultAgentId, workerPaths } from './paths.js';
 import { readState } from './state.js';
@@ -55,16 +58,6 @@ const RUN_COMMANDS = ['start', 'stop', 'status', 'logs', 'doctor', 'update', 'hu
 type RunCommand = (typeof RUN_COMMANDS)[number];
 const isRunCommand = (s: string): s is RunCommand => (RUN_COMMANDS as readonly string[]).includes(s);
 const isExecutor = (s: string): s is Executor => (EXECUTORS as readonly string[]).includes(s);
-
-const INSTALL_HINTS: Record<Executor, string> = {
-  agy:
-    process.platform === 'win32'
-      ? 'the PowerShell installer from https://antigravity.google/docs/getting-started?tab=cli'
-      : 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
-  claude: 'npm install -g @anthropic-ai/claude-code',
-  codex: 'npm install -g @openai/codex',
-  gemini: 'npm install -g @google/gemini-cli',
-};
 
 /** A comma list, trimmed, without empty items or repeats. */
 function commaList(raw: string): string[] {
@@ -329,7 +322,7 @@ export async function startForeground(args: CliArgs, opts: StartOptions = {}): P
   }
   if (described.available.length === 0) {
     logger.error(`no engine found (looked for ${names.join(', ')}). Install one and log in to it once:`);
-    for (const n of names) logger.error(`  ${n}: ${INSTALL_HINTS[n]}`);
+    for (const n of names) logger.error(`  ${n}: ${installHint(n, process.platform)}`);
     release();
     return 1;
   }
@@ -442,6 +435,8 @@ export interface MainOptions extends StartOptions {
   fetch?: typeof fetch;
   /** The script `start -d` re-runs and `update` replaces; `process.argv[1]` by default. */
   scriptPath?: string;
+  /** Replaces parts of the doctor context (tests inject fetch, gh, engines and the socket). */
+  doctor?: Partial<DoctorContext>;
 }
 
 export async function main(argv: string[], opts: MainOptions = {}): Promise<number> {
@@ -469,9 +464,24 @@ export async function main(argv: string[], opts: MainOptions = {}): Promise<numb
       case 'version':
         console.log(WORKER_VERSION);
         return 0;
-      case 'doctor':
-        console.error('doctor: not implemented yet');
-        return 1;
+      case 'doctor': {
+        const repo = path.resolve(cwd, args.repo ?? '.');
+        const checks = await runDoctor({
+          nodeVersion: process.version,
+          repo,
+          homeDir,
+          env,
+          flags: { hub: args.hub, apiKey: args.apiKey, agentId: agentId() },
+          engines: args.engines ?? [...DEFAULT_ENGINES],
+          probe: args.probe,
+          ...opts.doctor,
+        });
+        const hub = detectHubConfig({ flags: { hub: args.hub, apiKey: args.apiKey }, env, homeDir, repoPath: repo });
+        const secrets = 'error' in hub ? [] : [hub.apiKey];
+        if (args.apiKey !== undefined) secrets.push(args.apiKey);
+        console.log(redact(formatChecks(checks), secrets));
+        return checks.some((c) => c.required && !c.ok) ? 1 : 0;
+      }
       case 'hub-url': {
         const hub = hubBase();
         if ('error' in hub) {

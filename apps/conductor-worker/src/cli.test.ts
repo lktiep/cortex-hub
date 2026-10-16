@@ -248,10 +248,18 @@ describe('main', () => {
     expect(String(err.mock.calls[0]?.[0])).toMatch(/--hub/);
   });
 
-  it('doctor is not implemented yet', async () => {
-    const { err } = quiet();
-    expect(await main(['doctor', '--probe'], { homeDir: home, env: {} })).toBe(1);
-    expect(err).toHaveBeenCalledWith('doctor: not implemented yet');
+  it('doctor prints the checks and exits 1 when a required one fails', async () => {
+    const { log } = quiet();
+    const code = await main(['doctor'], {
+      homeDir: home,
+      env: {},
+      cwd: home,
+      doctor: { adapters: [], engines: [], gitVersion: async () => 'git version x', gh: async () => ({ code: 0, stdout: '', stderr: '' }) },
+    });
+    expect(code).toBe(1);
+    const out = String(log.mock.calls[0]?.[0]);
+    expect(out).toContain('✗ hub config');
+    expect(out).toContain('✓ git — git version x');
   });
 
   it('help gives the stop grace period from the constant stop uses', async () => {
