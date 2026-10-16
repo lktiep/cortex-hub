@@ -225,7 +225,8 @@ The Cortex extension finds the hub in this order: the `cortexHub.hubUrl` setting
 default), then the `CORTEX_HUB_WS_URL` or `CORTEX_HUB_URL` env var, then the MCP config it
 detects (Claude Code, `.mcp.json`, Gemini, Antigravity, Cursor, Windsurf, VS Code). It does not
 read `~/.codex/config.toml`. At activation it logs `hubSource` (`setting`, `env:<NAME>`, a config
-path or `default`) so you can see which one won. It never logs the key.
+path or `default`) so you can see which one won. The key appears only as `***` plus its last 8
+characters.
 
 ## 6. Install a worker
 
