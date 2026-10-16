@@ -90,6 +90,7 @@
     "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "pnpm build --watch",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "lint": "eslint src/",
     "package": "npx @vscode/vsce package --no-dependencies",
     "release": "npm version patch && npm run build && npm run package",
@@ -100,7 +101,8 @@
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.5.0",
     "esbuild": "^0.21.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   },
   "dependencies": {
     "antigravity-sdk": "^1.7.0",
