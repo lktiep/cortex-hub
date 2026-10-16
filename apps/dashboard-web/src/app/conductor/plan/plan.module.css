@@ -91,3 +91,14 @@
 .routeRow b { text-align: right; }
 .routeBar { height: 6px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden; }
 .routeBar span { display: block; height: 100%; }
+
+/* ── Task actions (drawer) ── */
+.actions { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.actionRow { display: flex; gap: 8px; }
+.actionForm { display: flex; flex-direction: column; gap: 6px; }
+.actionLabel { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); }
+.actionInput { background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; font-family: inherit; }
+.actionBtn { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+.actionBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.actionError { color: var(--status-error); font-size: 12px; }
+.reviewLine { font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); }

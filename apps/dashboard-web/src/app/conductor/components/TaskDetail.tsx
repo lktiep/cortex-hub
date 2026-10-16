@@ -55,6 +55,7 @@ export function TaskDetail({
   onDelete,
   onMarkDone,
   onNewTaskFromOutcome,
+  actions,
 }: {
   task: ConductorTask
   onClose: () => void
@@ -62,6 +63,7 @@ export function TaskDetail({
   onDelete: () => void
   onMarkDone?: () => void
   onNewTaskFromOutcome?: (task: ConductorTask) => void
+  actions?: React.ReactNode
 }) {
   const isRunning = task.status === 'in_progress' || task.status === 'accepted' || task.status === 'analyzing'
   const isActionable = task.status === 'pending' || task.status === 'assigned' || task.status === 'accepted' || task.status === 'in_progress' || task.status === 'analyzing' || task.status === 'review'
@@ -292,6 +294,8 @@ export function TaskDetail({
             <LiveOutput taskId={task.id} isActive={isRunning} />
           </Section>
         </div>
+
+        {actions}
 
         {/* Sticky ghost action buttons */}
         <div className={styles.detailActions}>
