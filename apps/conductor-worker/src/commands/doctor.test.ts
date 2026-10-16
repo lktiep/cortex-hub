@@ -6,12 +6,13 @@ import path from 'node:path';
 import type { Executor } from '@cortex/shared-types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocketServer } from 'ws';
+import type { WebSocket } from 'ws';
 import type { Classification, EngineAdapter, RunInput } from '../engines/types.js';
 import type { GhRun } from '../git.js';
 import { workerPaths } from '../paths.js';
 import { writeState } from '../state.js';
 import { WORKER_VERSION } from '../version.js';
-import { defaultWsConnect, formatChecks, runDoctor } from './doctor.js';
+import { formatChecks, runDoctor } from './doctor.js';
 import type { Check, DoctorContext } from './doctor.js';
 
 const KEY = 'sk-doctor-secret-123';
@@ -169,6 +170,7 @@ describe('runDoctor', () => {
     wss.on('connection', (ws, req) => {
       opened++;
       expect(req.headers.authorization).toBe(`Bearer ${KEY}`);
+      ws.send('{"type":"welcome"}');
       ws.on('message', (d) => messages.push(String(d)));
       ws.on('close', (code) => {
         closeCode = code;
@@ -189,14 +191,78 @@ describe('runDoctor', () => {
     }
   });
 
-  it('defaultWsConnect reports a refused connection without the url', async () => {
+  async function withServer<T>(
+    onConn: (ws: WebSocket) => void,
+    body: (hubUrl: string) => Promise<T>,
+  ): Promise<T> {
     const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    wss.on('connection', onConn);
     await new Promise<void>((r) => wss.once('listening', () => r()));
-    const port = (wss.address() as AddressInfo).port;
-    await new Promise<void>((r) => wss.close(() => r()));
-    const r = await defaultWsConnect(`ws://127.0.0.1:${port}/ws?apiKey=${KEY}`, KEY);
-    expect(typeof r).toBe('string');
-    expect(String(r)).not.toContain(KEY);
+    try {
+      return await body(`http://127.0.0.1:${(wss.address() as AddressInfo).port}`);
+    } finally {
+      await new Promise<void>((r) => wss.close(() => r()));
+    }
+  }
+  const real = (hubUrl: string): Partial<DoctorContext> => ({
+    wsConnect: undefined,
+    env: { CORTEX_HUB_URL: hubUrl },
+    flags: { apiKey: KEY, agentId: 'a' },
+  });
+
+  it('a close before the welcome fails the handshake with its code', async () => {
+    await withServer(
+      (ws) => ws.close(4003, 'forbidden'),
+      async (hubUrl) => {
+        const checks = await runDoctor(ctx(real(hubUrl)));
+        const h = byName(checks, 'handshake');
+        expect(h.ok).toBe(false);
+        expect(h.detail).toContain('closed 4003');
+        expect(JSON.stringify(checks)).not.toContain(KEY);
+      },
+    );
+  });
+
+  it('a welcome passes the handshake; doctor closes with 1000 and sends nothing', async () => {
+    const messages: string[] = [];
+    let closeCode = 0;
+    await withServer(
+      (ws) => {
+        ws.on('message', (d) => messages.push(String(d)));
+        ws.on('close', (c) => {
+          closeCode = c;
+        });
+        ws.send('{"type":"welcome"}');
+      },
+      async (hubUrl) => {
+        expect(byName(await runDoctor(ctx(real(hubUrl))), 'handshake').ok).toBe(true);
+        await vi.waitFor(() => expect(closeCode).toBe(1000));
+        expect(messages).toEqual([]);
+      },
+    );
+  });
+
+  it('another first message fails the handshake without echoing it', async () => {
+    await withServer(
+      (ws) => ws.send(`{"type":"nope","secret":"${KEY}"}`),
+      async (hubUrl) => {
+        const checks = await runDoctor(ctx(real(hubUrl)));
+        expect(byName(checks, 'handshake').detail).toContain('unexpected first message');
+        expect(JSON.stringify(checks)).not.toContain(KEY);
+      },
+    );
+  });
+
+  it('keeps the key out of a close reason', async () => {
+    await withServer(
+      (ws) => ws.close(4003, `bad ${KEY}`),
+      async (hubUrl) => {
+        const checks = await runDoctor(ctx(real(hubUrl)));
+        expect(byName(checks, 'handshake').ok).toBe(false);
+        expect(JSON.stringify(checks)).not.toContain(KEY);
+        expect(formatChecks(checks)).not.toContain(KEY);
+      },
+    );
   });
 
   it('warns when an engine MCP config points at another hub', async () => {
@@ -241,7 +307,11 @@ describe('runDoctor', () => {
   });
 
   it('skips checks that depend on a missing hub config, keeping order', async () => {
-    const checks = await runDoctor(ctx({ flags: { agentId: 'a' } }));
+    const fetchImpl = vi.fn(okFetch());
+    const wsConnect = vi.fn(async () => 'open' as const);
+    const checks = await runDoctor(ctx({ flags: { agentId: 'a' }, fetchImpl, wsConnect }));
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(wsConnect).not.toHaveBeenCalled();
     expect(byName(checks, 'hub config')).toMatchObject({ ok: false, required: true });
     for (const n of ['hub health', 'worker version', 'handshake']) {
       expect(byName(checks, n).ok).toBe(false);
@@ -291,6 +361,31 @@ describe('runDoctor', () => {
     expect(byName(err, 'engine claude').detail).toContain('not logged in');
     expect(JSON.stringify(err)).not.toContain(KEY);
     expect(byName(err, 'engines').ok).toBe(false);
+  });
+
+  it('a timed-out probe is unusable whatever classify says', async () => {
+    const run = vi.fn(async (_input: RunInput) => ({ exitCode: 0, stdout: 'OK', stderr: '', timedOut: true, aborted: false }));
+    const checks = await runDoctor(ctx({ probe: true, adapters: [adapter('claude', { run })] }));
+    expect(byName(checks, 'engine claude')).toMatchObject({ ok: false });
+    expect(byName(checks, 'engine claude').detail).toContain('probe timed out after 120 s');
+    expect(byName(checks, 'engines').ok).toBe(false);
+  });
+
+  it('does not probe an engine that was not found', async () => {
+    const run = vi.fn(async (_input: RunInput) => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false, aborted: false }));
+    await runDoctor(ctx({ probe: true, adapters: [adapter('claude', { found: false, run })] }));
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('keeps the engine order when the first one is slower', async () => {
+    const slow = adapter('claude');
+    const slowDetect = slow.detect;
+    slow.detect = async () => {
+      await new Promise((r) => setTimeout(r, 50));
+      return slowDetect();
+    };
+    const checks = await runDoctor(ctx({ engines: ['claude', 'codex'], adapters: [slow, adapter('codex')] }));
+    expect(checks.map((c) => c.name).filter((n) => /^engine \w+$/.test(n) && n !== 'engines')).toEqual(['engine claude', 'engine codex']);
   });
 
   it('a throwing probe is reported, not thrown', async () => {

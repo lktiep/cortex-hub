@@ -57,39 +57,57 @@ function defaultGitVersion(): Promise<string | null> {
 }
 
 /**
- * Opens the socket and closes it with 1000 at once; it never sends a message, so the hub never
- * sees a registration. The URL carries the key: nothing returned here may contain it.
+ * Opens the socket and waits for the hub's `welcome` (an accepted key and a working handshake),
+ * then closes with 1000. It never sends a message, so the hub never sees a registration. A close
+ * before the welcome (4001/4003 for a bad key) fails with its code. The URL carries the key:
+ * nothing returned here may contain it.
  */
 export function defaultWsConnect(url: string, key: string): Promise<'open' | 401 | string> {
   return new Promise((resolve) => {
     let settled = false;
     let ws: WebSocket | undefined;
-    const done = (v: 'open' | 401 | string): void => {
+    const finish = (v: 'open' | 401 | string): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve(typeof v === 'string' ? v.split(url).join('<hub url>') : v);
+      resolve(typeof v === 'string' && v !== 'open' ? v.split(url).join('<hub url>') : v);
+      // a stuck peer must not hold the CLI open
+      const w = ws;
+      if (w !== undefined) setTimeout(() => w.terminate(), 1_000).unref();
     };
     const timer = setTimeout(() => {
-      done('timed out after 10 s');
+      finish('timed out waiting for welcome');
       ws?.terminate();
     }, NETWORK_TIMEOUT_MS);
     try {
       ws = new WebSocket(url, { headers: { Authorization: `Bearer ${key}` }, handshakeTimeout: NETWORK_TIMEOUT_MS });
     } catch (err) {
-      done(messageOf(err));
+      finish(messageOf(err));
       return;
     }
-    ws.on('open', () => {
-      done('open');
-      ws?.close(1000);
+    ws.on('message', (data) => {
+      if (settled) return;
+      let type: unknown;
+      try {
+        type = (JSON.parse(String(data)) as { type?: unknown } | null)?.type;
+      } catch {
+        type = undefined;
+      }
+      if (type === 'welcome') {
+        finish('open');
+        ws?.close(1000);
+      } else {
+        finish('unexpected first message');
+        ws?.terminate();
+      }
     });
+    ws.on('close', (code, reason) => finish(`closed ${String(code)}: ${reason.toString()}`));
     ws.on('unexpected-response', (_req, res) => {
-      done(res.statusCode === 401 ? 401 : `HTTP ${String(res.statusCode)}`);
+      finish(res.statusCode === 401 ? 401 : `HTTP ${String(res.statusCode)}`);
       res.resume();
       ws?.terminate();
     });
-    ws.on('error', (err) => done(messageOf(err)));
+    ws.on('error', (err) => finish(messageOf(err)));
   });
 }
 
@@ -125,6 +143,9 @@ async function engineCheck(a: EngineAdapter, ctx: DoctorContext): Promise<Check>
       timeoutMs: PROBE_TIMEOUT_MS,
       onLine: () => undefined,
     });
+    if (out.timedOut || out.aborted) {
+      return { name, ok: false, required: false, detail: `found ${where}; probe timed out after ${String(PROBE_TIMEOUT_MS / 1000)} s` };
+    }
     const c = a.classify(out.exitCode, out.stdout, out.stderr);
     if (c.kind === 'ok') return { name, ok: true, required: false, detail: `found ${where}; probe ok` };
     if (c.kind === 'quota') {
@@ -263,7 +284,13 @@ export async function runDoctor(ctx: DoctorContext): Promise<Check[]> {
 
   // 4 engines
   const engineEnv = Object.fromEntries(Object.entries(ctx.env).filter(([, v]) => v === undefined || !secrets.includes(v)));
-  const adapters = ctx.adapters ?? createAdapters(ctx.engines, engineEnv);
+  let adapters: EngineAdapter[] = [];
+  let adaptersError: string | null = null;
+  try {
+    adapters = ctx.adapters ?? createAdapters(ctx.engines, engineEnv);
+  } catch (err) {
+    adaptersError = messageOf(err);
+  }
   const engineChecks = await Promise.all(adapters.map((a) => engineCheck(a, ctx)));
   checks.push(...engineChecks);
   checks.push(
@@ -278,7 +305,12 @@ export async function runDoctor(ctx: DoctorContext): Promise<Check[]> {
           name: 'engines',
           ok: false,
           required: true,
-          detail: ctx.probe ? 'no engine found and logged in' : 'no engine found',
+          detail:
+            adaptersError !== null
+              ? `could not set up the engines: ${adaptersError}`
+              : ctx.probe
+                ? 'no engine found and logged in'
+                : 'no engine found',
           fix: `install one and log in to it once: ${ctx.engines.map((e) => `${e}: ${installHint(e, process.platform)}`).join('; ')}`,
         },
   );
@@ -346,7 +378,7 @@ export async function runDoctor(ctx: DoctorContext): Promise<Check[]> {
     }
     checks.push(
       result === 'open'
-        ? { name: 'handshake', ok: true, required: true, detail: 'the hub accepted the key and the handshake' }
+        ? { name: 'handshake', ok: true, required: true, detail: 'the hub accepted the key and sent its welcome' }
         : result === 401
           ? { name: 'handshake', ok: false, required: true, detail: 'the hub rejected the API key (401)', fix: 'check the key in --api-key, CORTEX_API_KEY or the MCP config' }
           : { name: 'handshake', ok: false, required: true, detail: `could not connect: ${result}` },
@@ -377,7 +409,12 @@ export async function runDoctor(ctx: DoctorContext): Promise<Check[]> {
     checks.push({ name: 'project mapping', ok: false, required: false, detail: skipped('no origin') });
   } else {
     const agentId = ctx.flags.agentId ?? defaultAgentId(os.hostname(), ctx.repo);
-    const projectId = readState(workerPaths(agentId, ctx.homeDir).stateFile).lastRegistered?.projectId ?? null;
+    let projectId: string | null = null;
+    try {
+      projectId = readState(workerPaths(agentId, ctx.homeDir).stateFile).lastRegistered?.projectId ?? null;
+    } catch {
+      projectId = null;
+    }
     checks.push({
       name: 'project mapping',
       ok: true,
