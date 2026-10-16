@@ -7,6 +7,7 @@ import type { EngineInfo, Executor, RouteSpec, WaitReason } from '@cortex/shared
 import { db } from '../db/client.js'
 import { baseBranchFor, getConductorConfig, type ConductorConfig } from './config.js'
 import { pathsConflict } from './files.js'
+import { returnTask } from './lifecycle.js'
 import { assignedMsg, branchFor } from './messages.js'
 import { formatNotification, notifyLead } from './notify.js'
 import { listConnections, sendTo } from './registry.js'
@@ -355,17 +356,6 @@ function applyAssignment(row: TaskRow, a: Assignment, now: number, cfg: Conducto
 let running = false
 let rerun = false
 
-// Task 7 replaces this with lifecycle.returnTask
-function returnAfterSendFailure(task: TaskRow): void {
-  const changed = db.prepare(`
-    UPDATE conductor_tasks SET status = 'pending', assigned_to_agent = NULL, assigned_at = NULL, lease_expires_at = NULL
-    WHERE id = ? AND status = 'assigned' AND assigned_to_agent = ?
-  `).run(task.id, task.assigned_to_agent).changes
-  if (changed === 0) return
-  logTask(task.id, task.assigned_to_agent, 'returned', 'send failed')
-  rerun = true // returnTask gets the same effect by calling dispatch()
-}
-
 /** One load–select–apply pass in a transaction, then the pushes. Agents in `sendFailed` count as busy. */
 function dispatchPass(now: number, sendFailed: Set<string>): Assignment[] {
   const cfg = getConductorConfig()
@@ -394,7 +384,8 @@ function dispatchPass(now: number, sendFailed: Set<string>): Assignment[] {
       sent.push(assignment)
     } else {
       sendFailed.add(assignment.agentId)
-      returnAfterSendFailure(task)
+      // returnTask's own dispatch() call lands while this one runs, so it asks for one more pass
+      returnTask(task.id, 'send failed')
     }
   }
   return sent
