@@ -1,5 +1,7 @@
 # Cortex Conductor — Multi-Agent Task Orchestration (v2 Design)
 
+> The worker, dispatch and review parts of this document are superseded by the [2026-10-16 spec](../superpowers/specs/2026-10-16-conductor-production-ready-design.md).
+
 > Updated 2026-03-30: Corrected scope model, agent identity, and communication architecture.
 
 ## Core Principles

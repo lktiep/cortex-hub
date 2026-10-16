@@ -375,17 +375,13 @@ cortex_code_search(query: "auth middleware jwt", repo: "cortex-hub")  // narrow 
 ### Run Agent (No Clone Needed)
 
 ```bash
-# macOS / Linux — interactive wizard
-curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- launch
-
-# Headless daemon with preset
-curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- start --daemon --preset fullstack
+# macOS / Linux — starts a background worker (details: docs/conductor/setup.md)
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | CORTEX_API_KEY=<worker-api-key> bash -s -- start --daemon --hub https://<your-mcp-host>
 ```
 
 ```powershell
 # Windows
-iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1" -OutFile $env:TEMP\run-agent.ps1
-& $env:TEMP\run-agent.ps1 start
+$env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; & $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host>
 ```
 
 ### One-Command Project Setup
@@ -423,9 +419,9 @@ cd infra && docker compose up -d
 
 ## Multi-Agent Conductor
 
-Cortex includes an **experimental** multi-agent orchestration layer for cross-IDE task delegation. **It is not feature-complete** — agents can already create/pickup tasks, but autonomous strategy execution and smart agent matching are still WIP.
+Cortex includes a multi-agent orchestration layer for cross-IDE task delegation. It is production-ready for the rows marked ✅ in the status table; 🔄 and 📋 rows are not.
 
-📖 See [`docs/conductor.md`](docs/conductor.md) for current capabilities, limitations, and the rough edges to expect.
+📖 See [`docs/conductor.md`](docs/conductor.md) for current capabilities and limitations, and [`docs/conductor/setup.md`](docs/conductor/setup.md) to set up each machine.
 
 ---
 
@@ -465,11 +461,11 @@ cortex-hub/
 │   └── Dockerfile.*             # Per-service builds
 ├── scripts/
 │   ├── install.sh / .ps1        # Unified installer
-│   ├── run-agent.sh / .ps1      # Agent daemon launcher
+│   ├── run-agent.sh / .ps1      # Worker bootstrap (downloads cortex-worker.mjs from your hub)
 │   └── bootstrap.sh             # Admin setup
 ├── docs/
 │   ├── architecture/            # Design docs (recipe, conductor, gateway)
-│   ├── conductor.md             # ⚠️ Multi-agent orchestration (experimental)
+│   ├── conductor.md             # Multi-agent orchestration (status table)
 │   └── guides/                  # Onboarding, installation, use cases
 ├── templates/
 │   ├── skills/install/          # /install slash command
@@ -487,7 +483,8 @@ cortex-hub/
 | [`docs/architecture/recipe-system.md`](docs/architecture/recipe-system.md) | Recipe System (auto-learning from execution) |
 | [`docs/architecture/llm-gateway.md`](docs/architecture/llm-gateway.md) | LLM Gateway design |
 | [`docs/architecture/agent-quality-strategy.md`](docs/architecture/agent-quality-strategy.md) | Quality gates + scoring |
-| [`docs/conductor.md`](docs/conductor.md) | Multi-agent conductor (experimental) |
+| [`docs/conductor.md`](docs/conductor.md) | Multi-agent conductor: status, quick tour, limitations |
+| [`docs/conductor/setup.md`](docs/conductor/setup.md) | Conductor setup, per machine |
 | [`docs/api/hub-mcp-reference.md`](docs/api/hub-mcp-reference.md) | Full MCP tool API reference |
 | [`benchmarks/README.md`](benchmarks/README.md) | Benchmark methodology + results |
 | [`docs/guides/installation.md`](docs/guides/installation.md) | Full installation guide |
