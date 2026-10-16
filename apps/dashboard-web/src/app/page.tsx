@@ -26,6 +26,7 @@ import { MetricCard } from '@/components/ui/MetricCard'
 import { GaugeChart } from '@/components/ui/GaugeChart'
 import { ActivityFeed } from '@/components/ui/ActivityFeed'
 import { StatusDot } from '@/components/ui/StatusDot'
+import { agentsOnline } from '@/lib/conductor-plan/summary'
 import styles from './page.module.css'
 
 // ── Utilities ──
@@ -166,7 +167,7 @@ export default function DashboardPage() {
   const { data: recipeData } = useSWR('recipe-stats', getRecipeStats, {
     refreshInterval: 30000,
   })
-  const onlineAgents = agentsData?.agents?.length ?? 0
+  const onlineAgents = agentsOnline(agentsData?.agents ?? [], agentsData?.sessions ?? []).total
 
   const svcMap = healthData?.services as Record<string, string> | undefined
 

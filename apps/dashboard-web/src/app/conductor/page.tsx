@@ -14,6 +14,7 @@ import {
   updateConductorTask,
   type ConductorTask,
   type ConductorAgent,
+  type ConductorWorker,
 } from '@/lib/api'
 import {
   TaskBriefingWizard,
@@ -26,6 +27,7 @@ import {
   buildTaskTree,
   flattenTree,
   getIdeInfo,
+  formatTimeAgo,
   getCapColor,
   getResultSummary,
   getTaskDuration,
@@ -38,6 +40,7 @@ import {
 } from './components'
 import { SkeletonCircle } from '@/components/ui/Skeleton'
 import { NumberTransition } from '@/components/ui/NumberTransition'
+import { agentsOnline } from '@/lib/conductor-plan/summary'
 import { PlanView } from './plan/PlanView'
 import styles from './page.module.css'
 
@@ -397,7 +400,8 @@ export default function ConductorPage() {
 
   const allTasks = data?.tasks ?? []
   const agents = agentsData?.agents ?? []
-  const onlineCount = agentsData?.online ?? agents.length
+  const online = agentsOnline(agents, agentsData?.sessions ?? [])
+  const onlineCount = online.total
   const [agentsCollapsed, setAgentsCollapsed] = useState(false)
 
   const filteredTasks = useMemo(() => {
@@ -536,7 +540,7 @@ export default function ConductorPage() {
       </div>
 
       {/* Agents Online */}
-      {agents.length > 0 && (
+      {onlineCount > 0 && (
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
             <h2
@@ -544,12 +548,13 @@ export default function ConductorPage() {
               onClick={() => setAgentsCollapsed(!agentsCollapsed)}
             >
               <span className={`${styles.collapseIcon} ${agentsCollapsed ? styles.collapseIconClosed : ''}`}>▾</span>
-              Agents <span className={styles.filterCount}><NumberTransition value={onlineCount} /> online</span>
+              Agents · <span className={styles.filterCount}><NumberTransition value={onlineCount} /> online</span>
             </h2>
           </div>
           {!agentsCollapsed && (
+            <>
             <div className={styles.agentsGrid}>
-              {agents.map((agent: ConductorAgent) => {
+              {agents.map((agent: ConductorWorker) => {
                 const { icon: ideIcon, label: ideLabel, colorClass } = getIdeInfo(agent.ide)
                 const ideColor = colorClass ? styles[colorClass] : ''
                 const statusLabel = agent.status === 'idle' ? 'Idle' : agent.status === 'busy' ? 'Busy' : 'Online'
@@ -587,6 +592,16 @@ export default function ConductorPage() {
                         <span className={styles.agentDetailLabel}>Connected</span>
                         <span className={styles.agentDetailValue}>{new Date(agent.connectedAt).toLocaleTimeString()}</span>
                       </div>
+                      <div className={styles.agentDetailRow}>
+                        <span className={styles.agentDetailLabel}>Engines</span>
+                        <span className={styles.agentDetailValue}>
+                          {agent.engines.map((e) => `${e.executor} (${e.models.length} models)`).join(', ') || '-'}
+                        </span>
+                      </div>
+                      <div className={styles.agentDetailRow}>
+                        <span className={styles.agentDetailLabel}>Task</span>
+                        <span className={styles.agentDetailValue}>{agent.currentTaskId ?? 'idle'}</span>
+                      </div>
                     </div>
 
                     {agent.capabilities && agent.capabilities.length > 0 ? (
@@ -603,6 +618,24 @@ export default function ConductorPage() {
                 )
               })}
             </div>
+            {online.sessions.length > 0 && (
+              <div className={styles.sessionList}>
+                <span className={styles.sessionListLabel}>MCP sessions</span>
+                {online.sessions.map((s) => {
+                  const { icon, label, colorClass } = getIdeInfo(s.ide ?? undefined)
+                  return (
+                    <div key={s.sessionId} className={styles.sessionRow}>
+                      <span className={`${styles.agentIdeIcon} ${colorClass ? styles[colorClass] : ''}`} title={label}>{icon}</span>
+                      <strong className={styles.agentIdText}>{s.agentId}</strong>
+                      <span className={styles.sessionMeta}>{s.hostname ?? '-'}</span>
+                      <span className={styles.sessionMeta}>{s.branch ?? '-'}</span>
+                      <span className={styles.sessionMeta}>{formatTimeAgo(s.lastActivity)}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            </>
           )}
         </div>
       )}

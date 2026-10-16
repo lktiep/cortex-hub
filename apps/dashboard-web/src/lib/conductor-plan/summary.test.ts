@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { toPlanTasks } from './model'
 import type { PlanTask } from './model'
-import { awaitingLead, groupTabs, needsYou, progressCounts, progressSegments, routeTally, workerRows } from './summary'
-import { row, worker } from './test-fixtures'
+import { agentsOnline, awaitingLead, groupTabs, needsYou, progressCounts, progressSegments, routeTally, workerRows } from './summary'
+import { row, session, worker } from './test-fixtures'
 import type { ConductorTask } from '../api'
 
 const root = row({ id: 'root', kind: 'group' })
@@ -201,5 +201,26 @@ describe('groupTabs', () => {
 
   it('gives [] for a legacy tree without groups', () => {
     expect(groupTabs(plan([{ id: 'a' }, { id: 'b' }]))).toEqual([])
+  })
+})
+
+describe('agentsOnline', () => {
+  it('counts an agent that is both a worker and a session once', () => {
+    const r = agentsOnline([worker({ agentId: 'a' })], [session({ agentId: 'a' }), session({ sessionId: 's2', agentId: 'b' })])
+    expect(r.workers.map((w) => w.agentId)).toEqual(['a'])
+    expect(r.sessions.map((s) => s.agentId)).toEqual(['b'])
+    expect(r.total).toBe(2)
+  })
+
+  it('with no workers lists all sessions', () => {
+    const r = agentsOnline([], [session({ agentId: 'a' }), session({ sessionId: 's2', agentId: 'b' })])
+    expect(r.sessions).toHaveLength(2)
+    expect(r.total).toBe(2)
+  })
+
+  it('tolerates a missing sessions array', () => {
+    const r = agentsOnline([worker({ agentId: 'a' })], undefined as unknown as [])
+    expect(r.sessions).toEqual([])
+    expect(r.total).toBe(1)
   })
 })

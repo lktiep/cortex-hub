@@ -1,6 +1,6 @@
 // Plan summaries: progress counts, Needs you, Awaiting lead, fallback tally and worker rows.
 // Pure folds over PlanTask[] — no React, no DOM; anything time-dependent takes `now`.
-import type { ConductorWorker } from '../api'
+import type { ConductorSession, ConductorWorker } from '../api'
 import { STATUS_COLOR } from './flow'
 import { nodeNote, routeLabel } from './model'
 import type { PlanTask } from './model'
@@ -146,4 +146,15 @@ export function groupTabs(tasks: PlanTask[]): { id: string; label: string; count
       const work = tasks.filter((t) => t.kind === 'work' && t.groupId === g.id)
       return { id: g.id, label: g.row.task_key ?? g.title, count: work.length, days: work.reduce((a, t) => a + t.estimate, 0) }
     })
+}
+
+/** Workers plus the MCP sessions whose agent is not already a worker; `total` counts unique agent ids. */
+export function agentsOnline(
+  workers: ConductorWorker[],
+  sessions: ConductorSession[],
+): { workers: ConductorWorker[]; sessions: ConductorSession[]; total: number } {
+  const workerIds = new Set(workers.map((w) => w.agentId))
+  const extra = (sessions ?? []).filter((s) => !workerIds.has(s.agentId))
+  const ids = new Set([...workerIds, ...extra.map((s) => s.agentId)])
+  return { workers, sessions: extra, total: ids.size }
 }
