@@ -18,6 +18,8 @@ param(
     [int]$LogLines = 50
 )
 
+Write-Warning "cortex-agent.ps1 is deprecated; use run-agent.ps1 (TypeScript worker): irm https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile run-agent.ps1; .\run-agent.ps1 start --hub <url>"
+
 $ErrorActionPreference = "Stop"
 
 # -- Constants ------------------------------------------------

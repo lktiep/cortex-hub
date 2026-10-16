@@ -6,6 +6,7 @@
 # ============================================================
 
 set -euo pipefail
+echo "cortex-agent.sh is deprecated; use run-agent.sh (TypeScript worker): curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- start --hub <url>" >&2
 
 # ── Constants ────────────────────────────────────────────────
 readonly SCRIPT_NAME="cortex-agent"

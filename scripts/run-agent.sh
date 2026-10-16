@@ -1,77 +1,32 @@
 #!/usr/bin/env bash
-# ============================================================
-# Cortex Hub — Remote Agent Bootstrap
-# Downloads cortex-agent.sh + dependencies, then launches.
-# No repo clone needed.
-#
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash
-#   curl ... | bash -s -- launch
-#   curl ... | bash -s -- start --daemon --preset fullstack
-#   curl ... | bash -s -- start -d CORTEX_AGENT_IDE=codex CORTEX_AGENT_ID=rev-1
-# ============================================================
-
+# Cortex Hub worker bootstrap: downloads the TypeScript worker from the hub and runs it.
+# Usage: curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | bash -s -- start --hub https://<your-mcp-host>
 set -euo pipefail
-
-REPO_RAW="https://raw.githubusercontent.com/lktiep/cortex-hub/master"
-WORK_DIR="${CORTEX_AGENT_HOME:-${TMPDIR:-/tmp}/cortex-agent-remote}"
-
-RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
-info()  { echo -e "${BLUE}[cortex]${NC} $*"; }
-ok()    { echo -e "${GREEN}[cortex]${NC} $*"; }
-err()   { echo -e "${RED}[cortex]${NC} $*" >&2; }
-
-# ── Check prerequisites ──
-for cmd in curl node; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    err "$cmd is required but not found."
-    exit 1
-  fi
+die() { echo "[cortex] $*" >&2; exit 1; }
+command -v git >/dev/null 2>&1 || die "git not found; install git: https://git-scm.com/downloads"
+node -e 'process.exit(+process.versions.node.split(".")[0] >= 20 ? 0 : 1)' >/dev/null 2>&1 || die "node 20+ not found; install Node.js 20 or newer: https://nodejs.org"
+HOME_DIR="${CORTEX_WORKER_HOME:-$HOME/.cortex/worker}"; W="$HOME_DIR/cortex-worker.mjs"; HUB=""; prev=""
+for a in "$@"; do
+  case "$a" in --hub=*) HUB="${a#--hub=}" ;; *) [ "$prev" = "--hub" ] && HUB="$a" ;; esac; prev="$a"
 done
-
-# ── Setup workspace ──
-mkdir -p "$WORK_DIR/scripts" "$WORK_DIR/.cortex" "$WORK_DIR/node_modules"
-info "Workspace: $WORK_DIR"
-
-# ── Download files (only if missing or older than 1 hour) ──
-download_if_needed() {
-  local url="$1" dest="$2"
-  if [ -f "$dest" ]; then
-    # Re-download if older than 1 hour
-    local age=$(( $(date +%s) - $(stat -f%m "$dest" 2>/dev/null || stat -c%Y "$dest" 2>/dev/null || echo 0) ))
-    if [ "$age" -lt 3600 ]; then
-      return 0
-    fi
-  fi
-  curl -fsSL "$url" -o "$dest" 2>/dev/null
-}
-
-info "Downloading agent scripts..."
-download_if_needed "$REPO_RAW/scripts/cortex-agent.sh" "$WORK_DIR/scripts/cortex-agent.sh"
-chmod +x "$WORK_DIR/scripts/cortex-agent.sh"
-
-# Optional files (non-fatal if missing)
-download_if_needed "$REPO_RAW/scripts/orchestrator-prompt.md" "$WORK_DIR/scripts/orchestrator-prompt.md" 2>/dev/null || true
-download_if_needed "$REPO_RAW/.cortex/capability-templates.json" "$WORK_DIR/.cortex/capability-templates.json" 2>/dev/null || true
-download_if_needed "$REPO_RAW/.cortex/agent-identity.json" "$WORK_DIR/.cortex/agent-identity.json" 2>/dev/null || true
-
-# ── Install ws package if needed ──
-if ! node -e "require('ws')" 2>/dev/null; then
-  if ! node -e "require('$WORK_DIR/node_modules/ws')" 2>/dev/null; then
-    info "Installing ws package..."
-    (cd "$WORK_DIR" && npm install --no-save ws 2>/dev/null) || {
-      err "Failed to install ws package. Run: npm install -g ws"
-      exit 1
-    }
-    ok "ws package installed"
-  fi
-fi
-
-# ── Add node_modules to NODE_PATH so ws is resolvable ──
-export NODE_PATH="$WORK_DIR/node_modules:${NODE_PATH:-}"
-
-ok "Ready. Launching cortex-agent..."
-echo ""
-
-# ── Forward all arguments to cortex-agent.sh ──
-exec "$WORK_DIR/scripts/cortex-agent.sh" "$@"
+[ -n "$HUB" ] || HUB="${CORTEX_HUB_URL:-}"
+[ -n "$HUB" ] || { [ -f "$W" ] && HUB="$(node "$W" hub-url 2>/dev/null)" || HUB=""; }
+[ -n "$HUB" ] || die "no hub URL; pass --hub https://<your-mcp-host>"
+HUB="${HUB%/}"; HUB="${HUB%/mcp}"; HUB="${HUB%/}"
+mkdir -p "$HOME_DIR"; rc=0
+node -e '
+const [url, out] = process.argv.slice(1);
+fetch(url).then(async (r) => {
+  if (r.status === 404) process.exit(44);
+  if (!r.ok) { console.error("HTTP " + r.status); process.exit(1); }
+  const body = await r.text();
+  if (!body.startsWith("#!/usr/bin/env node")) { console.error("unexpected response body"); process.exit(1); }
+  require("node:fs").writeFileSync(out, body);
+}).catch((e) => { console.error(String(e && e.cause && e.cause.code || e)); process.exit(1); });
+' "$HUB/conductor/worker.mjs" "$W.tmp" || rc=$?
+if [ "$rc" -eq 44 ]; then rm -f "$W.tmp"; die "this hub does not serve the worker yet — upgrade the hub"; fi
+if [ "$rc" -ne 0 ]; then
+  rm -f "$W.tmp"; [ -f "$W" ] || die "could not download the worker from $HUB"
+  echo "[cortex] warning: download failed; using cached worker" >&2
+else mv "$W.tmp" "$W"; fi
+exec node "$W" "$@"
