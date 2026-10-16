@@ -4,6 +4,7 @@ import { join } from 'path'
 import { readFileSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { applyConductorMigrations } from './conductor-migrations.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -25,6 +26,8 @@ db.pragma('journal_mode = WAL')
 // Initialize schema — resolve relative to THIS file, not cwd()
 const schemaPath = join(__dirname, 'schema.sql')
 const schemaStr = readFileSync(schemaPath, 'utf-8')
+// Conductor columns must exist before schema.sql creates indexes over them on an old database
+applyConductorMigrations(db)
 db.exec(schemaStr)
 
 // Safe migrations for early schema changes without drop
@@ -106,9 +109,6 @@ for (const sql of queryLogsCols) {
 
 // Session handoffs: api key audit trail
 try { db.exec('ALTER TABLE session_handoffs ADD COLUMN api_key_name TEXT') } catch { /* ignore if exists */ }
-
-// Conductor tasks: api key ownership
-try { db.exec('ALTER TABLE conductor_tasks ADD COLUMN api_key_owner TEXT') } catch { /* ignore if exists */ }
 
 // MemPalace-inspired memory hierarchy + temporal validity
 const memoryHierarchyCols = [

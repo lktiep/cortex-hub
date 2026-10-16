@@ -125,12 +125,34 @@ CREATE TABLE IF NOT EXISTS conductor_tasks (
     created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     assigned_at TEXT,
     accepted_at TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    api_key_owner TEXT,
+    task_key TEXT,
+    kind TEXT DEFAULT 'work',
+    approver TEXT,
+    executor TEXT,
+    model TEXT,
+    effort TEXT,
+    fallback TEXT,
+    files TEXT DEFAULT '[]',
+    branch TEXT,
+    pinned_agent TEXT,
+    review_required INTEGER DEFAULT 0,
+    attempt INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    reject_count INTEGER DEFAULT 0,
+    current_route TEXT,
+    lease_expires_at TEXT,
+    wait_reason TEXT,
+    wait_until TEXT,
+    escalated_at TEXT,
+    last_agent TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_conductor_tasks_assigned ON conductor_tasks(assigned_to_agent, status);
 CREATE INDEX IF NOT EXISTS idx_conductor_tasks_status ON conductor_tasks(status);
 CREATE INDEX IF NOT EXISTS idx_conductor_tasks_parent ON conductor_tasks(parent_task_id);
+CREATE INDEX IF NOT EXISTS idx_conductor_tasks_kind_status ON conductor_tasks(kind, status);
 
 CREATE TABLE IF NOT EXISTS conductor_task_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,6 +164,28 @@ CREATE TABLE IF NOT EXISTS conductor_task_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_conductor_task_logs_task ON conductor_task_logs(task_id);
+
+CREATE TABLE IF NOT EXISTS conductor_quota (
+  host TEXT NOT NULL,            -- worker hostname
+  executor TEXT NOT NULL,
+  model TEXT NOT NULL,           -- exact id, prefix ending in '*', or '*'
+  exhausted_until TEXT NOT NULL,
+  reason TEXT,                   -- raw engine message, truncated to 500 chars
+  updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  PRIMARY KEY (host, executor, model)
+);
+
+CREATE TABLE IF NOT EXISTS conductor_notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  recipient TEXT NOT NULL,       -- API key name
+  task_id TEXT,
+  kind TEXT NOT NULL,            -- review_ready | escalated | capacity | gate_ready | no_worker
+  message TEXT NOT NULL,
+  created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  delivered_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_conductor_notif_pending
+  ON conductor_notifications(recipient, delivered_at);
 
 -- ── Conductor Comments ──
 CREATE TABLE IF NOT EXISTS conductor_comments (
@@ -167,6 +211,7 @@ CREATE TABLE IF NOT EXISTS hub_config (
 -- Insert defaults
 INSERT OR IGNORE INTO hub_config (key, value) VALUES ('hub_name', 'Cortex Hub');
 INSERT OR IGNORE INTO hub_config (key, value) VALUES ('hub_description', 'Self-hosted MCP Intelligence Platform');
+INSERT OR IGNORE INTO hub_config (key, value) VALUES ('conductor.defaultFallback', '[{"executor":"claude","model":"opus"}]');
 
 -- ── Notification Preferences ──
 CREATE TABLE IF NOT EXISTS notification_preferences (
