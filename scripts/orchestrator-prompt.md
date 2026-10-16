@@ -24,8 +24,8 @@ that root's key as its `parentKey`. Without the root, the dashboard shows N one-
 | `requiredCapabilities`, `priority` | Capability tags; `critical`, `high`, `medium` or `low` |
 | `executor`, `model`, `effort`, `fallback`, `pinnedAgent` | Routing (section 4) |
 | `files`, `branch` | Locks and branch (sections 5, 6) |
-| `reviewRequired`, `approver` | Review defaults to true; `approver` is `user` or `lead` for gates |
-| `context.testCommand`, `context.allowEmpty`, `context.estimate` | Test command to run, allow a change-free result, size estimate |
+| `reviewRequired`, `approver` | Review defaults to true. A gate's `approver` is `user` or `lead` and defaults to `user` when omitted, so set `approver: 'lead'` on gates you will close yourself |
+| `context.testCommand`, `context.allowEmpty`, `context.estimate` | Test command to run, allow a change-free result, estimate as a positive number of days (default 1) |
 
 ## 4. Routing
 - Pick only executor and model pairs that `cortex_agents` lists.
