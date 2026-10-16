@@ -1,11 +1,20 @@
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, realpathSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path, { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CONDUCTOR_PROTOCOL_VERSION, EXECUTORS } from '@cortex/shared-types';
 import type { Executor } from '@cortex/shared-types';
-import { isAlive, printLogs, readPid, startDaemon, statusText, stopWorker } from './commands/daemon.js';
+import {
+  DEFAULT_STOP_GRACE_MS,
+  claimPidFile,
+  isAlive,
+  printLogs,
+  readPid,
+  startDaemon,
+  statusText,
+  stopWorker,
+} from './commands/daemon.js';
 import { updateBundle } from './commands/update.js';
 import { detectHubBase, detectHubConfig } from './config.js';
 import { createAdapters, describeEngines } from './engines/index.js';
@@ -16,7 +25,6 @@ import type { FatalReason } from './hub-client.js';
 import { createLogger } from './logger.js';
 import type { Logger } from './logger.js';
 import { defaultAgentId, workerPaths } from './paths.js';
-import type { WorkerPaths } from './paths.js';
 import { readState } from './state.js';
 import { WORKER_VERSION } from './version.js';
 import { Worker } from './worker.js';
@@ -143,7 +151,7 @@ function helpText(): string {
     '',
     'Commands:',
     '  start      run the worker for this repo (foreground; -d to run it in the background)',
-    '  stop       stop the background worker (waits up to 90 s for a task to wrap up)',
+    `  stop       stop the background worker (waits up to ${DEFAULT_STOP_GRACE_MS / 1000} s for a task to wrap up)`,
     '  status     show whether the worker runs, its task and its last registration',
     '  logs       print the last 200 log lines (-f to follow)',
     '  update     replace this cortex-worker.mjs with the hub\'s version',
@@ -190,13 +198,18 @@ export function isEntrypoint(
   }
 }
 
-/** `env` without any entry whose value contains `secret`, whatever the variable is called. */
-export function envWithoutSecret(env: NodeJS.ProcessEnv, secret: string): NodeJS.ProcessEnv {
-  if (secret === '') return { ...env };
-  const out: NodeJS.ProcessEnv = {};
+/** Deletes from `env`, in place, every entry whose value contains `secret`, whatever the variable is called. */
+export function scrubSecret(env: NodeJS.ProcessEnv, secret: string): void {
+  if (secret === '') return;
   for (const [k, v] of Object.entries(env)) {
-    if (v === undefined || !v.includes(secret)) out[k] = v;
+    if (v?.includes(secret) === true) delete env[k];
   }
+}
+
+/** A copy of `env` without any entry whose value contains `secret`. */
+export function envWithoutSecret(env: NodeJS.ProcessEnv, secret: string): NodeJS.ProcessEnv {
+  const out = { ...env };
+  scrubSecret(out, secret);
   return out;
 }
 
@@ -224,27 +237,6 @@ function fatalHint(reason: FatalReason, keySource: string): string {
   }
 }
 
-/**
- * Writes our pid into the pid file. Returns the pid of a live worker that holds it
- * instead, or null once it is ours. A stale file (dead pid, or garbage) is replaced.
- */
-function claimPidFile(paths: WorkerPaths): number | null {
-  mkdirSync(paths.home, { recursive: true });
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const pid = readPid(paths);
-    if (pid !== null && pid !== process.pid && isAlive(pid)) return pid;
-    rmSync(paths.pidFile, { force: true });
-    try {
-      writeFileSync(paths.pidFile, `${process.pid}\n`, { flag: 'wx' });
-      return null;
-    } catch (err) {
-      // another start wrote it between our check and our write: look again
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-    }
-  }
-  throw new Error(`could not claim ${paths.pidFile}`);
-}
-
 /** Something to receive SIGINT and SIGTERM from; `process` in production. */
 export interface SignalSource {
   on(event: 'SIGINT' | 'SIGTERM', listener: () => void): unknown;
@@ -257,7 +249,7 @@ export interface StartOptions {
   cwd?: string;
   hostname?: string;
   signals?: SignalSource;
-  /** Called with 130 on a second signal; `process.exit` in production. */
+  /** Called with 130 on the second signal; `process.exit` in production. */
   exit?: (code: number) => void;
   stopPollMs?: number;
   createAdapters?: (names: Executor[], env: NodeJS.ProcessEnv) => EngineAdapter[];
@@ -265,7 +257,7 @@ export interface StartOptions {
 
 /**
  * Runs the worker until the stop file appears, a signal arrives (0) or the hub refuses
- * it for good (2). Returns 1 when it cannot start.
+ * it for good (2). Returns 1 when it cannot start. A second signal calls `exit(130)` at once.
  */
 export async function startForeground(args: CliArgs, opts: StartOptions = {}): Promise<number> {
   const env = opts.env ?? process.env;
@@ -292,6 +284,10 @@ export async function startForeground(args: CliArgs, opts: StartOptions = {}): P
     console.error(hub.error);
     return 1;
   }
+  // git, gh and repo hooks inherit process.env (git.ts), so the key leaves it, whatever the
+  // variable; engines and their setup/test commands get the same scrubbed env
+  scrubSecret(process.env, hub.apiKey);
+  const childEnv = envWithoutSecret(env, hub.apiKey);
 
   const paths = workerPaths(agentId, homeDir);
   const holder = claimPidFile(paths);
@@ -322,8 +318,6 @@ export async function startForeground(args: CliArgs, opts: StartOptions = {}): P
       `hub ${hub.hubBase} (from ${hub.source.hub}), key from ${hub.source.key}`,
   );
 
-  // engines, their setup and test commands never see the key
-  const childEnv = envWithoutSecret(env, hub.apiKey);
   const names = args.engines ?? [...DEFAULT_ENGINES];
   let described: Awaited<ReturnType<typeof describeEngines>>;
   try {
@@ -394,12 +388,19 @@ export async function startForeground(args: CliArgs, opts: StartOptions = {}): P
     logger.info(code === 0 ? 'stopped' : `stopped (exit ${code})`);
     resolveDone(code);
   };
+  let signalCount = 0;
   const onSignal = (name: string): void => {
-    if (finishing) {
+    signalCount++;
+    if (signalCount >= 2) {
       // a second Ctrl-C: the user does not want to wait for the task to wrap up
       logger.warn(`${name} again: exiting now`);
       release();
       exit(130);
+      return;
+    }
+    if (finishing) {
+      // the stop file or the hub started the shutdown: this signal joins it
+      logger.info(`${name}: already stopping; send it again to exit at once`);
       return;
     }
     void finish(0, name);
@@ -507,7 +508,9 @@ export async function main(argv: string[], opts: MainOptions = {}): Promise<numb
         const paths = workerPaths(id, homeDir);
         const pid = readPid(paths);
         if (pid !== null && isAlive(pid)) {
-          console.log(`stopping ${id} (pid ${pid}); a running task gets up to 90 s to push its work…`);
+          console.log(
+            `stopping ${id} (pid ${pid}); a running task gets up to ${DEFAULT_STOP_GRACE_MS / 1000} s to push its work…`,
+          );
         }
         const r = await stopWorker(paths);
         console.log(

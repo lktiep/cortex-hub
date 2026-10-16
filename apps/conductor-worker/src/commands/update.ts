@@ -23,6 +23,17 @@ function firstLine(file: string): string {
   }
 }
 
+/**
+ * The body length the response declares, or null when it declares none or counts encoded
+ * bytes (fetch hands over the decoded body, so a gzip Content-Length cannot be compared).
+ */
+function declaredLength(res: Response): number | null {
+  const encoding = res.headers.get('content-encoding')?.trim().toLowerCase() ?? '';
+  if (encoding !== '' && encoding !== 'identity') return null;
+  const raw = res.headers.get('content-length')?.trim() ?? '';
+  return /^\d+$/.test(raw) ? Number(raw) : null;
+}
+
 async function get(url: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<Response> {
   const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (res.status !== 200) throw new Error(`GET ${url}: HTTP ${res.status}`);
@@ -31,8 +42,9 @@ async function get(url: string, fetchImpl: typeof fetch, timeoutMs: number): Pro
 
 /**
  * Fetches `<hub>/conductor/worker.version`; when it differs from `current`, downloads
- * `worker.mjs` to `<target>.tmp`, checks it starts with the node shebang, gives it the
- * target's mode and renames it over `target`. A failure leaves `target` untouched.
+ * `worker.mjs` to `<target>.tmp`, checks it is as long as its Content-Length says and
+ * starts with the node shebang, gives it the target's mode and renames it over `target`.
+ * A failure leaves `target` untouched and no tmp file.
  */
 export async function updateBundle(
   hubBase: string,
@@ -60,9 +72,14 @@ export async function updateBundle(
   }
 
   const bundleUrl = `${base}/conductor/worker.mjs`;
-  const body = Buffer.from(await (await get(bundleUrl, fetchImpl, BUNDLE_TIMEOUT_MS)).arrayBuffer());
+  const res = await get(bundleUrl, fetchImpl, BUNDLE_TIMEOUT_MS);
+  const body = Buffer.from(await res.arrayBuffer());
   const tmp = `${target}.tmp`;
   try {
+    const declared = declaredLength(res);
+    if (declared !== null && body.length !== declared) {
+      throw new Error(`${bundleUrl}: got ${body.length} of ${declared} bytes`);
+    }
     writeFileSync(tmp, body, { mode: mode || 0o755 });
     const head = firstLine(tmp);
     if (head !== SHEBANG) {

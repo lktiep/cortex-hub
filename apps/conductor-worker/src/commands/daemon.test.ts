@@ -26,13 +26,14 @@ import type { WebSocket } from 'ws';
 import { parseCli, startForeground } from '../cli.js';
 import type { CliArgs, StartOptions } from '../cli.js';
 import type { EngineAdapter } from '../engines/types.js';
+import { HubClient } from '../hub-client.js';
 import { workerPaths } from '../paths.js';
 import type { WorkerPaths } from '../paths.js';
 import type { WorkerState } from '../state.js';
 import { createGitFixture } from '../test-utils/git-fixture.js';
 import type { GitFixture } from '../test-utils/git-fixture.js';
 import { WORKER_VERSION } from '../version.js';
-import { isAlive, printLogs, readPid, startDaemon, statusText, stopWorker } from './daemon.js';
+import { claimPidFile, isAlive, printLogs, readPid, startDaemon, statusText, stopWorker } from './daemon.js';
 
 const posixOnly = it.skipIf(process.platform === 'win32');
 
@@ -137,16 +138,54 @@ describe('readPid and isAlive', () => {
   });
 });
 
+describe('claimPidFile', () => {
+  it('claims a missing or stale pid file and gives way to a live holder', async () => {
+    const paths = freshPaths();
+    expect(claimPidFile(paths)).toBeNull();
+    expect(readPid(paths)).toBe(process.pid);
+    writePid(paths, await deadPid());
+    expect(claimPidFile(paths)).toBeNull();
+    expect(readPid(paths)).toBe(process.pid);
+    writeFileSync(paths.pidFile, 'garbage');
+    expect(claimPidFile(paths)).toBeNull();
+    expect(readPid(paths)).toBe(process.pid);
+    const live = spawnNode('setInterval(() => {}, 1000)');
+    writePid(paths, live.pid ?? 0);
+    expect(claimPidFile(paths)).toBe(live.pid);
+    expect(readPid(paths)).toBe(live.pid);
+  });
+
+  it('keeps the pid file another start claimed after this one judged the old file stale', async () => {
+    const paths = freshPaths();
+    writePid(paths, await deadPid());
+    const rival = spawnNode('setInterval(() => {}, 1000)');
+    let reads = 0;
+    const racingRead = (file: string): string | null => {
+      const text = existsSync(file) ? readFileSync(file, 'utf8') : null;
+      if (++reads === 1) {
+        // the rival start removes the stale file and writes its own, just after our first look
+        rmSync(file);
+        writeFileSync(file, `${rival.pid}\n`, { flag: 'wx' });
+      }
+      return text;
+    };
+    expect(claimPidFile(paths, racingRead)).toBe(rival.pid);
+    expect(readPid(paths)).toBe(rival.pid);
+  });
+});
+
 // ── startDaemon ──
 
 /** The script startDaemon runs: records its argv and env, then writes the pid file (or not). */
 const FAKE_WORKER = `
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 const env = process.env;
 writeFileSync(env.FAKE_INFO_FILE, JSON.stringify({
   pid: process.pid,
+  pidFileBefore: existsSync(env.FAKE_PID_FILE) ? readFileSync(env.FAKE_PID_FILE, 'utf8') : null,
   argv: process.argv.slice(2),
   daemon: env.CORTEX_WORKER_DAEMON ?? null,
+  apiKey: env.CORTEX_API_KEY ?? null,
 }));
 if (env.FAKE_MODE === 'exit') {
   console.error('fake worker: giving up');
@@ -159,8 +198,10 @@ setInterval(() => {}, 1000);
 
 interface FakeInfo {
   pid: number;
+  pidFileBefore: string | null;
   argv: string[];
   daemon: string | null;
+  apiKey: string | null;
 }
 
 describe('startDaemon', () => {
@@ -181,6 +222,7 @@ describe('startDaemon', () => {
     FAKE_PID_FILE: paths.pidFile,
     FAKE_INFO_FILE: info,
     FAKE_MODE: mode,
+    CORTEX_API_KEY: undefined,
   });
 
   const readInfo = (): FakeInfo => JSON.parse(readFileSync(info, 'utf8')) as FakeInfo;
@@ -194,7 +236,13 @@ describe('startDaemon', () => {
     expect(readPid(paths)).toBe(r.pid);
     expect(isAlive(r.pid)).toBe(true);
     // re-run as `start` without the daemon flag, told it is the daemon
-    expect(readInfo()).toEqual({ pid: r.pid, argv: ['start', '--agent-id', 'a', '-f', '--engines=claude'], daemon: '1' });
+    expect(readInfo()).toEqual({
+      pid: r.pid,
+      pidFileBefore: null,
+      argv: ['start', '--agent-id', 'a', '-f', '--engines=claude'],
+      daemon: '1',
+      apiKey: null,
+    });
     // its stdout and stderr go to the log
     await until(() => existsSync(paths.logFile) && readFileSync(paths.logFile, 'utf8').includes('fake worker started'), 'log');
     if (process.platform !== 'win32') {
@@ -246,13 +294,32 @@ process.stdout.write(JSON.stringify(r));
     expect(existsSync(info)).toBe(false);
   });
 
-  it('ignores a stale pid file', async () => {
+  it('ignores a stale pid file and leaves replacing it to the child', async () => {
     const paths = freshPaths();
-    writePid(paths, await deadPid());
-    const r = await startDaemon(startArgs(['-d']), paths, script, ['-d'], { env: fakeEnv(paths) });
+    const dead = await deadPid();
+    writePid(paths, dead);
+    const env = { ...fakeEnv(paths), CORTEX_API_KEY: 'from-env' };
+    const r = await startDaemon(startArgs(['-d']), paths, script, ['-d'], { env });
     if (!('pid' in r)) throw new Error(r.error);
     strayPids.push(r.pid);
     expect(readPid(paths)).toBe(r.pid);
+    // the child's claim replaces it; a parent that removed it could remove a racing child's claim
+    expect(readInfo().pidFileBefore).toBe(`${dead}\n`);
+    // without --api-key the key the env holds passes through as is
+    expect(readInfo().apiKey).toBe('from-env');
+  });
+
+  it('hands --api-key to the child in its env, never in its argv', async () => {
+    const paths = freshPaths();
+    const argv = ['-d', '--api-key', 'k-first', '--agent-id', 'a', '--api-key=k-last', '--engines=claude'];
+    const env = { ...fakeEnv(paths), CORTEX_API_KEY: 'from-env' };
+    const r = await startDaemon(startArgs(argv), paths, script, argv, { env });
+    if (!('pid' in r)) throw new Error(r.error);
+    strayPids.push(r.pid);
+    const got = readInfo();
+    expect(got.argv).toEqual(['start', '--agent-id', 'a', '--engines=claude']);
+    // the flag wins over the env, as it does for a foreground start
+    expect(got.apiKey).toBe('k-last');
   });
 
   it('reports a worker that exits before writing its pid file', async () => {
@@ -269,8 +336,12 @@ process.stdout.write(JSON.stringify(r));
       timeoutMs: 300,
     });
     await until(() => existsSync(info), 'the fake to start');
-    strayPids.push(readInfo().pid);
-    expect(r).toEqual({ error: expect.stringMatching(/pid file.*worker\.log/) });
+    const pid = readInfo().pid;
+    strayPids.push(pid);
+    expect(r).toEqual({ error: expect.stringContaining(`pid ${pid}`) });
+    expect(r).toEqual({ error: expect.stringMatching(/may still be starting.*cortex-worker status --agent-id a.*worker\.log/) });
+    // the child is left running: it may just be slow
+    expect(isAlive(pid)).toBe(true);
   });
 });
 
@@ -528,6 +599,7 @@ describe('start', () => {
   afterAll(() => fx.cleanup());
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     for (const r of running.splice(0)) {
       r.signals.emit('SIGTERM');
       await r.done;
@@ -652,6 +724,55 @@ describe('start', () => {
     expect(h.exit).toHaveBeenCalledWith(130);
     expect(await done).toBe(0);
     expect(existsSync(h.paths.pidFile)).toBe(false);
+  });
+
+  it('removes every process.env entry that holds the key, so git, gh and hooks never see it', async () => {
+    vi.stubEnv('CW_TEST_KEY_COPY', KEY);
+    vi.stubEnv('CW_TEST_KEY_HEADER', `Authorization: Bearer ${KEY}`);
+    vi.stubEnv('CW_TEST_UNRELATED', 'keep me');
+    hub = await startHub();
+    const h = harness(hub);
+    void launch(h);
+    await until(() => hub?.frames.length !== 0, 'worker.register');
+    expect(Object.entries(process.env).filter(([, v]) => v?.includes(KEY))).toEqual([]);
+    expect(process.env['CW_TEST_UNRELATED']).toBe('keep me');
+    // the engines' env is the scrubbed one too
+    expect(Object.values(h.adapterEnvs[0] ?? {}).some((v) => v?.includes(KEY))).toBe(false);
+  });
+
+  /** Emits `names` from inside `HubClient.stop`, i.e. while a shutdown is under way. */
+  function signalDuringShutdown(h: Harness, names: Array<'SIGINT' | 'SIGTERM'>): { exitCallsAfter: number[] } {
+    const realStop = HubClient.prototype.stop;
+    const seen = { exitCallsAfter: [] as number[] };
+    vi.spyOn(HubClient.prototype, 'stop').mockImplementation(function (this: HubClient) {
+      for (const name of names) {
+        h.signals.emit(name);
+        seen.exitCallsAfter.push(h.exit.mock.calls.length);
+      }
+      return realStop.call(this);
+    });
+    return seen;
+  }
+
+  it('one signal during a stop-file shutdown does not exit at once; a second one exits 130', async () => {
+    hub = await startHub();
+    const h = harness(hub);
+    const seen = signalDuringShutdown(h, ['SIGTERM', 'SIGINT']);
+    const done = launch(h);
+    await until(() => hub?.frames.length !== 0, 'worker.register');
+    writeFileSync(h.paths.stopFile, '');
+    expect(await done).toBe(0);
+    expect(seen.exitCallsAfter).toEqual([0, 1]);
+    expect(h.exit.mock.calls).toEqual([[130]]);
+  });
+
+  it('one signal during the shutdown after a fatal close neither exits nor changes the exit code 2', async () => {
+    hub = await startHub(4003);
+    const h = harness(hub);
+    const seen = signalDuringShutdown(h, ['SIGINT']);
+    expect(await launch(h)).toBe(2);
+    expect(seen.exitCallsAfter).toEqual([0]);
+    expect(h.exit).not.toHaveBeenCalled();
   });
 
   it.each([

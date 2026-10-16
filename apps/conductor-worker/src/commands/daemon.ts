@@ -19,7 +19,8 @@ import type { WorkerPaths } from '../paths.js';
 import { killTree } from '../process.js';
 import type { WorkerState } from '../state.js';
 
-const DEFAULT_STOP_GRACE_MS = 90_000;
+/** How long `stop` lets a running task wrap up (push its work) before it kills the worker. */
+export const DEFAULT_STOP_GRACE_MS = 90_000;
 /** How long the process tree gets between SIGTERM and SIGKILL once the grace period is over. */
 const KILL_GRACE_MS = 5_000;
 const DEFAULT_TAIL_LINES = 200;
@@ -41,17 +42,26 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** The pid in the pid file: a positive integer, else null. */
-export function readPid(paths: WorkerPaths): number | null {
-  let text: string;
+/** A file's text, or null when it cannot be read. */
+function readText(file: string): string | null {
   try {
-    text = readFileSync(paths.pidFile, 'utf8').trim();
+    return readFileSync(file, 'utf8');
   } catch {
     return null;
   }
-  if (!/^\d+$/.test(text)) return null;
-  const pid = Number(text);
+}
+
+/** A positive integer pid, else null. */
+function parsePid(text: string | null): number | null {
+  const t = text?.trim() ?? '';
+  if (!/^\d+$/.test(t)) return null;
+  const pid = Number(t);
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+/** The pid in the pid file: a positive integer, else null. */
+export function readPid(paths: WorkerPaths): number | null {
+  return parsePid(readText(paths.pidFile));
 }
 
 export function isAlive(pid: number): boolean {
@@ -65,16 +75,52 @@ export function isAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Writes our pid into the pid file. Returns the pid of a live worker that holds it
+ * instead, or null once it is ours. A stale file (dead pid, or garbage) is removed only
+ * while it still holds what was judged stale, so a file another start wrote meanwhile
+ * survives and is judged again. `read` reads the file; tests use it to race another start.
+ */
+export function claimPidFile(paths: WorkerPaths, read: (file: string) => string | null = readText): number | null {
+  mkdirSync(paths.home, { recursive: true });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const text = read(paths.pidFile);
+    if (text !== null) {
+      const pid = parsePid(text);
+      if (pid !== null && pid !== process.pid && isAlive(pid)) return pid;
+      if (read(paths.pidFile) !== text) continue; // replaced since we looked: look again
+      rmSync(paths.pidFile, { force: true });
+    }
+    try {
+      writeFileSync(paths.pidFile, `${process.pid}\n`, { flag: 'wx' });
+      return null;
+    } catch (err) {
+      // another start wrote it between our check and our write: look again
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  }
+  throw new Error(`could not claim ${paths.pidFile}`);
+}
+
 /** Removes the pid file only while it still names `pid`, so a newer worker's file survives. */
 function removePidFile(paths: WorkerPaths, pid: number): void {
   if (readPid(paths) === pid) rmSync(paths.pidFile, { force: true });
 }
 
-/** `argv` without `--daemon`/`-d`, also inside a group of short flags (`-fd` → `-f`). */
-function withoutDaemonFlag(argv: string[]): string[] {
+/**
+ * The argv the background `start` gets: without `--daemon`/`-d`, also inside a group of
+ * short flags (`-fd` → `-f`), and without `--api-key <key>`/`--api-key=<key>`, which
+ * would show in `ps`; the key goes in the child's env instead.
+ */
+function forwardedArgv(argv: string[]): string[] {
   const out: string[] = [];
-  for (const a of argv) {
-    if (a === '--daemon') continue;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i] ?? '';
+    if (a === '--daemon' || a.startsWith('--api-key=')) continue;
+    if (a === '--api-key') {
+      i++; // and its value
+      continue;
+    }
     if (/^-[^-]/.test(a)) {
       const rest = a.slice(1).replaceAll('d', '');
       if (rest !== '') out.push(`-${rest}`);
@@ -93,8 +139,9 @@ export interface DaemonOptions {
 }
 
 /**
- * Re-runs `start` (`argv` minus the daemon flag) detached, with stdout and stderr
- * appended to the log, and waits until the child has written its pid file.
+ * Re-runs `start` (`argv` minus the daemon flag and the key) detached, with stdout and
+ * stderr appended to the log, and waits until the child has written its pid file. An
+ * `--api-key` reaches the child as `CORTEX_API_KEY`, which its start scrubs from its env.
  */
 export async function startDaemon(
   args: CliArgs,
@@ -109,18 +156,22 @@ export async function startDaemon(
 
   const existing = readPid(paths);
   if (existing !== null && isAlive(existing)) return { error: `already running (pid ${existing})` };
-  rmSync(paths.pidFile, { force: true });
+  // a stale pid file stays: the child's claimPidFile replaces it, and removing it here
+  // could remove the claim of a child another `start -d` just spawned
   mkdirSync(paths.home, { recursive: true });
+
+  const env: NodeJS.ProcessEnv = { ...(opts.env ?? process.env), CORTEX_WORKER_DAEMON: '1' };
+  if (args.apiKey !== undefined) env['CORTEX_API_KEY'] = args.apiKey;
 
   let exited: string | null = null;
   let child: ChildProcess;
   const logFd = openSync(paths.logFile, 'a');
   try {
-    child = spawn(process.execPath, [scriptPath, 'start', ...withoutDaemonFlag(argv)], {
+    child = spawn(process.execPath, [scriptPath, 'start', ...forwardedArgv(argv)], {
       detached: true,
       windowsHide: true,
       stdio: ['ignore', logFd, logFd],
-      env: { ...(opts.env ?? process.env), CORTEX_WORKER_DAEMON: '1' },
+      env,
     });
   } catch (err) {
     return { error: `could not start the worker: ${(err as Error).message}` };
@@ -143,8 +194,11 @@ export async function startDaemon(
       return { error: `the worker ${exited} before it wrote its pid file; see ${paths.logFile}` };
     }
     if (Date.now() >= deadline) {
+      // left running: it may just be slow
       return {
-        error: `the worker (pid ${pid ?? '?'}) wrote no pid file within ${timeoutMs / 1000} s; see ${paths.logFile}`,
+        error:
+          `the worker (pid ${pid ?? '?'}) wrote no pid file within ${timeoutMs / 1000} s and may still be starting; ` +
+          `run \`cortex-worker status --agent-id ${path.basename(paths.home)}\` to check, and see ${paths.logFile}`,
       };
     }
     await sleep(pollMs);

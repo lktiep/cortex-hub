@@ -14,6 +14,8 @@ const NEW = `${SHEBANG}\nimport x from 'y';\nconsole.log('new');\n`;
 interface Route {
   status: number;
   body: string;
+  /** Declare this Content-Length, send the body, then cut the connection. */
+  declaredLength?: number;
 }
 
 interface Hub {
@@ -43,6 +45,11 @@ beforeEach(async () => {
   server = createServer((req, res) => {
     hub.requests.push({ url: req.url ?? '', headers: req.headers });
     const route = hub.routes[req.url ?? ''] ?? { status: 404, body: 'not found' };
+    if (route.declaredLength !== undefined) {
+      res.writeHead(route.status, { 'content-type': 'text/plain', 'content-length': route.declaredLength });
+      res.write(route.body, () => res.socket?.destroy());
+      return;
+    }
     res.writeHead(route.status, { 'content-type': 'text/plain' });
     res.end(route.body);
   });
@@ -106,6 +113,43 @@ describe('updateBundle', () => {
     await expect(updateBundle(hub.base, target, '1.0.0')).rejects.toThrow(/worker\.mjs.*HTTP 500/);
     expect(readFileSync(target, 'utf8')).toBe(OLD);
     expect(leftovers()).toEqual([]);
+  });
+
+  it('throws when the server cuts the bundle short of its Content-Length', async () => {
+    hub.routes['/conductor/worker.mjs'] = { status: 200, body: NEW, declaredLength: Buffer.byteLength(NEW) + 100 };
+    await expect(updateBundle(hub.base, target, '1.0.0')).rejects.toThrow();
+    expect(readFileSync(target, 'utf8')).toBe(OLD);
+    expect(leftovers()).toEqual([]);
+  });
+
+  /** A fetch that answers the version, and the bundle with `bundle`. */
+  const fetchWith =
+    (bundle: () => Response): typeof fetch =>
+    (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      return Promise.resolve(url.endsWith('/worker.version') ? new Response('1.2.3\n') : bundle());
+    };
+
+  it('throws when the bundle is shorter than its Content-Length, leaving no tmp file', async () => {
+    const declared = Buffer.byteLength(NEW) + 100;
+    const short = fetchWith(() => new Response(NEW, { headers: { 'content-length': String(declared) } }));
+    await expect(updateBundle(hub.base, target, '1.0.0', short)).rejects.toThrow(
+      new RegExp(`worker\\.mjs: got ${Buffer.byteLength(NEW)} of ${declared} bytes`),
+    );
+    expect(readFileSync(target, 'utf8')).toBe(OLD);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('accepts a bundle whose length matches its Content-Length, and skips the check for an encoded body', async () => {
+    const exact = fetchWith(() => new Response(NEW, { headers: { 'content-length': String(Buffer.byteLength(NEW)) } }));
+    expect(await updateBundle(hub.base, target, '1.0.0', exact)).toEqual({ updated: true, version: '1.2.3' });
+    writeFileSync(target, OLD);
+    // fetch hands over the decoded body, while Content-Length counts the compressed bytes
+    const gzipped = fetchWith(
+      () => new Response(NEW, { headers: { 'content-length': '17', 'content-encoding': 'gzip' } }),
+    );
+    expect(await updateBundle(hub.base, target, '1.0.0', gzipped)).toEqual({ updated: true, version: '1.2.3' });
+    expect(readFileSync(target, 'utf8')).toBe(NEW);
   });
 
   it('throws on an empty version', async () => {
