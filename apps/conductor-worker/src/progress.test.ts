@@ -42,6 +42,33 @@ describe('createProgressThrottle', () => {
     expect(send).toHaveBeenLastCalledWith('b')
   })
 
+  it('waits the full interval measured from the last send', () => {
+    const send = vi.fn()
+    const t = createProgressThrottle(send)
+    t.push('a')
+    vi.advanceTimersByTime(3000)
+    t.push('b')
+    vi.advanceTimersByTime(1999)
+    expect(send).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(1)
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenLastCalledWith('b')
+  })
+
+  it('honours a non-default intervalMs', () => {
+    const send = vi.fn()
+    const t = createProgressThrottle(send, { intervalMs: 1000 })
+    t.push('a')
+    t.push('b')
+    vi.advanceTimersByTime(999)
+    expect(send).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(1)
+    expect(send).toHaveBeenLastCalledWith('b')
+    vi.advanceTimersByTime(1000)
+    t.push('c')
+    expect(send).toHaveBeenLastCalledWith('c')
+  })
+
   it('ignores blank lines and caps length', () => {
     const send = vi.fn()
     const t = createProgressThrottle(send, { maxLen: 10 })
