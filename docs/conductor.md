@@ -35,7 +35,7 @@ check nobody has run yet; the Evidence column names that check. 📋 means plann
 | User and lead gates | ✅ | `apps/dashboard-api/src/routes/conductor-v2.test.ts`, `apps/hub-mcp/src/tools/conductor-lead.test.ts` |
 | The 📋 lead notifications (`review_ready`, `escalated`, `capacity`, `gate_ready`, `no_worker`) | ✅ | `apps/dashboard-api/src/conductor/notify.test.ts` |
 | TypeScript worker on macOS and Linux (worktree → PR) | ✅ | `apps/conductor-worker/src/e2e/worker.e2e.test.ts` |
-| TypeScript worker on Windows (worktree → PR) | 🔄 | The end-to-end test is skipped on Windows; manual Windows checklist pending |
+| TypeScript worker on Windows (worktree → PR) | 🔄 | The end-to-end test is skipped on Windows; manual Windows checklist pending (Task 18, Step 5 of the [worker plan](superpowers/plans/2026-10-16-conductor-a2-worker.md)) |
 | Engine: agy | ✅ | `apps/conductor-worker/src/engines/agy.test.ts` pins its verified quota output |
 | Engines: claude, codex, gemini | 🔄 | Quota patterns are best effort; checked only against fixtures, no live quota hit yet |
 | Dashboard plan view | ✅ | `apps/dashboard-web/src/lib/conductor-plan/*.test.ts` |
@@ -96,7 +96,7 @@ Navigate to `/conductor` to see:
 | `cortex_task_update` | Transition status (in_progress → completed/failed) |
 | `cortex_task_submit_strategy` | Propose execution plan for user review (Lead Agent pattern) |
 | `cortex_agents` | List online workers, their engines and quota |
-| `cortex_task_review` | Approve or reject a finished task (`verdict`, `feedback`) |
+| `cortex_task_review` | Approve or reject a finished task (`verdict`, `feedback`); also closes `approver: 'lead'` gates. User gates are refused over MCP and are closed from the dashboard |
 | `cortex_task_route` | Change a task's executor, model, fallback, files or `dependsOn` (stored task IDs) |
 | `cortex_task_cancel` | Cancel a task (`taskId`, optional `reason`) |
 
@@ -104,8 +104,8 @@ Navigate to `/conductor` to see:
 
 1. **Quota patterns are unverified** for claude, codex and gemini. Only agy's quota output has been verified.
 2. **Locks are only as good as `files`.** A task that does not list the files it touches is not protected from conflicts.
-3. **agy start-up takes about 2 minutes** per task.
-4. **A shared key splits notifications.** If several leads use one API key, each notice reaches only one of them.
+3. **agy start-up takes about 2 minutes** per task, because it starts every MCP server it has. To shorten it, trim agy's MCP server list.
+4. **A shared key splits notifications.** Notices are delivered once per API key, to whichever session polls first. A worker's engines calling hub tools with the lead's key would consume the lead's notices. Use separate API keys for the lead and for workers (see [API keys](conductor/setup.md#2-api-keys)).
 5. **User gates are dashboard-only, and the dashboard has no login.** Anyone who can open it can approve a user gate.
 6. **No MCP tool edits a task's description.** Replace the task instead.
 
