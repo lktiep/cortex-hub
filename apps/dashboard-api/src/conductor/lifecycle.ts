@@ -413,23 +413,44 @@ export function completeTask(
 }
 
 /**
- * Counts a failed attempt and returns the task to `pending`. The second
- * failure sets `escalated_at` (the dispatcher then skips the task) and tells
- * the lead, once. `agentId` null (reclaim, REST) skips the owner check and
- * revokes the task from its worker first. `attempt`: see `load`.
+ * A failed attempt, inside the caller's transaction: `fail_count` grows and
+ * the task returns to `pending`; the second failure sets `escalated_at` (the
+ * dispatcher then skips the task) and tells the lead, once.
+ */
+function countFailure(task: TaskRow, error: string): Settled {
+  const failCount = task.fail_count + 1
+  db.prepare('UPDATE conductor_tasks SET fail_count = ? WHERE id = ?').run(failCount, task.id)
+  toPending(task, `failed: ${error}`)
+  escalate(task, task.assigned_to_agent, failCount, 'failures', error)
+  return { outcome: { ok: true, task: current(task.id) }, worker: task.assigned_to_agent }
+}
+
+/**
+ * Counts a failed attempt (`countFailure`). `agentId` null (REST, MCP) skips
+ * the owner check and revokes the task from its worker first. `attempt`: see `load`.
  */
 export function failAttempt(taskId: string, agentId: string | null, error: string, attempt?: number): Outcome {
   if (agentId === null) revokeBefore(taskId, 'failed', attempt)
   return settle((): Settled => {
     const loaded = load(taskId, agentId, 'fail', agentId === null ? (t) => isActive(t.status) : heldBy(agentId), attempt)
     if (!loaded.ok) return refused(loaded)
-    const { task } = loaded
-    const failCount = task.fail_count + 1
-    db.prepare('UPDATE conductor_tasks SET fail_count = ? WHERE id = ?').run(failCount, taskId)
-    toPending(task, `failed: ${error}`)
-    escalate(task, task.assigned_to_agent, failCount, 'failures', error)
-    return { outcome: { ok: true, task: current(taskId) }, worker: task.assigned_to_agent }
+    return countFailure(loaded.task, error)
   })
+}
+
+/**
+ * The scheduler's reclaim of an active task (spec §6.8: lease expired, worker
+ * offline): one `task.revoked` with `reason` to its worker if connected, then
+ * the failure is counted as `failAttempt` counts it, with `reason` as the
+ * error. `attempt`: see `load`. `now` is the tick's clock, for the dispatch pass.
+ */
+export function reclaimTask(taskId: string, reason: string, attempt?: number, now?: number): Outcome {
+  revokeBefore(taskId, reason, attempt)
+  return settle((): Settled => {
+    const loaded = load(taskId, null, 'reclaim', (t) => isActive(t.status), attempt)
+    if (!loaded.ok) return refused(loaded)
+    return countFailure(loaded.task, reason)
+  }, now)
 }
 
 /** Back to `pending` with nothing counted (send failure, reroute). The task must be active. */

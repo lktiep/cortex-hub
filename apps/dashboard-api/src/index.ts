@@ -40,6 +40,7 @@ import { settingsRouter } from './routes/settings.js'
 import { recoverInterruptedJobs } from './services/indexer.js'
 import { scheduleBranchSweep } from './services/branch-retention.js'
 import { scheduleSessionExpiry } from './services/session-expiry.js'
+import { scheduleConductor } from './conductor/scheduler.js'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
@@ -337,6 +338,7 @@ const port = Number(process.env.PORT) || 4000
 recoverInterruptedJobs()
 scheduleBranchSweep()
 scheduleSessionExpiry()
+scheduleConductor()
 
 const server = serve({ fetch: app.fetch, port }, () => {
   logger.info(`Dashboard API listening on http://localhost:${port}`)
