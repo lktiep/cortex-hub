@@ -297,9 +297,9 @@ if os.path.exists(path):
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
 config['mcpServers']['cortex-hub'] = {
-    'command': 'npx',
-    'args': ['-y', 'mcp-remote', '${MCP_URL}', '--header', 'Authorization:\${AUTH_HEADER}'],
-    'env': {'AUTH_HEADER': 'Bearer ${API_KEY}'}
+    'type': 'http',
+    'url': '${MCP_URL}',
+    'headers': {'Authorization': 'Bearer ${API_KEY}'}
 }
 with open(path, 'w') as f:
     json.dump(config, f, indent=2)

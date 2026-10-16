@@ -311,18 +311,16 @@ inject_mcp_config() {
     # Build MCP server entry based on tool
     # Claude Code uses a different format than other tools
     if [ "$tool_key" = "claude" ]; then
-        # Claude Code: ~/.claude.json uses mcpServers with command/args
+        # Claude Code: ~/.claude.json uses mcpServers with type http, url and headers
         python3 -c "
 import json
 path = '$config_path'
 with open(path, 'r', encoding='utf-8-sig') as f: config = json.load(f)
 if '$config_key' not in config: config['$config_key'] = {}
 config['$config_key']['cortex-hub'] = {
-    'command': 'npx',
-    'args': ['-y', 'mcp-remote', '$MCP_URL', '--header', 'Authorization: Bearer $HUB_API_KEY'],
-    'env': {
-        'HUB_API_KEY': '$HUB_API_KEY'
-    }
+    'type': 'http',
+    'url': '$MCP_URL',
+    'headers': {'Authorization': 'Bearer $HUB_API_KEY'}
 }
 with open(path, 'w', encoding='utf-8') as f: json.dump(config, f, indent=2)
 print('    Injected cortex-hub into $config_key')

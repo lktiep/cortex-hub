@@ -149,15 +149,24 @@ if (-not $McpConfigured) {
 
         # Pure PowerShell JSON merge — no Python needed
         function Set-McpConfig {
-            param([string]$Path, [string]$RootKey, [string]$Label)
+            param([string]$Path, [string]$RootKey, [string]$Label, [string]$Kind = "mcp-remote")
             $dir = Split-Path $Path -Parent
             if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
 
             # Build MCP entry as ordered dict (PS 5.1 compatible)
-            $mcpEntry = [ordered]@{
-                command = "npx"
-                args = @("-y", "mcp-remote", $McpUrl, "--header", "Authorization:`${AUTH_HEADER}")
-                env = [ordered]@{ AUTH_HEADER = "Bearer $ApiKey" }
+            if ($Kind -eq "http") {
+                # Claude Code's own form: type http with url and headers
+                $mcpEntry = [ordered]@{
+                    type = "http"
+                    url = $McpUrl
+                    headers = [ordered]@{ Authorization = "Bearer $ApiKey" }
+                }
+            } else {
+                $mcpEntry = [ordered]@{
+                    command = "npx"
+                    args = @("-y", "mcp-remote", $McpUrl, "--header", "Authorization:`${AUTH_HEADER}")
+                    env = [ordered]@{ AUTH_HEADER = "Bearer $ApiKey" }
+                }
             }
 
             if (Test-Path $Path) {
@@ -186,7 +195,7 @@ if (-not $McpConfigured) {
             Write-Ok ("MCP: configured " + $Label)
         }
 
-        Set-McpConfig -Path $ClaudeJson -RootKey "mcpServers" -Label "Claude Code"
+        Set-McpConfig -Path $ClaudeJson -RootKey "mcpServers" -Label "Claude Code" -Kind "http"
         $McpConfigured = $true
 
         if (Test-IDESelected "cursor") {
