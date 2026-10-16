@@ -117,12 +117,25 @@ function portOf(server: { address(): AddressInfo | string | null }): number {
   return a.port;
 }
 
+interface GitServer {
+  server: http.Server;
+  /** `git http-backend` processes that have not exited yet. */
+  children: Set<ChildProcess>;
+  /** One entry per request whose backend failed or wrote to stderr. */
+  failures: string[];
+}
+
+/** Bounds what one backend's stderr can add to a failure message. */
+const BACKEND_STDERR_MAX = 8_192;
+
 /**
  * Serves the repositories under `projectRoot` over smart HTTP on 127.0.0.1 through
  * `git http-backend`, so the clone's origin can be an http URL with userinfo that git
  * accepts and the worker must strip, without leaving the machine.
  */
-async function serveGit(projectRoot: string, home: string): Promise<http.Server> {
+async function serveGit(projectRoot: string, home: string): Promise<GitServer> {
+  const children = new Set<ChildProcess>();
+  const failures: string[] = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const env: NodeJS.ProcessEnv = {
@@ -143,10 +156,38 @@ async function serveGit(projectRoot: string, home: string): Promise<http.Server>
     const protocol = req.headers['git-protocol'];
     if (typeof protocol === 'string') env['GIT_PROTOCOL'] = protocol;
 
-    const child = spawn('git', ['http-backend'], { env, stdio: ['pipe', 'pipe', 'ignore'] });
-    child.on('error', () => {
-      if (!res.headersSent) res.statusCode = 500;
+    const request = `${req.method ?? 'GET'} ${url.pathname}${url.search}`;
+    const child = spawn('git', ['http-backend'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    children.add(child);
+    let stderr = '';
+    let killedHere = false;
+    child.stderr.setEncoding('utf8').on('data', (c: string) => {
+      if (stderr.length < BACKEND_STDERR_MAX) stderr += c.slice(0, BACKEND_STDERR_MAX - stderr.length);
+    });
+    child.on('error', (err) => {
+      stderr += `${err.message}\n`;
+    });
+    child.on('close', (code, signal) => {
+      children.delete(child);
+      const failed = code !== 0 && !killedHere;
+      if (failed || stderr !== '') {
+        failures.push(`${request}: http-backend exited with ${code ?? signal ?? '?'}\n${stderr.trimEnd()}`);
+      }
+      if (res.writableEnded) return;
+      if (!res.headersSent && failed) {
+        res.statusCode = 502;
+        res.setHeader('content-type', 'text/plain');
+        res.end(`git http-backend exited with ${code ?? signal ?? '?'} before its headers\n${stderr}`);
+        return;
+      }
       res.end();
+    });
+    // a client that goes away mid-request would leave the backend waiting on its stdin
+    res.on('close', () => {
+      if (child.exitCode === null && child.signalCode === null) {
+        killedHere = true;
+        child.kill('SIGTERM');
+      }
     });
     child.stdin.on('error', () => undefined);
     req.pipe(child.stdin);
@@ -173,11 +214,14 @@ async function serveGit(projectRoot: string, home: string): Promise<http.Server>
       }
       res.write(head.subarray(end + 4));
     });
-    child.stdout.on('end', () => res.end());
+    // without a complete CGI head there is nothing to end yet: 'close' answers with a 502
+    child.stdout.on('end', () => {
+      if (inBody) res.end();
+    });
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  return server;
+  return { server, children, failures };
 }
 
 function makeTask(n: number, title: string, route: Partial<RouteSpec>): AssignedTask {
@@ -204,7 +248,7 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
   let home = '';
   let fixture: GitFixture | null = null;
   let restoreGitConfig: (() => void) | null = null;
-  let gitServer: http.Server | null = null;
+  let gitServer: GitServer | null = null;
   let gitPort = 0;
   let hub: WebSocketServer | null = null;
   let env: NodeJS.ProcessEnv = {};
@@ -219,12 +263,22 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
   const upgrades: Array<{ url: string; authorization: string | undefined }> = [];
   const received: Received[] = [];
 
-  const workerTail = (): string => `--- worker output (tail) ---\n${workerOutput.split('\n').slice(-40).join('\n')}`;
+  /** The worker's output tail, plus whatever the git backend complained about. */
+  const workerTail = (): string => {
+    const tail = `--- worker output (tail) ---\n${workerOutput.split('\n').slice(-40).join('\n')}`;
+    const backend = gitServer?.failures.slice(-5) ?? [];
+    return backend.length === 0 ? tail : `${tail}\n--- git http-backend (stderr) ---\n${backend.join('\n')}`;
+  };
+
+  /** The steps share one worker and build on each other: once one fails, the rest are skipped. */
+  let failedStep: string | null = null;
 
   /** Polls `probe` until it returns a value; throws after `timeoutMs`. */
   async function waitFor<T>(what: string, probe: () => T | undefined, timeoutMs: number): Promise<T> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
+      // a step abandoned at its bound must not keep polling into the next step or afterAll
+      if (failedStep !== null) throw new Error(`stopped waiting for ${what}: step "${failedStep}" failed`);
       const v = probe();
       if (v !== undefined) return v;
       if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs} ms waiting for ${what}\n${workerTail()}`);
@@ -250,8 +304,9 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
       type,
       () => {
         const hit = find(type, pred, from);
-        if (hit === undefined && worker !== null && worker.exitCode !== null) {
-          throw new Error(`the worker exited with ${worker.exitCode} while waiting for ${type}\n${workerTail()}`);
+        if (hit === undefined && worker !== null && (worker.exitCode !== null || worker.signalCode !== null)) {
+          const how = worker.signalCode !== null ? `signal ${worker.signalCode}` : `code ${String(worker.exitCode)}`;
+          throw new Error(`the worker exited (${how}) while waiting for ${type}\n${workerTail()}`);
         }
         return hit;
       },
@@ -280,23 +335,50 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
   const idleAfter = (from: number): Promise<Received<MsgOf<'status.update'>>> =>
     next('status.update', (m) => m.state === 'idle', from, 20_000);
 
-  /** The steps share one worker and build on each other: once one fails, the rest are skipped. */
-  let failedStep: string | null = null;
+  /**
+   * One step of the scenario. `timeoutMs` is the vitest timeout; the body gets 2 s less, so its
+   * own bound fails it with the worker's output before vitest does. Each step's timeout is the
+   * sum of its inner waits plus 15 s, so a stuck wait reports itself before the bound fires.
+   */
   function step(name: string, body: () => Promise<void>, timeoutMs: number): void {
+    const boundMs = timeoutMs - 2_000;
     it(
       name,
       async (ctx) => {
         ctx.skip(failedStep !== null, `needs step "${failedStep ?? ''}", which failed`);
+        // a vitest-level timeout rejects from outside the body, so record the failure here too
+        ctx.onTestFailed(() => {
+          failedStep ??= name;
+        });
+        const run = body();
+        // after the bound gives up on it, its own rejection is expected, not unhandled
+        run.catch(() => undefined);
+        let timer: NodeJS.Timeout | undefined;
         try {
-          await body();
+          await Promise.race([
+            run,
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(() => {
+                reject(new Error(`step still running after ${boundMs} ms\n${workerTail()}`));
+              }, boundMs);
+            }),
+          ]);
         } catch (err) {
           failedStep = name;
           throw err;
+        } finally {
+          clearTimeout(timer);
         }
       },
       timeoutMs,
     );
   }
+
+  /** Outcomes the worker reported for `taskId`; a revoked task must have none. */
+  const outcomesOf = (taskId: string): Received[] =>
+    received.filter(
+      (r) => (r.msg.type === 'task.complete' || r.msg.type === 'task.quota_exhausted') && r.msg.taskId === taskId,
+    );
 
   beforeAll(async () => {
     if (!existsSync(BUNDLE)) {
@@ -312,7 +394,7 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
     fixture = createGitFixture();
 
     gitServer = await serveGit(fixture.root, home);
-    gitPort = portOf(gitServer);
+    gitPort = portOf(gitServer.server);
     // userinfo git accepts, which the worker must strip before it tells the hub
     fixture.run(fixture.repo, ['remote', 'set-url', 'origin', `http://e2e:not-a-real-credential@127.0.0.1:${gitPort}/origin.git`]);
 
@@ -340,6 +422,8 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
       HOME: home,
       USERPROFILE: home,
       XDG_CONFIG_HOME: path.join(home, '.config'),
+      // the fakes come first, so a lookup by name never reaches a real agy or gh either
+      PATH: `${bin}${path.delimiter}${process.env['PATH'] ?? ''}`,
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_TERMINAL_PROMPT: '0',
       CORTEX_AGY_BIN: writeWrapper(bin, 'agy', FAKE_AGY),
@@ -408,8 +492,9 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
       if (server !== null) await new Promise<void>((resolve) => server.close(() => resolve()));
     });
     await step(async () => {
-      const server = gitServer;
-      if (server === null) return;
+      if (gitServer === null) return;
+      const { server, children } = gitServer;
+      for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     });
@@ -441,7 +526,7 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
     expect(upgrades[0]?.authorization).toBe(`Bearer ${API_KEY}`);
 
     hubSend({ type: 'registered', connectionId: 'conn-1', projectId: 'project-e2e', hubVersion: m.version });
-  }, 30_000);
+  }, 35_000); // waits: 20 s
 
   step('2. runs T1 to a pushed commit, a pull request and passing tests', async () => {
     const t1 = makeTask(1, 'Add a greeting to the README', { model: 'gemini-4-argon-low' });
@@ -464,7 +549,7 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
     const prCreate = readJsonLines<{ args: string[] }>(ghLog).find((c) => c.args[0] === 'pr' && c.args[1] === 'create');
     expect(prCreate?.args).toEqual(expect.arrayContaining(['--head', t1.branch, '--base', 'main']));
     await idleAfter(done.index);
-  }, 60_000);
+  }, 85_000); // waits: 20 + 30 + 20 = 70 s
 
   step('3. declines T2 as busy while T3 runs; revoking T3 kills agy and pushes its WIP', async () => {
     const t3 = makeTask(3, 'Take a long time', { model: 'slow' });
@@ -485,11 +570,8 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
     // ruling 3: the slow model wrote SLOW.md first, so there is always a WIP commit
     expect(originGit(['log', '-1', '--format=%s', t3.branch])).toBe('WIP T3: revoked');
     expect(originGit(['show', '--name-only', '--format=', t3.branch]).split('\n')).toContain('SLOW.md');
-    const reported = received.filter(
-      (r) => (r.msg.type === 'task.complete' || r.msg.type === 'task.quota_exhausted') && r.msg.taskId === t3.id,
-    );
-    expect(reported).toEqual([]);
-  }, 60_000);
+    expect(outcomesOf(t3.id)).toEqual([]);
+  }, 100_000); // waits: 20 + 20 + 10 + 15 + 20 = 85 s
 
   step('4. hands T4 off on quota with a pushed WIP, then finishes it on the same branch', async () => {
     const t4 = makeTask(4, 'Survive a quota', { model: 'claude-sonnet-5-5-low' });
@@ -529,7 +611,7 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
     expect(lastRun?.model).toBe('gemini-4-argon-low');
     expect(lastRun?.prompt).toContain('## Handoff from the previous run');
     await idleAfter(done.index);
-  }, 90_000);
+  }, 135_000); // waits: 30 + 20 + 20 + 30 + 20 = 120 s
 
   step('5. reconnects and registers again after the connection drops (1006)', async () => {
     const before = conns.length;
@@ -549,7 +631,7 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
       5_000,
     );
     hubSend({ type: 'registered', connectionId: 'conn-2', projectId: 'project-e2e', hubVersion: reg.msg.version }, reg.conn);
-  }, 30_000);
+  }, 40_000); // waits: 20 + 5 = 25 s
 
   step('6. `cortex-worker stop` stops it: the worker exits 0 within 10 s', async () => {
     if (worker === null || workerExit === null) throw new Error('the worker never started');
@@ -574,6 +656,6 @@ describe.skipIf(process.platform === 'win32')('cortex-worker end to end (built b
     expect(workerOutput).not.toContain(API_KEY);
     expect(readFileSync(path.join(home, '.cortex', 'worker', AGENT_ID, 'worker.log'), 'utf8')).not.toContain(API_KEY);
     // the revoked T3 never reported an outcome, before or after the reconnect
-    expect(received.some((r) => r.msg.type === 'task.complete' && r.msg.taskId === 'task-e2e-t3')).toBe(false);
-  }, 30_000);
+    expect(outcomesOf('task-e2e-t3')).toEqual([]);
+  }, 35_000); // waits: 10 + 10 = 20 s
 });
