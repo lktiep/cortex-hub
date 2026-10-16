@@ -10,7 +10,9 @@ export interface WorkerBootstrap {
 
 /** Build the one-line worker bootstrap commands from the hub's MCP URL. */
 export function workerBootstrap(mcpUrl: string | null): WorkerBootstrap {
-  const hubBase = mcpUrl === null ? null : mcpUrl.replace(/\/+$/, '').replace(/\/mcp$/, '');
+  // Cut at the first ? or # so a query token never reaches the shell command.
+  const cleaned = mcpUrl === null ? '' : (mcpUrl.trim().split(/[?#]/)[0] ?? '');
+  const hubBase = cleaned === '' ? null : cleaned.replace(/\/+$/, '').replace(/\/mcp$/, '');
   const hub = hubBase ?? HOST_PLACEHOLDER;
   return {
     hubBase,
