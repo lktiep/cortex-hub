@@ -1,8 +1,8 @@
-import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { isEntrypoint, main, parseCli } from './cli.js';
 import { WORKER_VERSION } from './version.js';
 
@@ -30,6 +30,7 @@ describe('isEntrypoint', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cw-entry-'));
   const file = join(dir, 'Entry.mjs');
   writeFileSync(file, '');
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
   const url = pathToFileURL(file).href;
 
   it('follows a symlink to the real file', () => {
@@ -45,6 +46,11 @@ describe('isEntrypoint', () => {
     expect(isEntrypoint(url, swapped, 'linux')).toBe(false);
   });
 
+  it('is false for a malformed or non-file url', () => {
+    expect(isEntrypoint('not a url', '/x')).toBe(false);
+    expect(isEntrypoint('https://h/x.mjs', '/x')).toBe(false);
+  });
+
   it('is false without argv1', () => {
     expect(isEntrypoint(url, undefined)).toBe(false);
     expect(isEntrypoint(url, '')).toBe(false);
@@ -52,13 +58,13 @@ describe('isEntrypoint', () => {
 });
 
 describe('main', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('returns 2 for unknown commands and 0 for --version', async () => {
-    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     expect(await main(['bogus'])).toBe(2);
     expect(await main(['--version'])).toBe(0);
     expect(log).toHaveBeenCalledWith('0.0.0-dev');
-    err.mockRestore();
-    log.mockRestore();
   });
 });

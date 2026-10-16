@@ -43,9 +43,13 @@ export function isEntrypoint(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   if (!argv1) return false;
-  const self = canonical(fileURLToPath(metaUrl));
-  const entry = canonical(argv1);
-  return platform === 'win32' ? self.toLowerCase() === entry.toLowerCase() : self === entry;
+  try {
+    const self = canonical(fileURLToPath(metaUrl));
+    const entry = canonical(argv1);
+    return platform === 'win32' ? self.toLowerCase() === entry.toLowerCase() : self === entry;
+  } catch {
+    return false;
+  }
 }
 
 export async function main(argv: string[]): Promise<number> {
