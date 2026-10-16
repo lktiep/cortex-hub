@@ -2,7 +2,7 @@ import type { CortexConfig } from './config.js'
 
 /** Resolve the Dashboard API base URL (not MCP URL) */
 function getApiBaseUrl(config: CortexConfig): string {
-  // hubUrl is normally ws://localhost:8318 or wss://custom-domain.com
+  // hubUrl is the full conductor WebSocket URL
   // If it's a domain/host, we derive the API URL by replacing the MCP port/subdomain
   const wsUrl = config.hubUrl
     .replace('wss://', 'https://')

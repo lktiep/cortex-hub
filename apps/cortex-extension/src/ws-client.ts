@@ -1,6 +1,8 @@
 import WebSocket from 'ws'
 import { EventEmitter } from 'node:events'
+import { hostname } from 'node:os'
 import type { CortexConfig } from './config.js'
+import { conductorConnectUrl } from './mcp-config.js'
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected'
 
@@ -44,10 +46,14 @@ export class ConductorClient extends EventEmitter {
     this.intentionalClose = false
     this.setState('connecting')
 
-    const capsEncoded = encodeURIComponent(JSON.stringify(this.config.capabilities))
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const hostname = encodeURIComponent(require('os').hostname())
-    const url = `${this.config.hubUrl}/ws/conductor?apiKey=${this.config.apiKey}&agentId=${encodeURIComponent(this.config.agentId)}&capabilities=${capsEncoded}&ide=${this.config.ide}&platform=${encodeURIComponent(this.config.platform)}&hostname=${hostname}`
+    const url = conductorConnectUrl(this.config.hubUrl, {
+      apiKey: this.config.apiKey,
+      agentId: this.config.agentId,
+      capabilities: this.config.capabilities,
+      ide: this.config.ide,
+      platform: this.config.platform,
+      hostname: hostname(),
+    })
 
     this.ws = new WebSocket(url)
 

@@ -759,7 +759,7 @@ export function activate(context: vscode.ExtensionContext): void {
   )
 
   // Auto-connect on activation
-  log(`Config loaded: agentId=${config.agentId} hubUrl=${config.hubUrl} apiKey=${config.apiKey ? '***' + config.apiKey.slice(-8) : 'NONE'} autoConnect=${config.autoConnect}`)
+  log(`Config loaded: agentId=${config.agentId} hubUrl=${config.hubUrl} hubSource=${config.hubSource} apiKey=${config.apiKey ? '***' + config.apiKey.slice(-8) : 'NONE'} autoConnect=${config.autoConnect}`)
   if (config.autoConnect && config.apiKey) {
     log('Auto-connecting to Hub...')
     initClient(config)

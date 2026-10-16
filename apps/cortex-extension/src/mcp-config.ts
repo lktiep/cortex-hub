@@ -158,7 +158,8 @@ export function detectHub(
     const derived = toConductorWsUrl(url)
     if (derived === undefined) continue
     const entryEnv = isRecord(entry['env']) ? entry['env'] : {}
-    const override = asString(entryEnv['CORTEX_HUB_WS_URL'])
+    const overrideRaw = asString(entryEnv['CORTEX_HUB_WS_URL'])
+    const override = overrideRaw === undefined ? undefined : toConductorWsUrl(overrideRaw)
     return {
       mcpUrl: url,
       wsUrl: override ?? derived,
@@ -167,4 +168,19 @@ export function detectHub(
     }
   }
   return undefined
+}
+
+/** Build the conductor connect URL. `wsUrl` already ends in /ws/conductor; the query is URL-encoded. */
+export function conductorConnectUrl(
+  wsUrl: string,
+  p: { apiKey: string; agentId: string; capabilities: string[]; ide: string; platform: string; hostname: string },
+): string {
+  const url = new URL(wsUrl)
+  url.searchParams.set('apiKey', p.apiKey)
+  url.searchParams.set('agentId', p.agentId)
+  url.searchParams.set('capabilities', JSON.stringify(p.capabilities))
+  url.searchParams.set('ide', p.ide)
+  url.searchParams.set('platform', p.platform)
+  url.searchParams.set('hostname', p.hostname)
+  return url.toString()
 }

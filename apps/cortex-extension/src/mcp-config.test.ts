@@ -1,8 +1,11 @@
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_HUB_WS_URL,
+  conductorConnectUrl,
   detectHub,
   entryEndpoint,
+  mcpSources,
   toConductorWsUrl,
 } from './mcp-config.js'
 
@@ -86,10 +89,15 @@ describe('detectHub', () => {
   const ws = '/w'
   const A = 'https://a.example.com/mcp'
   const B = 'https://b.example.com/mcp'
+  const CLAUDE = join(home, '.claude.json')
+  const MCPJSON = join(ws, '.mcp.json')
+  const AGY = join(home, '.gemini', 'antigravity', 'mcp_config.json')
+  const VSC = join(ws, '.vscode', 'mcp.json')
+  const CURSOR = join(home, '.cursor', 'mcp.json')
 
   it('per-project entry beats top level', () => {
     const read = files({
-      '/h/.claude.json': {
+      [CLAUDE]: {
         projects: { '/w': { mcpServers: { 'cortex-hub': http(A, 'ka') } } },
         mcpServers: { 'cortex-hub': http(B, 'kb') },
       },
@@ -102,16 +110,16 @@ describe('detectHub', () => {
 
   it('.mcp.json beats ~/.claude.json', () => {
     const read = files({
-      '/w/.mcp.json': { mcpServers: { 'cortex-hub': http(A, 'ka') } },
-      '/h/.claude.json': { mcpServers: { 'cortex-hub': http(B, 'kb') } },
+      [MCPJSON]: { mcpServers: { 'cortex-hub': http(A, 'ka') } },
+      [CLAUDE]: { mcpServers: { 'cortex-hub': http(B, 'kb') } },
     })
     expect(detectHub(read, home, ws, {})?.mcpUrl).toBe(A)
   })
 
   it('takes the key from the same entry only', () => {
     const read = files({
-      '/h/.claude.json': { mcpServers: { 'cortex-hub': http(A) } },
-      '/h/.gemini/antigravity/mcp_config.json': { mcpServers: { 'cortex-hub': http(B, 'kb') } },
+      [CLAUDE]: { mcpServers: { 'cortex-hub': http(A) } },
+      [AGY]: { mcpServers: { 'cortex-hub': http(B, 'kb') } },
     })
     const got = detectHub(read, home, ws, {})
     expect(got?.mcpUrl).toBe(A)
@@ -120,30 +128,30 @@ describe('detectHub', () => {
 
   it('prefers the cortex-hub key, else any cortex key', () => {
     const both = files({
-      '/h/.claude.json': {
+      [CLAUDE]: {
         mcpServers: { 'cortex-dev': http(A, 'ka'), 'cortex-hub': http(B, 'kb') },
       },
     })
     expect(detectHub(both, home, ws, {})?.mcpUrl).toBe(B)
-    const only = files({ '/h/.claude.json': { mcpServers: { 'Cortex-X': http(A, 'ka') } } })
+    const only = files({ [CLAUDE]: { mcpServers: { 'Cortex-X': http(A, 'ka') } } })
     expect(detectHub(only, home, ws, {})?.mcpUrl).toBe(A)
   })
 
   it('reads VS Code servers', () => {
-    const read = files({ '/w/.vscode/mcp.json': { servers: { 'cortex-hub': http(A) } } })
+    const read = files({ [VSC]: { servers: { 'cortex-hub': http(A) } } })
     expect(detectHub(read, home, ws, {})?.mcpUrl).toBe(A)
   })
 
   it('skips invalid and missing files', () => {
     const read = files({
-      '/w/.mcp.json': '{not json',
-      '/h/.cursor/mcp.json': { mcpServers: { 'cortex-hub': http(A, 'ka') } },
+      [MCPJSON]: '{not json',
+      [CURSOR]: { mcpServers: { 'cortex-hub': http(A, 'ka') } },
     })
     expect(detectHub(read, home, ws, {})?.mcpUrl).toBe(A)
   })
 
   it('skips workspace sources without a workspace', () => {
-    const read = files({ '/w/.mcp.json': { mcpServers: { 'cortex-hub': http(A) } } })
+    const read = files({ [MCPJSON]: { mcpServers: { 'cortex-hub': http(A) } } })
     expect(detectHub(read, home, undefined, {})).toBeUndefined()
   })
 
@@ -152,10 +160,10 @@ describe('detectHub', () => {
   })
 
   it('derives wsUrl and honours the CORTEX_HUB_WS_URL override', () => {
-    const plain = files({ '/h/.claude.json': { mcpServers: { 'cortex-hub': http(A, 'ka') } } })
+    const plain = files({ [CLAUDE]: { mcpServers: { 'cortex-hub': http(A, 'ka') } } })
     expect(detectHub(plain, home, ws, {})?.wsUrl).toBe('wss://a.example.com/ws/conductor')
     const over = files({
-      '/h/.claude.json': {
+      [CLAUDE]: {
         mcpServers: {
           'cortex-hub': {
             ...http(A, 'ka'),
@@ -165,5 +173,79 @@ describe('detectHub', () => {
       },
     })
     expect(detectHub(over, home, ws, {})?.wsUrl).toBe('wss://x.example.com/ws/conductor')
+  })
+
+  const withOverride = (value: string) =>
+    files({
+      [CLAUDE]: { mcpServers: { 'cortex-hub': { ...http(A, 'ka'), env: { CORTEX_HUB_WS_URL: value } } } },
+    })
+
+  it('normalises a valid override through toConductorWsUrl', () => {
+    expect(detectHub(withOverride('https://x.example.com/mcp'), home, ws, {})?.wsUrl).toBe(
+      'wss://x.example.com/ws/conductor',
+    )
+  })
+
+  it('ignores an invalid override and keeps the derived URL', () => {
+    expect(detectHub(withOverride('not a url'), home, ws, {})?.wsUrl).toBe('wss://a.example.com/ws/conductor')
+  })
+})
+
+describe('mcpSources', () => {
+  const home = '/h'
+  const ws = '/w'
+
+  it('pins the full order with a workspace', () => {
+    expect(mcpSources(home, ws)).toEqual([
+      { path: join(ws, '.mcp.json') },
+      { path: join(home, '.claude.json'), project: ws },
+      { path: join(home, '.claude.json') },
+      { path: join(home, '.claude', 'claude_mcp_config.json') },
+      { path: join(ws, '.gemini', 'settings.json') },
+      { path: join(home, '.gemini', 'settings.json') },
+      { path: join(home, '.gemini', 'antigravity', 'mcp_config.json') },
+      { path: join(home, '.cursor', 'mcp.json') },
+      { path: join(home, '.codeium', 'windsurf', 'mcp_config.json') },
+      { path: join(ws, '.vscode', 'mcp.json') },
+    ])
+  })
+
+  it('omits workspace-only sources without a workspace', () => {
+    expect(mcpSources(home)).toEqual([
+      { path: join(home, '.claude.json') },
+      { path: join(home, '.claude', 'claude_mcp_config.json') },
+      { path: join(home, '.gemini', 'settings.json') },
+      { path: join(home, '.gemini', 'antigravity', 'mcp_config.json') },
+      { path: join(home, '.cursor', 'mcp.json') },
+      { path: join(home, '.codeium', 'windsurf', 'mcp_config.json') },
+    ])
+  })
+})
+
+describe('conductorConnectUrl', () => {
+  const params = {
+    apiKey: 'a+b/c=',
+    agentId: 'host-vscode',
+    capabilities: ['code-edit', 'terminal'],
+    ide: 'vscode',
+    platform: 'macOS',
+    hostname: 'my host',
+  }
+  const out = conductorConnectUrl('wss://h.example.com/ws/conductor', params)
+
+  it('has the conductor path exactly once', () => {
+    expect(new URL(out).pathname).toBe('/ws/conductor')
+  })
+  it('round-trips the api key', () => {
+    expect(new URL(out).searchParams.get('apiKey')).toBe('a+b/c=')
+  })
+  it('encodes capabilities as a JSON array', () => {
+    const caps = new URL(out).searchParams.get('capabilities')
+    expect(JSON.parse(caps ?? '')).toEqual(params.capabilities)
+  })
+  it('has exactly the six keys', () => {
+    expect([...new URL(out).searchParams.keys()].sort()).toEqual(
+      ['agentId', 'apiKey', 'capabilities', 'hostname', 'ide', 'platform'],
+    )
   })
 })

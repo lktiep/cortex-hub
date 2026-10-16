@@ -54,12 +54,12 @@
         "cortexHub.apiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "API key for Cortex Hub authentication. Falls back to `CORTEX_HUB_API_KEY` env var, then `~/.claude.json` MCP config."
+          "markdownDescription": "API key for Cortex Hub authentication. Resolution order: this setting, then `CORTEX_HUB_API_KEY` / `HUB_API_KEY` / `CORTEX_API_KEY` env vars, then MCP configs (Claude Code, `.mcp.json`, Gemini, Antigravity, Cursor, Windsurf, VS Code)."
         },
         "cortexHub.hubUrl": {
           "type": "string",
-          "default": "ws://localhost:8318",
-          "markdownDescription": "Cortex Hub WebSocket URL. Falls back to `CORTEX_HUB_WS_URL` env var, then `~/.claude.json` MCP config."
+          "default": "",
+          "markdownDescription": "Cortex Hub conductor WebSocket URL. Resolution order: this setting, then `CORTEX_HUB_WS_URL` / `CORTEX_HUB_URL` env vars, then MCP configs (Claude Code, `.mcp.json`, Gemini, Antigravity, Cursor, Windsurf, VS Code), then `ws://localhost:8318/ws/conductor`."
         },
         "cortexHub.agentId": {
           "type": "string",
