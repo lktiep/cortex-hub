@@ -153,6 +153,16 @@ describe('createTree', () => {
     expect(count()).toBe(0)
   })
 
+  it('refuses malformed fallback, dependsOn and files with an error and writes nothing', () => {
+    expect(failure(tree(work('A', { fallback: [null] as never }))).error).toContain('A')
+    expect(failure(tree(work('A', { fallback: 'x' as never }))).error).toContain('A')
+    expect(failure(tree(work('A'), work('B', { dependsOn: 'A' as never }))).error).toContain('B')
+    expect(failure(tree(work('A', { dependsOn: [3] as never }))).error).toContain('A')
+    expect(failure(tree(work('A', { files: 'a.ts' as never }))).error).toContain('A')
+    expect(failure({ tasks: 'x' as never }).error).toMatch(/tasks/)
+    expect(count()).toBe(0)
+  })
+
   it('maps priority labels and normalizes files', () => {
     success(tree(work('A', { priority: 'high', files: ['./src//a.ts'] }), work('B', { priority: 2 }), work('C')))
     expect(byKey('A').priority).toBe(3)
@@ -243,6 +253,30 @@ describe('rerouteTask', () => {
       expect(rerouteTask('t1', patch as never, null)).toMatchObject({ ok: false, status: 400 })
     }
     expect(row('t1').executor).toBeNull()
+    expect(logs('t1', 'rerouted')).toHaveLength(0)
+  })
+
+  it("rerouting a group's dependsOn is refused", () => {
+    const ws = connect('w1')
+    insertTask(testDb, { id: 'g', task_key: 'G', kind: 'group', status: 'pending' })
+    insertTask(testDb, { id: 'k', task_key: 'K', parent_task_id: 'g', status: 'in_progress', assigned_to_agent: 'w1', attempt: 1 })
+    const r = rerouteTask('g', { dependsOn: ['k'] }, null)
+    expect(r).toMatchObject({ ok: false, status: 400, error: "a group's dependencies are set on its tasks" })
+    expect(row('g').depends_on).toBe('[]')
+    expect(row('g').status).toBe('pending')
+    expect(logs('g', 'rerouted')).toHaveLength(0)
+    expect((ws.sent as { type: string }[]).filter((m) => m.type === 'task.revoked')).toHaveLength(0)
+    expect(row('k').status).toBe('in_progress')
+  })
+
+  it('refuses malformed fallback, dependsOn and files with 400 and changes nothing', () => {
+    insertTask(testDb, { id: 't1', status: 'pending' })
+    insertTask(testDb, { id: 'o', status: 'pending' })
+    for (const patch of [{ fallback: [null] }, { fallback: ['x'] }, { fallback: {} }, { dependsOn: 'o' }, { dependsOn: [1] }, { files: 'a.ts' }, { files: [null] }]) {
+      expect(rerouteTask('t1', patch as never, null)).toMatchObject({ ok: false, status: 400 })
+    }
+    expect(row('t1').fallback).toBeNull()
+    expect(row('t1').depends_on).toBe('[]')
     expect(logs('t1', 'rerouted')).toHaveLength(0)
   })
 

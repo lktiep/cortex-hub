@@ -54,10 +54,19 @@ export function knownExecutor(e: unknown): boolean {
 export function fallbackProblem(fallback: RouteSpec[] | null | undefined): string | null {
   if (fallback === undefined || fallback === null) return null
   if (!Array.isArray(fallback)) return 'fallback must be a list'
+  for (const f of fallback as unknown[]) {
+    if (typeof f !== 'object' || f === null || Array.isArray(f)) return 'fallback entries must be objects'
+  }
   for (const f of fallback) {
     if (f.executor !== null && !knownExecutor(f.executor)) return `unknown fallback executor ${String(f.executor)}`
   }
   return null
+}
+
+/** A problem text when `value` is present but not an array of strings, else null. */
+export function stringListProblem(name: string, value: unknown): string | null {
+  if (value === undefined) return null
+  return Array.isArray(value) && value.every((v) => typeof v === 'string') ? null : `${name} must be a list of strings`
 }
 
 function newId(): string {
@@ -97,10 +106,16 @@ interface Plan {
 /** Validates the whole request; nothing is written. */
 function plan(req: TreeCreateRequest, existingKeys: Set<string>): { plans: Map<string, Plan> } | { err: TreeError } {
   const plans = new Map<string, Plan>()
+  if (!Array.isArray(req.tasks)) return { err: { error: 'tasks must be a list' } }
   for (const input of req.tasks) {
+    if (typeof input !== 'object' || input === null) return { err: { error: 'every task must be an object' } }
     if (typeof input.key !== 'string' || input.key === '') return { err: { error: 'every task needs a non-empty key' } }
     if (plans.has(input.key)) return { err: { error: `duplicate key ${input.key}` } }
     if (existingKeys.has(input.key)) return { err: { error: `key ${input.key} is already used in that tree` } }
+    for (const [name, value] of [['dependsOn', input.dependsOn], ['files', input.files]] as const) {
+      const bad = stringListProblem(name, value)
+      if (bad !== null) return { err: { error: `${input.key}: ${bad}` } }
+    }
     const kind = input.kind ?? 'work'
     const priority = priorityValue(input.priority)
     if (priority === null) return { err: { error: `${input.key}: unknown priority ${String(input.priority)}` } }

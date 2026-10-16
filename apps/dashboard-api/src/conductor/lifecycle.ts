@@ -17,7 +17,7 @@ import { normalizeFiles } from './files.js'
 import {
   ACTIVE_STATUSES, getTask, isoSeconds, logTask, parseJson, stringList, taskContext, taskLabel, type TaskRow,
 } from './rows.js'
-import { fallbackProblem, findCycle, knownExecutor, priorityValue } from './tree.js'
+import { fallbackProblem, findCycle, knownExecutor, priorityValue, stringListProblem } from './tree.js'
 
 export type Outcome = { ok: true; task: TaskRow } | { ok: false; status: 403 | 404 | 409; error: string }
 
@@ -660,7 +660,13 @@ function badRoute(error: string, cycle?: string[]): RerouteOutcome {
 }
 
 /** The first problem in a route patch, before anything is written. */
-function routeProblem(taskId: string, patch: RoutePatch): RerouteOutcome | null {
+function routeProblem(task: TaskRow, patch: RoutePatch): RerouteOutcome | null {
+  const taskId = task.id
+  for (const [name, value] of [['dependsOn', patch.dependsOn], ['files', patch.files]] as const) {
+    const bad = stringListProblem(name, value)
+    if (bad !== null) return badRoute(bad)
+  }
+  if (patch.dependsOn !== undefined && task.kind === 'group') return badRoute("a group's dependencies are set on its tasks")
   if (patch.executor !== undefined && patch.executor !== null && !knownExecutor(patch.executor)) {
     return badRoute(`unknown executor ${String(patch.executor)}`)
   }
@@ -719,7 +725,7 @@ export function rerouteTask(taskId: string, patch: RoutePatch, by: string | null
   const before = getTask(taskId)
   if (before === undefined) return { ok: false, status: 404, error: `task ${taskId} not found` }
   if (isTerminal(before.status)) return { ok: false, status: 409, error: `reroute ignored: task is ${before.status}` }
-  const problem = routeProblem(taskId, patch)
+  const problem = routeProblem(before, patch)
   if (problem !== null) return problem
   if (patch.dependsOn !== undefined) {
     const cycle = rerouteCycle(before, patch.dependsOn)
