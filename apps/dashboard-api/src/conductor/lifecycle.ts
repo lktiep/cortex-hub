@@ -13,7 +13,9 @@ import { getConductorConfig } from './config.js'
 import { dispatch } from './dispatcher.js'
 import { formatNotification, notifyLead } from './notify.js'
 import { getByAgent, sendTo, setStatus } from './registry.js'
-import { ACTIVE_STATUSES, getTask, isoSeconds, logTask, parseJson, stringList, taskContext, type TaskRow } from './rows.js'
+import {
+  ACTIVE_STATUSES, getTask, isoSeconds, logTask, parseJson, stringList, taskContext, taskLabel, type TaskRow,
+} from './rows.js'
 
 export type Outcome = { ok: true; task: TaskRow } | { ok: false; status: 403 | 404 | 409; error: string }
 
@@ -122,14 +124,19 @@ function flush(sends: Send[]): void {
     }
   }
   if (delivered.size === 0) return
-  db.transaction(() => {
-    for (const [taskId, agents] of delivered) {
-      const task = getTask(taskId)
-      if (task === undefined) continue
-      const notified = [...new Set([...stringList(task.notified_agents), ...agents])]
-      db.prepare('UPDATE conductor_tasks SET notified_agents = ? WHERE id = ?').run(JSON.stringify(notified), taskId)
-    }
-  })()
+  try {
+    db.transaction(() => {
+      for (const [taskId, agents] of delivered) {
+        const task = getTask(taskId)
+        if (task === undefined) continue
+        const notified = [...new Set([...stringList(task.notified_agents), ...agents])]
+        db.prepare('UPDATE conductor_tasks SET notified_agents = ? WHERE id = ?').run(JSON.stringify(notified), taskId)
+      }
+    })()
+  } catch (e) {
+    // the step has committed: bookkeeping must not stop the worker update or the dispatch pass
+    console.error('[conductor] recording notified_agents failed:', e)
+  }
 }
 
 /** Runs `step` in one transaction; after a successful commit, sends, marks the worker and dispatches. */
@@ -539,12 +546,37 @@ function rejectWork(task: TaskRow, by: string, feedback: string, now: number): v
 }
 
 /**
+ * Undoes what `returned`'s completion released, now that `gate` sent it back:
+ * its `pending` dependents are blocked again, and a completed `group` parent
+ * reopens (`pending`, completion cleared), in turn up the tree. Dependents that
+ * already started are left alone (spec §6.2); a legacy `work` parent is not
+ * reopened. Completing the task again releases them through the chain.
+ */
+function unwindCompletion(returned: TaskRow, gate: TaskRow, by: string): void {
+  const message = `${taskLabel(returned)} returned by ${taskLabel(gate)}`
+  const pending = db.prepare("SELECT * FROM conductor_tasks WHERE status = 'pending'").all() as TaskRow[]
+  for (const dependent of pending) {
+    if (!stringList(dependent.depends_on).includes(returned.id)) continue
+    db.prepare("UPDATE conductor_tasks SET status = 'blocked' WHERE id = ?").run(dependent.id)
+    logTask(dependent.id, by, 'reblocked', message)
+  }
+  const parent = returned.parent_task_id === null ? undefined : getTask(returned.parent_task_id)
+  if (parent?.kind !== 'group' || parent.status !== 'completed') return
+  db.prepare("UPDATE conductor_tasks SET status = 'pending', completed_at = NULL, completed_by = NULL WHERE id = ?").run(parent.id)
+  logTask(parent.id, by, 'reopened', message)
+  unwindCompletion(current(parent.id), gate, by)
+}
+
+/**
  * The lead's verdict (spec §6.2, §6.6). On a `work` task in `review`: approve
  * → `completed` and the chain; reject → back to `pending` with the feedback.
- * On a `gate` in `pending`: approve → `completed` and the chain; reject → each
- * completed direct dependency of kind `work` is rejected the same way and the
- * gate returns to `blocked`. A `user` gate is approved only from the dashboard.
- * `by` defaults to the channel. Anything else → 409.
+ * On a `gate` in `pending`: approve (every dependency completed, else 409) →
+ * `completed` and the chain; reject → the gate returns to `blocked` and each
+ * completed direct dependency of kind `work` is rejected the same way, its
+ * completion unwound (`unwindCompletion`); with none to return → 409. A `user`
+ * gate is reviewed only from the dashboard. `by` defaults to the channel.
+ * Anything else → 409 with an `ignored` log row; the 403 and the two gate
+ * 409s above write nothing.
  */
 export function reviewTask(taskId: string, req: ReviewRequest, via: 'mcp' | 'dashboard'): Outcome {
   const by = req.by ?? (via === 'dashboard' ? 'dashboard' : 'mcp')
@@ -558,6 +590,9 @@ export function reviewTask(taskId: string, req: ReviewRequest, via: 'mcp' | 'das
     const now = Date.now()
 
     if (req.verdict === 'approve') {
+      if (task.kind === 'gate' && !allCompleted(stringList(task.depends_on))) {
+        return refused({ ok: false, status: 409, error: 'dependencies not complete' })
+      }
       db.prepare("UPDATE conductor_tasks SET status = 'completed', completed_at = ?, completed_by = ? WHERE id = ?")
         .run(isoSeconds(now), by, taskId)
       logTask(taskId, by, 'approved', req.feedback?.slice(0, LOG_MESSAGE_MAX))
@@ -571,14 +606,22 @@ export function reviewTask(taskId: string, req: ReviewRequest, via: 'mcp' | 'das
     const feedback = req.feedback ?? ''
     if (task.kind === 'work') {
       rejectWork(task, by, feedback, now)
-    } else {
-      for (const depId of stringList(task.depends_on)) {
-        const dep = getTask(depId)
-        // only finished work goes back; an active task would need its worker revoked first
-        if (dep?.kind === 'work' && dep.status === 'completed') rejectWork(dep, by, feedback, now)
-      }
-      db.prepare("UPDATE conductor_tasks SET status = 'blocked' WHERE id = ?").run(taskId)
-      logTask(taskId, by, 'rejected', feedback.slice(0, LOG_MESSAGE_MAX))
+      return { outcome: { ok: true, task: current(taskId) }, worker: null }
+    }
+
+    // only finished direct work goes back (not a group's children); an active task would need its worker revoked first
+    const returned = [...new Set(stringList(task.depends_on))]
+      .map((id) => getTask(id))
+      .filter((dep): dep is TaskRow => dep?.kind === 'work' && dep.status === 'completed')
+    if (returned.length === 0) {
+      return refused({ ok: false, status: 409, error: 'nothing to return: cancel the gate or reroute its dependencies' })
+    }
+    // blocked first, so the unwinding below does not count the gate among the pending dependents
+    db.prepare("UPDATE conductor_tasks SET status = 'blocked' WHERE id = ?").run(taskId)
+    logTask(taskId, by, 'rejected', feedback.slice(0, LOG_MESSAGE_MAX))
+    for (const dep of returned) {
+      rejectWork(dep, by, feedback, now)
+      unwindCompletion(dep, task, by)
     }
     return { outcome: { ok: true, task: current(taskId) }, worker: null }
   })

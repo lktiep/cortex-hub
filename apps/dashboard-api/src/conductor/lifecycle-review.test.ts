@@ -77,6 +77,18 @@ function notifications(): { recipient: string; task_id: string; kind: string; me
     .all() as { recipient: string; task_id: string; kind: string; message: string }[]
 }
 
+function gate(id: string, dependsOn: string[], extra: Partial<TaskRow> = {}): TaskRow {
+  return insertTask(testDb, {
+    id, task_key: id.toUpperCase(), kind: 'gate', approver: 'lead', status: 'pending',
+    depends_on: JSON.stringify(dependsOn), api_key_owner: 'lead', ...extra,
+  })
+}
+
+/** A returned task's next attempt, running on `agentId` (its dispatch is covered by the dispatcher's tests). */
+function rerun(id: string, agentId: string): void {
+  testDb.prepare("UPDATE conductor_tasks SET status = 'in_progress', assigned_to_agent = ? WHERE id = ?").run(agentId, id)
+}
+
 beforeEach(() => {
   testDb = createTestDb()
   resetRegistry(NOW)
@@ -362,5 +374,106 @@ describe('review of a gate', () => {
     // only work dependencies go back
     expect(row('h').status).toBe('completed')
     expect(notifications().filter((n) => n.kind === 'escalated').map((n) => n.task_id)).toEqual(['b'])
+  })
+
+  it('user gate rejected over MCP is 403 and changes nothing', () => {
+    done('a')
+    gate('g', ['a'], { approver: 'user' })
+    const before = [row('a'), row('g')]
+
+    expect(reviewTask('g', { verdict: 'reject', feedback: 'wrong', by: 'lead' }, 'mcp'))
+      .toEqual({ ok: false, status: 403, error: 'user gates are approved in the dashboard' })
+    expect([row('a'), row('g')]).toEqual(before)
+    expect([...logs('a'), ...logs('g')]).toEqual([])
+  })
+
+  it('approving a gate whose dependencies are not all completed is 409', () => {
+    done('a')
+    running('b', 'w1')
+    gate('g', ['a', 'b'])
+    const before = row('g')
+
+    expect(reviewTask('g', { verdict: 'approve' }, 'dashboard')).toEqual({ ok: false, status: 409, error: 'dependencies not complete' })
+    expect(row('g')).toEqual(before)
+    expect(logs('g')).toEqual([])
+  })
+
+  it('a rejection that returns a shared dependency re-blocks the other gate until it completes again', () => {
+    insertTask(testDb, { id: 'l', status: 'completed' })
+    done('w', { task_key: 'W', parent_task_id: 'l', branch: 'cx/w', last_agent: 'w1', attempt: 1 })
+    gate('g1', ['w'])
+    gate('g2', ['w'])
+
+    expect(reviewTask('g1', { verdict: 'reject', feedback: 'wrong API shape', by: 'lead' }, 'mcp').ok).toBe(true)
+
+    expect(row('w').status).toBe('pending')
+    expect(row('g1').status).toBe('blocked')
+    expect(row('g2').status).toBe('blocked')
+    expect(logs('g2', 'reblocked')).toEqual([{ action: 'reblocked', agent_id: 'lead', message: 'W returned by G1' }])
+    expect(logs('g1', 'reblocked')).toEqual([])
+    // a legacy work parent is not reopened
+    expect(row('l').status).toBe('completed')
+
+    // G2 can no longer be approved on the returned work
+    const blockedG2 = row('g2')
+    expect(reviewTask('g2', { verdict: 'approve' }, 'mcp')).toMatchObject({ ok: false, status: 409 })
+    expect(row('g2')).toEqual(blockedG2)
+
+    // the fixed work completes again: both gates wait for approval again
+    rerun('w', 'w1')
+    expect(completeTask('w', 'w1', 'completed', { summary: 'fixed' }).ok).toBe(true)
+    expect(row('g1').status).toBe('pending')
+    expect(row('g2').status).toBe('pending')
+    expect(notifications().filter((n) => n.kind === 'gate_ready').map((n) => n.task_id)).toEqual(['g1', 'g2'])
+    expect(reviewTask('g2', { verdict: 'approve' }, 'mcp').ok).toBe(true)
+  })
+
+  it('gate rejection reopens completed groups up the tree and re-blocks what waits on them', () => {
+    insertTask(testDb, { id: 'o', task_key: 'O', kind: 'group', status: 'completed', completed_at: isoSeconds(NOW), completed_by: 'x' })
+    insertTask(testDb, {
+      id: 'p', task_key: 'P', kind: 'group', status: 'completed', parent_task_id: 'o',
+      completed_at: isoSeconds(NOW), completed_by: 'x',
+    })
+    done('a', { task_key: 'A', parent_task_id: 'p', branch: 'cx/a', last_agent: 'w1' })
+    done('b', { parent_task_id: 'p' })
+    gate('g', ['a'])
+    insertTask(testDb, { id: 'c', status: 'pending', depends_on: '["p"]' })
+    insertTask(testDb, { id: 'e', status: 'in_progress', assigned_to_agent: 'w2', depends_on: '["p"]' })
+
+    expect(reviewTask('g', { verdict: 'reject', feedback: 'wrong', by: 'lead' }, 'mcp').ok).toBe(true)
+
+    expect(row('a').status).toBe('pending')
+    expect(row('p')).toMatchObject({ status: 'pending', completed_at: null, completed_by: null })
+    expect(logs('p', 'reopened')).toEqual([{ action: 'reopened', agent_id: 'lead', message: 'A returned by G' }])
+    expect(row('o')).toMatchObject({ status: 'pending', completed_at: null, completed_by: null })
+    expect(logs('o', 'reopened')).toEqual([{ action: 'reopened', agent_id: 'lead', message: 'P returned by G' }])
+    expect(row('c').status).toBe('blocked')
+    expect(logs('c', 'reblocked')).toEqual([{ action: 'reblocked', agent_id: 'lead', message: 'P returned by G' }])
+    // a dependent that already started is left alone
+    expect(row('e').status).toBe('in_progress')
+    expect(row('b').status).toBe('completed')
+
+    rerun('a', 'w1')
+    expect(completeTask('a', 'w1', 'completed', { summary: 'fixed' }).ok).toBe(true)
+    expect(row('p').status).toBe('completed')
+    expect(row('o').status).toBe('completed')
+    expect(row('c').status).toBe('pending')
+    expect(row('g').status).toBe('pending')
+  })
+
+  it('a gate rejection with nothing to return is 409 and changes nothing', () => {
+    done('h', { kind: 'group' })
+    done('hc', { parent_task_id: 'h' })
+    done('g0', { kind: 'gate' })
+    gate('g', ['h', 'g0'])
+    const all = (): unknown[] => testDb.prepare('SELECT * FROM conductor_tasks ORDER BY id').all()
+    const before = all()
+
+    expect(reviewTask('g', { verdict: 'reject', feedback: 'wrong', by: 'lead' }, 'mcp')).toEqual({
+      ok: false, status: 409, error: 'nothing to return: cancel the gate or reroute its dependencies',
+    })
+    expect(all()).toEqual(before)
+    expect(testDb.prepare('SELECT COUNT(*) AS n FROM conductor_task_logs').get()).toEqual({ n: 0 })
+    expect(notifications()).toEqual([])
   })
 })

@@ -281,7 +281,7 @@ function handleMessage(agent: ConnectedAgent, msg: Record<string, unknown>) {
       const completedTask = db.prepare('SELECT * FROM conductor_tasks WHERE id = ?').get(completedTaskId)
       if (completedTask) {
         try { onCompleted(completedTask as Parameters<typeof onCompleted>[0]) } catch (e) {
-          console.error('[ws] resolveCompletionChain error:', e)
+          console.error('[ws] onCompleted error:', e)
         }
       }
 
