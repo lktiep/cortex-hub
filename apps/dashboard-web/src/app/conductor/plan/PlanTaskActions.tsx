@@ -1,13 +1,14 @@
 'use client'
 
-// Per-task actions for the plan drawer: the task's outcome, approve and reject (saying what each does),
-// clear escalation, reroute, review history.
+// Per-task controls for the plan drawer. PlanTaskDecision leads the drawer: what the task produced and
+// what Approve / Reject do, so the decision is made knowing what it covers. PlanTaskActions closes it:
+// reroute and review history.
 import { useMemo, useRef, useState } from 'react'
 import { EXECUTORS, reviewConductorTask, routeConductorTask } from '@/lib/api'
 import type { ConductorWorker, Executor } from '@/lib/api'
 import { actionErrorMessage, availableActions } from '@/lib/conductor-plan/actions'
 import type { PlanTask } from '@/lib/conductor-plan/model'
-import { approveContext, listKeys } from '@/lib/conductor-plan/outcome'
+import { approveContext, listKeys, taskOutcome } from '@/lib/conductor-plan/outcome'
 import {
   modelOptions, pinOptions, routeBodyFromForm, routeFormFrom, type RouteForm,
 } from '@/lib/conductor-plan/route-form'
@@ -15,32 +16,11 @@ import { formatTimeAgo } from '../components/shared'
 import { PlanOutcome } from './PlanOutcome'
 import styles from './plan.module.css'
 
-interface Props {
-  task: PlanTask
-  /** Every task of the plan, for what approving releases and a gate's dependencies. */
-  byId: Map<string, PlanTask>
-  workers: ConductorWorker[]
-  onDone: () => void
-  onSelect: (id: string) => void
-}
-
-export function PlanTaskActions({ task, byId, workers, onDone, onSelect }: Props) {
-  const avail = availableActions(task)
-  const ctx = useMemo(() => approveContext(task, byId), [task, byId])
+/** One hub call at a time, with its error; a 409 means the task moved on, so the plan reloads too. */
+function useRun(onDone: () => void) {
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false) // state lags a same-tick double click; the ref does not
   const [error, setError] = useState<string | null>(null)
-  const [rejecting, setRejecting] = useState(false)
-  const [feedback, setFeedback] = useState('')
-  const [form, setForm] = useState<RouteForm>(() => routeFormFrom(task))
-  // The form is diffed against what it showed on mount, so a poll that brings a reroute made
-  // elsewhere cannot make Save send the old values back.
-  const [baseline, setBaseline] = useState<RouteForm>(form)
-
-  const body = routeBodyFromForm(form, baseline)
-  const changed = Object.keys(body).length > 0
-  const models = modelOptions(workers, form.executor)
-  const pins = pinOptions(workers, form.pinnedAgent)
 
   async function run(call: () => Promise<unknown>, afterOk?: () => void) {
     if (busyRef.current) return
@@ -60,11 +40,33 @@ export function PlanTaskActions({ task, byId, workers, onDone, onSelect }: Props
     }
   }
 
+  return { busy, error, run }
+}
+
+interface DecisionProps {
+  task: PlanTask
+  /** Every task of the plan, for what approving releases and a gate's dependencies. */
+  byId: Map<string, PlanTask>
+  onDone: () => void
+  onSelect: (id: string) => void
+}
+
+/** The task's outcome, then Approve / Reject saying what each does, and Clear escalation. */
+export function PlanTaskDecision({ task, byId, onDone, onSelect }: DecisionProps) {
+  const avail = availableActions(task)
+  const ctx = useMemo(() => approveContext(task, byId), [task, byId])
+  const outcome = useMemo(() => (task.kind === 'gate' ? null : taskOutcome(task.row)), [task])
+  const { busy, error, run } = useRun(onDone)
+  const [rejecting, setRejecting] = useState(false)
+  const [feedback, setFeedback] = useState('')
+
+  const gate = task.kind === 'gate'
+  if (!gate && !outcome && !avail.review && !avail.clearEscalation && !error) return null
   return (
-    <div className={styles.actions}>
+    <div className={styles.decision}>
       <PlanOutcome
-        task={task}
-        deps={task.kind === 'gate' ? ctx.deps : null}
+        outcome={outcome}
+        deps={gate ? ctx.deps : null}
         external={ctx.external}
         approving={avail.review}
         onSelect={onSelect}
@@ -120,6 +122,34 @@ export function PlanTaskActions({ task, byId, workers, onDone, onSelect }: Props
           Clear escalation
         </button>
       )}
+      {error && <div className={styles.actionError} role="alert">{error}</div>}
+    </div>
+  )
+}
+
+interface ActionsProps {
+  task: PlanTask
+  workers: ConductorWorker[]
+  onDone: () => void
+}
+
+/** Reroute and review history, at the foot of the drawer. */
+export function PlanTaskActions({ task, workers, onDone }: ActionsProps) {
+  const avail = availableActions(task)
+  const { busy, error, run } = useRun(onDone)
+  const [form, setForm] = useState<RouteForm>(() => routeFormFrom(task))
+  // The form is diffed against what it showed on mount, so a poll that brings a reroute made
+  // elsewhere cannot make Save send the old values back.
+  const [baseline, setBaseline] = useState<RouteForm>(form)
+
+  const body = routeBodyFromForm(form, baseline)
+  const changed = Object.keys(body).length > 0
+  const models = modelOptions(workers, form.executor)
+  const pins = pinOptions(workers, form.pinnedAgent)
+
+  if (!avail.route && task.reviews.length === 0 && !error) return null
+  return (
+    <div className={styles.actions}>
       {avail.route && (
         <div className={styles.actionForm}>
           <div className={styles.actionLabel}>Route</div>

@@ -2,17 +2,17 @@
 
 // Outcome card for the plan drawer: what a task produced (pull request, branch, commit, tests, summary)
 // and, for a gate, the outcomes of the dependencies its approval covers. Logic lives in outcome.ts.
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { MarkdownRenderer } from '@/components/ui/MarkdownRenderer'
-import type { PlanTask } from '@/lib/conductor-plan/model'
-import { isLongSummary, prLabel, taskOutcome, TESTS_LABEL } from '@/lib/conductor-plan/outcome'
+import { isLongSummary, prLabel, TESTS_LABEL } from '@/lib/conductor-plan/outcome'
 import type { ApproveDep, TaskOutcome, TestsState } from '@/lib/conductor-plan/outcome'
 import { STATUS_COLOR, STATUS_LABEL } from '@/lib/conductor-plan/status'
 import styles from './plan.module.css'
 
 interface Props {
-  task: PlanTask
+  /** The task's own outcome (taskOutcome); work only. */
+  outcome: TaskOutcome | null
   /** A gate's dependencies, from approveContext; null for work. */
   deps: ApproveDep[] | null
   /** A gate's dependencies outside this plan. */
@@ -22,9 +22,7 @@ interface Props {
   onSelect: (id: string) => void
 }
 
-export function PlanOutcome({ task, deps, external, approving, onSelect }: Props) {
-  const outcome = useMemo(() => (deps ? null : taskOutcome(task.row)), [deps, task.row])
-
+export function PlanOutcome({ outcome, deps, external, approving, onSelect }: Props) {
   if (deps) {
     return (
       <section className={styles.outcome} aria-label={approving ? 'You are approving' : 'Dependencies'}>

@@ -241,6 +241,8 @@
 .approve { display: flex; flex-direction: column; gap: 6px; }
 .approveNote { margin: 0; font: 500 11.5px/1.45 var(--font-mono); color: var(--muted); }
 .approveNote[data-blocked='1'] { color: var(--st-held); }
+/* The drawer's lead, between the title and the meta grid: the outcome, then the decision. */
+.decision { display: flex; flex-direction: column; gap: 10px; margin-bottom: var(--space-4, 16px); }
 
 /* ── outcome card (drawer) ── */
 .outcome { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; color: var(--text); }

@@ -10,6 +10,7 @@ import { actionErrorMessage } from '@/lib/conductor-plan/actions'
 import { criticalPath, fileConflicts } from '@/lib/conductor-plan/analysis'
 import { computeDepths, selectPhase } from '@/lib/conductor-plan/layout'
 import { toPlanTasks } from '@/lib/conductor-plan/model'
+import { taskOutcome } from '@/lib/conductor-plan/outcome'
 import {
   awaitingLead,
   groupTabs,
@@ -23,7 +24,7 @@ import { PlanBoard } from './PlanBoard'
 import { PlanGraph } from './PlanGraph'
 import { PlanProgress } from './PlanProgress'
 import { PlanSidePanel } from './PlanSidePanel'
-import { PlanTaskActions } from './PlanTaskActions'
+import { PlanTaskActions, PlanTaskDecision } from './PlanTaskActions'
 import styles from './plan.module.css'
 import { usePlanFlash } from './usePlanFlash'
 
@@ -239,14 +240,23 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
           onClose={() => setSelectedId(undefined)}
           onCancel={() => void handleCancel(selected.id)}
           onDelete={() => handleDelete(selected.id)}
+          lead={
+            <PlanTaskDecision
+              key={selected.id}
+              task={selected}
+              byId={byId}
+              onDone={() => void mutate()}
+              onSelect={setSelectedId}
+            />
+          }
+          // Only a result the outcome card can show leaves the Result section: a list or unknown shape stays there.
+          resultInLead={selected.kind !== 'gate' && taskOutcome(selected.row) !== null}
           actions={
             <PlanTaskActions
               key={selected.id}
               task={selected}
-              byId={byId}
               workers={workers}
               onDone={() => void mutate()}
-              onSelect={setSelectedId}
             />
           }
         />

@@ -55,6 +55,8 @@ export function TaskDetail({
   onDelete,
   onMarkDone,
   onNewTaskFromOutcome,
+  lead,
+  resultInLead = false,
   actions,
 }: {
   task: ConductorTask
@@ -64,6 +66,11 @@ export function TaskDetail({
   onDelete: () => void | boolean | Promise<void | boolean>
   onMarkDone?: () => void
   onNewTaskFromOutcome?: (task: ConductorTask) => void
+  /** Rendered right under the title, before everything else in the body. */
+  lead?: React.ReactNode
+  /** The lead already shows the result, so the plain Result section is skipped (a Decision Matrix still shows). */
+  resultInLead?: boolean
+  /** Rendered under the body, above the sticky buttons. */
   actions?: React.ReactNode
 }) {
   const isRunning = task.status === 'in_progress' || task.status === 'accepted' || task.status === 'analyzing'
@@ -121,6 +128,16 @@ export function TaskDetail({
       if (ctx.decisions) contextDecisions = ctx.decisions as Record<string, FindingDecision>
     }
   } catch { /* ignore */ }
+  // A lead that shows the result replaces the plain Result section, never a Decision Matrix.
+  const resultSection = structuredResult !== null || !resultInLead
+  const newTaskFromOutcome = onNewTaskFromOutcome && (
+    <button
+      className={styles.outcomeActionBtn}
+      onClick={() => { onNewTaskFromOutcome(task); onClose() }}
+    >
+      New Task from Outcome
+    </button>
+  )
 
   return (
     <div className={styles.detailOverlay} onClick={onClose}>
@@ -155,6 +172,9 @@ export function TaskDetail({
           <h2 className={styles.detailTitle} style={{ marginBottom: 'var(--space-4)', fontSize: '1.0625rem' }}>
             {task.title}
           </h2>
+
+          {lead}
+          {task.result && !resultSection && newTaskFromOutcome}
 
           {/* Compact meta grid */}
           <div className={styles.detailMetaGrid}>
@@ -259,7 +279,7 @@ export function TaskDetail({
           )}
 
           {/* Result: DecisionMatrix for structured findings, or MarkdownRenderer */}
-          {task.result && (
+          {task.result && resultSection && (
             <Section title={structuredResult ? 'Decision Matrix' : 'Result'} defaultOpen={true}>
               {structuredResult ? (
                 <DecisionMatrix
@@ -272,14 +292,7 @@ export function TaskDetail({
               ) : (
                 <ResultDisplay result={task.result} />
               )}
-              {onNewTaskFromOutcome && (
-                <button
-                  className={styles.outcomeActionBtn}
-                  onClick={() => { onNewTaskFromOutcome(task); onClose() }}
-                >
-                  New Task from Outcome
-                </button>
-              )}
+              {newTaskFromOutcome}
             </Section>
           )}
 
