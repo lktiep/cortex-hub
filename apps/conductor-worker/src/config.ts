@@ -158,6 +158,9 @@ function mcpEntries(input: DetectInput): () => McpEntry[] {
         env,
         '~/.gemini/antigravity/mcp_config.json mcpServers',
       ),
+    // Antigravity 2.x keeps its MCP servers here; the path above is often a symlink to this file.
+    () =>
+      readMcpJson(path.join(homeDir, '.gemini', 'config', 'mcp_config.json'), env, '~/.gemini/config/mcp_config.json mcpServers'),
     () => readMcpJson(path.join(homeDir, '.cursor', 'mcp.json'), env, '~/.cursor/mcp.json mcpServers'),
   ];
   let cache: McpEntry[] | null = null;

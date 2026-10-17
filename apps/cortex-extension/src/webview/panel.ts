@@ -1,10 +1,16 @@
 import * as vscode from 'vscode';
 
-interface AgentStatus {
+export interface AgentStatus {
   agentId: string;
   capabilities: string[];
   connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'reconnecting';
   uptime: number;
+  /** `***` and the key's last 8 characters, or '' when there is no key. Never the key. */
+  keyHint?: string;
+  /** Where the key came from: 'window', 'setting', 'env:<NAME>', a config path or 'none'. */
+  keySource?: string;
+  /** Why the connection stopped, when the hub closed it on purpose. */
+  note?: string;
 }
 
 interface Task {
@@ -37,8 +43,34 @@ type ExtensionMessage =
   | { type: 'webviewReady' }
   | { type: 'pickupTask'; taskId: string }
   | { type: 'viewTask'; taskId: string }
-  | { type: 'renameAgent'; newName: string }
-  | { type: 'updateCapabilities'; capabilities: string[] };
+  | { type: 'saveAgent'; agentId: string; capabilities: string[]; apiKey?: string }
+  | { type: 'resetWindow' };
+
+/** The sidebar and the editor-tab panel send the same messages; both land here. */
+function dispatch(message: ExtensionMessage): void {
+  switch (message.type) {
+    case 'refreshTasks':
+    case 'webviewReady':
+      vscode.commands.executeCommand('cortex.refreshData');
+      break;
+    case 'pickupTask':
+      vscode.commands.executeCommand('cortex.pickupTask', message.taskId);
+      break;
+    case 'viewTask':
+      vscode.commands.executeCommand('cortex.viewTask', message.taskId);
+      break;
+    case 'saveAgent':
+      vscode.commands.executeCommand('cortex.saveAgent', {
+        agentId: message.agentId,
+        capabilities: message.capabilities,
+        apiKey: message.apiKey,
+      });
+      break;
+    case 'resetWindow':
+      vscode.commands.executeCommand('cortex.resetWindow');
+      break;
+  }
+}
 
 /** Build HTML for the webview (shared between sidebar + panel) */
 function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
@@ -67,6 +99,11 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
     </div>
     <div class="agent-uptime"><span class="label">Uptime</span><span class="value mono" id="agent-uptime">0s</span></div>
   </div>
+  <div class="agent-key">
+    <span class="label">API key</span>
+    <span class="value mono" id="agent-key">--</span>
+    <input class="edit-input agent-key-input" id="agent-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="New key for this window (empty keeps it)" style="display:none" />
+  </div>
   <div class="capabilities" id="capabilities"></div>
   <div class="capability-add" id="capability-add" style="display:none">
     <select class="cap-select" id="cap-select">
@@ -88,7 +125,9 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
   <div class="edit-actions" id="edit-actions" style="display:none">
     <button class="btn-save" id="edit-save">Save</button>
     <button class="btn-cancel" id="edit-cancel">Cancel</button>
+    <button class="btn-cancel btn-reset" id="edit-reset" title="Forget this window's name, capabilities and key, and use the cortexHub settings again">Reset window</button>
   </div>
+  <div class="edit-hint" id="edit-hint" style="display:none">Saved for this window only. The key goes to the OS keychain, not settings.json.</div>
   <div class="connection-status" id="connection-status">Disconnected</div>
 </section>
 <section class="card stats-card" id="stats-section">
@@ -136,34 +175,11 @@ export class CortexWebviewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = buildWebviewHtml(webviewView.webview, this.extensionUri);
 
-    webviewView.webview.onDidReceiveMessage((message: ExtensionMessage) => {
-      this.handleMessage(message);
-    });
+    webviewView.webview.onDidReceiveMessage(dispatch);
   }
 
   public postMessage(message: WebviewMessage): void {
     this.view?.webview.postMessage(message);
-  }
-
-  private handleMessage(message: ExtensionMessage): void {
-    switch (message.type) {
-      case 'refreshTasks':
-      case 'webviewReady':
-        vscode.commands.executeCommand('cortex.refreshData');
-        break;
-      case 'pickupTask':
-        vscode.commands.executeCommand('cortex.pickupTask', message.taskId);
-        break;
-      case 'viewTask':
-        vscode.commands.executeCommand('cortex.viewTask', message.taskId);
-        break;
-      case 'renameAgent':
-        vscode.commands.executeCommand('cortex.renameAgent', message.newName);
-        break;
-      case 'updateCapabilities':
-        vscode.commands.executeCommand('cortex.updateCapabilities', message.capabilities);
-        break;
-    }
   }
 }
 
@@ -184,7 +200,7 @@ export class CortexPanel {
 
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
-      (message: ExtensionMessage) => this.handleMessage(message),
+      dispatch,
       null,
       this.disposables
     );
@@ -217,27 +233,6 @@ export class CortexPanel {
 
   public postMessage(message: WebviewMessage): void {
     this.panel.webview.postMessage(message);
-  }
-
-  private handleMessage(message: ExtensionMessage): void {
-    switch (message.type) {
-      case 'refreshTasks':
-      case 'webviewReady':
-        vscode.commands.executeCommand('cortex.refreshData');
-        break;
-      case 'pickupTask':
-        vscode.commands.executeCommand('cortex.pickupTask', message.taskId);
-        break;
-      case 'viewTask':
-        vscode.commands.executeCommand('cortex.viewTask', message.taskId);
-        break;
-      case 'renameAgent':
-        vscode.commands.executeCommand('cortex.renameAgent', message.newName);
-        break;
-      case 'updateCapabilities':
-        vscode.commands.executeCommand('cortex.updateCapabilities', message.capabilities);
-        break;
-    }
   }
 
   private update(): void {

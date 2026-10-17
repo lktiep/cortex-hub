@@ -207,6 +207,7 @@ describe('mcpSources', () => {
       { path: join(ws, '.gemini', 'settings.json') },
       { path: join(home, '.gemini', 'settings.json') },
       { path: join(home, '.gemini', 'antigravity', 'mcp_config.json') },
+      { path: join(home, '.gemini', 'config', 'mcp_config.json') },
       { path: join(home, '.cursor', 'mcp.json') },
       { path: join(home, '.codeium', 'windsurf', 'mcp_config.json') },
       { path: join(ws, '.vscode', 'mcp.json') },
@@ -219,6 +220,7 @@ describe('mcpSources', () => {
       { path: join(home, '.claude', 'claude_mcp_config.json') },
       { path: join(home, '.gemini', 'settings.json') },
       { path: join(home, '.gemini', 'antigravity', 'mcp_config.json') },
+      { path: join(home, '.gemini', 'config', 'mcp_config.json') },
       { path: join(home, '.cursor', 'mcp.json') },
       { path: join(home, '.codeium', 'windsurf', 'mcp_config.json') },
     ])
@@ -295,15 +297,15 @@ describe('resolveHubUrl / resolveApiKey', () => {
     expect(resolveHubUrl('', {}, none)).toEqual({ url: DEFAULT_HUB_WS_URL, source: 'default' })
   })
 
-  it('key: setting, then env order, then detection, then empty', () => {
-    expect(resolveApiKey('ks', { CORTEX_HUB_API_KEY: 'k1' }, detect)).toBe('ks')
+  it('key: setting, then env order, then detection, then empty, each with its source', () => {
+    expect(resolveApiKey('ks', { CORTEX_HUB_API_KEY: 'k1' }, detect)).toEqual({ key: 'ks', source: 'setting' })
     const env = { CORTEX_API_KEY: 'k3', HUB_API_KEY: 'k2', CORTEX_HUB_API_KEY: 'k1' }
-    expect(resolveApiKey('', env, detect)).toBe('k1')
-    expect(resolveApiKey('', { CORTEX_API_KEY: 'k3', HUB_API_KEY: 'k2' }, detect)).toBe('k2')
-    expect(resolveApiKey('', { CORTEX_API_KEY: 'k3' }, detect)).toBe('k3')
-    expect(resolveApiKey('', {}, detect)).toBe('kd')
-    expect(resolveApiKey('', {}, () => ({ ...found, apiKey: null }))).toBe('')
-    expect(resolveApiKey('', {}, none)).toBe('')
+    expect(resolveApiKey('', env, detect)).toEqual({ key: 'k1', source: 'env:CORTEX_HUB_API_KEY' })
+    expect(resolveApiKey('', { CORTEX_API_KEY: 'k3', HUB_API_KEY: 'k2' }, detect)).toEqual({ key: 'k2', source: 'env:HUB_API_KEY' })
+    expect(resolveApiKey('', { CORTEX_API_KEY: 'k3' }, detect)).toEqual({ key: 'k3', source: 'env:CORTEX_API_KEY' })
+    expect(resolveApiKey('', {}, detect)).toEqual({ key: 'kd', source: found.source })
+    expect(resolveApiKey('', {}, () => ({ ...found, apiKey: null }))).toEqual({ key: '', source: 'none' })
+    expect(resolveApiKey('', {}, none)).toEqual({ key: '', source: 'none' })
   })
 
   it('does not detect when setting and env supply both', () => {

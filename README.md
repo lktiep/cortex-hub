@@ -385,6 +385,20 @@ curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/ru
 $env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host>
 ```
 
+### Editor Extension (Antigravity IDE, VS Code, Cursor, Windsurf)
+
+```bash
+# macOS / Linux — installs the latest cortex-agent.vsix into every editor it finds
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install-extension.sh | bash
+```
+
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install-extension.ps1 | iex
+```
+
+Or download [`cortex-agent.vsix`](https://github.com/lktiep/cortex-hub/releases/latest/download/cortex-agent.vsix) and use **Install from VSIX...**. Each window can run its own agent with its own key: see [`docs/conductor/antigravity.md`](docs/conductor/antigravity.md).
+
 ### One-Command Project Setup
 
 ```bash
@@ -505,6 +519,7 @@ cortex-hub/
 | [`docs/architecture/agent-quality-strategy.md`](docs/architecture/agent-quality-strategy.md) | Quality gates + scoring |
 | [`docs/conductor.md`](docs/conductor.md) | Multi-agent conductor: status, quick tour, limitations |
 | [`docs/conductor/setup.md`](docs/conductor/setup.md) | Conductor setup, per machine |
+| [`docs/conductor/antigravity.md`](docs/conductor/antigravity.md) | Antigravity IDE, app and headless agy on macOS and Windows |
 | [`docs/conductor/manual-test-checklist.md`](docs/conductor/manual-test-checklist.md) | Manual checks per environment (Windows, Docker, VSIX, live hub) |
 | [Conductor showcase](https://lktiep.github.io/cortex-hub/) | One-page tour of the Conductor |
 | [`docs/api/hub-mcp-reference.md`](docs/api/hub-mcp-reference.md) | Full MCP tool API reference |

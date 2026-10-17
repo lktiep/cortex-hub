@@ -34,6 +34,10 @@ const dom = {
   editActions: /** @type {HTMLElement} */ (document.getElementById('edit-actions')),
   editSave: /** @type {HTMLElement} */ (document.getElementById('edit-save')),
   editCancel: /** @type {HTMLElement} */ (document.getElementById('edit-cancel')),
+  editReset: /** @type {HTMLElement} */ (document.getElementById('edit-reset')),
+  editHint: /** @type {HTMLElement} */ (document.getElementById('edit-hint')),
+  agentKey: /** @type {HTMLElement} */ (document.getElementById('agent-key')),
+  agentKeyInput: /** @type {HTMLInputElement} */ (document.getElementById('agent-key-input')),
 };
 
 // ── Message Handler ────────────────────────────────────────────────────────
@@ -64,21 +68,29 @@ window.addEventListener('message', (event) => {
 
 // ── Agent Status ───────────────────────────────────────────────────────────
 /**
- * @param {{ agentId: string; capabilities: string[]; connectionStatus: string; uptime: number }} agent
+ * @param {{ agentId: string; capabilities: string[]; connectionStatus: string; uptime: number;
+ *   keyHint?: string; keySource?: string; note?: string }} agent
  */
 function renderAgent(agent) {
-  currentAgentId = agent.agentId;
-  currentCapabilities = [...agent.capabilities];
-
-  dom.agentId.textContent = agent.agentId;
+  // A refresh arrives every 15 s; it must not undo what is being typed in the form.
+  if (!editMode) {
+    currentAgentId = agent.agentId;
+    currentCapabilities = [...agent.capabilities];
+    dom.agentId.textContent = agent.agentId;
+    renderCapabilityBadges();
+  }
   dom.agentUptime.textContent = formatUptime(agent.uptime);
+
+  // Only the masked hint ever reaches the webview, never the key.
+  if (agent.keySource !== undefined) {
+    dom.agentKey.textContent = agent.keyHint ? `${agent.keyHint} · ${agent.keySource}` : 'none';
+    dom.agentKey.title = agent.keySource;
+  }
 
   // Connection dot
   dom.connectionDot.className = 'connection-dot ' + agent.connectionStatus;
-  dom.connectionStatus.textContent = capitalize(agent.connectionStatus);
+  dom.connectionStatus.textContent = agent.note || capitalize(agent.connectionStatus);
   dom.connectionStatus.className = 'connection-status ' + agent.connectionStatus;
-
-  renderCapabilityBadges();
 }
 
 function renderCapabilityBadges() {
@@ -381,8 +393,11 @@ function enterEditMode() {
   dom.agentId.style.display = 'none';
   dom.agentNameInput.style.display = '';
   dom.agentNameInput.value = currentAgentId;
+  dom.agentKeyInput.style.display = '';
+  dom.agentKeyInput.value = '';
   dom.capabilityAdd.style.display = '';
   dom.editActions.style.display = '';
+  dom.editHint.style.display = '';
   dom.editToggle.classList.add('active');
   renderCapabilityBadges();
   dom.agentNameInput.focus();
@@ -392,23 +407,22 @@ function exitEditMode() {
   editMode = false;
   dom.agentId.style.display = '';
   dom.agentNameInput.style.display = 'none';
+  dom.agentKeyInput.style.display = 'none';
+  dom.agentKeyInput.value = '';
   dom.capabilityAdd.style.display = 'none';
   dom.editActions.style.display = 'none';
+  dom.editHint.style.display = 'none';
   dom.editToggle.classList.remove('active');
   dom.capSelect.value = '';
   renderCapabilityBadges();
 }
 
+/** One message for name, capabilities and key, so the extension reconnects once. It answers with a toast. */
 function saveEdits() {
-  const newName = dom.agentNameInput.value.trim();
-  if (newName && newName !== currentAgentId) {
-    vscode.postMessage({ type: 'renameAgent', newName });
-    currentAgentId = newName;
-    dom.agentId.textContent = newName;
-  }
-  vscode.postMessage({ type: 'updateCapabilities', capabilities: [...currentCapabilities] });
+  const agentId = dom.agentNameInput.value.trim() || currentAgentId;
+  const apiKey = dom.agentKeyInput.value.trim() || undefined;
+  vscode.postMessage({ type: 'saveAgent', agentId, capabilities: [...currentCapabilities], apiKey });
   exitEditMode();
-  showToast('Agent settings saved', 'success');
 }
 
 dom.editToggle.addEventListener('click', () => {
@@ -426,13 +440,20 @@ dom.editCancel.addEventListener('click', () => {
   exitEditMode();
 });
 
-dom.agentNameInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    saveEdits();
-  } else if (e.key === 'Escape') {
-    exitEditMode();
-  }
+dom.editReset.addEventListener('click', () => {
+  vscode.postMessage({ type: 'resetWindow' });
+  exitEditMode();
 });
+
+for (const input of [dom.agentNameInput, dom.agentKeyInput]) {
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      saveEdits();
+    } else if (e.key === 'Escape') {
+      exitEditMode();
+    }
+  });
+}
 
 dom.capSelect.addEventListener('change', () => {
   const val = dom.capSelect.value;

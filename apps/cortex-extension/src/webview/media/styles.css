@@ -139,6 +139,28 @@ h2 {
   color: var(--text-primary);
 }
 
+.agent-key {
+  margin-bottom: var(--sp-3);
+}
+
+.agent-key .label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-bottom: var(--sp-1);
+}
+
+.agent-key .value {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.agent-key-input {
+  font-size: 12px;
+  font-weight: 400;
+}
+
 /* Connection dot — animated pulse */
 .connection-dot {
   width: 8px;
@@ -682,4 +704,14 @@ h2 {
 .btn-cancel:hover {
   background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+.btn-reset {
+  margin-left: auto;
+}
+
+.edit-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: var(--sp-2);
 }

@@ -1,8 +1,10 @@
 import * as vscode from 'vscode'
 import { readFileSync } from 'node:fs'
 import { hostname } from 'node:os'
-import { detectHub, resolveApiKey, resolveHubUrl } from './mcp-config.js'
+import { detectHub, resolveHubUrl } from './mcp-config.js'
 import type { HubDetection } from './mcp-config.js'
+import { resolveIdentity } from './identity.js'
+import type { WindowAgent } from './identity.js'
 
 export interface CortexConfig {
   apiKey: string
@@ -14,6 +16,8 @@ export interface CortexConfig {
   autoConnect: boolean
   /** Where hubUrl came from: 'setting', 'env:<NAME>', a config path or 'default'. Never the key. */
   hubSource: string
+  /** Where apiKey came from: 'window', 'setting', 'env:<NAME>', a config path or 'none'. Never the key. */
+  keySource: string
 }
 
 /** Detect which IDE we're running in */
@@ -47,10 +51,10 @@ function readText(path: string): string | undefined {
   }
 }
 
-export function getConfig(): CortexConfig {
+/** The settings, env and MCP configs, with this window's own choices (Agent Panel) on top. */
+export function getConfig(window: WindowAgent = {}): CortexConfig {
   const settings = vscode.workspace.getConfiguration('cortexHub')
   const ide = detectIde()
-  const agentId = settings.get<string>('agentId', '') || `${hostname()}-${ide}`
 
   const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
   // Detection reads config files; run it at most once, and only if setting and env leave a gap.
@@ -60,15 +64,27 @@ export function getConfig(): CortexConfig {
     return detection.value
   }
   const hub = resolveHubUrl(settings.get<string>('hubUrl', ''), process.env, detect)
+  const identity = resolveIdentity(
+    window,
+    {
+      agentId: settings.get<string>('agentId', ''),
+      capabilities: settings.get<string[]>('capabilities'),
+      apiKey: settings.get<string>('apiKey', ''),
+    },
+    `${hostname()}-${ide}`,
+    process.env,
+    detect,
+  )
 
   return {
-    apiKey: resolveApiKey(settings.get<string>('apiKey', ''), process.env, detect),
+    apiKey: identity.apiKey,
     hubUrl: hub.url,
-    agentId,
+    agentId: identity.agentId,
     ide,
     platform: friendlyPlatform(),
-    capabilities: settings.get<string[]>('capabilities', ['code-edit', 'terminal', 'file-read']),
+    capabilities: identity.capabilities,
     autoConnect: settings.get<boolean>('autoConnect', true),
     hubSource: hub.source,
+    keySource: identity.keySource,
   }
 }

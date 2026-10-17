@@ -9,7 +9,7 @@ export type ReadText = (path: string) => string | undefined
 export interface McpEntry { [k: string]: unknown }
 export interface HubDetection { mcpUrl: string; wsUrl: string; apiKey: string | null; source: string }
 
-type Env = Record<string, string | undefined>
+export type Env = Record<string, string | undefined>
 
 const CONDUCTOR_PATH = '/ws/conductor'
 const KEY_ENV_NAMES = ['HUB_API_KEY', 'CORTEX_HUB_API_KEY', 'CORTEX_API_KEY']
@@ -55,6 +55,8 @@ export function mcpSources(home: string, workspace?: string): Array<{ path: stri
   if (workspace) out.push({ path: join(workspace, '.gemini', 'settings.json') })
   out.push({ path: join(home, '.gemini', 'settings.json') })
   out.push({ path: join(home, '.gemini', 'antigravity', 'mcp_config.json') })
+  // Antigravity 2.x (app, IDE and agy) reads this one; older builds and our scripts use the line above.
+  out.push({ path: join(home, '.gemini', 'config', 'mcp_config.json') })
   out.push({ path: join(home, '.cursor', 'mcp.json') })
   out.push({ path: join(home, '.codeium', 'windsurf', 'mcp_config.json') })
   if (workspace) out.push({ path: join(workspace, '.vscode', 'mcp.json') })
@@ -210,12 +212,21 @@ export function resolveHubUrl(
   return { url: DEFAULT_HUB_WS_URL, source: 'default' }
 }
 
-/** Resolve the API key: setting, env, MCP config, ''. `detect` runs only when needed. */
-export function resolveApiKey(setting: string, env: Env, detect: () => HubDetection | undefined): string {
-  if (setting) return setting
+/**
+ * Resolve the API key: setting, env, MCP config, ''. `source` is 'setting', 'env:<NAME>', the
+ * config path or 'none'; it never carries the key. `detect` runs only when needed.
+ */
+export function resolveApiKey(
+  setting: string,
+  env: Env,
+  detect: () => HubDetection | undefined,
+): { key: string; source: string } {
+  if (setting) return { key: setting, source: 'setting' }
   for (const name of API_KEY_ENV_NAMES) {
     const v = env[name]
-    if (v) return v
+    if (v) return { key: v, source: `env:${name}` }
   }
-  return detect()?.apiKey ?? ''
+  const detected = detect()
+  if (detected?.apiKey) return { key: detected.apiKey, source: detected.source }
+  return { key: '', source: 'none' }
 }

@@ -16,10 +16,10 @@ open the dashboard), `<lead-api-key>` and `<worker-api-key>`.
 ## 0. Before you start
 
 - [ ] The hub runs the release you are testing. `curl -s <dashboard-url>/health` (or port 4000
-  on the hub host) returns `"version": "1.0.0"`. The compose file uses `:latest` images with
+  on the hub host) returns that version, for example `"version": "1.0.1"`. The compose file uses `:latest` images with
   watchtower; to pull now, run `docker compose pull && docker compose up -d` in `infra/`.
 - [ ] The hub serves the same worker: `curl -s https://<your-mcp-host>/conductor/worker.version`
-  prints `1.0.0`.
+  prints the same version.
 - [ ] Two keys exist in Dashboard, Settings, API Keys: `lead`, and one `worker-<host>` per worker
   machine ([setup §2](setup.md#2-api-keys)).
 - [ ] A sandbox repository on GitHub that you do not mind getting pull requests: a README and one
@@ -119,12 +119,17 @@ worker from check 2 running. **Covers:** planning in one call, notices, review.
 
 **Where:** a machine with `agy` installed. **Covers:** which file agy reads its MCP servers from.
 
-1. Put the `cortex-hub` entry only in `~/.gemini/antigravity/mcp_config.json`
-   ([setup §5](setup.md#agy-antigravity-cli)). Edit the file in an editor; do not print it.
-2. Start `agy` in the sandbox clone and ask it to call the `cortex_health` tool.
-3. If agy does not see the tool, move the entry to `~/.gemini/config/mcp_config.json` (the
-   vendor's path) and try again.
-4. `node ~/.cortex/worker/cortex-worker.mjs doctor` and read the `engine MCP configs` row.
+1. `ls -l ~/.gemini/antigravity/mcp_config.json ~/.gemini/config/mcp_config.json` (on Windows,
+   `dir $HOME\.gemini\antigravity, $HOME\.gemini\config`). Note which exist, and whether the
+   first is a symlink to the second. Do not print their contents.
+2. Put the `cortex-hub` entry in `~/.gemini/config/mcp_config.json`, the Antigravity 2.x path
+   ([antigravity §3](antigravity.md#3-antigravity-the-agent-app-mcp)). Edit the file in an
+   editor.
+3. Start `agy` in the sandbox clone and ask it to call the `cortex_health` tool.
+4. If agy does not see the tool, put the entry in `~/.gemini/antigravity/mcp_config.json` instead
+   and try again.
+5. `node ~/.cortex/worker/cortex-worker.mjs doctor --engines agy` and read the `engine MCP
+   configs` row.
 
 **Pass when:**
 
@@ -146,22 +151,24 @@ check; run it when it happens, or with an account that has little quota left.
 the failure (`node ~/.cortex/worker/cortex-worker.mjs logs`). These lines are what the quota
 patterns need. Remove anything that looks like a key, an email address or a host before sending.
 
-## 7. VS Code extension (packaged VSIX)
+## 7. Extension in VS Code and Antigravity IDE (released VSIX)
 
-**Where:** a machine with VS Code and a clone of cortex-hub. **Covers:** the extension finds the hub
-and connects to `/ws/conductor` once.
+**Where:** a machine with Antigravity IDE or VS Code. **Covers:** the released VSIX installs, finds
+the hub, connects to `/ws/conductor` once, and keeps one agent per window.
 
-1. Build and package:
+1. Install it from the latest release ([antigravity §1](antigravity.md#1-antigravity-ide-install-the-extension)):
 
    ```bash
-   pnpm install
-   pnpm --filter cortex-agent build
-   cd apps/cortex-extension && pnpm package
+   curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install-extension.sh | bash
    ```
 
-2. `code --install-extension apps/cortex-extension/cortex-agent-<version>.vsix`, then reload VS
-   Code and open the sandbox clone.
+   On Windows: `irm https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install-extension.ps1 | iex`.
+   To test a build of your own instead: `pnpm --filter cortex-agent build`, then
+   `pnpm --filter cortex-agent package`, and pass the file with `--vsix`.
+2. Reload the editor and open the sandbox clone.
 3. Open View, Output, and pick **Cortex Agent**.
+4. Run the per-window steps 2 to 7 of the [Antigravity checklist](antigravity.md#5-checklist):
+   a key set with the pencil, a second window with its own name, and the same name twice.
 
 **Pass when:**
 
@@ -170,6 +177,9 @@ and connects to `/ws/conductor` once.
 - [ ] The URL it connects to ends in `/ws/conductor` exactly once (never
   `/ws/conductor/ws/conductor`).
 - [ ] The agent shows in Agents Online on the dashboard.
+- [ ] Two windows with two names stay connected for 5 minutes, with no flapping.
+- [ ] With the same name twice, the older window stops with the 4000 message and does not
+  reconnect on its own.
 
 ## 8. Worker on Windows
 
@@ -234,6 +244,6 @@ Copy this table into an issue or a message, one row per check and environment.
 | 4. Dashboard with worker | | | |
 | 5. agy MCP path | | | |
 | 6. Quota output | | | |
-| 7. VSIX | | | |
+| 7. Extension (VSIX, two windows) | | | |
 | 8. Worker Windows | | | |
 | 9. `install.ps1` / `onboard.ps1` | | | |

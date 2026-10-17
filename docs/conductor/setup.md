@@ -163,10 +163,11 @@ writes:
 }
 ```
 
-The vendor's MCP page describes a different file (`~/.gemini/config/mcp_config.json`) and a
-direct form with `serverUrl` and `headers`, without `mcp-remote`. The worker reads the
-`antigravity/` path above. If your agy build uses the vendor's path, put the entry there too
-(unverified on this branch — check the vendor page).
+Antigravity 2.x (the app, and the agy that ships with it) reads `~/.gemini/config/mcp_config.json`
+instead, and also takes the vendor's direct form with `serverUrl` and `headers`, without
+`mcp-remote`. On some Macs the `antigravity/` file is a symlink to it. The worker and the extension
+read both paths and both forms. See [antigravity.md](antigravity.md) for the app, the IDE and a
+headless agy with its own key.
 
 #### Codex
 
@@ -211,15 +212,30 @@ Codex can also reach a remote server directly with `url = "https://<your-mcp-hos
 >
 > If it is not the current hub, edit the file, or rerun `scripts/onboard.sh`.
 >
-> This reads `~/.gemini/antigravity/mcp_config.json`. If your agy build keeps its config at the
-> vendor path, it reports no entry; in that case pass `--api-key` or set `CORTEX_API_KEY`.
+> This reads `~/.gemini/antigravity/mcp_config.json`. If it reports no entry, replace
+> `antigravity` with `config` in the path to read the Antigravity 2.x file.
 
 The worker takes the hub URL from `--hub`, then `CORTEX_HUB_URL`, then the first `cortex-hub` entry
-it finds in `~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/antigravity/mcp_config.json`
-and `~/.cursor/mcp.json`, in that order. The key comes from `--api-key`, then `CORTEX_API_KEY`,
+it finds in `~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/antigravity/mcp_config.json`,
+`~/.gemini/config/mcp_config.json` and `~/.cursor/mcp.json`, in that order. The key comes from `--api-key`, then `CORTEX_API_KEY`,
 then the entry for the same hub in those files.
 
 #### VS Code extension
+
+Install it into Antigravity IDE, VS Code, Cursor and Windsurf from the latest release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install-extension.sh | bash
+```
+
+```powershell
+irm https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install-extension.ps1 | iex
+```
+
+The VSIX itself is at
+`https://github.com/lktiep/cortex-hub/releases/latest/download/cortex-agent.vsix`. Each window can
+have its own agent name and key, set with the pencil in the Agent Panel; the key goes to the OS
+keychain. See [antigravity.md](antigravity.md#2-antigravity-ide-one-agent-per-window).
 
 The Cortex extension finds the hub in this order: the `cortexHub.hubUrl` setting (empty by
 default), then the `CORTEX_HUB_WS_URL` or `CORTEX_HUB_URL` env var, then the MCP config it

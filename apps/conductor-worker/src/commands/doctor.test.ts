@@ -282,6 +282,17 @@ describe('runDoctor', () => {
     expect(formatChecks(checks)).not.toContain(KEY);
   });
 
+  it('checks the Antigravity 2.x MCP config in ~/.gemini/config', async () => {
+    mkdirSync(path.join(home, '.gemini', 'config'), { recursive: true });
+    writeFileSync(
+      path.join(home, '.gemini', 'config', 'mcp_config.json'),
+      JSON.stringify({ mcpServers: { 'cortex-hub': { serverUrl: 'https://old.example/mcp' } } }),
+    );
+    const c = byName(await runDoctor(ctx({ engines: ['agy'], adapters: [adapter('agy')] })), 'engine MCP configs');
+    expect(c.detail).toContain("agy's MCP points at https://old.example");
+    expect(c.fix).toContain(path.join('.gemini', 'config', 'mcp_config.json'));
+  });
+
   it('accepts an MCP config that points at the same hub', async () => {
     writeFileSync(
       path.join(home, '.claude.json'),

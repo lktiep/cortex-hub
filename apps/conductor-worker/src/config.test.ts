@@ -197,6 +197,12 @@ describe('detectHubConfig', () => {
     expect(r).toMatchObject({ apiKey: 'ctx_test_key_3' });
   });
 
+  it('reads Antigravity 2.x MCP servers from ~/.gemini/config when ~/.gemini/antigravity has none', () => {
+    const home = fakeHome({ '.gemini/config/mcp_config.json': 'agy-mcp-remote.json', '.cursor/mcp.json': 'cursor.json' });
+    const r = detectHubConfig({ homeDir: home, repoPath: '/r', flags: {}, env: {} });
+    expect(r).toMatchObject({ hubBase: 'https://h.example', source: { key: '~/.gemini/config/mcp_config.json mcpServers' } });
+  });
+
   it('skips malformed JSON and keeps looking', () => {
     const home = fakeHome({ '.claude.json': 'raw:{ broken', '.cursor/mcp.json': 'cursor.json' });
     const r = detectHubConfig({ homeDir: home, repoPath: '/r', flags: {}, env: {} });

@@ -177,7 +177,11 @@ function mcpEntryFor(executor: Executor, ctx: DoctorContext): { entry: McpEntry 
       return { file, entry: readCodexToml(file, ctx.env) };
     }
     case 'agy': {
-      const file = path.join(h, '.gemini', 'antigravity', 'mcp_config.json');
+      // Antigravity 2.x reads ~/.gemini/config; older builds ~/.gemini/antigravity (often a symlink to it).
+      const old = path.join(h, '.gemini', 'antigravity', 'mcp_config.json');
+      const entry = readMcpJson(old, ctx.env, old);
+      if (entry !== null) return { file: old, entry };
+      const file = path.join(h, '.gemini', 'config', 'mcp_config.json');
       return { file, entry: readMcpJson(file, ctx.env, file) };
     }
     case 'gemini': {

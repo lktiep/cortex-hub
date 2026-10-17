@@ -2,9 +2,14 @@
   "name": "cortex-agent",
   "displayName": "Cortex Agent",
   "description": "VS Code extension for Cortex Hub — real-time agent orchestration via WebSocket conductor",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "publisher": "cortex-hub",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lktiep/cortex-hub.git",
+    "directory": "apps/cortex-extension"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -28,6 +33,14 @@
       {
         "command": "cortex.showStatus",
         "title": "Cortex: Show Connection Status"
+      },
+      {
+        "command": "cortex.showPanel",
+        "title": "Cortex: Open Agent Panel"
+      },
+      {
+        "command": "cortex.resetWindow",
+        "title": "Cortex: Reset This Window's Agent and Key"
       }
     ],
     "viewsContainers": {
@@ -54,7 +67,7 @@
         "cortexHub.apiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "API key for Cortex Hub authentication. Resolution order: this setting, then `CORTEX_HUB_API_KEY` / `HUB_API_KEY` / `CORTEX_API_KEY` env vars, then MCP configs (Claude Code, `.mcp.json`, Gemini, Antigravity, Cursor, Windsurf, VS Code)."
+          "markdownDescription": "API key for Cortex Hub authentication. Resolution order: the key set for this window in the Agent Panel (kept in the OS keychain), this setting, then `CORTEX_HUB_API_KEY` / `HUB_API_KEY` / `CORTEX_API_KEY` env vars, then MCP configs (Claude Code, `.mcp.json`, Gemini, Antigravity `~/.gemini/config/mcp_config.json`, Cursor, Windsurf, VS Code). Two windows that need two agents: set a key per window in the Agent Panel instead of here."
         },
         "cortexHub.hubUrl": {
           "type": "string",
@@ -64,7 +77,7 @@
         "cortexHub.agentId": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Agent identifier sent to the conductor. Defaults to `<hostname>-vscode`."
+          "markdownDescription": "Agent identifier sent to the conductor. Defaults to `<hostname>-<ide>`. The name set for a window in the Agent Panel wins over this setting. Two windows with the same id replace each other, so give each window its own name there."
         },
         "cortexHub.capabilities": {
           "type": "array",
@@ -76,7 +89,7 @@
             "terminal",
             "file-read"
           ],
-          "markdownDescription": "Agent capabilities to register with the conductor."
+          "markdownDescription": "Agent capabilities to register with the conductor. The Agent Panel can set them per window."
         },
         "cortexHub.autoConnect": {
           "type": "boolean",
@@ -92,7 +105,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "lint": "eslint src/",
-    "package": "npx @vscode/vsce package --no-dependencies",
+    "package": "npx --yes @vscode/vsce@4.0.0 package --no-dependencies",
     "release": "npm version patch && npm run build && npm run package",
     "release:minor": "npm version minor && npm run build && npm run package",
     "release:major": "npm version major && npm run build && npm run package"

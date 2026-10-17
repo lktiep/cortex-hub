@@ -6,6 +6,32 @@ import { conductorConnectUrl } from './mcp-config.js'
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected'
 
+/** Close codes the hub sends on purpose; mirrors CLOSE_CODES in @cortex/shared-types. */
+const CLOSE_CODES = { replaced: 4000, missingKey: 4001, badKey: 4003, agentIdInUse: 4009 } as const
+
+export type StopReason = 'replaced' | 'missing-key' | 'bad-key' | 'agent-in-use'
+
+/**
+ * Codes after which reconnecting cannot help, as in the worker's hub-client: a newer connection
+ * took this agent id (another window on this machine), the id is live on another machine, or the
+ * key is missing or refused. Reconnecting after 4000 would take the id back from the other
+ * window, which then does the same, so the two would flap forever.
+ */
+export function classifyClose(code: number): StopReason | null {
+  switch (code) {
+    case CLOSE_CODES.replaced:
+      return 'replaced'
+    case CLOSE_CODES.missingKey:
+      return 'missing-key'
+    case CLOSE_CODES.badKey:
+      return 'bad-key'
+    case CLOSE_CODES.agentIdInUse:
+      return 'agent-in-use'
+    default:
+      return null
+  }
+}
+
 export interface ConductorMessage {
   type: string
   [key: string]: unknown
@@ -13,7 +39,8 @@ export interface ConductorMessage {
 
 /**
  * WebSocket client for Cortex Hub conductor.
- * Auto-reconnects on disconnect. Emits typed events for conductor messages.
+ * Reconnects after a dropped connection, but not after a close in classifyClose: then it emits
+ * 'stopped' (reason, code, text) and waits for connect(). Emits typed events for conductor messages.
  */
 export class ConductorClient extends EventEmitter {
   private ws: WebSocket | null = null
@@ -39,7 +66,7 @@ export class ConductorClient extends EventEmitter {
   connect(): void {
     if (this.state === 'connecting' || this.state === 'connected') return
     if (!this.config.apiKey) {
-      this.emit('error', new Error('No API key configured. Set cortex.apiKey or CORTEX_API_KEY env.'))
+      this.emit('error', new Error('No API key configured. Set one in the Agent Panel, cortexHub.apiKey or CORTEX_API_KEY.'))
       return
     }
 
@@ -55,15 +82,21 @@ export class ConductorClient extends EventEmitter {
       hostname: hostname(),
     })
 
-    this.ws = new WebSocket(url)
+    // reconnect() and disconnect() drop the socket before its close event arrives. Events from a
+    // socket that is no longer this.ws are ignored: a late close would otherwise clear the new
+    // socket and open a third, which the hub then closes with 4000 as a duplicate.
+    const socket = new WebSocket(url)
+    this.ws = socket
 
-    this.ws.on('open', () => {
+    socket.on('open', () => {
+      if (this.ws !== socket) return
       this.reconnectDelay = 1000
       this.setState('connected')
       this.emit('connected')
     })
 
-    this.ws.on('message', (data: Buffer) => {
+    socket.on('message', (data: Buffer) => {
+      if (this.ws !== socket) return
       try {
         const raw = data.toString()
         const msg: ConductorMessage = JSON.parse(raw)
@@ -74,23 +107,31 @@ export class ConductorClient extends EventEmitter {
       }
     })
 
-    this.ws.on('close', (code: number, reason: Buffer) => {
+    socket.on('close', (code: number, reason: Buffer) => {
+      if (this.ws !== socket) return
       this.ws = null
       this.setState('disconnected')
-      this.emit('disconnected', code, reason.toString())
+      const text = reason.toString()
+      this.emit('disconnected', code, text)
 
-      if (!this.intentionalClose) {
-        this.scheduleReconnect()
+      if (this.intentionalClose) return
+      const stop = classifyClose(code)
+      if (stop) {
+        this.clearReconnect()
+        this.emit('stopped', stop, code, text)
+        return
       }
+      this.scheduleReconnect()
     })
 
-    this.ws.on('error', (err: Error) => {
+    socket.on('error', (err: Error) => {
+      if (this.ws !== socket) return
       this.emit('error', err)
       // close event will follow, which triggers reconnect
     })
 
-    this.ws.on('ping', () => {
-      this.ws?.pong()
+    socket.on('ping', () => {
+      if (this.ws === socket) socket.pong()
     })
   }
 

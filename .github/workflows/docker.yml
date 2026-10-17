@@ -352,3 +352,39 @@ jobs:
             --title "v${VERSION}" \
             --generate-notes \
             --latest
+
+      # The cortex-agent extension (VS Code, Cursor, Windsurf, Antigravity IDE),
+      # built from the release commit. It goes up under a fixed name as well as a
+      # versioned one, so releases/latest/download/cortex-agent.vsix always serves
+      # the newest, which is what scripts/install-extension.sh downloads. This runs
+      # when the release already existed too, so re-running a release attaches a
+      # VSIX that an earlier run left out.
+      - name: Check out the release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Package and attach the extension
+        working-directory: apps/cortex-extension
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          pnpm build
+          EXT_VERSION=$(node -p "require('./package.json').version")
+          pnpm run package -o cortex-agent.vsix < /dev/null
+          cp cortex-agent.vsix "cortex-agent-${EXT_VERSION}.vsix"
+          gh release upload "v${VERSION}" cortex-agent.vsix "cortex-agent-${EXT_VERSION}.vsix" --clobber

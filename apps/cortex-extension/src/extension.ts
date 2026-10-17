@@ -1,7 +1,10 @@
 import * as vscode from 'vscode'
-import { getConfig } from './config.js'
-import { ConductorClient, type ConnectionState } from './ws-client.js'
-import { CortexWebviewProvider, CortexPanel } from './webview/panel.js'
+import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
+import { getConfig, type CortexConfig } from './config.js'
+import { maskKey, normaliseAgentId, type WindowAgent } from './identity.js'
+import { ConductorClient, type ConnectionState, type StopReason } from './ws-client.js'
+import { CortexWebviewProvider, CortexPanel, type AgentStatus } from './webview/panel.js'
 // hub-api.ts no longer needed — all data fetched via WS
 
 // Antigravity SDK — optional, only available in Antigravity IDE
@@ -396,11 +399,95 @@ function refreshHubData(): void {
   client?.send({ type: 'request.data' })
 }
 
-export function activate(context: vscode.ExtensionContext): void {
-  const config = getConfig()
+// ── This window's agent ────────────────────────────────────────────────────
+// The Agent Panel's choices for one window. Name and capabilities live in workspaceState; the key
+// lives in SecretStorage (the OS keychain) under a random slot id kept in workspaceState, so each
+// workspace window can be its own agent with its own key, and no key lands in settings.json.
+const WINDOW_AGENT_ID = 'cortexHub.window.agentId'
+const WINDOW_CAPABILITIES = 'cortexHub.window.capabilities'
+const WINDOW_SLOT = 'cortexHub.window.slot'
+const SECRET_PREFIX = 'cortexHub.apiKey.'
+
+async function readWindowAgent(context: vscode.ExtensionContext, log: (msg: string) => void): Promise<WindowAgent> {
+  const slot = context.workspaceState.get<string>(WINDOW_SLOT)
+  let apiKey: string | undefined
+  if (slot) {
+    try {
+      apiKey = await context.secrets.get(SECRET_PREFIX + slot)
+    } catch (e) {
+      log(`Could not read this window's key from the OS keychain: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+  return {
+    agentId: context.workspaceState.get<string>(WINDOW_AGENT_ID),
+    capabilities: context.workspaceState.get<string[]>(WINDOW_CAPABILITIES),
+    apiKey,
+  }
+}
+
+/** A key source for display: a config path with the home directory as `~`. */
+function displaySource(source: string): string {
+  const home = homedir()
+  return home && source.startsWith(home) ? '~' + source.slice(home.length) : source
+}
+
+/** What the webview shows: the key only as a hint, never the key. */
+function agentPayload(cfg: CortexConfig, connectionStatus: ConnectionState, note?: string): AgentStatus {
+  return {
+    agentId: cfg.agentId,
+    capabilities: cfg.capabilities,
+    connectionStatus,
+    uptime: 0,
+    keyHint: maskKey(cfg.apiKey),
+    keySource: displaySource(cfg.keySource),
+    note,
+  }
+}
+
+function postAgent(status: AgentStatus): void {
+  const message = { type: 'updateAgent' as const, payload: status }
+  sidebarProvider?.postMessage(message)
+  CortexPanel.currentPanel?.postMessage(message)
+}
+
+function toast(message: string, level: 'info' | 'success' | 'warning' | 'error'): void {
+  const msg = { type: 'toast' as const, payload: { message, level } }
+  sidebarProvider?.postMessage(msg)
+  CortexPanel.currentPanel?.postMessage(msg)
+}
+
+/** Why the hub closed this window's connection on purpose, in words the panel and a warning can show. */
+function stopNote(reason: StopReason, cfg: CortexConfig, text: string): string {
+  switch (reason) {
+    case 'replaced':
+      return `Another window on this machine connected as "${cfg.agentId}", so this one stopped. Give this window its own name.`
+    case 'agent-in-use':
+      return `"${cfg.agentId}" is already connected from another machine${text ? ` (${text})` : ''}. Give this window its own name.`
+    case 'bad-key':
+      return `The hub refused the key (${displaySource(cfg.keySource)}): wrong, revoked or for another project.`
+    case 'missing-key':
+      return 'The hub got no key or no agent id.'
+  }
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // Output channel for logs — first, so reading this window's key can report a failure
+  const output = vscode.window.createOutputChannel('Cortex Agent')
+  context.subscriptions.push(output)
+
+  function log(msg: string): void {
+    output.appendLine(`[${new Date().toISOString()}] ${msg}`)
+  }
+
+  /** The settings, env and MCP configs, with this window's own agent on top. */
+  const loadConfig = async (): Promise<CortexConfig> => getConfig(await readWindowAgent(context, log))
+  /** Who this window is now. The live client always runs with this config. */
+  let current = await loadConfig()
+  /** Why the hub last closed the connection on purpose; cleared when a connection starts. */
+  let stoppedNote: string | undefined
 
   // Initialize Antigravity SDK if running in Antigravity IDE
-  if (config.ide === 'antigravity') {
+  if (current.ide === 'antigravity') {
     try {
       // Dynamic import — antigravity-sdk is optional peer dependency
       // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
@@ -422,7 +509,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Status bar — shows agent ID + connection state
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
-  updateStatusBar(config.agentId, 'disconnected')
+  updateStatusBar(current.agentId, 'disconnected')
   statusBarItem.show()
   context.subscriptions.push(statusBarItem)
 
@@ -435,41 +522,24 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   )
 
-  // Output channel for logs
-  const output = vscode.window.createOutputChannel('Cortex Agent')
-  context.subscriptions.push(output)
-
-  function log(msg: string): void {
-    output.appendLine(`[${new Date().toISOString()}] ${msg}`)
-  }
-
-  // Initialize WsClient with config on activation
-  function initClient(cfg: ReturnType<typeof getConfig>): void {
+  // Connect as `current`. Disposing the old client drops its listeners, so the handlers below
+  // always describe the live connection.
+  function initClient(): void {
     if (client) {
       client.dispose()
     }
 
-    client = new ConductorClient(cfg)
+    stoppedNote = undefined
+    client = new ConductorClient(current)
 
     client.on('stateChange', (state: ConnectionState) => {
-      updateStatusBar(cfg.agentId, state)
+      updateStatusBar(current.agentId, state)
       log(`Connection state: ${state}`)
     })
 
     client.on('connected', () => {
-      vscode.window.showInformationMessage(`Cortex: Connected as ${cfg.agentId}`)
-      // Push agent status to webview
-      const agentStatus = {
-        type: 'updateAgent' as const,
-        payload: {
-          agentId: cfg.agentId,
-          capabilities: cfg.capabilities,
-          connectionStatus: 'connected' as const,
-          uptime: 0,
-        },
-      }
-      sidebarProvider?.postMessage(agentStatus)
-      CortexPanel.currentPanel?.postMessage(agentStatus)
+      vscode.window.showInformationMessage(`Cortex: Connected as ${current.agentId}`)
+      postAgent(agentPayload(current, 'connected'))
 
       // Fetch and push Hub data
       refreshHubData()
@@ -480,12 +550,37 @@ export function activate(context: vscode.ExtensionContext): void {
 
     client.on('disconnected', (code: number, reason: string) => {
       log(`Disconnected: code=${code} reason=${reason}`)
-      const msg = {
-        type: 'updateAgent' as const,
-        payload: { agentId: cfg.agentId, capabilities: cfg.capabilities, connectionStatus: 'disconnected' as const, uptime: 0 },
-      }
-      sidebarProvider?.postMessage(msg)
-      CortexPanel.currentPanel?.postMessage(msg)
+      postAgent(agentPayload(current, 'disconnected'))
+    })
+
+    // The hub closed on purpose (replaced, id in use, key refused). Reconnecting would only fight
+    // the other window for the id, so say why and offer the fix instead.
+    client.on('stopped', (reason: StopReason, code: number, text: string) => {
+      const cfg = current
+      stoppedNote = stopNote(reason, cfg, text)
+      log(`Stopped reconnecting: ${reason} (code=${code}${text ? `, ${text}` : ''})`)
+      postAgent(agentPayload(cfg, 'disconnected', stoppedNote))
+      const fix = reason === 'replaced' || reason === 'agent-in-use' ? 'Rename this window' : 'Set key for this window'
+      void vscode.window.showWarningMessage(`Cortex: ${stoppedNote}`, fix, 'Reconnect').then(async (pick) => {
+        if (pick === 'Reconnect') {
+          await vscode.commands.executeCommand('cortex.connect')
+        } else if (pick === 'Rename this window') {
+          const agentId = await vscode.window.showInputBox({
+            title: 'Cortex: agent name for this window',
+            value: cfg.agentId,
+            validateInput: (v) => (normaliseAgentId(v) ? null : '1 to 64 characters, no control characters'),
+          })
+          if (agentId) await vscode.commands.executeCommand('cortex.saveAgent', { agentId })
+        } else if (pick === 'Set key for this window') {
+          const apiKey = await vscode.window.showInputBox({
+            title: 'Cortex: API key for this window',
+            prompt: 'Stored in the OS keychain for this window only',
+            password: true,
+            ignoreFocusOut: true,
+          })
+          if (apiKey?.trim()) await vscode.commands.executeCommand('cortex.saveAgent', { apiKey })
+        }
+      })
     })
 
     client.on('error', (err: Error) => {
@@ -637,15 +732,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Connect command
   context.subscriptions.push(
-    vscode.commands.registerCommand('cortex.connect', () => {
-      const cfg = getConfig()
-      if (!cfg.apiKey) {
+    vscode.commands.registerCommand('cortex.connect', async () => {
+      current = await loadConfig()
+      if (!current.apiKey) {
         vscode.window.showErrorMessage(
-          'Cortex: No API key found. Set cortex.apiKey in settings or CORTEX_API_KEY env variable.',
+          'Cortex: No API key found. Set one for this window in the Agent Panel (pencil icon), or set cortexHub.apiKey or CORTEX_API_KEY.',
         )
         return
       }
-      initClient(cfg)
+      initClient()
     }),
   )
 
@@ -655,7 +750,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (client) {
         client.dispose()
         client = null
-        updateStatusBar(config.agentId, 'disconnected')
+        updateStatusBar(current.agentId, 'disconnected')
         vscode.window.showInformationMessage('Cortex: Disconnected')
       }
     }),
@@ -668,9 +763,8 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.window.showInformationMessage('Cortex: Not connected')
         return
       }
-      const cfg = getConfig()
       vscode.window.showInformationMessage(
-        `Cortex: ${client.state} | Agent: ${cfg.agentId} | Capabilities: ${cfg.capabilities.join(', ')}`,
+        `Cortex: ${client.state} | Agent: ${current.agentId} | Capabilities: ${current.capabilities.join(', ')}`,
       )
     }),
   )
@@ -678,17 +772,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Refresh data command — triggered by webview on ready or refresh button
   context.subscriptions.push(
     vscode.commands.registerCommand('cortex.refreshData', () => {
-      const cfg = getConfig()
       // Push current agent status
-      const state = client?.state ?? 'disconnected'
-      const agentMsg = {
-        type: 'updateAgent' as const,
-        payload: { agentId: cfg.agentId, capabilities: cfg.capabilities, connectionStatus: state, uptime: 0 },
-      }
-      sidebarProvider?.postMessage(agentMsg)
-      CortexPanel.currentPanel?.postMessage(agentMsg)
+      postAgent(agentPayload(current, client?.state ?? 'disconnected', stoppedNote))
       // Fetch hub data
-      if (cfg.apiKey) refreshHubData()
+      if (current.apiKey) refreshHubData()
     }),
   )
 
@@ -699,72 +786,101 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   )
 
-  // cortex.renameAgent — update agentId setting, reconnect WS with new name
+  /** Re-read who this window is and act on it: reconnect once if the name or key changed. */
+  async function applyWindowAgent(): Promise<void> {
+    const before = current
+    current = await loadConfig()
+    log(`This window: agentId=${current.agentId} capabilities=${current.capabilities.join(',')} apiKey=${maskKey(current.apiKey) || 'NONE'} keySource=${current.keySource}`)
+    const sameIdentity = current.agentId === before.agentId && current.apiKey === before.apiKey
+    if (client && client.state === 'connected' && sameIdentity) {
+      client.updateConfig(current)
+      client.sendCapabilitiesUpdate(current.capabilities)
+    } else if (current.apiKey) {
+      initClient()
+    } else {
+      client?.dispose()
+      client = null
+    }
+    updateStatusBar(current.agentId, client?.state ?? 'disconnected')
+    postAgent(agentPayload(current, client?.state ?? 'disconnected', stoppedNote))
+  }
+
+  // cortex.saveAgent — the Agent Panel's Save: name, capabilities and key for this window only.
+  // A field left out keeps its current value; an empty key keeps the current key.
   context.subscriptions.push(
-    vscode.commands.registerCommand('cortex.renameAgent', async (newName: string) => {
-      if (!newName || typeof newName !== 'string') return
-      const settings = vscode.workspace.getConfiguration('cortexHub')
-      await settings.update('agentId', newName, vscode.ConfigurationTarget.Global)
-      log(`Agent renamed to: ${newName}`)
-
-      // Reconnect WS with updated config so server sees new identity
-      if (client) {
-        const cfg = getConfig()
-        client.updateConfig(cfg)
-        client.reconnect()
-        updateStatusBar(cfg.agentId, 'connecting')
+    vscode.commands.registerCommand('cortex.saveAgent', async (input?: { agentId?: string; capabilities?: string[]; apiKey?: string }) => {
+      const state = context.workspaceState
+      if (input?.agentId !== undefined) {
+        const agentId = normaliseAgentId(input.agentId)
+        if (!agentId) {
+          toast('Agent name must be 1 to 64 characters, without control characters', 'error')
+          return
+        }
+        await state.update(WINDOW_AGENT_ID, agentId)
       }
-
-      vscode.window.showInformationMessage(`Cortex: Agent renamed to "${newName}"`)
+      if (Array.isArray(input?.capabilities)) {
+        await state.update(WINDOW_CAPABILITIES, input.capabilities.filter((c) => typeof c === 'string' && c.trim() !== ''))
+      }
+      const apiKey = input?.apiKey?.trim()
+      if (apiKey) {
+        let slot = state.get<string>(WINDOW_SLOT)
+        if (!slot) {
+          slot = randomUUID()
+          await state.update(WINDOW_SLOT, slot)
+        }
+        try {
+          await context.secrets.store(SECRET_PREFIX + slot, apiKey)
+        } catch (e) {
+          log(`Could not store the key in the OS keychain: ${e instanceof Error ? e.message : String(e)}`)
+          toast('Could not store the key in the OS keychain. See Output > Cortex Agent.', 'error')
+          return
+        }
+      }
+      await applyWindowAgent()
+      toast('Saved for this window', 'success')
     }),
   )
 
-  // cortex.updateCapabilities — update capabilities setting, send via WS
+  // cortex.resetWindow — forget this window's own agent and key; the cortexHub settings apply again
   context.subscriptions.push(
-    vscode.commands.registerCommand('cortex.updateCapabilities', async (capabilities: string[]) => {
-      if (!Array.isArray(capabilities)) return
-      const settings = vscode.workspace.getConfiguration('cortexHub')
-      await settings.update('capabilities', capabilities, vscode.ConfigurationTarget.Global)
-      log(`Capabilities updated: ${capabilities.join(', ')}`)
-
-      // Send capabilities update over existing WS connection
-      if (client) {
-        const cfg = getConfig()
-        client.updateConfig(cfg)
-        client.sendCapabilitiesUpdate(capabilities)
-
-        // Update webview with new agent status
-        const agentMsg = {
-          type: 'updateAgent' as const,
-          payload: { agentId: cfg.agentId, capabilities, connectionStatus: client.state, uptime: 0 },
+    vscode.commands.registerCommand('cortex.resetWindow', async () => {
+      const state = context.workspaceState
+      const slot = state.get<string>(WINDOW_SLOT)
+      if (slot) {
+        try {
+          await context.secrets.delete(SECRET_PREFIX + slot)
+        } catch (e) {
+          log(`Could not delete this window's key from the OS keychain: ${e instanceof Error ? e.message : String(e)}`)
         }
-        sidebarProvider?.postMessage(agentMsg)
-        CortexPanel.currentPanel?.postMessage(agentMsg)
       }
+      await state.update(WINDOW_AGENT_ID, undefined)
+      await state.update(WINDOW_CAPABILITIES, undefined)
+      await applyWindowAgent()
+      toast('This window uses the cortexHub settings again', 'info')
     }),
   )
 
   // Re-read config on settings change
   context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('cortex')) {
-        const cfg = getConfig()
+    vscode.workspace.onDidChangeConfiguration(async (e) => {
+      if (e.affectsConfiguration('cortexHub')) {
+        current = await loadConfig()
         if (client) {
-          client.updateConfig(cfg)
+          client.updateConfig(current)
           log('Config updated from settings')
         }
-        updateStatusBar(cfg.agentId, client?.state ?? 'disconnected')
+        updateStatusBar(current.agentId, client?.state ?? 'disconnected')
       }
     }),
   )
 
   // Auto-connect on activation
-  log(`Config loaded: agentId=${config.agentId} hubUrl=${config.hubUrl} hubSource=${config.hubSource} apiKey=${config.apiKey ? '***' + config.apiKey.slice(-8) : 'NONE'} autoConnect=${config.autoConnect}`)
-  if (config.autoConnect && config.apiKey) {
+  log(`Config loaded: agentId=${current.agentId} hubUrl=${current.hubUrl} hubSource=${current.hubSource} apiKey=${maskKey(current.apiKey) || 'NONE'} keySource=${current.keySource} autoConnect=${current.autoConnect}`)
+  if (current.autoConnect && current.apiKey) {
     log('Auto-connecting to Hub...')
-    initClient(config)
-  } else if (!config.apiKey) {
-    log('No API key found. Run "Cortex: Connect to Hub" after setting cortexHub.apiKey or configuring MCP.')
+    initClient()
+  } else if (!current.apiKey) {
+    log('No API key found. Set one for this window in the Agent Panel (pencil icon), set cortexHub.apiKey, or configure MCP; then run "Cortex: Connect to Hub".')
     vscode.window.showWarningMessage('Cortex Agent: No API key detected. Check Output > Cortex Agent for details.')
   }
 }
