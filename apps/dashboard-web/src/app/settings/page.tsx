@@ -172,7 +172,7 @@ export default function SettingsPage() {
     const api = data?.externalUrls?.api || getExternalUrl('api')
     const llmProxy = data?.externalUrls?.llmProxy || getExternalUrl('cliproxy')
     setEndpoints({ dashboard, api, llmProxy })
-    if (data || error) setMcpEndpoint(resolveMcpEndpoint(data?.externalUrls?.mcp, window.location))
+    if (data || error) setMcpEndpoint(resolveMcpEndpoint(data?.externalUrls?.mcp, window.location, data?.externalUrls?.mcpDetected))
   }, [data, error])
 
   const bootstrap = workerBootstrap(mcpEndpoint?.url ?? null)
@@ -615,12 +615,19 @@ export default function SettingsPage() {
   }
 }`}
           </pre>
+          {mcpEndpoint?.source === 'detected' && (
+            <p className={styles.mcpHint}>
+              Seen on {mcpEndpoint.agentId ? <code>{mcpEndpoint.agentId}</code> : 'an agent'}&apos;s
+              connection. To pin it, set <code>EXTERNAL_MCP_URL</code> in the hub&apos;s{' '}
+              <code>.env</code> and recreate <code>cortex-api</code>.
+            </p>
+          )}
           {mcpEndpoint?.source === 'unconfigured' && (
             <p className={styles.mcpHint}>
               This dashboard is served from a domain, so the MCP address can&apos;t be worked out
-              from it. Set <code>EXTERNAL_MCP_URL</code> in the hub&apos;s <code>.env</code> to the
-              public MCP URL (e.g. <code>https://mcp.example.com</code>) and recreate{' '}
-              <code>cortex-api</code>.
+              from it. It shows here once an agent connects through the MCP address. Or set{' '}
+              <code>EXTERNAL_MCP_URL</code> in the hub&apos;s <code>.env</code> to the public MCP URL
+              (e.g. <code>https://mcp.example.com</code>) and recreate <code>cortex-api</code>.
             </p>
           )}
         </div>
@@ -659,8 +666,9 @@ export default function SettingsPage() {
           ))}
           {mcpEndpoint?.source === 'unconfigured' && (
             <p className={styles.mcpHint}>
-              <code>--hub</code> needs the public MCP address too: set <code>EXTERNAL_MCP_URL</code>{' '}
-              in the hub&apos;s <code>.env</code> and recreate <code>cortex-api</code>.
+              <code>--hub</code> needs the public MCP address too. It fills in once an agent
+              connects through it, or set <code>EXTERNAL_MCP_URL</code> in the hub&apos;s{' '}
+              <code>.env</code> and recreate <code>cortex-api</code>.
             </p>
           )}
         </div>

@@ -1,0 +1,19 @@
+{
+  "tasks": [
+    {
+      "key": "ESC",
+      "title": "Escalation drill",
+      "kind": "group",
+      "description": "One task whose test command always fails, to see a failure, a retry and an escalation reach the lead."
+    },
+    {
+      "key": "E1",
+      "title": "Write NOTES.md (its check always fails)",
+      "kind": "work",
+      "parentKey": "ESC",
+      "files": ["NOTES.md"],
+      "context": { "testCommand": "node -e \"process.exit(1)\"", "estimate": 0.1 },
+      "description": "Goal: create NOTES.md containing the single line 'escalation drill'.\nThe test command of this task fails on purpose, every time. Do not try to make it pass and do not change any other file.\nFiles: NOTES.md only."
+    }
+  ]
+}

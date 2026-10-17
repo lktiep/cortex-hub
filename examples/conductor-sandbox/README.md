@@ -1,0 +1,154 @@
+# Conductor sandbox
+
+A toy Node project and a plan of eleven harmless tasks, for testing Conductor end to end without
+touching real code. Each task changes a few lines. Together they exercise routing by engine and by
+capability, a fallback, a file lock, a run with no change, a user gate and a lead gate.
+`plan-escalation.json` adds one task that always fails, to see an escalation.
+
+Needs Node.js 20 or newer, git and the GitHub CLI (`gh`).
+
+## What each task tests
+
+| Key | Task | Tests |
+|---|---|---|
+| SBX | Conductor sandbox drill | The root group: done when everything below is done |
+| P1 | Phase 1 | A group whose tasks run in parallel |
+| A1 | Add clamp() | Routing to the `claude` engine, priority `high` |
+| A2 | Add titleCase() | Routing to `agy` with no fallback: it waits for an agy worker |
+| A3 | Note phase 1 in CHANGELOG.md | Routing by capability (`design`) to an IDE window, after A1 and A2 |
+| G1 | Sign off phase 1 | A gate only you can open, on the dashboard |
+| P2 | Phase 2 | A group that waits for G1 |
+| B1 | Add formatBytes() | `agy` first, `claude` as fallback |
+| B2 | Add formatDuration() | Any agent. Shares `src/format.js` with B1, so the two run one at a time |
+| B3 | Check the README usage examples | A run that changes nothing (`allowEmpty`) still completes |
+| G2 | Lead sign-off | A gate the lead closes |
+| E1 | Write NOTES.md | In `plan-escalation.json`: its test always fails, so it is retried, then escalated |
+
+Every work task runs `node --test` as its check. Check a plan before sending it:
+
+```bash
+npm run check-plan
+```
+
+## 1. Make your own copy
+
+Workers open pull requests, so the sandbox needs a repo of its own on GitHub.
+
+macOS and Ubuntu:
+
+```bash
+git clone --depth 1 https://github.com/lktiep/cortex-hub.git /tmp/cortex-hub-src
+cp -R /tmp/cortex-hub-src/examples/conductor-sandbox ~/conductor-sandbox
+cd ~/conductor-sandbox
+git init -b main && git add -A && git commit -m "Conductor sandbox"
+gh repo create <you>/conductor-sandbox --private --source . --push
+npm test
+```
+
+Windows (PowerShell):
+
+```powershell
+git clone --depth 1 https://github.com/lktiep/cortex-hub.git $env:TEMP\cortex-hub-src
+Copy-Item -Recurse $env:TEMP\cortex-hub-src\examples\conductor-sandbox $HOME\conductor-sandbox
+cd $HOME\conductor-sandbox
+git init -b main; git add -A; git commit -m "Conductor sandbox"
+gh repo create <you>/conductor-sandbox --private --source . --push
+npm test
+```
+
+`npm test` should report 8 passing tests.
+
+## 2. Start the agents
+
+Give each agent its own worker key (Dashboard, API keys). Run these inside your copy. They are
+the commands from [setup.md](../../docs/conductor/setup.md#6-install-a-worker) with a name and an
+engine added.
+
+macOS and Ubuntu:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | CORTEX_API_KEY=<worker-key-1> bash -s -- start --daemon --hub https://<your-mcp-host> --agent-id sbx-claude --engines claude
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | CORTEX_API_KEY=<worker-key-2> bash -s -- start --daemon --hub https://<your-mcp-host> --agent-id sbx-agy --engines agy
+```
+
+Windows:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1
+$env:CORTEX_API_KEY="<worker-key-1>"; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host> --agent-id sbx-claude --engines claude
+$env:CORTEX_API_KEY="<worker-key-2>"; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host> --agent-id sbx-agy --engines agy
+```
+
+Then open the sandbox folder in Antigravity IDE with the Cortex extension
+([antigravity.md](../../docs/conductor/antigravity.md)). Click the pencil on its status bar item,
+set the name `sbx-ide`, the capability `design` and a third key, and Save. A3 goes to this window
+only: the two workers above have no capabilities.
+
+Check: `node ~/.cortex/worker/cortex-worker.mjs status --agent-id sbx-claude` (and `sbx-agy`), and
+the three agents on the dashboard's Conductor page.
+
+## 3. Load the plan
+
+**With a lead (recommended).** Open Claude Code in your copy, with the hub added under the lead key
+(setup.md, section 9), and paste the prompt in [LEAD-PROMPT.md](LEAD-PROMPT.md). The lead creates
+the whole tree in one call, reviews and merges each PR, and reports progress.
+
+**Without a lead.** On the hub machine, with the project id the lead would use (from
+`cortex_session_start` in your copy, or the dashboard's Projects page):
+
+```bash
+node scripts/check-plan.mjs --body <projectId> plan.json > body.json
+curl -sS -X POST http://localhost:4000/api/conductor/tree -H 'Content-Type: application/json' --data @body.json
+```
+
+Then approve each task's review on the Conductor page yourself. Always pass the project id: a task
+without one can go to a worker in any of your repos.
+
+## 4. What should happen
+
+1. A1 goes to `sbx-claude` and A2 to `sbx-agy`, at the same time. A3 waits for both.
+2. Each opens a PR on a `cx/<key>-…` branch with a commit titled `<key>: <title>`. The lead merges it
+   and approves the task.
+3. A3 goes to the IDE window, as the only agent with `design`.
+4. P1 completes. G1 shows under "Needs you" on the dashboard. Nothing else moves until you approve it.
+5. B1 and B3 start. B2 waits until B1 lets go of `src/format.js`, then starts from the merged code.
+   If `sbx-agy` is stopped or busy, B1 goes to `sbx-claude` instead.
+6. B3 finds nothing to correct and completes with no PR.
+7. The lead pulls, runs `npm test` and approves G2. SBX completes.
+
+After a full run, `npm test` on `main` reports at least 12 passing tests.
+
+## 5. Escalation drill
+
+Load `plan-escalation.json` the same way. E1's check is `node -e "process.exit(1)"`, so every run
+fails. The worker still commits NOTES.md and opens a PR, then reports the run as failed. The task
+is retried once on the same branch, then escalated to the lead, who sees it in "Needs you" and
+cancels it with `cortex_task_cancel` (or cancel it on the dashboard). Close the PR without merging.
+
+## 6. Run it again
+
+Keys are unique within a tree, not across trees, so the same plan can be loaded again as a new
+tree. Reset the code first:
+
+```bash
+git checkout main && git pull
+git reset --hard <first commit> && git push --force-with-lease origin main
+```
+
+Or delete the GitHub repo and repeat step 1.
+
+## Usage
+
+```js
+import { sum, mean } from './src/math.js'
+import { slugify } from './src/strings.js'
+import { pad2, groupDigits } from './src/format.js'
+
+console.log(sum([1, 2, 3]))           // 6
+console.log(mean([2, 4, 9]))          // 5
+console.log(slugify('Hello, World!')) // hello-world
+console.log(pad2(7))                  // 07
+console.log(groupDigits(1234567))     // 1,234,567
+```
+
+To run it (macOS and Ubuntu): `sed -n '/^```js$/,/^```$/p' README.md | sed '1d;$d' | node --input-type=module`

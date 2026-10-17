@@ -278,6 +278,8 @@ export interface SettingsData {
     dashboard: string | null
     api: string | null
     mcp: string | null
+    // the https address an agent reached MCP through; null when EXTERNAL_MCP_URL is set
+    mcpDetected?: { url: string; agentId: string | null; at: string | null } | null
     llmProxy: string | null
   }
 }

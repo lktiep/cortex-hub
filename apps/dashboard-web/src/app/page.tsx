@@ -178,7 +178,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (settings || settingsError) {
-      setMcpEndpoint(resolveMcpEndpoint(settings?.externalUrls?.mcp, window.location))
+      setMcpEndpoint(resolveMcpEndpoint(settings?.externalUrls?.mcp, window.location, settings?.externalUrls?.mcpDetected))
     }
   }, [settings, settingsError])
 
@@ -498,10 +498,18 @@ export default function DashboardPage() {
   }
 }`}
           </pre>
+          {mcpEndpoint?.source === 'detected' && (
+            <p className={styles.mcpHint}>
+              Seen on {mcpEndpoint.agentId ? <code>{mcpEndpoint.agentId}</code> : 'an agent'}&apos;s
+              connection. To pin it, set <code>EXTERNAL_MCP_URL</code> in the hub&apos;s{' '}
+              <code>.env</code>.
+            </p>
+          )}
           {mcpEndpoint?.source === 'unconfigured' && (
             <p className={styles.mcpHint}>
-              Set <code>EXTERNAL_MCP_URL</code> in the hub&apos;s <code>.env</code> to the public MCP
-              URL — it can&apos;t be worked out from this dashboard&apos;s domain.
+              The MCP address shows here once an agent connects through it. Or set{' '}
+              <code>EXTERNAL_MCP_URL</code> in the hub&apos;s <code>.env</code> to the public MCP URL:
+              it can&apos;t be worked out from this dashboard&apos;s domain.
             </p>
           )}
           <a href="/keys" className="btn btn-primary btn-sm" style={{ marginTop: 'var(--space-4)', display: 'inline-flex' }}>

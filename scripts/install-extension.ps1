@@ -19,6 +19,7 @@ $ErrorActionPreference = 'Stop'
 function Die($m) { throw "[cortex] $m" }
 
 $Repo = 'lktiep/cortex-hub'
+$ExtId = 'cortex-hub.cortex-agent'
 $Local = $env:LOCALAPPDATA; $Prog = $env:ProgramFiles
 
 # The editor's command line: on PATH, else where its installer puts it.
@@ -39,8 +40,41 @@ function Find-Cli($e) {
   return $null
 }
 
+# Runs an editor's command line and returns its exit code and output, stdout and stderr together.
+# Editors print warnings on stderr even when the call works: Antigravity IDE prints
+# "extensionManagementService depends on antigravityAnalytics which is NOT registered" on every
+# call. Under 'Stop', Windows PowerShell 5.1 turns a redirected stderr line into a terminating
+# error, so the call runs with 'Continue' and is judged by its exit code.
+function Invoke-Cli([string]$Cli, [string[]]$Argv) {
+  $ErrorActionPreference = 'Continue'
+  $lines = @(& $Cli @Argv 2>&1 | ForEach-Object { "$_" })
+  return @{ Code = $LASTEXITCODE; Lines = $lines }
+}
+
+# The version inside the VSIX (extension/package.json), or $null when it cannot be read.
+function Get-VsixVersion([string]$Path) {
+  try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+      $entry = $zip.GetEntry('extension/package.json')
+      if (-not $entry) { return $null }
+      $reader = New-Object IO.StreamReader($entry.Open())
+      try { return ($reader.ReadToEnd() | ConvertFrom-Json).version } finally { $reader.Dispose() }
+    } finally { $zip.Dispose() }
+  } catch { return $null }
+}
+
+# The version of cortex-agent the editor lists, or $null.
+function Get-InstalledVersion([string]$Cli) {
+  $hit = (Invoke-Cli $Cli @('--list-extensions', '--show-versions')).Lines | Where-Object { $_ -like "$ExtId@*" } | Select-Object -First 1
+  if ($hit) { return $hit.Substring($ExtId.Length + 1) }
+  return $null
+}
+
 $Tmp = Join-Path ([IO.Path]::GetTempPath()) ("cortex-agent-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
+$Downloaded = $false
 try {
   if (-not $Vsix) {
     if ($Release) {
@@ -53,32 +87,52 @@ try {
     $Vsix = Join-Path $Tmp 'cortex-agent.vsix'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     try { Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Vsix } catch { Die "download failed: $Url ($($_.Exception.Message))" }
+    $Downloaded = $true
   }
   if (-not (Test-Path -LiteralPath $Vsix)) { Die "no such file: $Vsix" }
   $Vsix = (Resolve-Path -LiteralPath $Vsix).Path
   $head = [IO.File]::ReadAllBytes($Vsix) | Select-Object -First 2
   if ($head.Count -lt 2 -or $head[0] -ne 0x50 -or $head[1] -ne 0x4B) { Die "$Vsix is not a VSIX (not a zip archive)" }
+  $Expected = Get-VsixVersion $Vsix
 
-  $installed = 0
+  $installed = 0; $failed = @()
   foreach ($e in $Editors) {
     if ($Ide -ne 'all' -and $Ide -ne $e.Name) { continue }
     $cli = Find-Cli $e
     if (-not $cli) {
-      if ($Ide -ne 'all') { Die "$($e.App) not found (no $($e.Cmd) on PATH)" }
+      if ($Ide -ne 'all') { Die "$($e.App) not found (no $($e.Cmd) on PATH). Install it by hand: Extensions view, ... menu, Install from VSIX..." }
       continue
     }
-    Write-Host "[cortex] $($e.App): installing"
-    & $cli --install-extension $Vsix --force | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-      $version = & $cli --list-extensions --show-versions 2>$null | Where-Object { $_ -like 'cortex-hub.cortex-agent@*' } | Select-Object -First 1
-      if (-not $version) { $version = 'installed' }
-      Write-Host "[cortex] $($e.App): $version"
+    Write-Host "[cortex] $($e.App): installing $ExtId$(if ($Expected) { "@$Expected" })"
+    $r = Invoke-Cli $cli @('--install-extension', $Vsix, '--force')
+    $version = Get-InstalledVersion $cli
+    if ($version -and (-not $Expected -or $version -eq $Expected)) {
+      Write-Host "[cortex] $($e.App): $ExtId@$version"
+      $installed++
+    } elseif ($r.Code -eq 0 -and -not $version) {
+      Write-Host "[cortex] $($e.App): installed (the editor did not list its version)"
       $installed++
     } else {
-      [Console]::Error.WriteLine("[cortex] $($e.App): install failed")
+      $why = if ($version) { "it still lists $ExtId@$version" } else { "the install exited with code $($r.Code)" }
+      [Console]::Error.WriteLine("[cortex] $($e.App): install failed: $why")
+      # The vendor warning above is printed on success too; leave it out of the failure.
+      $r.Lines | Where-Object { $_ -and $_ -notmatch 'NOT registered' } | Select-Object -Last 5 | ForEach-Object { [Console]::Error.WriteLine("  $_") }
+      $failed += $e.App
     }
   }
-  if ($installed -eq 0) { Die 'no editor found; install Antigravity IDE, VS Code, Cursor or Windsurf, or pass -Ide' }
+  if ($installed -eq 0 -and $failed.Count -eq 0) { Die 'no editor found; install Antigravity IDE, VS Code, Cursor or Windsurf, or pass -Ide' }
+  if ($failed.Count -gt 0) {
+    $keep = $Vsix
+    if ($Downloaded) {
+      # The download sits in a temp folder that is removed on exit: keep a copy to pick by hand.
+      $dir = Join-Path $HOME 'Downloads'
+      if (-not (Test-Path -LiteralPath $dir)) { $dir = $HOME }
+      $keep = Join-Path $dir $(if ($Expected) { "cortex-agent-$Expected.vsix" } else { 'cortex-agent.vsix' })
+      Copy-Item -LiteralPath $Vsix -Destination $keep -Force
+    }
+    Write-Host "[cortex] Install it by hand in $($failed -join ', '): open the Extensions view, click the ... menu, choose Install from VSIX..., and pick $keep"
+    Die "install failed in $($failed -join ', ')"
+  }
   Write-Host '[cortex] done. Reload each editor window (Developer: Reload Window), then open Cortex: Open Agent Panel.'
 } finally {
   Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $Tmp

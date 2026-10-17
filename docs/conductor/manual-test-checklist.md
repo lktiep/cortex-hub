@@ -22,9 +22,10 @@ open the dashboard), `<lead-api-key>` and `<worker-api-key>`.
   prints the same version.
 - [ ] Two keys exist in Dashboard, Settings, API Keys: `lead`, and one `worker-<host>` per worker
   machine ([setup §2](setup.md#2-api-keys)).
-- [ ] A sandbox repository on GitHub that you do not mind getting pull requests: a README and one
-  small source file are enough. Clone it on every machine you test. Tasks open PRs there, not in a
-  real project.
+- [ ] A sandbox repository on GitHub that you do not mind getting pull requests. Make it from
+  [`examples/conductor-sandbox`](../../examples/conductor-sandbox/README.md): a tiny Node project
+  with no dependencies, plus a plan you can load. Clone it on every machine you test. Tasks open PRs
+  there, not in a real project.
 
 ## 1. Hub on Docker with `EXTERNAL_MCP_URL`
 
@@ -44,6 +45,10 @@ open the dashboard), `<lead-api-key>` and `<worker-api-key>`.
 - [ ] With `EXTERNAL_MCP_URL` empty: opened on `http://localhost:4000`, the dashboard shows
   `http://localhost:8318/mcp`; opened through a domain, it says the address is not configured
   instead of guessing.
+- [ ] Still with `EXTERNAL_MCP_URL` empty and opened through a domain: connect one agent through
+  `https://<your-mcp-host>/mcp` (call `cortex_health`, or start a worker), wait 2 minutes, and
+  reload Settings. The snippets show `https://<your-mcp-host>/mcp` with "Seen on `<agent>`'s
+  connection". Set `EXTERNAL_MCP_URL` again and recreate `cortex-api`: the note goes away.
 - [ ] Modals open centred on the screen.
 
 ## 2. Worker on macOS or Linux, live run

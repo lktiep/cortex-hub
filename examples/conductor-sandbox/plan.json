@@ -1,0 +1,103 @@
+{
+  "tasks": [
+    {
+      "key": "SBX",
+      "title": "Conductor sandbox drill",
+      "kind": "group",
+      "description": "A harmless plan for testing Conductor end to end: routing by engine and by capability, a fallback, a file lock, a run with no change, a user gate and a lead gate. Every task changes a few lines of a toy Node project."
+    },
+    {
+      "key": "P1",
+      "title": "Phase 1: three agents in parallel",
+      "kind": "group",
+      "parentKey": "SBX"
+    },
+    {
+      "key": "A1",
+      "title": "Add clamp() to src/math.js",
+      "kind": "work",
+      "parentKey": "P1",
+      "priority": "high",
+      "executor": "claude",
+      "files": ["src/math.js", "test/math.test.js"],
+      "context": { "testCommand": "node --test", "estimate": 0.25 },
+      "description": "Goal: add `export function clamp(value, min, max)` to src/math.js, with a one-line doc comment like the others. It returns min when value < min, max when value > max, and value otherwise. It throws a RangeError when min > max.\nAcceptance: test/math.test.js gains one test for clamp that covers a value below, inside and above the range, both edges, and the RangeError. Existing tests are unchanged.\nFiles: src/math.js and test/math.test.js only.\nTest: node --test"
+    },
+    {
+      "key": "A2",
+      "title": "Add titleCase() to src/strings.js",
+      "kind": "work",
+      "parentKey": "P1",
+      "executor": "agy",
+      "fallback": [],
+      "files": ["src/strings.js", "test/strings.test.js"],
+      "context": { "testCommand": "node --test", "estimate": 0.25 },
+      "description": "Goal: add `export function titleCase(text)` to src/strings.js, with a one-line doc comment like slugify's. It upper-cases the first letter of each word and keeps the rest of the word as written, and collapses runs of spaces into one: 'hello  wide world' gives 'Hello Wide World', 'iOS app' gives 'IOS App', '' gives ''.\nAcceptance: test/strings.test.js gains one test for titleCase with those three cases. The slugify test is unchanged.\nFiles: src/strings.js and test/strings.test.js only.\nTest: node --test"
+    },
+    {
+      "key": "A3",
+      "title": "Note phase 1 in CHANGELOG.md",
+      "kind": "work",
+      "parentKey": "P1",
+      "dependsOn": ["A1", "A2"],
+      "requiredCapabilities": ["design"],
+      "files": ["CHANGELOG.md"],
+      "context": { "testCommand": "node --test", "estimate": 0.1 },
+      "description": "Goal: in CHANGELOG.md, under '## Unreleased', add two bullets after the existing one: '- `clamp(value, min, max)` in src/math.js.' and '- `titleCase(text)` in src/strings.js.'\nAcceptance: CHANGELOG.md has three bullets under '## Unreleased'. Nothing else in the repo changes.\nFiles: CHANGELOG.md only.\nTest: node --test"
+    },
+    {
+      "key": "G1",
+      "title": "Sign off phase 1",
+      "kind": "gate",
+      "parentKey": "SBX",
+      "approver": "user",
+      "dependsOn": ["P1"],
+      "description": "For the person running the drill: check that the PRs of A1, A2 and A3 are merged, then approve this gate on the dashboard's Conductor page. Phase 2 waits for it."
+    },
+    {
+      "key": "P2",
+      "title": "Phase 2: one file, two tasks",
+      "kind": "group",
+      "parentKey": "SBX",
+      "dependsOn": ["G1"]
+    },
+    {
+      "key": "B1",
+      "title": "Add formatBytes() to src/format.js",
+      "kind": "work",
+      "parentKey": "P2",
+      "executor": "agy",
+      "fallback": [{ "executor": "claude", "model": null, "effort": null }],
+      "files": ["src/format.js", "test/bytes.test.js"],
+      "context": { "testCommand": "node --test", "estimate": 0.25 },
+      "description": "Goal: in src/format.js, directly under the line '// B1: formatBytes() goes below this line.', add `export function formatBytes(n)` with a one-line doc comment. It formats a byte count with binary units and one decimal: 0 gives '0 B', 1023 gives '1023 B', 1024 gives '1.0 KB', 1536 gives '1.5 KB', 1048576 gives '1.0 MB'. Units: B, KB, MB, GB, TB. A negative number throws a RangeError. Leave the B2 marker and everything below it as it is.\nAcceptance: a new file test/bytes.test.js tests those cases and the RangeError.\nFiles: src/format.js and test/bytes.test.js only.\nTest: node --test"
+    },
+    {
+      "key": "B2",
+      "title": "Add formatDuration() to src/format.js",
+      "kind": "work",
+      "parentKey": "P2",
+      "files": ["src/format.js", "test/duration.test.js"],
+      "context": { "testCommand": "node --test", "estimate": 0.25 },
+      "description": "Goal: in src/format.js, directly under the line '// B2: formatDuration() goes below this line.', add `export function formatDuration(seconds)` with a one-line doc comment. It returns 'm:ss' under an hour and 'h:mm:ss' from an hour up, using the existing pad2(): 0 gives '0:00', 65 gives '1:05', 3600 gives '1:00:00', 3725 gives '1:02:05'. Fractions are dropped. A negative number throws a RangeError. Leave the B1 marker and everything above it as it is.\nAcceptance: a new file test/duration.test.js tests those cases and the RangeError.\nFiles: src/format.js and test/duration.test.js only.\nTest: node --test"
+    },
+    {
+      "key": "B3",
+      "title": "Check the README usage examples",
+      "kind": "work",
+      "parentKey": "P2",
+      "files": ["README.md"],
+      "context": { "testCommand": "node --test", "allowEmpty": true, "estimate": 0.1 },
+      "description": "Goal: run the code block of the 'Usage' section of README.md from the repo root by piping it into `node --input-type=module` (do not leave a file behind). Each console.log line ends with a comment giving the expected output. If an output differs, correct that comment in README.md. If every output matches, change nothing: a run with no change is the expected result.\nAcceptance: every example's comment matches what node prints.\nFiles: README.md only.\nTest: node --test"
+    },
+    {
+      "key": "G2",
+      "title": "Lead sign-off: every PR merged",
+      "kind": "gate",
+      "parentKey": "SBX",
+      "approver": "lead",
+      "dependsOn": ["P2"],
+      "description": "For the lead: check that the PRs of B1 and B2 are merged and that `node --test` passes on the default branch after a pull, then approve this gate with cortex_task_review."
+    }
+  ]
+}

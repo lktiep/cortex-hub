@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
 import { isEmbeddingModel } from '../lib/embedding-models.js'
+import { detectedMcpOrigin } from '../lib/mcp-origin.js'
 
 export const setupRouter = new Hono()
 
@@ -174,6 +175,8 @@ setupRouter.get('/settings', (c) => {
       dashboard: process.env.DASHBOARD_URL || null,
       api: process.env.EXTERNAL_API_URL || null,
       mcp: process.env.EXTERNAL_MCP_URL || null,
+      // Where agents reached MCP from outside, when EXTERNAL_MCP_URL does not say.
+      mcpDetected: process.env.EXTERNAL_MCP_URL ? null : detectedMcpOrigin(),
       llmProxy: process.env.EXTERNAL_LLM_PROXY_URL || null,
     },
   })

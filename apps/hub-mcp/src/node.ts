@@ -1,5 +1,6 @@
 import { serve } from '@hono/node-server'
 import type { IncomingMessage } from 'node:http'
+import { publicOrigin } from '@cortex/shared-types'
 import app from './index.js'
 import { defaultBundlePath, serveWorkerAsset } from './worker-asset.js'
 import { forwardCloseCode } from './ws-close.js'
@@ -29,9 +30,15 @@ async function validateWsAuth(req: IncomingMessage): Promise<{ valid: boolean; a
   }
 
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const origin = publicOrigin((name) => {
+      const v = req.headers[name]
+      return Array.isArray(v) ? v[0] : v
+    })
+    if (origin) headers['X-Cortex-Public-Origin'] = origin
     const res = await fetch(`${DASHBOARD_API_URL}/api/keys/verify`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ token }),
     })
     if (!res.ok) return { valid: false, error: 'Invalid API key' }

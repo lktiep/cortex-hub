@@ -1,3 +1,4 @@
+import { publicOrigin } from '@cortex/shared-types'
 import type { Env } from '../types.js'
 
 interface CachedAuth {
@@ -64,11 +65,13 @@ export async function validateApiKey(
   // 2. Fetch verification from API
   try {
     const apiUrl = env.DASHBOARD_API_URL || 'http://localhost:4000'
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    // The https address this agent dialled, so the dashboard can show it as the MCP URL.
+    const origin = publicOrigin((name) => request.headers.get(name))
+    if (origin) headers['X-Cortex-Public-Origin'] = origin
     const res = await fetch(`${apiUrl}/api/keys/verify`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers,
       body: JSON.stringify({ token }),
       signal: AbortSignal.timeout(3000), // Fail fast (3s) instead of hanging
     })

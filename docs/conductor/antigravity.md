@@ -1,4 +1,4 @@
-# Antigravity on macOS and Windows
+# Antigravity on macOS, Windows and Ubuntu
 
 Antigravity comes in three forms, and each one reaches Cortex Hub in its own way. Set up the ones
 you use.
@@ -36,6 +36,18 @@ with a downloaded VSIX:
 "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide" --install-extension cortex-agent.vsix --force
 ```
 
+### Ubuntu
+
+The same one-liner as macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install-extension.sh | bash -s -- --ide antigravity
+```
+
+The script needs `curl`, and `unzip` to read the version inside the VSIX (`sudo apt install curl
+unzip`). It looks on your PATH, then in `/usr/share/antigravity-ide/bin/` (a .deb install) and
+`/snap/bin/` (unverified: check where your package put it with `dpkg -L` or `snap list`).
+
 ### Windows (PowerShell)
 
 ```powershell
@@ -48,11 +60,24 @@ for every editor it finds. The script looks for `antigravity-ide` on your PATH, 
 hand: open the Extensions view, use the `...` menu, choose **Install from VSIX...**, and pick the
 downloaded file.
 
-### Then, on both
+### What the script prints
+
+- `[cortex] Antigravity IDE: cortex-hub.cortex-agent@1.0.x` means it worked. The script checks by
+  asking the editor which version it lists, not by the installer's exit code.
+- Antigravity IDE writes a warning while it installs: `... depends on antigravityAnalytics which is
+  NOT registered`. It is harmless and the extension works. An older copy of the Windows script
+  turned that line into a red error and stopped, even though the install had gone through. Check
+  with `--list-extensions` (below) before installing again.
+- When the install really fails, the script prints the editor's last lines and keeps the
+  downloaded VSIX in your Downloads folder as `cortex-agent-<version>.vsix`. Install that file by
+  hand: Extensions view, `...` menu, **Install from VSIX...**.
+
+### Then, on every OS
 
 1. Reload each window: **Developer: Reload Window**.
 2. Check the version. It should list `cortex-hub.cortex-agent@1.0.0` or newer:
-   `antigravity-ide --list-extensions --show-versions` (on macOS, the full path above).
+   `antigravity-ide --list-extensions --show-versions` (on macOS, the full path above; on Windows,
+   `antigravity-ide.cmd`).
 3. An older 0.x copy has the same id and is replaced. If it still shows, remove it and install again:
    `antigravity-ide --uninstall-extension cortex-hub.cortex-agent`.
 
@@ -147,6 +172,8 @@ Then run this inside a clone of the project.
 curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | CORTEX_API_KEY=<worker-api-key> bash -s -- start --daemon --hub https://<your-mcp-host> --engines agy --agent-id <host>-agy
 ```
 
+Ubuntu takes the same command. Install Node.js 20 or newer first.
+
 ### Windows (PowerShell)
 
 ```powershell
@@ -183,18 +210,18 @@ that agy takes about 2 minutes to start, almost all of it spent starting its MCP
 Run it on each machine and tick the steps that pass. Where a step fails, note what you saw:
 the panel's text, or the log lines with hosts and keys removed.
 
-| # | Step | Expected | macOS | Windows |
-|---|---|---|---|---|
-| 1 | Install the extension with the one-liner (section 1) | `[cortex] Antigravity IDE: cortex-hub.cortex-agent@1.0.0` or newer | ☐ | ☐ |
-| 2 | Reload the window and open **Cortex: Open Agent Panel** | Green dot. The key shows as `***xxxxxxxx · <source>` | ☐ | ☐ |
-| 3 | Pencil: set a name, a capability and a new key, then Save | The toast says "Saved for this window". The dashboard shows the new name. The key source is `window` | ☐ | ☐ |
-| 4 | Check that the key is not in `settings.json` | Search your user `settings.json` for `cortexHub.apiKey`: it is unchanged | ☐ | ☐ |
-| 5 | Open a second folder in a second window, with another name and key | Both stay connected for 5 minutes, with no flapping. The dashboard lists two agents | ☐ | ☐ |
-| 6 | Give the second window the first one's name | The first window stops with the 4000 message and stays stopped. **Rename this window** fixes it | ☐ | ☐ |
-| 7 | **Reset window** | The panel's key source goes back to `setting`, env or a config path | ☐ | ☐ |
-| 8 | Antigravity app: add the MCP entry (section 3), restart the app, ask it to call `cortex_health` | The hub answers. A session appears on the dashboard | ☐ | ☐ |
-| 9 | Headless agy: start it (section 4), then run `doctor --engines agy --probe` | Every required row passes. The `engine agy` row answers | ☐ | ☐ |
-| 10 | Send the headless agy a small task from the lead | It accepts the task, works in a worktree and reports back | ☐ | ☐ |
+| # | Step | Expected | macOS | Windows | Ubuntu |
+|---|---|---|---|---|---|
+| 1 | Install the extension with the one-liner (section 1) | `[cortex] Antigravity IDE: cortex-hub.cortex-agent@1.0.0` or newer | ☐ | ☐ | ☐ |
+| 2 | Reload the window and open **Cortex: Open Agent Panel** | Green dot. The key shows as `***xxxxxxxx · <source>` | ☐ | ☐ | ☐ |
+| 3 | Pencil: set a name, a capability and a new key, then Save | The toast says "Saved for this window". The dashboard shows the new name. The key source is `window` | ☐ | ☐ | ☐ |
+| 4 | Check that the key is not in `settings.json` | Search your user `settings.json` for `cortexHub.apiKey`: it is unchanged | ☐ | ☐ | ☐ |
+| 5 | Open a second folder in a second window, with another name and key | Both stay connected for 5 minutes, with no flapping. The dashboard lists two agents | ☐ | ☐ | ☐ |
+| 6 | Give the second window the first one's name | The first window stops with the 4000 message and stays stopped. **Rename this window** fixes it | ☐ | ☐ | ☐ |
+| 7 | **Reset window** | The panel's key source goes back to `setting`, env or a config path | ☐ | ☐ | ☐ |
+| 8 | Antigravity app: add the MCP entry (section 3), restart the app, ask it to call `cortex_health` | The hub answers. A session appears on the dashboard | ☐ | ☐ | ☐ |
+| 9 | Headless agy: start it (section 4), then run `doctor --engines agy --probe` | Every required row passes. The `engine agy` row answers | ☐ | ☐ | ☐ |
+| 10 | Send the headless agy a small task from the lead | It accepts the task, works in a worktree and reports back | ☐ | ☐ | ☐ |
 
 ## Troubleshooting
 
@@ -206,3 +233,9 @@ the panel's text, or the log lines with hosts and keys removed.
   version, uninstall and install again (section 1).
 - **The script finds no editor.** Pass the VSIX by hand: `--vsix ./cortex-agent.vsix`
   (`-Vsix` on Windows), or use **Install from VSIX...**.
+- **A red error on Windows, but Install from VSIX works.** An older copy of the script stopped on
+  the harmless `NOT registered` warning (section 1). Run `antigravity-ide.cmd --list-extensions
+  --show-versions`: if it lists `cortex-hub.cortex-agent`, the install went through. Reload the
+  window.
+- **Windows refuses to run the script** ("running scripts is disabled"). Use the `irm` one-liner,
+  which does not run a file, or start PowerShell with `-ExecutionPolicy Bypass` for that session.

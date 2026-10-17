@@ -265,8 +265,22 @@ The Windows line runs the script with `-ExecutionPolicy Bypass`, which applies t
 process only. Your machine's policy is not changed.
 
 Or copy these from Dashboard, Settings, "Run a worker". It fills in your hub from
-`EXTERNAL_MCP_URL`, or from the address you opened the dashboard on when that is localhost or a
-LAN address.
+`EXTERNAL_MCP_URL`. Without it, the dashboard uses the https address an agent last connected
+through (see below), or the address you opened the dashboard on when that is localhost or a LAN
+address.
+
+**How the dashboard learns the MCP address.** Behind a domain, the dashboard and MCP sit on
+different hostnames, so the dashboard cannot work out one from the other. The MCP gateway can:
+each time it checks an agent's key, it passes on the https host the agent dialled, as the tunnel
+forwarded it (`X-Forwarded-Proto: https` and `Host`). The hub keeps the last one and the dashboard
+shows it with "Seen on `<agent>`'s connection". Only an https domain is kept: localhost, LAN
+addresses and plain http never are. `EXTERNAL_MCP_URL` always wins, and pins the address. To drop
+a detected address, set `EXTERNAL_MCP_URL`, or delete the `mcp.detected` row of the `hub_config`
+table.
+
+Anyone holding a valid key and reaching port 8318 directly could send a made-up `Host` and change
+what the dashboard shows. It never changes who can connect. If that matters to you, set
+`EXTERNAL_MCP_URL`.
 
 Options (add them after `start`):
 

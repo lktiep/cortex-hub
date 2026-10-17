@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
 import { randomBytes, createHash } from 'crypto'
+import { recordMcpOrigin } from '../lib/mcp-origin.js'
 
 export const keysRouter = new Hono()
 
@@ -152,6 +153,14 @@ keysRouter.post('/verify', async (c) => {
     // Update last_used_at
     const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\') WHERE id = ?')
     updateStmt.run(keyRecord.id)
+
+    // The gateway passes the https address the agent dialled; the dashboard shows it as the MCP
+    // URL. Remembering it must never fail a valid key.
+    try {
+      recordMcpOrigin(c.req.header('x-cortex-public-origin'), keyRecord.name)
+    } catch (err) {
+      console.error('[keys] could not record the MCP origin:', err)
+    }
 
     return c.json({
       valid: true,

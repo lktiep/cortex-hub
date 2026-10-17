@@ -29,21 +29,31 @@ export const getExternalUrl = (type: 'dashboard' | 'api' | 'mcp' | 'cliproxy' | 
 
 export type McpEndpoint = {
   url: string | null
-  source: 'configured' | 'direct' | 'unconfigured'
+  source: 'configured' | 'detected' | 'direct' | 'unconfigured'
+  // detected only: the agent whose connection showed the address
+  agentId?: string | null
 }
 
+export type DetectedMcp = { url: string; agentId: string | null }
+
 // The MCP address agents should put in their config. A configured EXTERNAL_MCP_URL
-// always wins. Without one, hostname:8318 is only right when the browser reaches
-// the host itself (localhost, an IP, a LAN name, an explicit port). Behind a domain
-// the dashboard and MCP sit on separate tunnel hostnames (hub.* is behind Cloudflare
-// Access), so the address cannot be derived and none is invented.
+// always wins. Next comes the https address the gateway saw an agent dial: proven to
+// work from outside. Without either, hostname:8318 is only right when the browser
+// reaches the host itself (localhost, an IP, a LAN name, an explicit port). Behind a
+// domain the dashboard and MCP sit on separate tunnel hostnames (hub.* is behind
+// Cloudflare Access), so the address cannot be derived and none is invented.
 export const resolveMcpEndpoint = (
   configured: string | null | undefined,
   location: { hostname: string; port: string },
+  detected?: DetectedMcp | null,
 ): McpEndpoint => {
+  const withMcp = (base: string) => (base.endsWith('/mcp') ? base : `${base}/mcp`)
   const base = configured?.trim().replace(/\/+$/, '')
   if (base) {
-    return { url: base.endsWith('/mcp') ? base : `${base}/mcp`, source: 'configured' }
+    return { url: withMcp(base), source: 'configured' }
+  }
+  if (detected?.url) {
+    return { url: withMcp(detected.url.replace(/\/+$/, '')), source: 'detected', agentId: detected.agentId }
   }
 
   const { hostname, port } = location
