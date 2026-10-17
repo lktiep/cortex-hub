@@ -646,6 +646,9 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
+                  aria-label={`${copiedCmd === os ? 'Copied' : 'Copy'} ${label} command`}
+                  // Until settings load, the command still holds the <your-mcp-host> placeholder.
+                  disabled={mcpEndpoint === null}
                   onClick={() => copyCommand(os, cmd)}
                 >
                   {copiedCmd === os ? 'Copied' : 'Copy'}

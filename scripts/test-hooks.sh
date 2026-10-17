@@ -554,6 +554,31 @@ printf '{"tool_name":"run_shell_command","tool_input":{"command":"pnpm lint"},"t
 check "warnings alone pass the lint gate"  0 "$(grep -q '^tool=' "$STATE/gate-lint" 2>/dev/null && echo 0 || echo 1)"
 teardown
 
+echo "track-quality.sh — the lint verdict without jq"
+# The python3 fallback ran json.dumps with its ASCII default, so ✖ reached the regex as
+# \u2716 and a lint with errors armed the gate on any machine without jq.
+NOJQ=$(mktemp -d)
+for b in bash cat grep sed printf python3 mktemp rm dirname pwd date tr cut mkdir; do
+  [ -x "$(command -v $b 2>/dev/null)" ] && ln -sf "$(command -v $b)" "$NOJQ/$b"
+done
+lint_nojq() {  # $1 hooks dir, $2 tool name, $3 eslint summary
+  printf '{"tool_name":"%s","tool_input":{"command":"pnpm lint"},"tool_response":{"stdout":"%s","stderr":""}}' "$2" "$3" \
+    | CLAUDE_PROJECT_DIR="$SANDBOX" PATH="$NOJQ" bash "$1/track-quality.sh" >/dev/null 2>&1
+}
+setup; lint_nojq "$HOOKS_DIR" Bash '✖ 2 problems (2 errors, 0 warnings)'
+check "claude: errors open nothing"        0 "$([ ! -f "$STATE/gate-lint" ] && echo 0 || echo 1)"
+teardown
+setup; lint_nojq "$HOOKS_DIR" Bash '✖ 3 problems (0 errors, 3 warnings)'
+check "claude: warnings alone pass"        0 "$(grep -q '^tool=' "$STATE/gate-lint" 2>/dev/null && echo 0 || echo 1)"
+teardown
+setup; lint_nojq "$GHOOKS" run_shell_command '✖ 1 problem (1 error, 0 warnings)'
+check "gemini: errors open nothing"        0 "$([ ! -f "$STATE/gate-lint" ] && echo 0 || echo 1)"
+teardown
+setup; lint_nojq "$GHOOKS" run_shell_command '✖ 3 problems (0 errors, 3 warnings)'
+check "gemini: warnings alone pass"        0 "$(grep -q '^tool=' "$STATE/gate-lint" 2>/dev/null && echo 0 || echo 1)"
+teardown
+rm -rf "$NOJQ"
+
 echo "gemini — both holes, same shape"
 setup; printf 'tool=cortex_session_start at=now\n' > "$STATE/session-started"; discovered
 check "write_file still denied after discovery" deny "$(gdecision enforce-session.sh "$(gpayload write_file)")"

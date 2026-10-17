@@ -39,7 +39,7 @@ d=json.load(sys.stdin)
 r=d.get('tool_response', d.get('tool_output',''))
 print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
 print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
-print(f'OUTPUT={repr(json.dumps(r) if not isinstance(r,str) else r)}')
+print(f'OUTPUT={repr(json.dumps(r, ensure_ascii=False) if not isinstance(r,str) else r)}')
 print(f'CLIENT_ID={repr(str(d.get(\"session_id\",\"\")))}')
 " 2>/dev/null || true)"
 fi

@@ -27,7 +27,7 @@ import sys,json
 d=json.load(sys.stdin)
 print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
 print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
-print(f'OUTPUT={repr(json.dumps(d.get(\"tool_response\", d.get(\"tool_output\",\"\"))))}')
+print(f'OUTPUT={repr(json.dumps(d.get(\"tool_response\", d.get(\"tool_output\",\"\")), ensure_ascii=False))}')
 print(f'CLIENT_ID={repr(str(d.get(\"session_id\",\"\")))}')
 " 2>/dev/null || true)"
 fi
