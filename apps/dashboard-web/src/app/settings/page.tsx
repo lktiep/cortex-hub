@@ -12,7 +12,9 @@ import {
   getSystemInfo,
   restartService,
 } from '@/lib/api'
-import { config, getExternalUrl } from '@/lib/config'
+import { config, getExternalUrl, resolveMcpEndpoint, type McpEndpoint } from '@/lib/config'
+import { workerBootstrap } from '@/lib/worker-bootstrap'
+import { copyToClipboard } from '@/lib/clipboard'
 import { Bot, Radio, Package, CheckCircle, XCircle, AlertTriangle, RefreshCw, Hourglass, Dna, type LucideIcon, ICON_INLINE } from '@/lib/icons'
 import styles from './page.module.css'
 
@@ -114,6 +116,8 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`
 }
 
+const SETUP_GUIDE_URL = 'https://github.com/lktiep/cortex-hub/blob/master/docs/conductor/setup.md'
+
 const SERVICE_ICONS: Record<string, LucideIcon> = {
   cliproxy: Bot,
   qdrant: Dna,
@@ -157,17 +161,27 @@ export default function SettingsPage() {
   const [endpoints, setEndpoints] = useState({
     dashboard: 'http://localhost:3000',
     api: 'http://localhost:4000',
-    mcp: 'http://localhost:8318',
     llmProxy: 'http://localhost:8317',
   })
+  // null until settings answer, so a domain deployment doesn't flash the "not configured" hint
+  const [mcpEndpoint, setMcpEndpoint] = useState<McpEndpoint | null>(null)
+  const [copiedCmd, setCopiedCmd] = useState<'unix' | 'windows' | null>(null)
 
   useEffect(() => {
     const dashboard = data?.externalUrls?.dashboard || getExternalUrl('dashboard')
     const api = data?.externalUrls?.api || getExternalUrl('api')
-    const mcp = data?.externalUrls?.mcp || getExternalUrl('mcp')
     const llmProxy = data?.externalUrls?.llmProxy || getExternalUrl('cliproxy')
-    setEndpoints({ dashboard, api, mcp, llmProxy })
-  }, [data])
+    setEndpoints({ dashboard, api, llmProxy })
+    if (data || error) setMcpEndpoint(resolveMcpEndpoint(data?.externalUrls?.mcp, window.location))
+  }, [data, error])
+
+  const bootstrap = workerBootstrap(mcpEndpoint?.url ?? null)
+  const copyCommand = async (os: 'unix' | 'windows', cmd: string) => {
+    if (await copyToClipboard(cmd)) {
+      setCopiedCmd(os)
+      setTimeout(() => setCopiedCmd((current) => (current === os ? null : current)), 2000)
+    }
+  }
 
   const formatLinkText = (url: string) => {
     try {
@@ -499,14 +513,20 @@ export default function SettingsPage() {
             </div>
             <div className={styles.tunnelItem}>
               <span className={styles.tunnelLabel}>MCP</span>
-              <a
-                href={endpoints.mcp}
-                target="_blank"
-                rel="noreferrer"
-                className={styles.tunnelLink}
-              >
-                {formatLinkText(endpoints.mcp)}
-              </a>
+              {mcpEndpoint?.url ? (
+                <a
+                  href={mcpEndpoint.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.tunnelLink}
+                >
+                  {formatLinkText(mcpEndpoint.url)}
+                </a>
+              ) : (
+                <span className={styles.unsavedHint}>
+                  {mcpEndpoint ? 'not configured' : '…'}
+                </span>
+              )}
             </div>
             <div className={styles.tunnelItem}>
               <span className={styles.tunnelLabel}>LLM Proxy</span>
@@ -578,13 +598,16 @@ export default function SettingsPage() {
         <h2 className={styles.sectionTitle}>MCP Agent Config</h2>
         <div className={`card ${styles.codeCard}`}>
           <p className={styles.codeHint}>
-            Copy this snippet into your AI agent&apos;s MCP client configuration:
+            For Claude Code, put this in <code>~/.claude.json</code> or a project&apos;s{' '}
+            <code>.mcp.json</code>. Other clients use a different shape — see the{' '}
+            <a href={SETUP_GUIDE_URL} target="_blank" rel="noreferrer">setup guide</a>.
           </p>
           <pre className={styles.codeBlock}>
 {`{
   "mcpServers": {
     "cortex-hub": {
-      "url": "${endpoints.mcp.endsWith('/mcp') ? endpoints.mcp : `${endpoints.mcp}/mcp`}",
+      "type": "http",
+      "url": "${mcpEndpoint?.url ?? 'https://<your-mcp-host>/mcp'}",
       "headers": {
         "Authorization": "Bearer <your-api-key>"
       }
@@ -592,6 +615,51 @@ export default function SettingsPage() {
   }
 }`}
           </pre>
+          {mcpEndpoint?.source === 'unconfigured' && (
+            <p className={styles.mcpHint}>
+              This dashboard is served from a domain, so the MCP address can&apos;t be worked out
+              from it. Set <code>EXTERNAL_MCP_URL</code> in the hub&apos;s <code>.env</code> to the
+              public MCP URL (e.g. <code>https://mcp.example.com</code>) and recreate{' '}
+              <code>cortex-api</code>.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Conductor worker bootstrap */}
+      <div className={styles.section}>
+        <h2 className={styles.sectionTitle}>Run a worker</h2>
+        <div className={`card ${styles.codeCard}`}>
+          <p className={styles.codeHint}>
+            One line starts a Conductor worker on another machine. Create a separate worker key
+            under <a href="/keys">API Keys</a> and put it in place of{' '}
+            <code>&lt;worker-api-key&gt;</code> — not the key your lead agent uses. Details in the{' '}
+            <a href={SETUP_GUIDE_URL} target="_blank" rel="noreferrer">setup guide</a>.
+          </p>
+          {([
+            ['unix', 'macOS / Linux', bootstrap.unix],
+            ['windows', 'Windows (PowerShell)', bootstrap.windows],
+          ] as const).map(([os, label, cmd]) => (
+            <div key={os} style={{ marginTop: 'var(--space-4)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
+                <span className={styles.codeHint} style={{ marginBottom: 0 }}>{label}</span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => copyCommand(os, cmd)}
+                >
+                  {copiedCmd === os ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <pre className={styles.codeBlock}>{cmd}</pre>
+            </div>
+          ))}
+          {mcpEndpoint?.source === 'unconfigured' && (
+            <p className={styles.mcpHint}>
+              <code>--hub</code> needs the public MCP address too: set <code>EXTERNAL_MCP_URL</code>{' '}
+              in the hub&apos;s <code>.env</code> and recreate <code>cortex-api</code>.
+            </p>
+          )}
         </div>
       </div>
 

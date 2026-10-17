@@ -40,7 +40,7 @@ check nobody has run yet; the Evidence column names that check. 📋 means plann
 | Engines: claude, codex, gemini | 🔄 | Quota patterns are best effort; checked only against fixtures, no live quota hit yet |
 | Dashboard plan view | ✅ | `apps/dashboard-web/src/lib/conductor-plan/*.test.ts` |
 | Extension URL detection | ✅ | `apps/cortex-extension/src/mcp-config.test.ts` |
-| Setup guide | 🔄 | [`conductor/setup.md`](conductor/setup.md) is written; no machine has followed it end to end yet. Two spec section 8 dashboard items wait for the dashboard page update: the copyable worker bootstrap block and the `"type": "http"` Claude Code snippet |
+| Setup guide | 🔄 | [`conductor/setup.md`](conductor/setup.md) is written; no machine has followed it end to end yet. Dashboard Settings shows the copyable worker bootstrap ("Run a worker") and the `"type": "http"` Claude Code snippet |
 | Per-task cost tracking | 📋 | Planned |
 | Autostart on boot | 📋 | Planned |
 | Semantic capability matching | 📋 | Planned |

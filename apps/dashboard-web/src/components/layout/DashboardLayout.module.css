@@ -43,14 +43,16 @@
   transition:
     opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1),
     transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: opacity, transform;
   min-width: 0;
   max-width: 100%;
 }
 
+/* `none`, not translateY(0), and no will-change: any transform makes this
+   box the containing block of position: fixed descendants, so a page's
+   modal centers on the whole scrolled page instead of the viewport. */
 .contentVisible {
   opacity: 1;
-  transform: translateY(0);
+  transform: none;
 }
 
 /* ── Tablet Portrait & below (≤768px) ── */

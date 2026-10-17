@@ -27,6 +27,40 @@ export const getExternalUrl = (type: 'dashboard' | 'api' | 'mcp' | 'cliproxy' | 
   return ''
 }
 
+export type McpEndpoint = {
+  url: string | null
+  source: 'configured' | 'direct' | 'unconfigured'
+}
+
+// The MCP address agents should put in their config. A configured EXTERNAL_MCP_URL
+// always wins. Without one, hostname:8318 is only right when the browser reaches
+// the host itself (localhost, an IP, a LAN name, an explicit port). Behind a domain
+// the dashboard and MCP sit on separate tunnel hostnames (hub.* is behind Cloudflare
+// Access), so the address cannot be derived and none is invented.
+export const resolveMcpEndpoint = (
+  configured: string | null | undefined,
+  location: { hostname: string; port: string },
+): McpEndpoint => {
+  const base = configured?.trim().replace(/\/+$/, '')
+  if (base) {
+    return { url: base.endsWith('/mcp') ? base : `${base}/mcp`, source: 'configured' }
+  }
+
+  const { hostname, port } = location
+  const isDirect =
+    port !== '' ||
+    hostname === 'localhost' ||
+    hostname.startsWith('[') ||
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) ||
+    !hostname.includes('.') ||
+    hostname.endsWith('.local')
+  if (isDirect) {
+    // compose publishes 8318 as plain HTTP, whatever scheme the dashboard is on
+    return { url: `http://${hostname}:8318/mcp`, source: 'direct' }
+  }
+  return { url: null, source: 'unconfigured' }
+}
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
 const MCP_BASE = process.env.NEXT_PUBLIC_MCP_URL ?? getExternalUrl('mcp')
 

@@ -158,6 +158,12 @@
   line-height: 1.7;
 }
 
+.mcpHint {
+  font-size: 0.8125rem;
+  color: var(--status-warning);
+  margin-top: var(--space-3);
+}
+
 /* Danger Zone */
 .dangerCard {
   padding: 0;

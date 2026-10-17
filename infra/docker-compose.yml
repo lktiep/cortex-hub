@@ -248,6 +248,13 @@ services:
       CLIPROXY_AUTH_DIR: /app/cliproxy-auth
       CLIPROXY_MANAGEMENT_KEY: ${MANAGEMENT_PASSWORD:?Set MANAGEMENT_PASSWORD in .env}
       DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:4000}
+      # Public addresses the dashboard shows people (the MCP snippet agents copy).
+      # /api/setup/settings has always read these, but nothing passed them in, so
+      # behind a domain the dashboard guessed <dashboard-host>:8318 — an address
+      # no tunnel serves. Empty keeps the guess, which is right for local/LAN use.
+      EXTERNAL_MCP_URL: ${EXTERNAL_MCP_URL:-}
+      EXTERNAL_API_URL: ${EXTERNAL_API_URL:-}
+      EXTERNAL_LLM_PROXY_URL: ${EXTERNAL_LLM_PROXY_URL:-}
       # mem9 Configuration
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-}

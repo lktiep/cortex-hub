@@ -527,6 +527,12 @@
   line-height: 1.7;
 }
 
+.mcpHint {
+  font-size: 0.75rem;
+  color: var(--status-warning);
+  margin-top: var(--space-3);
+}
+
 /* ── Skeleton Loaders ── */
 .activitySkeletonList {
   display: flex;

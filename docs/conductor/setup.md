@@ -248,6 +248,10 @@ $env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.
 The Windows line runs the script with `-ExecutionPolicy Bypass`, which applies to that one
 process only. Your machine's policy is not changed.
 
+Or copy these from Dashboard, Settings, "Run a worker". It fills in your hub from
+`EXTERNAL_MCP_URL`, or from the address you opened the dashboard on when that is localhost or a
+LAN address.
+
 Options (add them after `start`):
 
 | Flag | Meaning |

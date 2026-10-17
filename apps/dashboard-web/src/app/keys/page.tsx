@@ -10,38 +10,7 @@ import useSWR from 'swr'
 import { listApiKeys, createApiKey, revokeApiKey, updateApiKey } from '@/lib/api'
 import type { ApiKey } from '@/lib/api'
 import { KeyRound, ClipboardList, AlertTriangle, XCircle, ICON_INLINE } from '@/lib/icons'
-
-function copyTextFallback(text: string): boolean {
-  const textArea = document.createElement('textarea')
-  textArea.value = text
-  textArea.style.top = '0'
-  textArea.style.left = '0'
-  textArea.style.position = 'fixed'
-  textArea.style.opacity = '0'
-  document.body.appendChild(textArea)
-  textArea.focus()
-  textArea.select()
-  let success = false
-  try {
-    success = document.execCommand('copy')
-  } catch (err) {
-    console.error('Fallback copy failed:', err)
-  }
-  document.body.removeChild(textArea)
-  return success
-}
-
-async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text)
-      return true
-    }
-  } catch (e) {
-    console.warn('Modern clipboard API failed, trying fallback:', e)
-  }
-  return copyTextFallback(text)
-}
+import { copyToClipboard } from '@/lib/clipboard'
 
 const allPermissions = [
   { id: 'cortex.session.start', label: 'Start Session (session_start)', group: 'Session' },
