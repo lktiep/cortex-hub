@@ -52,31 +52,42 @@ describe('saved accounts', () => {
     add.run('p-new', 'New', 'new', 'git@github.com:acme/new.git', 'Acme', 'tok-new', '2026-02-01T00:00:00Z')
     add.run('p-lab', 'Lab', 'lab', 'https://gitlab.com/acme/lab.git', 'acme', 'tok-lab', '2026-03-01T00:00:00Z')
     add.run('p-none', 'None', 'none', 'https://github.com/acme/none.git', 'acme', null, '2026-04-01T00:00:00Z')
+    // Saved without a username: it counts for the owner of the repo.
     add.run('p-blank', 'Blank', 'blank', 'https://github.com/acme/blank.git', '', 'tok-x', '2026-04-01T00:00:00Z')
+    add.run('p-solo', 'Solo', 'solo', 'https://github.com/solo/tool.git', null, 'tok-solo', '2026-01-15T00:00:00Z')
   })
 
   it('groups projects with a stored token by host and username, newest first, without the token', () => {
     const accounts = listGitAccounts()
     expect(accounts).toEqual([
-      { host: 'gitlab.com', username: 'acme', projects: [{ id: 'p-lab', name: 'Lab' }], updatedAt: '2026-03-01T00:00:00Z' },
       {
         host: 'github.com',
+        // Named as typed on p-new, though p-blank, saved without a username, is newer.
         username: 'Acme',
-        projects: [{ id: 'p-new', name: 'New' }, { id: 'p-old', name: 'Old' }],
-        updatedAt: '2026-02-01T00:00:00Z',
+        projects: [{ id: 'p-blank', name: 'Blank' }, { id: 'p-new', name: 'New' }, { id: 'p-old', name: 'Old' }],
+        updatedAt: '2026-04-01T00:00:00Z',
       },
+      { host: 'gitlab.com', username: 'acme', projects: [{ id: 'p-lab', name: 'Lab' }], updatedAt: '2026-03-01T00:00:00Z' },
+      { host: 'github.com', username: 'solo', projects: [{ id: 'p-solo', name: 'Solo' }], updatedAt: '2026-01-15T00:00:00Z' },
     ])
     expect(JSON.stringify(accounts)).not.toContain('tok-')
   })
 
   it('filters by host', () => {
-    expect(listGitAccounts('GitHub.com').map((a) => a.host)).toEqual(['github.com'])
+    expect(listGitAccounts('GitHub.com').map((a) => a.host)).toEqual(['github.com', 'github.com'])
   })
 
   it('returns the newest token saved for a username on that host, case-insensitively', () => {
-    expect(savedTokenFor('github.com', 'ACME')).toEqual({ username: 'Acme', token: 'tok-new', projectId: 'p-new' })
+    // p-blank is newer, but a token saved with the username comes first.
+    expect(savedTokenFor('github.com', 'ACME')).toEqual({ account: 'Acme', username: 'Acme', token: 'tok-new', projectId: 'p-new' })
     expect(savedTokenFor('gitlab.com', 'acme')?.token).toBe('tok-lab')
     expect(savedTokenFor('github.com', 'someone-else')).toBeNull()
     expect(savedTokenFor('bitbucket.org', 'acme')).toBeNull()
+  })
+
+  it('falls back to a token saved without a username for a repo the account owns', () => {
+    expect(savedTokenFor('github.com', 'Solo')).toEqual({ account: 'solo', username: null, token: 'tok-solo', projectId: 'p-solo' })
+    testDb.exec("UPDATE projects SET git_token = NULL WHERE id IN ('p-new', 'p-old')")
+    expect(savedTokenFor('github.com', 'acme')).toEqual({ account: 'acme', username: null, token: 'tok-x', projectId: 'p-blank' })
   })
 })

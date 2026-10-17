@@ -72,6 +72,13 @@ describe('autoRegisterProject', () => {
     expect(autoRegisterProject('https://github.com/acme/sandbox')?.orgId).toBe('org-a')
   })
 
+  it('uses a token saved without a username for another repo of the same owner, and keeps it without one', () => {
+    testDb.exec("UPDATE projects SET git_username = NULL WHERE id = 'p-a1'")
+    const reg = autoRegisterProject('https://github.com/acme/sandbox.git')
+    expect(reg?.username).toBe('acme')
+    expect(row(reg!.projectId)).toMatchObject({ git_username: null, git_token: SAVED })
+  })
+
   it.each([
     ['another owner', 'https://github.com/bob/sandbox.git'],
     ['another host', 'https://gitlab.com/acme/sandbox.git'],

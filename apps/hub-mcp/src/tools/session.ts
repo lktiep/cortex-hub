@@ -42,6 +42,8 @@ export function registerSessionTools(server: McpServer, env: Env) {
       // The hub registers a repo of a saved git account on first sight; the agent should say so.
       let autoRegistered: unknown
       let projectNote: string | undefined
+      // Set when the hub did not record the session: the id above is then local only.
+      let hubError: string | undefined
       try {
         const response = await apiCall(env, '/api/sessions/start', {
           method: 'POST',
@@ -75,9 +77,13 @@ export function registerSessionTools(server: McpServer, env: Env) {
           if (data.recentSessions) recentSessions = data.recentSessions
           autoRegistered = data.autoRegistered
           projectNote = data.projectNote
+        } else {
+          const data = await response.json().catch(() => null) as { error?: unknown } | null
+          hubError = `The hub refused the session (HTTP ${response.status}): ${typeof data?.error === 'string' ? data.error : response.statusText}`
         }
-      } catch {
+      } catch (err) {
         // Dashboard API unavailable — continue with local session ID
+        hubError = `The hub did not answer the session start: ${err instanceof Error ? err.message : String(err)}`
       }
 
       // Build dynamic mission brief from knowledge base
@@ -152,6 +158,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
               project: resolvedProjectId ? { id: resolvedProjectId, orgId: resolvedOrgId } : undefined,
               auto_registered: autoRegistered,
               project_note: projectNote,
+              hub_error: hubError,
               recent_sessions: recentSessions.length > 0 ? recentSessions : undefined,
               relevant_knowledge: relevantKnowledge.length > 0 ? relevantKnowledge : undefined,
             }, null, 2)

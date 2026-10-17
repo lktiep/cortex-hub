@@ -24,6 +24,7 @@ describe('findProjectByRepo', () => {
     'git@github.com:lktiep/cortex-hub.git',
     'https://github.com/lktiep/cortex-hub',
     'cortex-hub',
+    'C:\\src\\cortex-hub',
   ])('matches %s', (repo) => {
     expect(findProjectByRepo(repo)).toEqual(expected)
   })

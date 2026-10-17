@@ -45,7 +45,8 @@ function pickOrg(ref: RepoRef, tokenProjectId: string): string {
 /**
  * Register a repository nobody added yet, when it belongs to an account whose
  * token the hub already holds: the owner in its URL is a saved git username on
- * the same host. Repositories of any other owner are left alone. Synchronous,
+ * the same host, or owns a repo whose token was saved without a username.
+ * Repositories of any other owner are left alone. Synchronous,
  * so it never holds up the session start that calls it; indexing is
  * `indexRegisteredProject`'s job.
  *
@@ -72,14 +73,15 @@ export function autoRegisterProject(repo: string): AutoRegistration | null {
       insert.run(
         projectId, orgId, name, slugify(name),
         'Registered automatically when an agent started a session in this repo.',
+        // The username exactly as saved with the token: git authenticates the same way it did there.
         repoUrl, gitProviderForHost(ref.host), saved.username, saved.token,
       )
     } catch (err) {
       if (String(err).includes('UNIQUE constraint')) continue
       throw err
     }
-    logger.info(`Auto-registered ${ref.host}/${ref.path} as ${projectId} in ${orgId} with the token saved for ${saved.username}`)
-    return { projectId, orgId, orgName, name, repoUrl, username: saved.username }
+    logger.info(`Auto-registered ${ref.host}/${ref.path} as ${projectId} in ${orgId} with the token saved for ${saved.account}`)
+    return { projectId, orgId, orgName, name, repoUrl, username: saved.account }
   }
   return null
 }
@@ -99,13 +101,14 @@ export async function indexRegisteredProject(projectId: string): Promise<void> {
   }
 
   const project = db.prepare('SELECT git_repo_url, git_username FROM projects WHERE id = ?').get(projectId) as
-    { git_repo_url: string; git_username: string } | undefined
+    { git_repo_url: string; git_username: string | null } | undefined
   if (!project) return
   const ref = parseRepoUrl(project.git_repo_url)
   const where = ref ? `${ref.host}/${ref.path}` : project.git_repo_url
   const host = ref?.host ?? 'the git host'
+  const account = project.git_username || ref?.owner || 'this account'
   const error =
-    `The token saved for ${project.git_username} cannot read ${where}. A fine-grained token only reads the ` +
+    `The token saved for ${account} cannot read ${where}. A fine-grained token only reads the ` +
     `repositories it lists: add this one to it on ${host}, or save a token that can read it in this project's ` +
     `Git settings, then index again. (git: ${access.error.slice(0, 200)})`
   db.prepare(

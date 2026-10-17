@@ -20,7 +20,8 @@ export function normalizeRepo(repo: string): string {
 export function findProjectByRepo(repo: string): ProjectMatch | null {
   if (!repo) return null
   const normalizedRepo = normalizeRepo(repo)
-  const repoName = normalizedRepo.split('/').pop() ?? normalizedRepo
+  // A Windows checkout path names the repo after its last backslash.
+  const repoName = normalizedRepo.split(/[/\\]/).pop() ?? normalizedRepo
 
   let row = db.prepare(
     `SELECT * FROM projects

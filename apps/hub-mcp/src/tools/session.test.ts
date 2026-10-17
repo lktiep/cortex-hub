@@ -92,5 +92,24 @@ describe('cortex_session_start', () => {
     const out = JSON.parse(res.content[0]!.text) as Record<string, unknown>
     expect(out.project_note).toBe('not registered')
     expect(out).not.toHaveProperty('auto_registered')
+    expect(out).not.toHaveProperty('hub_error')
+  })
+
+  it('says why the hub refused the session, rather than passing a local id off as recorded', async () => {
+    const handler = tool('cortex_session_start')
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith('/api/sessions/start')
+        ? new Response(JSON.stringify({ success: false, error: 'Cortex Hub is disabled for this project.' }), { status: 403 })
+        : new Response('{}', { status: 200 })) as unknown as typeof fetch
+    const out = JSON.parse((await handler({ repo: 'r' })).content[0]!.text) as Record<string, unknown>
+    expect(out.hub_error).toBe('The hub refused the session (HTTP 403): Cortex Hub is disabled for this project.')
+    expect(out).not.toHaveProperty('project')
+  })
+
+  it('says so when the hub does not answer', async () => {
+    const handler = tool('cortex_session_start')
+    globalThis.fetch = vi.fn(async () => { throw new Error('connect ECONNREFUSED') }) as unknown as typeof fetch
+    const out = JSON.parse((await handler({ repo: 'r' })).content[0]!.text) as Record<string, unknown>
+    expect(out.hub_error).toBe('The hub did not answer the session start: connect ECONNREFUSED')
   })
 })
