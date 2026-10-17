@@ -1,5 +1,9 @@
 # Conductor Dashboard UI — Task for Antigravity
 
+> **Historical.** This is the 2026-03-30 task brief for the first Conductor page. The current
+> Conductor is described in [`../conductor.md`](../conductor.md), and machines are set up with
+> [`../conductor/setup.md`](../conductor/setup.md). Kept for history; do not follow it.
+
 ## Your Mission
 Build the `/conductor` page for Cortex Hub dashboard — a real-time task orchestration board where users see live agents and manage cross-agent tasks.
 

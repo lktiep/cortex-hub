@@ -1,5 +1,10 @@
 # Conductor v5: Multi-Agent Research Workflow
 
+> **Historical.** This 2026-04 planning note was superseded by the
+> [2026-10-16 spec](../superpowers/specs/2026-10-16-conductor-production-ready-design.md). The current
+> Conductor is described in [`../conductor.md`](../conductor.md), and machines are set up with
+> [`../conductor/setup.md`](../conductor/setup.md). Kept for history; do not follow it.
+
 > **Status**: Planning (2026-04-01)
 > **Author**: claude-code
 > **Depends on**: commit `044be04` (UX overhaul by antigravity)

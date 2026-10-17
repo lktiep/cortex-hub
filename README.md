@@ -290,7 +290,7 @@ graph TB
 
     subgraph Gateway["Hub MCP Server"]
         AUTH["API Key Auth"]
-        ROUTER["Tool Router (25 tools)"]
+        ROUTER["Tool Router (31 tools)"]
         TEL["Telemetry + Hints Engine"]
     end
 
@@ -337,7 +337,7 @@ Internet
 
 ## MCP Tools
 
-Cortex exposes **24 tools** via a single MCP endpoint:
+Cortex exposes **31 tools** via a single MCP endpoint. The 19 below are the core set; the 12 Conductor tools (`cortex_task_*` and `cortex_agents`) are listed under [Multi-Agent Conductor](#multi-agent-conductor).
 
 | # | Tool | Purpose |
 |---|------|---------|
@@ -353,12 +353,13 @@ Cortex exposes **24 tools** via a single MCP endpoint:
 | 10 | `cortex_detect_changes` | Pre-commit risk analysis |
 | 11 | `cortex_memory_search` | Recall agent memories |
 | 12 | `cortex_memory_store` | Store findings |
-| 13 | `cortex_knowledge_search` | Search knowledge base (with hall_type + asOf filters) |
-| 14 | `cortex_knowledge_store` | Store knowledge with hall type + validity |
-| 15 | `cortex_quality_report` | Report build/test/lint results |
-| 16 | `cortex_plan_quality` | 8-criterion plan assessment |
-| 17 | `cortex_tool_stats` | Token savings + tool usage analytics |
-| 18 | `cortex_health` | Backend service health check |
+| 13 | `cortex_memory_delete` | Delete a stored memory by id |
+| 14 | `cortex_knowledge_search` | Search knowledge base (with hall_type + asOf filters) |
+| 15 | `cortex_knowledge_store` | Store knowledge with hall type + validity |
+| 16 | `cortex_quality_report` | Report build/test/lint results |
+| 17 | `cortex_plan_quality` | 8-criterion plan assessment |
+| 18 | `cortex_tool_stats` | Token savings + tool usage analytics |
+| 19 | `cortex_health` | Backend service health check |
 
 **Cross-project search just works** — no repo lookup needed:
 ```typescript
@@ -421,7 +422,26 @@ cd infra && docker compose up -d
 
 Cortex includes a multi-agent orchestration layer for cross-IDE task delegation. It is production-ready for the rows marked ✅ in the status table; 🔄 and 📋 rows are not.
 
-📖 See [`docs/conductor.md`](docs/conductor.md) for current capabilities and limitations, and [`docs/conductor/setup.md`](docs/conductor/setup.md) to set up each machine.
+🌐 **Showcase:** [lktiep.github.io/cortex-hub](https://lktiep.github.io/cortex-hub/) shows a plan becoming a task graph and running across machines.
+
+📖 See [`docs/conductor.md`](docs/conductor.md) for current capabilities and limitations, and [`docs/conductor/setup.md`](docs/conductor/setup.md) to set up each machine. Before relying on it, run the [manual test checklist](docs/conductor/manual-test-checklist.md) on your own environments.
+
+| Tool | Who calls it | Purpose |
+|------|--------------|---------|
+| `cortex_task_tree_create` | Lead | Create a whole plan (tasks, dependencies, review and user gates) in one call |
+| `cortex_task_create` | Lead | Create a single task, optionally pinned to an agent |
+| `cortex_agents` | Lead | List connected workers and live MCP sessions before choosing routes |
+| `cortex_task_route` | Lead | Change how a task is routed, pick a fallback, clear an escalation |
+| `cortex_task_review` | Lead | Approve or reject a task in review, or decide a lead gate |
+| `cortex_task_cancel` | Lead | Cancel a task; its dependents stay blocked until rerouted |
+| `cortex_task_submit_strategy` | Lead | Propose roles, subtasks and an execution plan for user review |
+| `cortex_task_pickup` | Agent doing the work | Retrieve tasks assigned to the calling agent |
+| `cortex_task_accept` | Agent doing the work | Accept an assigned task |
+| `cortex_task_update` | Agent doing the work | Move a task through its lifecycle |
+| `cortex_task_list` | Anyone | List tasks by project, status or assignee |
+| `cortex_task_status` | Anyone | Full state of one task: subtasks, logs, history |
+
+Parameters for each are in the [API reference](docs/api/hub-mcp-reference.md#conductor-tasks).
 
 ---
 
@@ -429,7 +449,7 @@ Cortex includes a multi-agent orchestration layer for cross-IDE task delegation.
 
 | Layer | Technology | Role |
 |---|---|---|
-| **MCP Server** | Hono on Node.js | Streamable HTTP + JSON-RPC, 25 tools |
+| **MCP Server** | Hono on Node.js | Streamable HTTP + JSON-RPC, 31 tools |
 | **Code Intel** | GitNexus | AST parsing, execution flow, Cypher graph |
 | **Embeddings** | mem9 + Qdrant | Vector search with semantic recall |
 | **LLM Proxy** | CLIProxy | Multi-provider with fallback chains |
@@ -448,7 +468,7 @@ Cortex includes a multi-agent orchestration layer for cross-IDE task delegation.
 ```
 cortex-hub/
 ├── apps/
-│   ├── hub-mcp/                 # MCP Server — 25 tools
+│   ├── hub-mcp/                 # MCP Server — 31 tools
 │   ├── dashboard-api/           # Hono API + mem9 + recipe pipeline
 │   └── dashboard-web/           # Next.js dashboard (13 pages)
 ├── packages/
@@ -485,6 +505,8 @@ cortex-hub/
 | [`docs/architecture/agent-quality-strategy.md`](docs/architecture/agent-quality-strategy.md) | Quality gates + scoring |
 | [`docs/conductor.md`](docs/conductor.md) | Multi-agent conductor: status, quick tour, limitations |
 | [`docs/conductor/setup.md`](docs/conductor/setup.md) | Conductor setup, per machine |
+| [`docs/conductor/manual-test-checklist.md`](docs/conductor/manual-test-checklist.md) | Manual checks per environment (Windows, Docker, VSIX, live hub) |
+| [Conductor showcase](https://lktiep.github.io/cortex-hub/) | One-page tour of the Conductor |
 | [`docs/api/hub-mcp-reference.md`](docs/api/hub-mcp-reference.md) | Full MCP tool API reference |
 | [`benchmarks/README.md`](benchmarks/README.md) | Benchmark methodology + results |
 | [`docs/guides/installation.md`](docs/guides/installation.md) | Full installation guide |

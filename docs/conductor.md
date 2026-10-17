@@ -1,6 +1,9 @@
 # Cortex Conductor — Multi-Agent Orchestration
 
 > **Production-ready for the rows marked ✅ below; 🔄 and 📋 rows are not.**
+>
+> One-page tour: [lktiep.github.io/cortex-hub](https://lktiep.github.io/cortex-hub/). Before relying
+> on it on your machines, run the [manual test checklist](conductor/manual-test-checklist.md).
 
 ## What It Is
 
@@ -35,9 +38,9 @@ check nobody has run yet; the Evidence column names that check. 📋 means plann
 | User and lead gates | ✅ | `apps/dashboard-api/src/routes/conductor-v2.test.ts`, `apps/hub-mcp/src/tools/conductor-lead.test.ts` |
 | The 📋 lead notifications (`review_ready`, `escalated`, `capacity`, `gate_ready`, `no_worker`) | ✅ | `apps/dashboard-api/src/conductor/notify.test.ts` |
 | TypeScript worker on macOS and Linux (worktree → PR) | ✅ | `apps/conductor-worker/src/e2e/worker.e2e.test.ts` |
-| TypeScript worker on Windows (worktree → PR) | 🔄 | The end-to-end test is skipped on Windows; manual Windows checklist pending (Task 18, Step 5 of the [worker plan](superpowers/plans/2026-10-16-conductor-a2-worker.md)) |
+| TypeScript worker on Windows (worktree → PR) | 🔄 | The end-to-end test is skipped on Windows; manual check 8 of the [checklist](conductor/manual-test-checklist.md#8-worker-on-windows) is pending |
 | Engine: agy | ✅ | `apps/conductor-worker/src/engines/agy.test.ts` pins its verified quota output |
-| Engines: claude, codex, gemini | 🔄 | Quota patterns are best effort; checked only against fixtures, no live quota hit yet |
+| Engines: claude, codex, gemini | 🔄 | Quota patterns are best effort; checked only against fixtures, no live quota hit yet ([check 6](conductor/manual-test-checklist.md#6-quota-output-of-claude-codex-and-gemini)) |
 | Dashboard plan view | ✅ | `apps/dashboard-web/src/lib/conductor-plan/*.test.ts` |
 | Extension URL detection | ✅ | `apps/cortex-extension/src/mcp-config.test.ts` |
 | Setup guide | 🔄 | [`conductor/setup.md`](conductor/setup.md) is written; no machine has followed it end to end yet. Dashboard Settings shows the copyable worker bootstrap ("Run a worker") and the `"type": "http"` Claude Code snippet |

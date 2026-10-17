@@ -1,0 +1,974 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Cortex Conductor</title>
+<meta name="description" content="A lead agent turns a feature into a graph of tasks in one call. Workers on your Macs and Linux boxes pick them up, each in its own git worktree, with Claude, Codex, Gemini or Antigravity.">
+<link rel="canonical" href="https://lktiep.github.io/cortex-hub/">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'><rect width='26' height='26' rx='6' fill='%23dc440c'/><g fill='white'><circle cx='8' cy='9' r='2.4'/><circle cx='18' cy='9' r='2.4'/><circle cx='13' cy='18' r='2.4'/></g><path d='M10.2 9.6 L15.8 9.6 M9.2 11 L11.8 15.8 M16.8 11 L14.2 15.8' stroke='white' stroke-width='1.4'/></svg>">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Cortex Conductor: write the plan once, let every machine work it">
+<meta property="og:description" content="A lead agent turns a feature into a graph of tasks in one call. Workers on your Macs and Linux boxes pick them up, each in its own git worktree, with Claude, Codex, Gemini or Antigravity.">
+<meta property="og:url" content="https://lktiep.github.io/cortex-hub/">
+<meta name="twitter:card" content="summary">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  /* Layout: one 1160px column, gutters max(16px, safe-area), sections split by hairline rules.
+     The replay board is the one dense, wide moment; everything around it stays editorial.
+     Type: Bricolage Grotesque for display, IBM Plex Sans for prose, IBM Plex Mono for anything
+     a hub or a worker would actually print.
+     Color: graphite on paper plus a single signal orange. Status hues appear only on task state. */
+  --bg:#f3f4f6; --bg-2:#e8eaee; --surface:#ffffff; --surface-2:#f8f9fa;
+  --line:#dadde3; --line-strong:#b8bfc9;
+  --text:#0f1318; --muted:#56606c; --faint:#88909b;
+  --signal:#dc440c; --signal-soft:rgba(220,68,12,.09); --on-signal:#ffffff;
+  --st-done:#0f8a5f; --st-review:#7c4fd8; --st-run:#1f6feb; --st-ready:#0e7c8f;
+  --st-wait:#8a929c; --st-held:#b26a00; --st-crit:#d22f43;
+  --code-bg:#12161c; --code-text:#e4e7ec; --code-muted:#8d96a3;
+  --shadow:0 1px 2px rgba(15,19,24,.06),0 8px 24px -12px rgba(15,19,24,.18);
+  --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --gutter-l:max(clamp(16px,4vw,40px),env(safe-area-inset-left,0px));
+  --gutter-r:max(clamp(16px,4vw,40px),env(safe-area-inset-right,0px));
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0a0c0f; --bg-2:#11141a; --surface:#14181d; --surface-2:#191e24;
+    --line:#252b33; --line-strong:#38404b;
+    --text:#e9ecf0; --muted:#9aa3ae; --faint:#6b7480;
+    --signal:#ff6a2b; --signal-soft:rgba(255,106,43,.13); --on-signal:#160700;
+    --st-done:#3ccf91; --st-review:#b38dff; --st-run:#5aa2ff; --st-ready:#3cc6d8;
+    --st-wait:#6f7884; --st-held:#eaa53c; --st-crit:#ff5c6c;
+    --code-bg:#0d1014; --code-text:#e4e7ec; --code-muted:#7f8895;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -14px rgba(0,0,0,.7);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0a0c0f; --bg-2:#11141a; --surface:#14181d; --surface-2:#191e24;
+  --line:#252b33; --line-strong:#38404b;
+  --text:#e9ecf0; --muted:#9aa3ae; --faint:#6b7480;
+  --signal:#ff6a2b; --signal-soft:rgba(255,106,43,.13); --on-signal:#160700;
+  --st-done:#3ccf91; --st-review:#b38dff; --st-run:#5aa2ff; --st-ready:#3cc6d8;
+  --st-wait:#6f7884; --st-held:#eaa53c; --st-crit:#ff5c6c;
+  --code-bg:#0d1014; --code-text:#e4e7ec; --code-muted:#7f8895;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -14px rgba(0,0,0,.7);
+  color-scheme:dark;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:400 16px/1.6 var(--sans);overflow-x:hidden}
+a{color:inherit;text-decoration-color:var(--signal);text-underline-offset:3px}
+a:hover{color:var(--signal)}
+code,kbd,.mono{font-family:var(--mono);font-size:.92em}
+p code,li code,td code{background:var(--bg-2);border:1px solid var(--line);padding:.05em .35em;border-radius:4px;overflow-wrap:anywhere;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+
+.wrap{max-width:1160px;margin:0 auto;padding-left:var(--gutter-l);padding-right:var(--gutter-r)}
+section{border-top:1px solid var(--line);padding-block:clamp(56px,8vw,104px)}
+.kicker{font:600 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--signal);margin:0 0 18px;display:flex;align-items:center;gap:10px}
+.kicker::before{content:"";width:22px;height:2px;background:var(--signal)}
+h2{font:700 clamp(30px,4.4vw,52px)/1.04 var(--display);letter-spacing:-.025em;margin:0 0 18px;max-width:20ch}
+.lede{color:var(--muted);font-size:clamp(16px,1.6vw,18.5px);max-width:64ch;margin:0}
+
+/* ── top bar ── */
+.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:20px;height:58px}
+.mark{display:flex;align-items:center;gap:10px;font:700 17px/1 var(--display);letter-spacing:-.01em;text-decoration:none;white-space:nowrap}
+.mark svg{flex:none}
+.mark span{color:var(--muted);font-weight:500}
+.nav{display:flex;gap:22px;margin-left:auto;font-size:14px}
+.nav a{text-decoration:none;color:var(--muted)}
+.nav a:hover{color:var(--text)}
+.theme{margin-left:8px;width:36px;height:36px;display:grid;place-items:center;border:1px solid var(--line);background:var(--surface);border-radius:8px;cursor:pointer;flex:none}
+.theme:hover{border-color:var(--line-strong)}
+.theme .moon{display:none}
+:root[data-theme="dark"] .theme .sun{display:none}
+:root[data-theme="dark"] .theme .moon{display:block}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:block}}
+@media (max-width:820px){.nav{display:none}.theme{margin-left:auto}}
+
+/* ── hero ── */
+.hero{padding-block:clamp(48px,8vw,96px) clamp(40px,6vw,72px);border-top:0}
+.eyebrow{font:500 13px/1.4 var(--mono);color:var(--muted);margin:0 0 26px;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.eyebrow .pill{border:1px solid var(--line-strong);border-radius:999px;padding:4px 10px;color:var(--text)}
+.eyebrow .live{display:inline-flex;align-items:center;gap:8px;color:var(--st-done)}
+.eyebrow .live i{width:8px;height:8px;border-radius:50%;background:var(--st-done);box-shadow:0 0 0 4px color-mix(in srgb,var(--st-done) 20%,transparent)}
+h1{font:800 clamp(46px,8.6vw,118px)/.9 var(--display);letter-spacing:-.034em;margin:0 0 30px;max-width:13ch}
+h1 em{font-style:normal;color:var(--signal)}
+.hero .lede{font-size:clamp(17px,1.9vw,21px);max-width:58ch;color:var(--muted)}
+.hero .lede strong{color:var(--text);font-weight:600}
+.cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:34px}
+.btn{display:inline-flex;align-items:center;gap:10px;height:46px;padding:0 18px;border-radius:8px;font-weight:600;font-size:15px;text-decoration:none;border:1px solid var(--line-strong);background:var(--surface)}
+.btn:hover{color:var(--text);border-color:var(--text)}
+.btn.primary{background:var(--signal);border-color:var(--signal);color:var(--on-signal)}
+.btn.primary:hover{color:var(--on-signal);filter:brightness(1.06)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-top:clamp(48px,7vw,80px);border-top:1px solid var(--line-strong)}
+.stat{padding:20px 20px 0 0;min-width:0}
+.stat+.stat{padding-left:20px;border-left:1px solid var(--line)}
+.stat b{display:block;font:700 clamp(30px,4vw,46px)/1 var(--display);letter-spacing:-.03em}
+.stat span{display:block;color:var(--muted);font-size:14px;margin-top:8px}
+@media (max-width:720px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat:nth-child(3){padding-left:0;border-left:0}.stat:nth-child(n+3){border-top:1px solid var(--line);margin-top:18px}}
+
+/* ── replay ── */
+.replay-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:28px}
+.stage{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:980px){.stage{grid-template-columns:minmax(0,1fr)}}
+.board{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;min-width:0}
+.board-top{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+.plan-name{font:600 13px/1.2 var(--mono)}
+.plan-name small{color:var(--muted);font-weight:400;margin-left:6px}
+.progress{flex:1 1 220px;min-width:0}
+.bar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--bg-2)}
+.bar span{flex-grow:0;flex-basis:0;transition:flex-grow .6s ease}
+.legend{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:7px;font:500 11.5px/1.3 var(--mono);color:var(--muted)}
+.legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:-0.5px}
+.lanes{background-image:linear-gradient(var(--line) 1px,transparent 1px);background-size:100% 100%}
+.lane{display:grid;grid-template-columns:154px minmax(0,1fr);border-bottom:1px solid var(--line);min-height:104px}
+.lane:last-child{border-bottom:0}
+.lane-h{padding:14px 12px 14px 16px;border-right:1px dashed var(--line);display:flex;flex-direction:column;gap:6px;min-width:0}
+.lane-name{font:600 14px/1.1 var(--mono);display:flex;align-items:center;gap:8px}
+.lane-name i{width:8px;height:8px;border-radius:50%;background:var(--st-wait);flex:none;transition:background .3s}
+.lane[data-busy="1"] .lane-name i{background:var(--st-run);box-shadow:0 0 0 3px color-mix(in srgb,var(--st-run) 22%,transparent)}
+.lane-meta{font-size:12px;color:var(--muted);line-height:1.35}
+.engines{display:flex;flex-wrap:wrap;gap:4px}
+.engines span{font:500 11px/1 var(--mono);border:1px solid var(--line);padding:3px 6px;border-radius:4px;color:var(--muted)}
+.lane.queue{background:repeating-linear-gradient(-45deg,transparent 0 10px,color-mix(in srgb,var(--line) 35%,transparent) 10px 11px)}
+.track{display:flex;flex-wrap:wrap;align-content:flex-start;gap:8px;padding:12px;min-width:0}
+.chip{--st:var(--st-wait);position:relative;flex:1 1 132px;max-width:190px;min-width:0;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--st);border-radius:6px;padding:7px 9px 8px 10px;display:flex;flex-direction:column;gap:3px;will-change:transform;transition:border-color .35s,background-color .35s,opacity .35s}
+.chip .row{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0}
+.chip .key{font:600 12.5px/1.2 var(--mono);letter-spacing:.02em}
+.chip .att{font:500 10.5px/1 var(--mono);color:var(--faint);margin-left:4px}
+.chip .st{font:600 10px/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--st);white-space:nowrap;display:inline-flex;align-items:center;gap:5px}
+.chip .st::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--st)}
+.chip .ttl{font-size:12.5px;line-height:1.3;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip .route{font:500 10.5px/1.25 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.chip .note{font:500 10.5px/1.25 var(--mono);color:var(--st);overflow-wrap:anywhere}
+.chip .note:empty{display:none}
+.chip[data-st="ready"]{--st:var(--st-ready)}
+.chip[data-st="running"]{--st:var(--st-run);background:color-mix(in srgb,var(--st-run) 6%,var(--surface))}
+.chip[data-st="review"]{--st:var(--st-review);background:color-mix(in srgb,var(--st-review) 6%,var(--surface))}
+.chip[data-st="done"]{--st:var(--st-done)}
+.chip[data-st="done"] .ttl{color:var(--muted)}
+.chip[data-st="held"],.chip[data-st="capacity"]{--st:var(--st-held);background:color-mix(in srgb,var(--st-held) 7%,var(--surface))}
+.chip[data-st="waiting"] .ttl{color:var(--muted)}
+.chip.gate{border-style:dashed;border-left-style:solid}
+.chip[data-st="gate"]{--st:var(--signal);background:var(--signal-soft)}
+.chip.flash{border-color:var(--st)}
+.chip[data-st="running"] .st::before{animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.7)}}
+@media (max-width:620px){
+  .lane{grid-template-columns:minmax(0,1fr)}
+  .lane-h{border-right:0;border-bottom:1px dashed var(--line);flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:10px 12px}
+  .chip{flex:1 1 140px;max-width:none}
+}
+
+.side{display:flex;flex-direction:column;gap:14px;min-width:0}
+.caption{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 18px 16px;box-shadow:var(--shadow)}
+.caption .n{font:600 12px/1 var(--mono);color:var(--signal);letter-spacing:.08em}
+.caption h3{font:700 23px/1.15 var(--display);letter-spacing:-.015em;margin:8px 0 8px}
+.caption p{margin:0;color:var(--muted);font-size:15px}
+.controls{display:flex;align-items:center;gap:8px;margin-top:16px;flex-wrap:wrap}
+.ctl{height:36px;min-width:36px;padding:0 12px;border-radius:8px;border:1px solid var(--line-strong);background:var(--surface);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:13.5px;font-weight:600}
+.ctl:hover{border-color:var(--text)}
+.ctl.play{background:var(--text);color:var(--bg);border-color:var(--text)}
+.ctl:disabled{opacity:.4;cursor:default;border-color:var(--line)}
+.dots{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+.dots button{width:22px;height:22px;border:0;background:transparent;padding:0;cursor:pointer;display:grid;place-items:center}
+.dots button::after{content:"";width:8px;height:8px;border-radius:2px;background:var(--line-strong);transition:background .2s,transform .2s}
+.dots button[aria-current="step"]::after{background:var(--signal);transform:scale(1.25)}
+.dots button.seen::after{background:var(--muted)}
+.feed{background:var(--code-bg);color:var(--code-text);border-radius:12px;padding:12px 0;font:400 12px/1.55 var(--mono);max-height:430px;overflow:auto;scroll-behavior:smooth;min-width:0}
+.feed .hd{display:flex;justify-content:space-between;padding:0 14px 8px;color:var(--code-muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid rgba(255,255,255,.07);margin-bottom:6px}
+.ln{display:grid;grid-template-columns:68px minmax(0,1fr);gap:10px;padding:2px 14px;opacity:.42;transition:opacity .3s}
+.ln.now{opacity:1}
+.ln .src{color:var(--code-muted);text-align:right;white-space:nowrap}
+.ln .msg{overflow-wrap:anywhere;white-space:pre-wrap}
+.ln[data-src="lead"] .src{color:#ff8a52}
+.ln[data-src="studio"] .src,.ln[data-src="buildbox"] .src,.ln[data-src="mini"] .src{color:#7db5ff}
+.ln[data-src="user"] .src{color:#5fdca5}
+.ln[data-src="notice"]{background:rgba(255,106,43,.1);border-left:2px solid #ff6a2b;padding-left:12px;margin:3px 0}
+.ln[data-src="notice"] .src{color:#ff8a52}
+.ln.sep{opacity:.5;color:var(--code-muted);grid-template-columns:minmax(0,1fr);padding-top:8px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase}
+.ln.sep.now{opacity:.9}
+.disclaim{font-size:13px;color:var(--faint);margin:14px 0 0}
+
+/* ── flow ── */
+.flow{list-style:none;margin:44px 0 0;padding:0;display:grid;gap:0}
+.flow>li{display:grid;grid-template-columns:96px minmax(0,1fr);gap:24px;padding:32px 0;border-top:1px solid var(--line)}
+.flow>li:first-child{border-top:0;padding-top:8px}
+.flow .num{font:800 54px/.9 var(--display);color:var(--signal);letter-spacing:-.04em}
+.flow h3{font:700 clamp(22px,2.4vw,28px)/1.15 var(--display);letter-spacing:-.015em;margin:0 0 10px}
+.flow p{margin:0 0 14px;color:var(--muted);max-width:68ch}
+@media (max-width:620px){.flow>li{grid-template-columns:minmax(0,1fr);gap:6px}.flow .num{font-size:38px}}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:28px;align-items:start}
+@media (max-width:900px){.split{grid-template-columns:minmax(0,1fr)}}
+pre.code{margin:0;background:var(--code-bg);color:var(--code-text);border-radius:10px;padding:16px 18px;font:400 12.5px/1.6 var(--mono);overflow-x:auto;tab-size:2;min-width:0}
+pre.code .k{color:#ffb38a}
+pre.code .s{color:#9fd8a8}
+pre.code .c{color:var(--code-muted)}
+pre.code .f{color:#8ec5ff}
+.pipe{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0 16px;font:500 12.5px/1 var(--mono)}
+.pipe span{border:1px solid var(--line-strong);background:var(--surface);padding:8px 10px;border-radius:6px}
+.pipe span.hot{border-color:var(--signal);color:var(--signal)}
+.pipe i{color:var(--faint);font-style:normal}
+.verdicts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;max-width:760px}
+.verdicts div{border:1px solid var(--line);border-top:3px solid var(--c);background:var(--surface);border-radius:8px;padding:12px 14px;font-size:14px;color:var(--muted)}
+.verdicts b{display:block;color:var(--text);font:600 13px/1.3 var(--mono);margin-bottom:4px}
+@media (max-width:620px){.verdicts{grid-template-columns:minmax(0,1fr)}}
+
+/* ── quota ── */
+.chain{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:40px 0 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+.hop{padding:20px 18px 18px;position:relative;min-width:0;border-left:1px solid var(--line)}
+.hop:first-child{border-left:0}
+.hop .lbl{font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.hop .rt{font:600 14px/1.35 var(--mono);margin:12px 0 10px;overflow-wrap:anywhere}
+.hop .ev{font-size:13.5px;color:var(--muted)}
+.hop .tag{display:inline-block;font:600 11px/1 var(--mono);padding:4px 7px;border-radius:4px;margin-top:12px}
+.hop.out .tag{background:color-mix(in srgb,var(--st-crit) 13%,transparent);color:var(--st-crit)}
+.hop.ok .tag{background:color-mix(in srgb,var(--st-done) 14%,transparent);color:var(--st-done)}
+.hop.wait{background:var(--signal-soft)}
+.hop.wait .tag{background:var(--signal);color:var(--on-signal)}
+.hop:not(:last-child)::after{content:"";position:absolute;right:-9px;top:50%;width:16px;height:16px;background:var(--surface);border-top:1px solid var(--line);border-right:1px solid var(--line);transform:translateY(-50%) rotate(45deg);z-index:1}
+.hop.wait::before{content:none}
+@media (max-width:860px){.chain{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.hop:nth-child(3){border-left:0}.hop:nth-child(n+3){border-top:1px solid var(--line)}.hop::after{display:none}}
+@media (max-width:520px){.chain{grid-template-columns:minmax(0,1fr)}.hop{border-left:0;border-top:1px solid var(--line)}.hop:first-child{border-top:0}}
+.three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:28px;margin-top:40px}
+.three h3{font:700 19px/1.2 var(--display);margin:0 0 8px;letter-spacing:-.01em}
+.three p{margin:0;color:var(--muted);font-size:15px}
+@media (max-width:820px){.three{grid-template-columns:minmax(0,1fr);gap:22px}}
+.notice{margin-top:36px;max-width:820px}
+.notice .cap{font-size:13px;color:var(--faint);margin:10px 0 0}
+
+/* ── safety ── */
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:40px}
+.card{background:var(--surface);padding:24px 22px 26px;min-width:0}
+.card .ic{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;background:var(--signal-soft);color:var(--signal);margin-bottom:16px}
+.card h3{font:700 19px/1.2 var(--display);margin:0 0 8px;letter-spacing:-.01em}
+.card p{margin:0;color:var(--muted);font-size:14.5px}
+@media (max-width:900px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.cards{grid-template-columns:minmax(0,1fr)}}
+
+/* ── plan view ── */
+.dag-box{margin-top:40px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);min-width:0}
+.dag-scroll{overflow-x:auto;padding:22px 18px 10px}
+.dag-scroll svg{display:block;width:100%;min-width:720px;height:auto}
+.dag-legend{display:flex;flex-wrap:wrap;gap:8px 20px;padding:12px 18px 16px;border-top:1px solid var(--line);font:500 12px/1.3 var(--mono);color:var(--muted)}
+.dag-legend span{display:inline-flex;align-items:center;gap:8px}
+svg .n rect.box{fill:var(--surface-2);stroke:var(--line-strong);stroke-width:1}
+svg .n.gate rect.box{fill:var(--signal-soft);stroke:var(--signal);stroke-dasharray:5 4}
+svg .n text.k{font:600 12.5px var(--mono);fill:var(--text)}
+svg .n text.r{font:500 10.5px var(--mono);fill:var(--muted)}
+svg .n text.s{font:600 9.5px var(--mono);letter-spacing:.06em}
+svg .e{fill:none;stroke:var(--line-strong);stroke-width:1.5}
+svg .e.crit{stroke:var(--st-crit);stroke-width:2.2}
+svg .e.share{stroke:var(--st-held);stroke-width:1.8;stroke-dasharray:4 4}
+svg .shl{font:500 10px var(--mono);fill:var(--st-held)}
+.feat{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 36px;margin:32px 0 0;padding:0;list-style:none}
+.feat li{padding-left:18px;position:relative;color:var(--muted);font-size:15px}
+.feat li::before{content:"";position:absolute;left:0;top:.62em;width:8px;height:2px;background:var(--signal)}
+.feat b{color:var(--text);font-weight:600}
+@media (max-width:720px){.feat{grid-template-columns:minmax(0,1fr)}}
+
+/* ── setup ── */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-top:36px}
+.tab{border:0;background:transparent;padding:10px 14px;font-weight:600;font-size:14px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;align-items:center;gap:8px}
+.tab[aria-selected="true"]{color:var(--text);border-bottom-color:var(--signal)}
+.tab small{font:500 10.5px/1 var(--mono);color:var(--st-held);border:1px solid currentColor;border-radius:4px;padding:3px 5px}
+.panel{position:relative;margin-top:14px}
+.panel pre.code{padding-right:96px;white-space:pre-wrap;overflow-wrap:anywhere}
+.copy{position:absolute;top:10px;right:10px;height:30px;padding:0 12px;border-radius:6px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.06);color:#e4e7ec;font:600 12px/1 var(--sans);cursor:pointer}
+.copy:hover{background:rgba(255,255,255,.14)}
+.hint{color:var(--muted);font-size:14.5px;margin:14px 0 0;max-width:72ch}
+.cmds{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:30px}
+.cmds div{background:var(--surface);padding:14px 16px;min-width:0}
+.cmds code{font:600 13px/1.3 var(--mono);color:var(--text);background:none;border:0;padding:0}
+.cmds span{display:block;font-size:13.5px;color:var(--muted);margin-top:4px}
+
+/* ── status / proof ── */
+.status-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:40px;margin-top:40px;align-items:start}
+@media (max-width:900px){.status-grid{grid-template-columns:minmax(0,1fr)}}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:420px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+th{font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);background:var(--surface-2)}
+td.s{white-space:nowrap;width:1%}
+.grp td{font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);padding-top:12px}
+.bars{display:flex;flex-direction:column;gap:12px}
+.bars .b{display:grid;grid-template-columns:132px minmax(0,1fr) 54px;gap:12px;align-items:center;font-size:13.5px}
+.bars .b span:first-child{font:500 12.5px/1.2 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.bars .b i{display:block;height:10px;border-radius:3px;background:var(--text);width:var(--w)}
+.bars .b.hk i{background:var(--signal)}
+.bars .b b{font:600 13px/1 var(--mono);text-align:right}
+.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:28px}
+.facts div{background:var(--surface);padding:16px 18px;min-width:0}
+.facts b{display:block;font:700 28px/1 var(--display);letter-spacing:-.02em}
+.facts span{display:block;font-size:13.5px;color:var(--muted);margin-top:6px}
+.limits{margin:36px 0 0;padding:0;list-style:none;counter-reset:l;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 40px}
+.limits li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;color:var(--muted);font-size:15px}
+.limits li::before{counter-increment:l;content:counter(l,decimal-leading-zero);font:600 12px/1.9 var(--mono);color:var(--signal)}
+.limits b{color:var(--text);font-weight:600}
+@media (max-width:760px){.limits{grid-template-columns:minmax(0,1fr)}}
+
+footer{border-top:1px solid var(--line);padding-block:40px 56px;color:var(--muted);font-size:14px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:16px 32px;justify-content:space-between;align-items:baseline}
+footer nav{display:flex;flex-wrap:wrap;gap:8px 20px}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="mark" href="#top" aria-label="Cortex Conductor, top of page">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="9" r="2.4" fill="var(--signal)"/><circle cx="18" cy="9" r="2.4" fill="currentColor"/><circle cx="13" cy="18" r="2.4" fill="currentColor"/><path d="M10.2 9.6 L15.8 9.6 M9.2 11 L11.8 15.8 M16.8 11 L14.2 15.8" stroke="currentColor" stroke-width="1.4"/></svg>
+      Cortex <span>Conductor</span>
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#replay">Replay</a><a href="#how">How it works</a><a href="#quota">Quota</a><a href="#safety">Correctness</a><a href="#setup">Setup</a><a href="#status">Status</a><a href="https://github.com/lktiep/cortex-hub">GitHub</a>
+    </nav>
+    <button class="theme" type="button" aria-label="Switch light or dark theme">
+      <svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>
+      <svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 14.6A8.2 8.2 0 0 1 9.4 4a8.2 8.2 0 1 0 10.6 10.6Z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main id="top">
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow"><span class="pill">Cortex Hub</span><span>multi-machine agent orchestration</span><span class="live"><i></i>merged to master · 2026-10-17</span></p>
+    <h1>Write the plan once. Let <em>every machine</em> work&nbsp;it.</h1>
+    <p class="lede">A lead agent turns a feature into a graph of tasks in one call. Workers on your Macs and Linux boxes pick them up — each in its own git worktree, with <strong>Claude, Codex, Gemini or Antigravity</strong>. When an engine runs out of quota, the work moves on with its commits. Nothing waits silently, and every result comes back for review.</p>
+    <div class="cta">
+      <a class="btn primary" href="#replay">Watch a plan run
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 3v10M3.5 8.5 8 13l4.5-4.5"/></svg></a>
+      <a class="btn" href="#setup">Start a worker</a>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>1 call</b><span>creates the whole plan: dependencies, file locks, routes, gates</span></div>
+      <div class="stat"><b>4 engines</b><span>claude · codex · gemini · agy, chosen per task with fallbacks</span></div>
+      <div class="stat"><b>1,358</b><span>unit tests across six packages, plus 267 hook tests</span></div>
+      <div class="stat"><b>5 / 5</b><span>live worker run against a real hub stack</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="replay">
+  <div class="wrap">
+    <div class="replay-head">
+      <div>
+        <p class="kicker">Replay</p>
+        <h2>Watch one plan cross three machines</h2>
+        <p class="lede">Eight tasks, three workers, one quota limit, one rejected review and a human gate at the end. Step through it or let it play.</p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="board" aria-label="Plan board">
+        <div class="board-top">
+          <div class="plan-name">BILL<small>Billing v2 · 8 tasks</small></div>
+          <div class="progress">
+            <div class="bar" id="bar" aria-hidden="true"></div>
+            <div class="legend" id="legend"></div>
+          </div>
+        </div>
+        <div class="lanes" id="lanes"></div>
+      </div>
+
+      <div class="side">
+        <div class="caption" aria-live="polite">
+          <div class="n" id="stepN">STEP 1 / 10</div>
+          <h3 id="stepT">The lead writes the plan</h3>
+          <p id="stepP"></p>
+          <div class="controls">
+            <button class="ctl" id="prev" type="button" aria-label="Previous step">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg></button>
+            <button class="ctl play" id="play" type="button">Play</button>
+            <button class="ctl" id="next" type="button" aria-label="Next step">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg></button>
+            <div class="dots" id="dots"></div>
+          </div>
+        </div>
+        <div class="feed" id="feed" tabindex="0" aria-label="Protocol messages">
+          <div class="hd"><span>wire · /ws/conductor · protocol 2</span><span>📋 = lead notice</span></div>
+          <div id="feedBody"></div>
+        </div>
+      </div>
+    </div>
+    <p class="disclaim">The plan is illustrative. The message names, route strings and 📋 notice texts are the ones the hub and the worker exchange; the quota handoff follows the worker's live test.</p>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <p class="kicker">How it works</p>
+    <h2>From one call to merged work</h2>
+    <p class="lede">The lead plans, the hub decides, workers execute, and nothing reaches “done” without a verdict.</p>
+    <ol class="flow">
+      <li>
+        <div class="num">01</div>
+        <div>
+          <h3>The lead writes the plan</h3>
+          <p>Claude Code — or any MCP client — sends the feature as a single <code>cortex_task_tree_create</code> call: keys and <code>dependsOn</code>, the <code>files</code> each task will touch, the engine and model per task, a fallback chain, an optional pinned machine, and gates. The hub rejects cycles before anything runs.</p>
+<pre class="code"><span class="f">cortex_task_tree_create</span>(tasks: [
+  { <span class="k">key</span>: <span class="s">"BILL"</span>, <span class="k">title</span>: <span class="s">"Billing v2"</span>, <span class="k">kind</span>: <span class="s">"group"</span> },
+  { <span class="k">key</span>: <span class="s">"SCHEMA"</span>, <span class="k">parentKey</span>: <span class="s">"BILL"</span>, <span class="k">title</span>: <span class="s">"Invoices table + migration"</span>,
+    <span class="k">files</span>: [<span class="s">"db/schema/"</span>], <span class="k">executor</span>: <span class="s">"claude"</span>, <span class="k">model</span>: <span class="s">"opus"</span>, <span class="k">priority</span>: <span class="s">"high"</span> },
+  { <span class="k">key</span>: <span class="s">"PDF"</span>, <span class="k">parentKey</span>: <span class="s">"BILL"</span>, <span class="k">title</span>: <span class="s">"Invoice PDF renderer"</span>,
+    <span class="k">files</span>: [<span class="s">"lib/pdf/"</span>], <span class="k">executor</span>: <span class="s">"agy"</span>, <span class="k">model</span>: <span class="s">"claude-sonnet-5-5-low"</span>,
+    <span class="k">fallback</span>: [{ <span class="k">executor</span>: <span class="s">"agy"</span>, <span class="k">model</span>: <span class="s">"gemini-4-argon-low"</span> }] },
+  { <span class="k">key</span>: <span class="s">"API"</span>, <span class="k">parentKey</span>: <span class="s">"BILL"</span>, <span class="k">title</span>: <span class="s">"Invoice endpoints"</span>,
+    <span class="k">dependsOn</span>: [<span class="s">"SCHEMA"</span>], <span class="k">files</span>: [<span class="s">"api/billing/"</span>], <span class="k">executor</span>: <span class="s">"codex"</span> },
+  <span class="c">// HOOK, UI, DOCS, E2E …</span>
+  { <span class="k">key</span>: <span class="s">"SHIP"</span>, <span class="k">parentKey</span>: <span class="s">"BILL"</span>, <span class="k">title</span>: <span class="s">"Ship billing v2"</span>,
+    <span class="k">kind</span>: <span class="s">"gate"</span>, <span class="k">approver</span>: <span class="s">"user"</span>, <span class="k">dependsOn</span>: [<span class="s">"E2E"</span>, <span class="s">"DOCS"</span>, <span class="s">"PDF"</span>] }
+])</pre>
+        </div>
+      </li>
+      <li>
+        <div class="num">02</div>
+        <div>
+          <h3>The dispatcher decides — deterministically</h3>
+          <p>Assignment is a pure function, <code>selectAssignments(tasks, workers, quota, now)</code>, so every decision can be reproduced in a test. A task is ready when its dependencies are done and no running task holds a path under the same prefix. Priority goes first; a task returns to the machine that last ran it; pins and declines are honoured; routes that are out of quota are skipped.</p>
+        </div>
+      </li>
+      <li>
+        <div class="num">03</div>
+        <div>
+          <h3>A worker runs it in its own worktree</h3>
+          <div class="pipe" aria-label="Worker pipeline"><span>worktree</span><i>→</i><span>setup</span><i>→</i><span class="hot">engine</span><i>→</i><span>testCommand</span><i>→</i><span>commit</span><i>→</i><span>push</span><i>→</i><span>PR</span><i>→</i><span>review</span></div>
+          <p>Each task gets <code>~/.cortex/worker/&lt;agentId&gt;/wt/&lt;taskId&gt;</code>. The worker runs the optional setup command, then the engine, then the test command — keeping the last 200 lines — commits <code>&lt;key&gt;: &lt;title&gt;</code>, pushes, and opens a PR with <code>gh</code>, or hands back a compare URL when <code>gh</code> isn't there.</p>
+        </div>
+      </li>
+      <li>
+        <div class="num">04</div>
+        <div>
+          <h3>Review closes the loop</h3>
+          <p>A finished task is <em>in review</em>, not done. The lead hears about it on its next Cortex tool call and gives a verdict.</p>
+          <div class="verdicts">
+            <div style="--c:var(--st-done)"><b>approve</b>Done. Dependents become ready.</div>
+            <div style="--c:var(--st-review)"><b>reject + feedback</b>Back to the same branch, feedback in <code>context.reviews</code>.</div>
+            <div style="--c:var(--st-crit)"><b>2 strikes</b>Two rejections or two failures escalate to <em>Needs you</em>.</div>
+          </div>
+        </div>
+      </li>
+      <li>
+        <div class="num">05</div>
+        <div>
+          <h3>Gates hold the line</h3>
+          <p>A gate is a node in the graph with an approver. <code>approver: "lead"</code> closes with <code>cortex_task_review</code>. <code>approver: "user"</code> closes only from the dashboard — the MCP tool refuses it — so an agent cannot wave its own release through.</p>
+        </div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section id="quota">
+  <div class="wrap">
+    <p class="kicker">Quota</p>
+    <h2>Running out of quota is a routing event, not an outage</h2>
+    <p class="lede">Every task carries a chain of routes. A limit on one machine, engine and model sends the task down the chain — with its commits — and ends at the project default before it ever waits.</p>
+
+    <div class="chain" role="list" aria-label="Fallback chain for one task">
+      <div class="hop out" role="listitem"><div class="lbl">route 1 · mini</div><div class="rt">agy · claude-sonnet-5-5-low</div><div class="ev">agy exits 3 with <code>RESOURCE_EXHAUSTED</code>. The worker commits <code>WIP PDF: quota handoff</code> and pushes.</div><span class="tag">quota_exhausted</span></div>
+      <div class="hop ok" role="listitem"><div class="lbl">route 2 · fallback</div><div class="rt">agy · gemini-4-argon-low</div><div class="ev">Attempt 2 starts on the same branch, with the WIP commit as its parent.</div><span class="tag">continues</span></div>
+      <div class="hop" role="listitem"><div class="lbl">route 3 · project default</div><div class="rt">claude · opus</div><div class="ev">Every chain ends with the project's default route, on any machine that has it.</div><span class="tag" style="background:var(--bg-2);color:var(--muted)">last resort</span></div>
+      <div class="hop wait" role="listitem"><div class="lbl">nothing left</div><div class="rt">wait_reason: capacity</div><div class="ev">The task waits with a <code>wait_until</code>. The lead is told once; the dispatcher retries when the window resets.</div><span class="tag">never silent</span></div>
+    </div>
+
+    <div class="three">
+      <div><h3>Recorded where it happened</h3><p>A limit is stored per <strong>host × executor × model</strong>, and a model ending in <code>*</code> covers a family. The worker's <code>modelScope</code> widens one hit to <code>claude-sonnet-5-5-*</code>, so siblings aren't retried blindly.</p></div>
+      <div><h3>Nothing lost on the way</h3><p>The worker commits and pushes <em>before</em> it reports the limit. The next engine — on this machine or another — picks up from that commit instead of starting over.</p></div>
+      <div><h3>Never silently stuck</h3><p>A task that can't run says why: <code>capacity</code> with a time, or <code>no_worker</code> naming the routes nobody online can serve. Each reaches the lead once, not every tick.</p></div>
+    </div>
+
+    <div class="notice">
+<pre class="code"><span class="c">… tail of any Cortex tool result the lead receives</span>
+---
+📋 Conductor:
+  E2E "Billing e2e tests" is waiting for capacity: every route is out of quota until 2026-10-17T14:00:00Z.
+  SCHEMA "Invoices table + migration" is ready for review — https://github.com/acme/billing/pull/41 (tests attached)</pre>
+      <p class="cap">Five notice kinds reach the lead this way: <code>review_ready</code>, <code>escalated</code>, <code>capacity</code>, <code>gate_ready</code> and <code>no_worker</code>.</p>
+    </div>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <p class="kicker">Correctness</p>
+    <h2>Built for machines that sleep, drop and reconnect</h2>
+    <p class="lede">Laptops close, Wi-Fi drops, a worker gets started twice. None of that should duplicate work, lose it, or leak a key.</p>
+    <div class="cards">
+      <div class="card"><div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h6"/><path d="m16 15 2 2 4-4"/></svg></div><h3>Attempt fencing</h3><p>Every message carries its <code>attempt</code>. A worker that wakes up late and reports attempt 1 can't overwrite attempt 2 — the lifecycle refuses stale attempts.</p></div>
+      <div class="card"><div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg></div><h3>Leases and reclaim</h3><p>Offline for 30 minutes, or holding a lease past 24 hours, and the worker gets <code>task.revoked</code>; the task goes back to the queue. The scheduler checks every 60 seconds.</p></div>
+      <div class="card"><div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div><h3>Files are locks</h3><p>Two tasks whose <code>files</code> share a path prefix never run at the same time. The plan view draws the overlap as an orange dashed edge, so you see the contention before it happens.</p></div>
+      <div class="card"><div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7M8.3 7.2l7.4 3.6"/></svg></div><h3>Handoff commits</h3><p>Quota, revoke or failure: the branch is pushed before the hub hears about it. A review rejection returns to that same branch, so history stays one line per task.</p></div>
+      <div class="card"><div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8 8 9 4.6-1 8-4.5 8-9V6l-8-3Z"/><path d="M9 12h6"/></svg></div><h3>Keys stay out of reach</h3><p>Credentials are scrubbed from git remotes and output, redacted from logs, and <code>CORTEX_API_KEY</code> is removed from the environment the engines run in.</p></div>
+      <div class="card"><div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></div><h3>One identity per worker</h3><p>The registry is keyed by connection. Starting the same worker again replaces the old one (close 4000); the same agent id on another host is refused (close 4009).</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="view">
+  <div class="wrap">
+    <p class="kicker">Dashboard</p>
+    <h2>See the critical path before it slips</h2>
+    <p class="lede">The <code>/conductor</code> plan view draws the task graph by dependency depth, with a lane per machine and one for the queue.</p>
+    <div class="dag-box">
+      <div class="dag-scroll">
+        <svg viewBox="0 0 940 244" role="img" aria-label="Plan graph: SCHEMA leads to API and HOOK; API to UI and DOCS; UI and HOOK to E2E; E2E, DOCS and PDF to the SHIP gate. The critical path SCHEMA, API, UI, E2E, SHIP is drawn in red. API and HOOK share files under api/billing/.">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" style="fill:var(--line-strong)"/></marker>
+            <marker id="ahc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" style="fill:var(--st-crit)"/></marker>
+          </defs>
+          <path class="e" d="M170 40 C185 40 185 120 200 120" marker-end="url(#ah)"/>
+          <path class="e" d="M360 40 C375 40 375 120 390 120" marker-end="url(#ah)"/>
+          <path class="e" d="M360 120 C372 120 372 80 386 80 L646 80 Q660 80 660 67" marker-end="url(#ah)"/>
+          <path class="e" d="M550 120 L770 120" marker-end="url(#ah)"/>
+          <path class="e" d="M170 208 C560 208 560 128 770 128" marker-end="url(#ah)"/>
+          <path class="e crit" d="M170 40 L200 40" marker-end="url(#ahc)"/>
+          <path class="e crit" d="M360 40 L390 40" marker-end="url(#ahc)"/>
+          <path class="e crit" d="M550 40 L580 40" marker-end="url(#ahc)"/>
+          <path class="e crit" d="M740 40 C755 40 755 112 770 112" marker-end="url(#ahc)"/>
+          <path class="e share" d="M280 64 L280 96"/>
+          <text class="shl" x="288" y="84">api/billing/</text>
+
+          <g class="n"><rect class="box" x="10" y="16" width="160" height="48" rx="7"/><rect x="10" y="16" width="4" height="48" rx="2" style="fill:var(--st-done)"/><text class="k" x="24" y="36">SCHEMA</text><text class="r" x="24" y="53">claude·opus</text><text class="s" x="162" y="36" text-anchor="end" style="fill:var(--st-done)">DONE</text></g>
+          <g class="n"><rect class="box" x="10" y="184" width="160" height="48" rx="7"/><rect x="10" y="184" width="4" height="48" rx="2" style="fill:var(--st-review)"/><text class="k" x="24" y="204">PDF</text><text class="r" x="24" y="221">agy·gemini-4-argon-low</text><text class="s" x="162" y="204" text-anchor="end" style="fill:var(--st-review)">REVIEW</text></g>
+          <g class="n"><rect class="box" x="200" y="16" width="160" height="48" rx="7"/><rect x="200" y="16" width="4" height="48" rx="2" style="fill:var(--st-run)"/><text class="k" x="214" y="36">API</text><text class="r" x="214" y="53">codex</text><text class="s" x="352" y="36" text-anchor="end" style="fill:var(--st-run)">RUNNING</text></g>
+          <g class="n"><rect class="box" x="200" y="96" width="160" height="48" rx="7"/><rect x="200" y="96" width="4" height="48" rx="2" style="fill:var(--st-held)"/><text class="k" x="214" y="116">HOOK</text><text class="r" x="214" y="133">claude·sonnet</text><text class="s" x="352" y="116" text-anchor="end" style="fill:var(--st-held)">HELD</text></g>
+          <g class="n"><rect class="box" x="390" y="16" width="160" height="48" rx="7"/><rect x="390" y="16" width="4" height="48" rx="2" style="fill:var(--st-wait)"/><text class="k" x="404" y="36">UI</text><text class="r" x="404" y="53">claude·sonnet</text></g>
+          <g class="n"><rect class="box" x="390" y="96" width="160" height="48" rx="7"/><rect x="390" y="96" width="4" height="48" rx="2" style="fill:var(--st-wait)"/><text class="k" x="404" y="116">DOCS</text><text class="r" x="404" y="133">gemini</text></g>
+          <g class="n"><rect class="box" x="580" y="16" width="160" height="48" rx="7"/><rect x="580" y="16" width="4" height="48" rx="2" style="fill:var(--st-wait)"/><text class="k" x="594" y="36">E2E</text><text class="r" x="594" y="53">claude·opus → sonnet</text></g>
+          <g class="n gate"><rect class="box" x="770" y="96" width="160" height="48" rx="7"/><text class="k" x="784" y="116">SHIP</text><text class="r" x="784" y="133">gate · approver user</text></g>
+        </svg>
+      </div>
+      <div class="dag-legend">
+        <span><svg width="26" height="6" aria-hidden="true"><path d="M0 3h26" stroke="var(--st-crit)" stroke-width="2.4"/></svg>critical path</span>
+        <span><svg width="26" height="6" aria-hidden="true"><path d="M0 3h26" stroke="var(--st-held)" stroke-width="2" stroke-dasharray="4 4"/></svg>shared files</span>
+        <span><svg width="18" height="14" aria-hidden="true"><rect x="1" y="1" width="16" height="12" rx="3" fill="none" stroke="var(--signal)" stroke-dasharray="3 3"/></svg>gate</span>
+        <span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--st-done)"></i>done</span>
+        <span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--st-review)"></i>in review</span>
+        <span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--st-run)"></i>running</span>
+        <span><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--st-held)"></i>held</span>
+      </div>
+    </div>
+    <ul class="feat">
+      <li><b>Route chips</b> on every node — <code>agy·gemini-4-argon-low</code> — so you see which engine and model a task is on right now.</li>
+      <li><b>Progress bar</b> split into done, in review, running, ready, waiting and blocked.</li>
+      <li><b>Needs you</b> panel for escalations and user gates, with approve, reject and clear-escalation in place.</li>
+      <li><b>Workers</b> and a <b>fallback tally</b> showing which machines are online and how often routes fell through.</li>
+      <li><b>Reroute</b> a task — executor, model, fallback, files or dependencies — without recreating it.</li>
+      <li><b>Phase view</b> for plans grouped into milestones, with a lane per machine plus the queue.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="setup">
+  <div class="wrap">
+    <p class="kicker">Setup</p>
+    <h2>One line per machine</h2>
+    <p class="lede">Run it inside a clone of the project. The script fetches the worker from your own hub, so every machine runs the version its hub expects. Node 20 or newer; no global install.</p>
+
+    <div class="tabs" role="tablist" aria-label="Operating system">
+      <button class="tab" role="tab" id="tab-unix" aria-controls="p-unix" aria-selected="true" type="button">macOS / Linux</button>
+      <button class="tab" role="tab" id="tab-win" aria-controls="p-win" aria-selected="false" tabindex="-1" type="button">Windows <small>manual check pending</small></button>
+    </div>
+    <div class="panel" role="tabpanel" id="p-unix" aria-labelledby="tab-unix">
+      <pre class="code" id="cmd-unix">curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | CORTEX_API_KEY=&lt;worker-api-key&gt; bash -s -- start --daemon --hub https://&lt;your-mcp-host&gt;</pre>
+      <button class="copy" type="button" data-copy="cmd-unix" aria-label="Copy the macOS and Linux command">Copy</button>
+    </div>
+    <div class="panel" role="tabpanel" id="p-win" aria-labelledby="tab-win" hidden>
+      <pre class="code" id="cmd-win">$env:CORTEX_API_KEY="&lt;worker-api-key&gt;"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://&lt;your-mcp-host&gt;</pre>
+      <button class="copy" type="button" data-copy="cmd-win" aria-label="Copy the Windows PowerShell command">Copy</button>
+    </div>
+    <p class="hint">Replace <code>&lt;worker-api-key&gt;</code> and <code>&lt;your-mcp-host&gt;</code>. In the dashboard, <strong>Settings → Run a worker</strong> shows both lines with your hub's address already filled in. Give workers their own API key, separate from the lead's.</p>
+
+    <div class="cmds">
+      <div><code>start --daemon</code><span>Register with the hub and wait for tasks.</span></div>
+      <div><code>status</code><span>Online state, engines found, current task.</span></div>
+      <div><code>logs</code><span>The worker's log, with secrets redacted.</span></div>
+      <div><code>doctor --probe</code><span>Check git, gh, Node and every engine — and actually call them.</span></div>
+      <div><code>update</code><span>Fetch the bundle the hub is serving now.</span></div>
+      <div><code>hub-url</code><span>Show or change the hub this worker talks to.</span></div>
+      <div><code>stop</code><span>Finish cleanly; the hub requeues anything unfinished.</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <p class="kicker">Status</p>
+    <h2>Where it stands — honestly</h2>
+    <p class="lede">✅ means a test on master covers it and passes. 🔄 means it works but rests on a check nobody has run yet. 📋 means planned.</p>
+    <div class="status-grid">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Capability</th><th>State</th></tr></thead>
+          <tbody>
+            <tr class="grp"><td colspan="2">Hub</td></tr>
+            <tr><td>Plan trees and cycle check</td><td class="s">✅</td></tr>
+            <tr><td>Dispatcher: dependencies, priority, file locks</td><td class="s">✅</td></tr>
+            <tr><td>Per-task routing and fallback</td><td class="s">✅</td></tr>
+            <tr><td>Quota record, wait reason, lead notice</td><td class="s">✅</td></tr>
+            <tr><td>Leases and offline reclaim</td><td class="s">✅</td></tr>
+            <tr><td>Review on the same branch, escalation</td><td class="s">✅</td></tr>
+            <tr><td>User and lead gates</td><td class="s">✅</td></tr>
+            <tr class="grp"><td colspan="2">Workers</td></tr>
+            <tr><td>Worker on macOS and Linux, worktree → PR</td><td class="s">✅</td></tr>
+            <tr><td>Engine: agy, with verified quota output</td><td class="s">✅</td></tr>
+            <tr><td>Engines: claude, codex, gemini — quota patterns from fixtures</td><td class="s">🔄</td></tr>
+            <tr><td>Worker on Windows</td><td class="s">🔄</td></tr>
+            <tr class="grp"><td colspan="2">Dashboard &amp; setup</td></tr>
+            <tr><td>Plan view</td><td class="s">✅</td></tr>
+            <tr><td>Extension finds the hub URL</td><td class="s">✅</td></tr>
+            <tr><td>Setup guide followed end to end on a fresh machine</td><td class="s">🔄</td></tr>
+            <tr class="grp"><td colspan="2">Next</td></tr>
+            <tr><td>Per-task cost tracking · autostart on boot</td><td class="s">📋</td></tr>
+            <tr><td>Semantic capability matching · editing a task's description</td><td class="s">📋</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h3 style="font:700 22px/1.2 var(--display);margin:0 0 6px;letter-spacing:-.01em">Proof, not adjectives</h3>
+        <p style="color:var(--muted);margin:0 0 22px;font-size:15px">Passing tests on the merged branch, per package.</p>
+        <div class="bars">
+          <div class="b"><span>dashboard-api</span><i style="--w:100%"></i><b>523</b></div>
+          <div class="b"><span>conductor-worker</span><i style="--w:91.4%"></i><b>478</b></div>
+          <div class="b"><span>dashboard-web</span><i style="--w:32.7%"></i><b>171</b></div>
+          <div class="b"><span>shared-mem9</span><i style="--w:14.7%"></i><b>77</b></div>
+          <div class="b"><span>hub-mcp</span><i style="--w:12.8%"></i><b>67</b></div>
+          <div class="b"><span>cortex-agent</span><i style="--w:8%"></i><b>42</b></div>
+          <div class="b hk"><span>hook tests</span><i style="--w:51%"></i><b>267</b></div>
+        </div>
+        <div class="facts">
+          <div><b>16</b><span>defects caught in review and fixed before merge — 9 hub, 7 worker</span></div>
+          <div><b>5 / 5</b><span>live worker run: register, PR, quota handoff, resume</span></div>
+          <div><b>107</b><span>commits across 4 plans, each task reviewed</span></div>
+          <div><b>+32.7k</b><span>lines across 210 files, −2.8k removed</span></div>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="font:700 clamp(22px,2.4vw,28px)/1.2 var(--display);margin:64px 0 0;letter-spacing:-.015em">Know before you lean on it</h3>
+    <ol class="limits">
+      <li><span><b>Quota output is verified for agy only.</b> Claude, Codex and Gemini limits are matched against fixtures until a live hit confirms them.</span></li>
+      <li><span><b>Locks are only as good as <code>files</code>.</b> A task that doesn't list what it touches isn't protected from conflicts.</span></li>
+      <li><span><b>agy takes about two minutes to start</b> a task, because it starts every MCP server it has. Trim its server list to shorten that.</span></li>
+      <li><span><b>Use separate keys for the lead and workers.</b> Notices are delivered once per key, to whichever session asks first.</span></li>
+      <li><span><b>User gates live in the dashboard, and it has no login.</b> Anyone who can open it can approve one.</span></li>
+      <li><span><b>Windows workers await a manual run</b> of the checklist; the end-to-end test is skipped there.</span></li>
+    </ol>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Cortex Conductor ships in Cortex Hub · <a href="https://github.com/lktiep/cortex-hub/pull/55">PR #55</a>, merged 2026-10-17.</span>
+    <nav aria-label="Documentation">
+      <a href="https://github.com/lktiep/cortex-hub/blob/master/docs/conductor.md">Overview</a>
+      <a href="https://github.com/lktiep/cortex-hub/blob/master/docs/conductor/setup.md">Setup guide</a>
+      <a href="https://github.com/lktiep/cortex-hub/blob/master/docs/superpowers/specs/2026-10-16-conductor-production-ready-design.md">Design spec</a>
+      <a href="https://github.com/lktiep/cortex-hub">Source</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem('cc-theme'); if (saved === 'light' || saved === 'dark') root.setAttribute('data-theme', saved); } catch (e) {}
+  document.querySelector('.theme').addEventListener('click', function () {
+    var cur = root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    var next = cur === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('cc-theme', next); } catch (e) {}
+  });
+
+  /* ── copy ── */
+  function copyText(text, btn) {
+    function done(ok) {
+      btn.textContent = ok ? 'Copied' : 'Select it';
+      setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
+    }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+      ta.remove(); done(ok);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, fallback);
+    } else { fallback(); }
+  }
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () { copyText(document.getElementById(btn.dataset.copy).textContent, btn); });
+  });
+
+  /* ── tabs ── */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+  function selectTab(t) {
+    tabs.forEach(function (x) {
+      var on = x === t;
+      x.setAttribute('aria-selected', on ? 'true' : 'false');
+      x.tabIndex = on ? 0 : -1;
+      document.getElementById(x.getAttribute('aria-controls')).hidden = !on;
+    });
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function () { selectTab(t); });
+    t.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      var n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+      selectTab(n); n.focus();
+    });
+  });
+
+  /* ── replay ── */
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var LANES = [
+    { id: 'queue', name: 'Queue', meta: 'not on a machine yet' },
+    { id: 'studio', name: 'studio', meta: 'macOS', engines: ['claude', 'agy'] },
+    { id: 'buildbox', name: 'buildbox', meta: 'Linux', engines: ['codex', 'gemini'] },
+    { id: 'mini', name: 'mini', meta: 'macOS', engines: ['agy', 'claude'] }
+  ];
+  var TASKS = [
+    { k: 'SCHEMA', t: 'Invoices table + migration', r: 'claude·opus', deps: [] },
+    { k: 'PDF', t: 'Invoice PDF renderer', r: 'agy·claude-sonnet-5-5-low', deps: [] },
+    { k: 'API', t: 'Invoice endpoints', r: 'codex', deps: ['SCHEMA'] },
+    { k: 'HOOK', t: 'Payment webhook', r: 'claude·sonnet', deps: ['SCHEMA'] },
+    { k: 'UI', t: 'Invoices page', r: 'claude·sonnet', deps: ['API'] },
+    { k: 'DOCS', t: 'Billing docs', r: 'gemini', deps: ['API'] },
+    { k: 'E2E', t: 'Billing e2e tests', r: 'claude·opus', deps: ['UI', 'HOOK'] },
+    { k: 'SHIP', t: 'Ship billing v2', r: 'gate · approver user', deps: ['E2E', 'DOCS', 'PDF'], gate: true }
+  ];
+  var LABEL = { waiting: 'waiting', ready: 'ready', running: 'running', review: 'in review', done: 'done', held: 'held', capacity: 'capacity', gate: 'needs you' };
+
+  var FRAMES = [
+    { title: 'The lead writes the plan',
+      text: 'One MCP call carries the whole feature: keys, dependencies, file locks, a route per task with a fallback chain, and a user gate at the end. The hub checks it for cycles before anything runs.',
+      set: {},
+      feed: [['lead', 'cortex_task_tree_create · group BILL · 8 tasks'], ['hub', 'keys resolved · dependsOn checked · no cycles'], ['hub', 'ready: SCHEMA, PDF · waiting on dependencies: 6']] },
+    { title: 'Two machines start at once',
+      text: 'The dispatcher hands out every ready task in one pass. Each task gets its own git worktree on its machine, so no two engines ever share a checkout.',
+      set: { SCHEMA: { lane: 'studio', st: 'running', a: 1, note: 'wt/SCHEMA' }, PDF: { lane: 'mini', st: 'running', a: 1, note: 'wt/PDF' } },
+      feed: [['hub', '→ studio  task.assigned SCHEMA attempt=1 route=claude/opus'], ['studio', 'task.accept SCHEMA attempt=1'], ['hub', '→ mini  task.assigned PDF attempt=1 route=agy/claude-sonnet-5-5-low'], ['mini', 'task.accept PDF attempt=1'], ['studio', 'task.progress SCHEMA · claude running in wt/SCHEMA']] },
+    { title: 'Quota runs out mid-task',
+      text: 'agy hits its limit on claude-sonnet-5-5-low. Before saying so, the worker commits what it has and pushes. The hub records the limit for that machine, engine and model family, and moves PDF to its next route.',
+      set: { PDF: { lane: 'queue', st: 'ready', r: 'agy·gemini-4-argon-low', note: 'WIP pushed · next route' } },
+      feed: [['mini', 'agy exited 3 · RESOURCE_EXHAUSTED'], ['mini', 'git commit "WIP PDF: quota handoff" · git push'], ['mini', 'task.quota_exhausted PDF executor=agy modelScope=claude-sonnet-5-5-* resetAt=+89h'], ['hub', 'quota recorded: mini × agy × claude-sonnet-5-5-*'], ['hub', 'PDF → next route agy/gemini-4-argon-low']] },
+    { title: 'The fallback picks up the same branch',
+      text: 'Attempt 2 starts from the WIP commit, on the same branch. Meanwhile SCHEMA is finished: tests ran, the branch is pushed, the PR is open — and the notice rides along on the lead’s next Cortex tool call.',
+      set: { PDF: { lane: 'mini', st: 'running', a: 2, note: 'from the WIP commit' }, SCHEMA: { st: 'review', note: 'PR #41 · tests attached' } },
+      feed: [['hub', '→ mini  task.assigned PDF attempt=2 route=agy/gemini-4-argon-low · handoff'], ['studio', 'task.complete SCHEMA prUrl=…/pull/41 · last 200 test lines'], ['notice', 'SCHEMA "Invoices table + migration" is ready for review — https://github.com/acme/billing/pull/41 (tests attached)']] },
+    { title: 'Approve, and the graph opens up',
+      text: 'Approving SCHEMA releases API and HOOK. HOOK would edit a file inside the folder API is changing, so the dispatcher holds it rather than let two engines write the same code.',
+      set: { SCHEMA: { st: 'done', note: 'approved' }, API: { lane: 'buildbox', st: 'running', a: 1, note: 'locks api/billing/' }, HOOK: { st: 'held', note: 'api/billing/ held by API' } },
+      feed: [['lead', 'cortex_task_review SCHEMA verdict=approve'], ['hub', 'ready: API, HOOK'], ['hub', '→ buildbox  task.assigned API attempt=1 route=codex'], ['hub', 'HOOK held · api/billing/webhook.ts is under api/billing/ (API running)']] },
+    { title: 'A rejection goes back to the same branch',
+      text: 'The lead rejects PDF with a reason. The task returns to its branch with the feedback attached. A second rejection — or a second failure — would escalate it to Needs you instead of looping.',
+      set: { PDF: { st: 'running', a: 3, note: 'feedback 1 of 2' } },
+      feed: [['mini', 'task.complete PDF prUrl=…/pull/42'], ['lead', 'cortex_task_review PDF verdict=reject feedback="footer is missing page numbers"'], ['hub', '→ mini  task.assigned PDF attempt=3 · same branch · context.reviews[0]']] },
+    { title: 'Lock released, the plan fans out',
+      text: 'API’s approval frees its folder, and three tasks start at once: three machines, three branches, three engines.',
+      set: { API: { st: 'done', note: 'approved' }, PDF: { st: 'done', note: 'approved' }, HOOK: { lane: 'studio', st: 'running', a: 1, note: 'lock free' }, UI: { lane: 'mini', st: 'running', a: 1, note: '' }, DOCS: { lane: 'buildbox', st: 'running', a: 1, note: '' } },
+      feed: [['buildbox', 'task.complete API prUrl=…/pull/43'], ['mini', 'task.complete PDF prUrl=…/pull/42 · attempt=3'], ['lead', 'cortex_task_review API approve · PDF approve'], ['hub', '→ studio  task.assigned HOOK route=claude/sonnet'], ['hub', '→ mini  task.assigned UI route=claude/sonnet'], ['hub', '→ buildbox  task.assigned DOCS route=gemini']] },
+    { title: 'Nobody has capacity: say so, once',
+      text: 'Every route E2E may use is out of quota. It doesn’t sit as “ready” forever: it waits with a reason and a time, and the lead hears about it exactly once.',
+      set: { HOOK: { st: 'done', note: 'approved' }, UI: { st: 'done', note: 'approved' }, DOCS: { st: 'done', note: 'approved' }, E2E: { st: 'capacity', note: 'until 14:00Z' } },
+      feed: [['hub', 'HOOK, UI, DOCS approved · E2E ready'], ['hub', 'E2E routes: claude/opus → claude/sonnet'], ['hub', 'quota: studio × claude × opus, mini × claude × sonnet — both out'], ['hub', 'E2E wait_reason=capacity wait_until=2026-10-17T14:00:00Z'], ['notice', 'E2E "Billing e2e tests" is waiting for capacity: every route is out of quota until 2026-10-17T14:00:00Z.']] },
+    { title: 'Capacity returns; the gate waits for a person',
+      text: 'When the window resets, E2E runs and passes review. The last node is a user gate: it cannot be closed over MCP, so no agent can approve its own release.',
+      set: { E2E: { lane: 'studio', st: 'done', a: 1, note: 'approved' }, SHIP: { st: 'gate', note: 'approve in dashboard' } },
+      feed: [['hub', '14:00Z · window reset → studio  task.assigned E2E route=claude/opus'], ['studio', 'task.complete E2E prUrl=…/pull/47'], ['lead', 'cortex_task_review E2E verdict=approve'], ['notice', 'SHIP "Ship billing v2" is waiting for approval by the user in the dashboard.']] },
+    { title: 'Shipped',
+      text: 'Eight tasks, three machines, one quota handoff and one rejected review — and nobody had to babysit a terminal.',
+      set: { SHIP: { st: 'done', note: 'approved by user' } },
+      feed: [['user', 'dashboard · approve SHIP'], ['hub', 'BILL 8/8 done · 3 machines · 1 quota handoff · 1 rejection fixed']] }
+  ];
+
+  // Fold the frames into full snapshots, so stepping back is as cheap as stepping forward.
+  var base = {};
+  TASKS.forEach(function (t) {
+    base[t.k] = { lane: 'queue', st: t.deps.length ? 'waiting' : 'ready', a: 0, r: t.r, note: t.deps.length ? 'after ' + t.deps.join(', ') : '' };
+  });
+  var SNAP = [];
+  FRAMES.reduce(function (prev, f) {
+    var next = {};
+    Object.keys(prev).forEach(function (k) { next[k] = Object.assign({}, prev[k], f.set[k] || {}); });
+    SNAP.push(next);
+    return next;
+  }, base);
+
+  var lanesEl = document.getElementById('lanes');
+  var tracks = {}, laneEls = {}, chips = {};
+  LANES.forEach(function (l) {
+    var el = document.createElement('div');
+    el.className = 'lane' + (l.id === 'queue' ? ' queue' : '');
+    var h = document.createElement('div'); h.className = 'lane-h';
+    var name = document.createElement('div'); name.className = 'lane-name';
+    if (l.id !== 'queue') name.appendChild(document.createElement('i'));
+    name.appendChild(document.createTextNode(l.name));
+    var meta = document.createElement('div'); meta.className = 'lane-meta'; meta.textContent = l.meta;
+    h.appendChild(name); h.appendChild(meta);
+    if (l.engines) {
+      var en = document.createElement('div'); en.className = 'engines';
+      l.engines.forEach(function (e) { var s = document.createElement('span'); s.textContent = e; en.appendChild(s); });
+      h.appendChild(en);
+    }
+    var tr = document.createElement('div'); tr.className = 'track';
+    el.appendChild(h); el.appendChild(tr); lanesEl.appendChild(el);
+    tracks[l.id] = tr; laneEls[l.id] = el;
+  });
+  TASKS.forEach(function (t) {
+    var c = document.createElement('div');
+    c.className = 'chip' + (t.gate ? ' gate' : '');
+    c.innerHTML = '<div class="row"><span><b class="key"></b><span class="att"></span></span><span class="st"></span></div><div class="ttl"></div><div class="route"></div><div class="note"></div>';
+    c.querySelector('.key').textContent = t.k;
+    c.querySelector('.ttl').textContent = t.t;
+    c.querySelector('.ttl').title = t.t;
+    chips[t.k] = c;
+  });
+
+  var SEGS = [['done', 'var(--st-done)'], ['review', 'var(--st-review)'], ['running', 'var(--st-run)'], ['ready', 'var(--st-ready)'], ['waiting', 'var(--st-wait)'], ['held', 'var(--st-held)']];
+  var bar = document.getElementById('bar'), legend = document.getElementById('legend');
+  var segEls = {}, legEls = {};
+  SEGS.forEach(function (s) {
+    var sp = document.createElement('span'); sp.style.background = s[1]; bar.appendChild(sp); segEls[s[0]] = sp;
+    var lg = document.createElement('span'); lg.innerHTML = '<i style="background:' + s[1] + '"></i>'; var tx = document.createElement('span'); lg.appendChild(tx); legend.appendChild(lg); legEls[s[0]] = tx;
+  });
+
+  var feedBody = document.getElementById('feedBody'), feed = document.getElementById('feed');
+  var dotsEl = document.getElementById('dots');
+  FRAMES.forEach(function (f, i) {
+    var b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-label', 'Step ' + (i + 1) + ': ' + f.title);
+    b.addEventListener('click', function () { stop(); go(i); });
+    dotsEl.appendChild(b);
+  });
+
+  var cur = -1;
+  function bucket(st) { return st === 'gate' ? 'waiting' : st === 'capacity' ? 'held' : st; }
+
+  function go(i) {
+    i = Math.max(0, Math.min(FRAMES.length - 1, i));
+    var snap = SNAP[i], prevSnap = cur >= 0 ? SNAP[cur] : null;
+    var first = {};
+    if (!reduce) TASKS.forEach(function (t) { first[t.k] = chips[t.k].getBoundingClientRect(); });
+
+    var busy = {}, counts = {};
+    TASKS.forEach(function (t) {
+      var s = snap[t.k], c = chips[t.k];
+      c.dataset.st = s.st;
+      c.querySelector('.st').textContent = LABEL[s.st];
+      c.querySelector('.att').textContent = s.a ? '#' + s.a : '';
+      c.querySelector('.route').textContent = s.r;
+      c.querySelector('.note').textContent = s.note || '';
+      tracks[s.lane].appendChild(c);
+      if (s.st === 'running') busy[s.lane] = 1;
+      var bk = bucket(s.st); counts[bk] = (counts[bk] || 0) + 1;
+      var changed = prevSnap && JSON.stringify(prevSnap[t.k]) !== JSON.stringify(s);
+      c.classList.toggle('flash', !!changed);
+    });
+    LANES.forEach(function (l) { laneEls[l.id].dataset.busy = busy[l.id] ? '1' : '0'; });
+    SEGS.forEach(function (s) {
+      var n = counts[s[0]] || 0;
+      segEls[s[0]].style.flexGrow = n;
+      legEls[s[0]].textContent = n + ' ' + (s[0] === 'review' ? 'in review' : s[0]);
+    });
+
+    if (!reduce) {
+      TASKS.forEach(function (t) {
+        var c = chips[t.k], a = first[t.k], b = c.getBoundingClientRect();
+        var dx = a.left - b.left, dy = a.top - b.top;
+        if (!dx && !dy) return;
+        c.style.transition = 'none';
+        c.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            c.style.transition = 'transform .55s cubic-bezier(.2,.7,.2,1), border-color .35s, background-color .35s';
+            c.style.transform = '';
+          });
+        });
+      });
+    }
+
+    // Feed: every line up to this step; this step's lines at full strength.
+    feedBody.textContent = '';
+    for (var j = 0; j <= i; j++) {
+      var sep = document.createElement('div'); sep.className = 'ln sep' + (j === i ? ' now' : ''); sep.textContent = '— ' + (j + 1) + ' · ' + FRAMES[j].title;
+      feedBody.appendChild(sep);
+      FRAMES[j].feed.forEach(function (line) {
+        var d = document.createElement('div'); d.className = 'ln' + (j === i ? ' now' : ''); d.dataset.src = line[0];
+        var s = document.createElement('span'); s.className = 'src'; s.textContent = line[0] === 'notice' ? '📋' : line[0];
+        var m = document.createElement('span'); m.className = 'msg'; m.textContent = line[1];
+        d.appendChild(s); d.appendChild(m); feedBody.appendChild(d);
+      });
+    }
+    feed.scrollTop = feed.scrollHeight;
+
+    document.getElementById('stepN').textContent = 'STEP ' + (i + 1) + ' / ' + FRAMES.length;
+    document.getElementById('stepT').textContent = FRAMES[i].title;
+    document.getElementById('stepP').textContent = FRAMES[i].text;
+    Array.prototype.forEach.call(dotsEl.children, function (b, k) {
+      if (k === i) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
+      b.classList.toggle('seen', k < i);
+    });
+    document.getElementById('prev').disabled = i === 0;
+    document.getElementById('next').disabled = i === FRAMES.length - 1;
+    cur = i;
+    syncPlay();
+  }
+
+  var timer = null, playing = false;
+  var playBtn = document.getElementById('play');
+  function syncPlay() {
+    playBtn.textContent = playing ? 'Pause' : (cur === FRAMES.length - 1 ? 'Replay' : 'Play');
+  }
+  function tick() {
+    if (cur >= FRAMES.length - 1) { stop(); return; }
+    go(cur + 1);
+    timer = setTimeout(tick, 4600);
+  }
+  function play() {
+    if (playing) return;
+    playing = true;
+    if (cur >= FRAMES.length - 1) go(0);
+    syncPlay();
+    timer = setTimeout(tick, 3600);
+  }
+  function stop() { playing = false; clearTimeout(timer); timer = null; syncPlay(); }
+  playBtn.addEventListener('click', function () { if (playing) stop(); else play(); });
+  document.getElementById('prev').addEventListener('click', function () { stop(); go(cur - 1); });
+  document.getElementById('next').addEventListener('click', function () { stop(); go(cur + 1); });
+  document.addEventListener('visibilitychange', function () { if (document.hidden) stop(); });
+
+  go(0);
+
+  // Start playing the first time the board is on screen; with reduced motion, wait for a click.
+  if (!reduce) {
+    var board = document.querySelector('.board');
+    if ('IntersectionObserver' in window) {
+      var io = new IntersectionObserver(function (es) {
+        if (es.some(function (e) { return e.isIntersecting; })) { io.disconnect(); play(); }
+      }, { threshold: 0.35 });
+      io.observe(board);
+    } else { play(); }
+  }
+})();
+</script>
+</body>
+</html>
