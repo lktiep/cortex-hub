@@ -35,8 +35,10 @@ fi
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
 record() { printf 'tool=%s at=%s\n' "${2:-$TOOL_NAME}" "$NOW" > "$STATE_DIR/$1"; }
+# ESLint prints "✖ N problems (0 errors, N warnings)" for warnings alone, so a bare ✖
+# is not a failure; only an error count above zero is.
 looks_failed() {
-  printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖|FAIL |Exit status [1-9]'
+  printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖ [0-9]+ problems? \([1-9]|FAIL |Exit status [1-9]'
 }
 # 1 = this command is not one of the quality gates. mark_gate flips it, and the
 # invalidation block at the bottom reads it, so `pnpm build | tee build.log` does not

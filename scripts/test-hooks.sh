@@ -400,6 +400,18 @@ printf '{"tool_name":"Bash","tool_input":{"command":"pnpm build || true"},"tool_
 check "a hidden build failure opens nothing" 0 "$([ ! -f "$STATE/gate-build" ] && echo 0 || echo 1)"
 teardown
 
+setup
+printf '{"tool_name":"Bash","tool_input":{"command":"pnpm lint"},"tool_response":{"stdout":"✖ 3 problems (0 errors, 3 warnings)","stderr":""}}' \
+  | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "a lint with only warnings passes"    0 "$(grep -q '^tool=' "$STATE/gate-lint" 2>/dev/null && echo 0 || echo 1)"
+teardown
+
+setup
+printf '{"tool_name":"Bash","tool_input":{"command":"pnpm lint || true"},"tool_response":{"stdout":"✖ 4 problems (1 error, 3 warnings)","stderr":""}}' \
+  | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "a lint with an error opens nothing"  0 "$([ ! -f "$STATE/gate-lint" ] && echo 0 || echo 1)"
+teardown
+
 echo "track-quality.sh — a green build certifies a tree, not a session"
 # Gates passed, then one Edit, then `git commit`: the commit gate said yes to code that had
 # never been built. The certificate has to die the moment the tree changes under it.
@@ -537,6 +549,9 @@ check "report does not pass the gates"     0 "$([ ! -f "$STATE/quality-gates-pas
 printf '{"tool_name":"run_shell_command","tool_input":{"command":"pnpm build"},"tool_response":{"stdout":"ELIFECYCLE Command failed"}}' \
   | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
 check "a hidden failure opens nothing"     0 "$([ ! -f "$STATE/gate-build" ] && echo 0 || echo 1)"
+printf '{"tool_name":"run_shell_command","tool_input":{"command":"pnpm lint"},"tool_response":{"stdout":"✖ 3 problems (0 errors, 3 warnings)"}}' \
+  | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
+check "warnings alone pass the lint gate"  0 "$(grep -q '^tool=' "$STATE/gate-lint" 2>/dev/null && echo 0 || echo 1)"
 teardown
 
 echo "gemini — both holes, same shape"

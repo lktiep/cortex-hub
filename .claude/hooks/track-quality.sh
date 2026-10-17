@@ -55,8 +55,10 @@ record() {
 
 # A command that reports success while the build failed — `pnpm build || true`, or a pipe
 # that swallows the status. If the output says it failed, the gate does not open.
+# ESLint prints "✖ N problems (0 errors, N warnings)" for warnings alone, so a bare ✖
+# is not a failure; only an error count above zero is.
 looks_failed() {
-  printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖|FAIL |Exit status [1-9]'
+  printf '%s' "$OUTPUT" | grep -Eq 'ERR_PNPM|ELIFECYCLE|error TS[0-9]|Command failed|✖ [0-9]+ problems? \([1-9]|FAIL |Exit status [1-9]'
 }
 
 # 1 = this command is not one of the quality gates. mark_gate flips it, and the
