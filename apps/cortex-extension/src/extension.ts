@@ -1,9 +1,11 @@
 import * as vscode from 'vscode'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import type { AntigravitySDK } from 'antigravity-sdk'
+import type { AntigravitySDK, Models } from 'antigravity-sdk'
 import { getConfig, type CortexConfig } from './config.js'
-import { asAgentSdk, observeConversation, openTaskConversation, showConversation, stopConversation, type AgentSdk } from './conversation.js'
+import {
+  asAgentSdk, observeConversation, openTaskConversation, showConversation, stopConversation, taskModelFor, type AgentSdk, type ModelTable,
+} from './conversation.js'
 import { maskKey, normaliseAgentId, type WindowAgent } from './identity.js'
 import { hubUrlProblem } from './mcp-config.js'
 import {
@@ -16,6 +18,8 @@ import { CortexWebviewProvider, CortexPanel, type AgentStatus } from './webview/
 
 // Antigravity SDK — only in the Antigravity IDE, and only once its initialize() has finished
 let antigravitySdk: AgentSdk | null = null
+/** The SDK's own Models table, loaded with it; cortexHub.taskModel picks from it. */
+let sdkModels: ModelTable | null = null
 /** Settles when the SDK is ready or has failed, so that a task arriving first waits for it. */
 let sdkSettled: Promise<void> = Promise.resolve()
 
@@ -97,9 +101,11 @@ async function startTask(task: QueuedTask, log: (msg: string) => void): Promise<
   // A task that arrives during start-up waits for the SDK, but not forever: then it goes to the clipboard.
   await Promise.race([sdkSettled, new Promise((resolve) => setTimeout(resolve, SDK_WAIT_MS))])
   const sdk = antigravitySdk
-  const focus = vscode.workspace.getConfiguration('cortexHub').get<boolean>('focusOnAssign', false)
-  const opened = sdk
-    ? await openTaskConversation(sdk, prompt, { focus, title: `Cortex: ${task.title}` }, log)
+  const settings = vscode.workspace.getConfiguration('cortexHub')
+  const focus = settings.get<boolean>('focusOnAssign', false)
+  const model = sdkModels ? taskModelFor(settings.get('taskModel'), sdkModels) : null
+  const opened = sdk && model
+    ? await openTaskConversation(sdk, prompt, { focus, title: `Cortex: ${task.title}`, model }, log)
     : { mode: 'none' as const, why: 'this window has no agent API (the Antigravity SDK is not active)' }
 
   if (!sameRun(active, starting)) {
@@ -110,8 +116,9 @@ async function startTask(task: QueuedTask, log: (msg: string) => void): Promise<
 
   if (opened.mode === 'tracked') {
     active = startTracking({ ...task, mode: 'tracked', conversationId: opened.conversationId }, starting.startedAt)
-    log(`Task ${task.taskId} runs in its own conversation ${opened.conversationId} (${opened.via})`)
-    client?.reportProgress(task.taskId, `Started in its own conversation ${opened.conversationId} (${opened.via})`)
+    const how = `${opened.via}, ${opened.via === 'ls.createCascade' ? model?.name : "the IDE's selected model"}`
+    log(`Task ${task.taskId} runs in its own conversation ${opened.conversationId} (${how})`)
+    client?.reportProgress(task.taskId, `Started in its own conversation ${opened.conversationId} (${how})`)
     return
   }
 
@@ -378,10 +385,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try {
       // Loaded on demand: it touches Antigravity-only commands, and plain VS Code never needs it
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { AntigravitySDK: Sdk } = require('antigravity-sdk') as { AntigravitySDK: typeof AntigravitySDK }
+      const { AntigravitySDK: Sdk, Models: models } = require('antigravity-sdk') as { AntigravitySDK: typeof AntigravitySDK; Models: typeof Models }
       const sdk = new Sdk(context)
       sdkSettled = sdk.initialize().then(() => {
         antigravitySdk = asAgentSdk(sdk)
+        sdkModels = models
         context.subscriptions.push(sdk)
         log(`Antigravity SDK ready (language server ${sdk.ls.isReady ? 'ready' : 'not ready'}): each task gets a conversation of its own`)
         vscode.window.showInformationMessage('Cortex: Antigravity SDK ready — each task runs in a new conversation')

@@ -109,6 +109,27 @@
           "default": false,
           "markdownDescription": "Show each task's new conversation when it starts. Off: the task runs in the background and the chat you are in stays in front."
         },
+        "cortexHub.taskModel": {
+          "type": "string",
+          "enum": [
+            "gemini-pro-high",
+            "gemini-pro-low",
+            "gemini-flash",
+            "claude-sonnet",
+            "claude-opus",
+            "gpt-oss"
+          ],
+          "enumDescriptions": [
+            "Gemini Pro (high)",
+            "Gemini Pro (low)",
+            "Gemini Flash",
+            "Claude Sonnet",
+            "Claude Opus",
+            "GPT-OSS"
+          ],
+          "default": "gemini-pro-high",
+          "markdownDescription": "The model for the conversation each Cortex task opens (Antigravity IDE). The IDE's own chat model picker does not apply to these conversations. If the IDE refuses the model, the task falls back to a conversation on the model selected in the IDE."
+        },
         "cortexHub.taskTimeoutMinutes": {
           "type": "number",
           "default": 60,
