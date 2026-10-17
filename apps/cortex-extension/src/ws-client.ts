@@ -32,6 +32,9 @@ export function classifyClose(code: number): StopReason | null {
   }
 }
 
+/** The outcomes `task.complete` carries (COMPLETE_STATUSES in the hub). */
+export type TaskStatus = 'completed' | 'review' | 'failed'
+
 export interface ConductorMessage {
   type: string
   [key: string]: unknown
@@ -163,9 +166,17 @@ export class ConductorClient extends EventEmitter {
     this.send({ type: 'task.progress', taskId, message, percent })
   }
 
-  /** Send task completion */
-  completeTask(taskId: string, result?: unknown): void {
-    this.send({ type: 'task.complete', taskId, result })
+  /**
+   * Send a task's outcome. Without a status the hub reads a completion. `attempt` (from the
+   * assignment) makes the hub ignore an outcome that arrives after the task moved on.
+   */
+  completeTask(taskId: string, result?: unknown, outcome: { status?: TaskStatus; attempt?: number } = {}): void {
+    this.send({ type: 'task.complete', taskId, result, status: outcome.status, attempt: outcome.attempt })
+  }
+
+  /** Hand a task back to the hub, which offers it to another agent. */
+  declineTask(taskId: string, reason: string, attempt?: number): void {
+    this.send({ type: 'task.decline', taskId, reason, attempt })
   }
 
   /** Send status update (idle/busy) */
@@ -208,6 +219,10 @@ export class ConductorClient extends EventEmitter {
         break
       case 'task.completed':
         this.emit('task.completed', msg)
+        break
+      // The hub took a task back from this window: done through cortex_task_update, cancelled, moved.
+      case 'task.revoked':
+        this.emit('task.revoked', msg)
         break
       case 'agent.online':
         this.emit('agent.online', msg)

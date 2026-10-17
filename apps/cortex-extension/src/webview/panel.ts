@@ -45,7 +45,6 @@ type WebviewMessage =
 type ExtensionMessage =
   | { type: 'refreshTasks' }
   | { type: 'webviewReady' }
-  | { type: 'pickupTask'; taskId: string }
   | { type: 'viewTask'; taskId: string }
   | { type: 'saveAgent'; agentId: string; capabilities: string[]; apiKey?: string; hubUrl?: string }
   | { type: 'resetWindow' };
@@ -56,9 +55,6 @@ function dispatch(message: ExtensionMessage): void {
     case 'refreshTasks':
     case 'webviewReady':
       vscode.commands.executeCommand('cortex.refreshData');
-      break;
-    case 'pickupTask':
-      vscode.commands.executeCommand('cortex.pickupTask', message.taskId);
       break;
     case 'viewTask':
       vscode.commands.executeCommand('cortex.viewTask', message.taskId);

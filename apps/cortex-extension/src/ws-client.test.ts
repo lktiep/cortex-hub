@@ -103,6 +103,33 @@ describe('ConductorClient against a real server', () => {
     expect(hub.count()).toBe(3)
   })
 
+  it('sends outcomes with status and attempt, declines, and emits task.revoked', async () => {
+    const received: unknown[] = []
+    let gotAll: () => void = () => {}
+    const all = new Promise<void>((resolve) => { gotAll = resolve })
+    const hub = await start((socket) => {
+      socket.on('message', (data) => {
+        received.push(JSON.parse(data.toString()))
+        if (received.length === 3) gotAll()
+      })
+      socket.send(JSON.stringify({ type: 'task.revoked', taskId: 't1', reason: 'cancelled' }))
+    })
+    const c = newClient(hub.url)
+    const revoked = next(c, 'task.revoked')
+    c.connect()
+    expect(await revoked).toEqual([{ type: 'task.revoked', taskId: 't1', reason: 'cancelled' }])
+
+    c.completeTask('t1', { summary: 'ok' })
+    c.completeTask('t2', { summary: 'gave up', error: 'gave up' }, { status: 'failed', attempt: 3 })
+    c.declineTask('t3', 'Released by the user in the IDE', 1)
+    await all
+    expect(received).toEqual([
+      { type: 'task.complete', taskId: 't1', result: { summary: 'ok' } },
+      { type: 'task.complete', taskId: 't2', result: { summary: 'gave up', error: 'gave up' }, status: 'failed', attempt: 3 },
+      { type: 'task.decline', taskId: 't3', reason: 'Released by the user in the IDE', attempt: 1 },
+    ])
+  })
+
   it('reconnect() leaves one live socket: the old socket closing late does not touch the new one', async () => {
     const hub = await start(() => {})
     const c = newClient(hub.url)

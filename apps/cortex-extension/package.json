@@ -2,7 +2,7 @@
   "name": "cortex-agent",
   "displayName": "Cortex Agent",
   "description": "VS Code extension for Cortex Hub — real-time agent orchestration via WebSocket conductor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "cortex-hub",
   "license": "MIT",
   "repository": {
@@ -45,6 +45,10 @@
       {
         "command": "cortex.setHubUrl",
         "title": "Cortex: Set Hub URL"
+      },
+      {
+        "command": "cortex.reportTask",
+        "title": "Cortex: Report Current Task Result"
       }
     ],
     "viewsContainers": {
@@ -99,6 +103,17 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Automatically connect to Hub on startup."
+        },
+        "cortexHub.focusOnAssign": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Show each task's new conversation when it starts. Off: the task runs in the background and the chat you are in stays in front."
+        },
+        "cortexHub.taskTimeoutMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "markdownDescription": "Minutes a task may run without a result. After that the extension stops waiting and reports the task failed, so the hub can retry it. A task ends earlier when its agent calls `cortex_task_update`, or when you press Mark done, Mark failed or Release task (`Cortex: Report Current Task Result`)."
         }
       }
     }

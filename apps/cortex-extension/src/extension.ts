@@ -1,16 +1,23 @@
 import * as vscode from 'vscode'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
+import type { AntigravitySDK } from 'antigravity-sdk'
 import { getConfig, type CortexConfig } from './config.js'
+import { asAgentSdk, observeConversation, openTaskConversation, showConversation, stopConversation, type AgentSdk } from './conversation.js'
 import { maskKey, normaliseAgentId, type WindowAgent } from './identity.js'
 import { hubUrlProblem } from './mcp-config.js'
+import {
+  USER_REPORTS, decide, isReviewTask, outcomeFor, revokeStopsConversation, sameRun, startTracking, taskPrompt, timingsFor,
+  untrackedProgress, untrackedToast, type Outcome, type TaskTracking, type UserReport,
+} from './task-tracker.js'
 import { ConductorClient, type ConnectionState, type StopReason } from './ws-client.js'
 import { CortexWebviewProvider, CortexPanel, type AgentStatus } from './webview/panel.js'
 // hub-api.ts no longer needed — all data fetched via WS
 
-// Antigravity SDK — optional, only available in Antigravity IDE
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let antigravitySdk: any = null
+// Antigravity SDK — only in the Antigravity IDE, and only once its initialize() has finished
+let antigravitySdk: AgentSdk | null = null
+/** Settles when the SDK is ready or has failed, so that a task arriving first waits for it. */
+let sdkSettled: Promise<void> = Promise.resolve()
 
 let client: ConductorClient | null = null
 let statusBarItem: vscode.StatusBarItem
@@ -44,355 +51,197 @@ function forwardToWebview(type: 'newTask' | 'taskUpdate', payload: Record<string
   CortexPanel.currentPanel?.postMessage(message)
 }
 
-// Track active tasks waiting for review
-const pendingReviews = new Map<string, { taskId: string; plan: string; stopAcceptor: () => void }>()
+// ── Tasks: one at a time, each in a new conversation of its own ────────────
+// task-tracker.ts decides when a task is over; this section carries that out. A task ends when the
+// hub says so (task.revoked, task.completed), when the user reports it, or at the hard timeout,
+// which reports it failed. Nothing here completes a task because a conversation went quiet.
 
-// Task execution state — prevents hanging when new task arrives after conversation finishes
 interface QueuedTask {
   taskId: string
   title: string
   description: string
-  rawMsg: Record<string, unknown>
-  isSubtask?: boolean
+  attempt?: number
 }
 
-let currentTaskId: string | null = null
-let conversationDone = false // true when current conversation has finished
+/** The task this window runs; null while idle. Set before its conversation opens. */
+let active: TaskTracking | null = null
 const taskQueue: QueuedTask[] = []
-let completionMonitorStop: (() => void) | null = null
+let taskLoop: ReturnType<typeof setInterval> | null = null
+let polling = false
+/** How often the task's conversation is looked at. Each look reloads the IDE's diagnostics. */
+const POLL_MS = 10_000
+/** How long a task waits for the SDK to finish initializing. */
+const SDK_WAIT_MS = 30_000
 
-/** Auto-accept Antigravity steps (file edits, terminal commands) for autonomous task execution */
-function startAutoAcceptor(taskId: string, logFn: (msg: string) => void): () => void {
-  if (!antigravitySdk) return () => {}
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-  let running = true
-  const poll = async () => {
-    while (running) {
-      try {
-        await antigravitySdk.cascade.acceptStep().catch(() => {})
-        await antigravitySdk.cascade.acceptTerminalCommand().catch(() => {})
-        await antigravitySdk.cascade.acceptCommand().catch(() => {})
-      } catch {
-        // no pending steps
-      }
-      await new Promise(r => setTimeout(r, 1500))
-    }
-  }
-
-  logFn(`Auto-acceptor started for task ${taskId}`)
-  poll()
-  return () => { running = false }
+/** The task in a `task.assigned`: the flat copy, and the attempt from the full one. */
+function assignedTask(msg: Record<string, unknown>): QueuedTask {
+  const full = (msg['task'] ?? {}) as Record<string, unknown>
+  const taskId = String(msg['taskId'] ?? full['id'] ?? '')
+  const title = String(msg['title'] ?? full['title'] ?? taskId)
+  const description = String(msg['description'] || full['description'] || title)
+  const attempt = typeof full['attempt'] === 'number' ? full['attempt'] : undefined
+  return { taskId, title, description, attempt }
 }
 
-/** Track session IDs that have already been reviewed to prevent duplicate reviews */
-const reviewedSessions = new Set<string>()
+/** Starts a task in a new conversation of its own, or hands it to the user when none can be opened. */
+async function startTask(task: QueuedTask, log: (msg: string) => void): Promise<void> {
+  // Untracked until a conversation is open, so that a revoke meanwhile still finds the task.
+  const starting = startTracking({ ...task, mode: 'untracked' }, Date.now())
+  active = starting
+  client?.updateStatus('busy')
+  log(`Starting task ${task.taskId}: ${task.title}`)
 
-/** Monitor Antigravity for plan output, then submit for review before proceeding */
-function startPlanMonitor(taskId: string, logFn: (msg: string) => void): () => void {
-  if (!antigravitySdk) return () => {}
+  const prompt = taskPrompt(task.taskId, task.description)
+  // A task that arrives during start-up waits for the SDK, but not forever: then it goes to the clipboard.
+  await Promise.race([sdkSettled, new Promise((resolve) => setTimeout(resolve, SDK_WAIT_MS))])
+  const sdk = antigravitySdk
+  const focus = vscode.workspace.getConfiguration('cortexHub').get<boolean>('focusOnAssign', false)
+  const opened = sdk
+    ? await openTaskConversation(sdk, prompt, { focus, title: `Cortex: ${task.title}` }, log)
+    : { mode: 'none' as const, why: 'this window has no agent API (the Antigravity SDK is not active)' }
 
-  let running = true
-  let planDetected = false
-
-  const poll = async () => {
-    while (running && !planDetected) {
-      try {
-        // Check if step requires input (plan approval)
-        const sessions = await antigravitySdk.cascade.getSessions()
-        if (sessions && sessions.length > 0) {
-          const latest = sessions[0]
-          const sessionKey = `${latest.id ?? latest.title}:${latest.stepCount}`
-
-          // Skip if this session+stepCount combo was already reviewed
-          if (reviewedSessions.has(sessionKey)) {
-            await new Promise(r => setTimeout(r, 3000))
-            continue
-          }
-
-          // Detect plan by checking step count changes or title patterns
-          if (latest.stepCount > 0 && latest.title) {
-            const prevCount = latest.stepCount
-            await new Promise(r => setTimeout(r, 5000))
-            if (!running) break
-            const refreshed = (await antigravitySdk.cascade.getSessions())?.[0]
-            if (refreshed && refreshed.stepCount === prevCount && prevCount > 0) {
-              // Agent stopped — plan is ready, submit for review
-              planDetected = true
-              reviewedSessions.add(sessionKey)
-              logFn(`Plan detected for task ${taskId} (${prevCount} steps). Submitting for review...`)
-
-              const planSummary = `[Plan Review Request]\nTask: ${taskId}\nAgent: Anti-01\nSteps: ${prevCount}\nSession: ${latest.title}`
-
-              // Create review sub-task for codex-review via WS
-              client?.send({
-                type: 'task.create',
-                title: `[Review] ${latest.title || taskId}`,
-                description: planSummary,
-                assignTo: 'codex-review',
-                parentTaskId: taskId,
-                priority: 1,
-                context: JSON.stringify({ reviewType: 'plan', originalTaskId: taskId, autoReview: false }),
-              })
-
-              // Store pending review so we can proceed when approved
-              pendingReviews.set(taskId, {
-                taskId,
-                plan: planSummary,
-                stopAcceptor: () => {},
-              })
-
-              logFn(`Review task created for codex-review — waiting for approval`)
-            }
-          }
-        }
-      } catch {
-        // ignore monitor errors
-      }
-      await new Promise(r => setTimeout(r, 3000))
-    }
-  }
-
-  logFn(`Plan monitor started for task ${taskId}`)
-  poll()
-  return () => { running = false }
-}
-
-/** Proceed with plan after reviewer approves — auto-click Proceed via SDK */
-async function proceedAfterApproval(taskId: string, logFn: (msg: string) => void): Promise<void> {
-  if (!antigravitySdk) return
-
-  logFn(`Review approved for task ${taskId} — auto-proceeding via SDK`)
-
-  try {
-    // Accept the plan step (clicks "Proceed")
-    await antigravitySdk.cascade.acceptStep()
-    logFn(`Plan accepted via SDK for task ${taskId}`)
-
-    // Start auto-acceptor for implementation phase
-    const stop = startAutoAcceptor(taskId, logFn)
-    const pending = pendingReviews.get(taskId)
-    if (pending) {
-      pending.stopAcceptor = stop
-    }
-  } catch (e) {
-    logFn(`Failed to proceed: ${e instanceof Error ? e.message : String(e)}`)
-    // Fallback: try sendPrompt to continue
-    try {
-      await antigravitySdk.cascade.sendPrompt('Proceed with the implementation plan.')
-      startAutoAcceptor(taskId, logFn)
-    } catch {
-      logFn(`Fallback sendPrompt also failed`)
-    }
-  }
-}
-
-/** Send reviewer feedback back to Antigravity chat for plan revision */
-async function sendReviewFeedback(taskId: string, feedback: string, logFn: (msg: string) => void): Promise<void> {
-  if (!antigravitySdk) return
-
-  logFn(`Sending reviewer feedback for task ${taskId}`)
-  try {
-    await antigravitySdk.cascade.sendPrompt(
-      `[Reviewer Feedback]\n\n${feedback}\n\nPlease revise your plan based on this feedback.`
-    )
-    logFn(`Feedback sent to Antigravity — waiting for revised plan`)
-    // Restart plan monitor for the revised plan
-    startPlanMonitor(taskId, logFn)
-  } catch (e) {
-    logFn(`Failed to send feedback: ${e instanceof Error ? e.message : String(e)}`)
-  }
-}
-
-/** Monitor Antigravity sessions to detect when a conversation finishes */
-function startCompletionMonitor(taskId: string, logFn: (msg: string) => void): () => void {
-  if (!antigravitySdk) return () => {}
-
-  let running = true
-  let lastStepCount = 0
-  let stableChecks = 0
-
-  const poll = async () => {
-    while (running) {
-      try {
-        const sessions = await antigravitySdk.cascade.getSessions()
-        if (sessions && sessions.length > 0) {
-          const latest = sessions[0]
-          const currentSteps = latest.stepCount ?? 0
-
-          if (currentSteps > 0 && currentSteps === lastStepCount) {
-            stableChecks++
-            // If step count unchanged for ~15s (3 checks x 5s), conversation is likely done
-            if (stableChecks >= 3 && !conversationDone) {
-              conversationDone = true
-              logFn(`Conversation completed for task ${taskId} (stable at ${currentSteps} steps)`)
-              // Send task.complete to hub so pipeline can continue
-              client?.send({
-                type: 'task.complete',
-                taskId,
-                result: { completedBy: 'extension-auto-detect', steps: currentSteps },
-              })
-              logFn(`Sent task.complete for ${taskId}`)
-              client?.updateStatus('idle')
-              // Process next queued task if any
-              drainTaskQueue(logFn)
-            }
-          } else {
-            stableChecks = 0
-            lastStepCount = currentSteps
-          }
-        }
-      } catch {
-        // ignore monitor errors
-      }
-      await new Promise(r => setTimeout(r, 5000))
-    }
-  }
-
-  logFn(`Completion monitor started for task ${taskId}`)
-  poll()
-  return () => { running = false }
-}
-
-/** Idle watchdog — if agent is idle with tasks in queue, auto-drain */
-let idleWatchdog: ReturnType<typeof setInterval> | null = null
-
-function startIdleWatchdog(logFn: (msg: string) => void): void {
-  if (idleWatchdog) return
-  idleWatchdog = setInterval(() => {
-    // If conversation is done (or no active task) and queue has items, drain
-    if ((conversationDone || !currentTaskId) && taskQueue.length > 0) {
-      logFn(`Idle watchdog: conversation done=${conversationDone}, queue=${taskQueue.length} — draining`)
-      drainTaskQueue(logFn)
-    }
-    // Also check: if current task is completed on server but extension didn't notice
-    if (currentTaskId && !conversationDone && taskQueue.length > 0) {
-      // Check via Antigravity SDK if conversation is idle
-      if (antigravitySdk) {
-        antigravitySdk.cascade.getSessions().then((sessions: { stepCount: number }[]) => {
-          if (!sessions || sessions.length === 0) return
-          const latest = sessions[0]
-          // If agent hasn't produced new steps in the check interval, consider done
-          if (latest && latest.stepCount > 0 && lastDetectedStepCount === latest.stepCount) {
-            idleCheckCount++
-            if (idleCheckCount >= 2) { // 2 checks × 10s = 20s idle
-              logFn(`Idle watchdog: agent idle for 20s (steps stable at ${latest.stepCount}) — completing task ${currentTaskId}`)
-              // Send task.complete and drain
-              client?.send({ type: 'task.complete', taskId: currentTaskId, result: { completedBy: 'idle-watchdog' } })
-              conversationDone = true
-              if (completionMonitorStop) { completionMonitorStop(); completionMonitorStop = null }
-              client?.updateStatus('idle')
-              drainTaskQueue(logFn)
-            }
-          } else {
-            lastDetectedStepCount = latest?.stepCount ?? 0
-            idleCheckCount = 0
-          }
-        }).catch(() => {})
-      }
-    }
-  }, 10000)
-}
-
-let lastDetectedStepCount = 0
-let idleCheckCount = 0
-
-/** Process next task in the queue — starts a fresh conversation */
-function drainTaskQueue(logFn: (msg: string) => void): void {
-  if (taskQueue.length === 0) {
-    logFn('Task queue empty — agent idle')
-    currentTaskId = null
+  if (!sameRun(active, starting)) {
+    log(`Task ${task.taskId} ended while its conversation was opening`)
+    if (opened.mode === 'tracked' && sdk) await stopConversation(sdk, opened.conversationId).catch(() => {})
     return
   }
 
-  // Reset idle detection for new task
-  lastDetectedStepCount = 0
-  idleCheckCount = 0
+  if (opened.mode === 'tracked') {
+    active = startTracking({ ...task, mode: 'tracked', conversationId: opened.conversationId }, starting.startedAt)
+    log(`Task ${task.taskId} runs in its own conversation ${opened.conversationId} (${opened.via})`)
+    client?.reportProgress(task.taskId, `Started in its own conversation ${opened.conversationId} (${opened.via})`)
+    return
+  }
 
-  const next = taskQueue.shift()!
-  logFn(`Draining queue — starting task ${next.taskId}: ${next.title}`)
-  vscode.window.showInformationMessage(`Cortex: Starting next task "${next.title}"`)
+  // Not followed automatically: say so to the hub and to the user, with buttons to report the result.
+  const mode = opened.mode === 'untracked' ? 'untracked' : 'manual'
+  active = startTracking({ ...task, mode }, starting.startedAt)
+  client?.reportProgress(task.taskId, untrackedProgress(mode))
+  if (opened.mode === 'none') {
+    log(`No new conversation for task ${task.taskId} (${opened.why}); the prompt goes to the clipboard`)
+    try { await vscode.env.clipboard.writeText(prompt) } catch (e) { log(`Could not copy the prompt for ${task.taskId}: ${messageOf(e)}`) }
+    try { await vscode.commands.executeCommand('workbench.action.chat.open') } catch { /* no chat panel in this IDE */ }
+  } else {
+    log(`Task ${task.taskId} went to a new conversation whose id was not detected; it is not followed`)
+  }
+  offerReport(active, untrackedToast(task.title, mode, process.platform), false, log)
+}
 
-  const prompt = `[Cortex Task ${next.taskId}]\n\n${next.description}`
-  // Always create new conversation for queued tasks
-  executeTaskInChat(prompt, next.taskId, logFn, true, next.isSubtask).catch((e) => {
-    logFn(`Queued task execution error: ${e instanceof Error ? e.message : String(e)}`)
+/** A toast with the result buttons for run `t`. A button pressed after that run ended does nothing. */
+function offerReport(t: TaskTracking, text: string, warn: boolean, log: (msg: string) => void): void {
+  const buttons: string[] = t.mode === 'tracked' ? ['Show conversation', ...USER_REPORTS] : [...USER_REPORTS]
+  const shown = warn ? vscode.window.showWarningMessage(text, ...buttons) : vscode.window.showInformationMessage(text, ...buttons)
+  void shown.then(async (pick) => {
+    if (!pick) return
+    if (!sameRun(active, t)) {
+      void vscode.window.showInformationMessage(`Cortex: "${t.title}" is no longer running in this window`)
+      return
+    }
+    if (pick === 'Show conversation') {
+      if (antigravitySdk && t.conversationId) {
+        await showConversation(antigravitySdk, t.conversationId).catch((e: unknown) => log(`Could not show conversation ${t.conversationId}: ${messageOf(e)}`))
+      }
+      offerReport(t, `Cortex: report the result of "${t.title}" when the agent has finished.`, false, log)
+      return
+    }
+    endTask(t, outcomeFor(pick as UserReport), log)
   })
 }
 
-/** Execute a task by injecting prompt into IDE's AI chat.
- *  @param forceNewConversation — if true, always create a new cascade/chat instead of sending to existing
- *  @param isSubtask — if true, skip plan monitor (subtasks don't need review) */
-async function executeTaskInChat(prompt: string, taskId: string, logFn: (msg: string) => void, forceNewConversation = false, isSubtask = false): Promise<void> {
-  logFn(`Executing task ${taskId} via IDE chat... (newConversation=${forceNewConversation}, subtask=${isSubtask})`)
+/** How a run ends: an outcome this window reports, or one the hub already knows. */
+type Ending = Outcome | { kind: 'hub'; why: string; stopConversation: boolean }
 
-  // Update tracking state
-  currentTaskId = taskId
-  conversationDone = false
-  if (completionMonitorStop) { completionMonitorStop(); completionMonitorStop = null }
-  client?.updateStatus('busy')
-
-  // Strategy 1: Antigravity SDK — direct prompt injection via Language Server
-  if (antigravitySdk) {
-    // If forcing new conversation (previous one is done), always use createCascade
-    if (forceNewConversation) {
-      try {
-        const cascadeId = await antigravitySdk.ls.createCascade({ text: prompt })
-        const focusOnAssign = vscode.workspace.getConfiguration('cortexHub').get<boolean>('focusOnAssign', false)
-        if (focusOnAssign) {
-          await antigravitySdk.ls.focusCascade(cascadeId)
-        }
-        logFn(`New conversation created via createCascade — cascade ${cascadeId}`)
-        // Only monitor plans for top-level tasks — subtasks execute directly
-        if (!isSubtask) startPlanMonitor(taskId, logFn)
-        completionMonitorStop = startCompletionMonitor(taskId, logFn)
-        return
-      } catch (e) {
-        logFn(`createCascade failed: ${e instanceof Error ? e.message : String(e)}`)
-        // Fall through to sendPrompt
-      }
-    }
-
-    try {
-      await antigravitySdk.cascade.sendPrompt(prompt)
-      logFn(`Task prompt sent via Antigravity SDK (cascade.sendPrompt)`)
-      if (!isSubtask) startPlanMonitor(taskId, logFn)
-      completionMonitorStop = startCompletionMonitor(taskId, logFn)
-      return
-    } catch (e) {
-      logFn(`Antigravity SDK sendPrompt failed: ${e instanceof Error ? e.message : String(e)}`)
-      try {
-        const cascadeId = await antigravitySdk.ls.createCascade({ text: prompt })
-        const focusOnAssign = vscode.workspace.getConfiguration('cortexHub').get<boolean>('focusOnAssign', false)
-        if (focusOnAssign) {
-          await antigravitySdk.ls.focusCascade(cascadeId)
-        }
-        logFn(`Task prompt sent via Antigravity SDK (ls.createCascade) — cascade ${cascadeId}`)
-        if (!isSubtask) startPlanMonitor(taskId, logFn)
-        completionMonitorStop = startCompletionMonitor(taskId, logFn)
-        return
-      } catch (e2) {
-        logFn(`Antigravity SDK createCascade failed: ${e2 instanceof Error ? e2.message : String(e2)}`)
-      }
-    }
+/** Ends run `t` once: tells the hub unless the hub told us, stops its conversation if needed, starts the next task. */
+function endTask(t: TaskTracking, ending: Ending, log: (msg: string) => void): void {
+  if (!sameRun(active, t)) return
+  active = null
+  let stop: boolean
+  switch (ending.kind) {
+    case 'complete':
+      client?.completeTask(t.taskId, ending.result, { status: ending.status, attempt: t.attempt })
+      log(`Task ${t.taskId} reported ${ending.status}: ${ending.result.summary}`)
+      stop = ending.status === 'failed'
+      break
+    case 'decline':
+      client?.declineTask(t.taskId, ending.reason, t.attempt)
+      log(`Task ${t.taskId} handed back: ${ending.reason}`)
+      stop = true
+      break
+    case 'hub':
+      log(`Task ${t.taskId} ended by the hub: ${ending.why}`)
+      stop = ending.stopConversation
+      break
   }
-
-  // Strategy 2: VS Code chat commands
-  const chatCommands = ['workbench.action.chat.open', 'agent.openChat']
-  for (const cmd of chatCommands) {
-    try {
-      await vscode.commands.executeCommand(cmd, { query: prompt, isPartialQuery: false })
-      logFn(`Task prompt sent via ${cmd}`)
-      return
-    } catch {
-      // Try next
-    }
+  // A task that failed or went elsewhere may be run again; its old conversation must not keep working on it.
+  const sdk = antigravitySdk
+  if (stop && sdk && t.conversationId) {
+    const id = t.conversationId
+    void stopConversation(sdk, id).then(() => log(`Stopped conversation ${id}`), (e: unknown) => log(`Could not stop conversation ${id}: ${messageOf(e)}`))
   }
+  nextTask(log)
+}
 
-  // Strategy 3: Clipboard fallback
-  logFn('All chat injection methods failed, using clipboard fallback')
-  await vscode.env.clipboard.writeText(prompt)
-  try { await vscode.commands.executeCommand('workbench.action.chat.open') } catch { /* ignore */ }
-  vscode.window.showInformationMessage('Cortex: Task prompt copied — paste into AI chat (Cmd+V)')
+/** Starts the next queued task, or tells the hub this window is idle. */
+function nextTask(log: (msg: string) => void): void {
+  const next = taskQueue.shift()
+  if (!next) {
+    log('Task queue empty — agent idle')
+    client?.updateStatus('idle')
+    return
+  }
+  vscode.window.showInformationMessage(`Cortex: Starting next task "${next.title}"`)
+  startTask(next, log).catch((e: unknown) => log(`Task ${next.taskId} could not start: ${messageOf(e)}`))
+}
+
+/** One look at the running task, and whatever task-tracker decides about it. */
+async function pollTask(log: (msg: string) => void): Promise<void> {
+  if (polling) return
+  if (!active) {
+    if (taskQueue.length > 0) nextTask(log)
+    return
+  }
+  polling = true
+  try {
+    const t = active
+    const sdk = antigravitySdk
+    const seen = t.mode === 'tracked' && t.conversationId && sdk
+      ? await observeConversation(sdk, t.conversationId)
+      : { kind: 'unknown' as const }
+    // The run may have ended, or got its conversation, while the poll was out.
+    const current = active
+    if (current === null || !sameRun(current, t)) return
+    const minutes = vscode.workspace.getConfiguration('cortexHub').get<number>('taskTimeoutMinutes')
+    const { next, decision } = decide(current, current.conversationId === t.conversationId ? seen : { kind: 'unknown' }, Date.now(), timingsFor(minutes))
+    active = next
+    switch (decision.kind) {
+      case 'wait':
+        break
+      case 'progress':
+        client?.reportProgress(t.taskId, decision.message)
+        break
+      case 'attention':
+        log(`Task ${t.taskId}: ${decision.message}`)
+        client?.reportProgress(t.taskId, decision.message)
+        offerReport(next, `Cortex: "${t.title}" needs attention. ${decision.message}`, true, log)
+        break
+      case 'timeout':
+        log(`Task ${t.taskId}: ${decision.message}`)
+        void vscode.window.showWarningMessage(`Cortex: "${t.title}" was reported failed. ${decision.message}`)
+        endTask(next, { kind: 'complete', status: 'failed', result: { summary: decision.message, error: decision.message } }, log)
+        break
+    }
+  } finally {
+    polling = false
+  }
+}
+
+function startTaskLoop(log: (msg: string) => void): void {
+  if (taskLoop) return
+  taskLoop = setInterval(() => {
+    pollTask(log).catch((e: unknown) => log(`Task poll failed: ${messageOf(e)}`))
+  }, POLL_MS)
 }
 
 /** Request data via WS — server responds with data.response */
@@ -523,26 +372,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       })
   }
 
-  // Initialize Antigravity SDK if running in Antigravity IDE
+  // Initialize Antigravity SDK if running in Antigravity IDE. Without it each task goes to the
+  // clipboard and the user reports its result.
   if (current.ide === 'antigravity') {
     try {
-      // Dynamic import — antigravity-sdk is optional peer dependency
-      // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
-      const { AntigravitySDK } = require('antigravity-sdk') as { AntigravitySDK: any }
-      const sdk = new AntigravitySDK(context)
-      sdk.initialize().then(() => {
-        antigravitySdk = sdk
+      // Loaded on demand: it touches Antigravity-only commands, and plain VS Code never needs it
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { AntigravitySDK: Sdk } = require('antigravity-sdk') as { AntigravitySDK: typeof AntigravitySDK }
+      const sdk = new Sdk(context)
+      sdkSettled = sdk.initialize().then(() => {
+        antigravitySdk = asAgentSdk(sdk)
         context.subscriptions.push(sdk)
-        vscode.window.showInformationMessage('Cortex: Antigravity SDK initialized — auto-prompt enabled')
-      }).catch((err: Error) => {
-        // SDK not available — fall back to command-based approach
-        const out = vscode.window.createOutputChannel('Cortex Agent')
-        out.appendLine(`[Antigravity SDK] Init failed: ${err.message}`)
+        log(`Antigravity SDK ready (language server ${sdk.ls.isReady ? 'ready' : 'not ready'}): each task gets a conversation of its own`)
+        vscode.window.showInformationMessage('Cortex: Antigravity SDK ready — each task runs in a new conversation')
+      }, (err: unknown) => {
+        log(`Antigravity SDK init failed, so tasks go to the clipboard: ${messageOf(err)}`)
       })
-    } catch {
-      // antigravity-sdk not installed — silent fallback
+    } catch (e) {
+      log(`Antigravity SDK not loaded, so tasks go to the clipboard: ${messageOf(e)}`)
     }
   }
+  startTaskLoop(log)
 
   // Status bar — shows agent ID + connection state
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
@@ -579,6 +429,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       reachedHub = true
       vscode.window.showInformationMessage(`Cortex: Connected as ${current.agentId}`)
       postAgent(agentPayload(current, 'connected'))
+      // A reconnect mid-task must not read as idle, or the hub hands this window a second task.
+      if (active) client?.updateStatus('busy')
 
       // Fetch and push Hub data
       refreshHubData()
@@ -632,105 +484,90 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     client.on('welcome', (msg: Record<string, unknown>) => {
       const agents = msg['onlineAgents'] as unknown[]
       log(`Welcome — ${agents?.length ?? 0} agent(s) online`)
-      startIdleWatchdog(log)
     })
 
-    // Forward task.assigned to webview
+    // A task for this window: run it now in a conversation of its own, or queue it behind the current one
     client.on('task.assigned', (msg: Record<string, unknown>) => {
-      const taskId = msg['taskId'] as string
-      const title = msg['title'] as string
-      const description = (msg['description'] as string) || title
-      log(`Task assigned: ${taskId} — ${title}`)
-
+      const task = assignedTask(msg)
+      if (!task.taskId) return
+      log(`Task assigned: ${task.taskId} — ${task.title}`)
       forwardToWebview('newTask', msg)
 
-      // Skip review/sub-tasks to prevent recursive loop
-      const titleLower = title.toLowerCase()
-      const isReviewLike = titleLower.includes('review') || titleLower.includes('plan review')
-      if (isReviewLike) {
-        log(`Skipping review task ${taskId} — not executing to prevent loop`)
-        client?.acceptTask(taskId)
-        // Complete immediately with acknowledgment
-        client?.send({ type: 'task.complete', taskId, result: { skipped: true, reason: 'Review tasks handled by dedicated reviewer agent' } })
+      // Reviews go to a reviewer agent. Hand the task back rather than report a review that never ran.
+      if (isReviewTask(task.title)) {
+        log(`Declining review task ${task.taskId}: this window does not run reviews`)
+        client?.declineTask(task.taskId, 'This IDE window does not run review tasks', task.attempt)
         return
       }
 
-      // Auto-accept always
-      client?.acceptTask(taskId)
-      log(`Task auto-accepted: ${taskId}`)
-
-      // Detect subtasks — they have Role/Parent in description or parentTaskId in msg
-      const isSubtask = !!(msg['parentTaskId'] || description.includes('Parent task:') || description.includes('Role:'))
-
-      // If agent is busy with an active task — always queue (never interrupt)
-      if (currentTaskId && !conversationDone) {
-        taskQueue.push({ taskId, title, description, rawMsg: msg, isSubtask })
-        log(`Agent busy (task ${currentTaskId}) — queued task ${taskId} (queue size: ${taskQueue.length})`)
-        vscode.window.showInformationMessage(`Cortex: Task "${title}" queued (${taskQueue.length} in queue)`)
+      client?.acceptTask(task.taskId)
+      // The hub sends a task again after a reconnect or a retry: keep the one run, with its newest attempt.
+      if (active?.taskId === task.taskId) {
+        if (task.attempt !== undefined) active = { ...active, attempt: task.attempt }
+        log(`Task ${task.taskId} is already running here`)
+        return
+      }
+      const queued = taskQueue.find((q) => q.taskId === task.taskId)
+      if (queued) {
+        if (task.attempt !== undefined) queued.attempt = task.attempt
+        log(`Task ${task.taskId} is already queued`)
         return
       }
 
-      const needsNewConversation = conversationDone && currentTaskId !== null
-      if (needsNewConversation) {
-        log(`Previous conversation done — starting fresh for task ${taskId}`)
+      if (active) {
+        taskQueue.push(task)
+        log(`Agent busy (task ${active.taskId}) — queued task ${task.taskId} (queue size: ${taskQueue.length})`)
+        vscode.window.showInformationMessage(`Cortex: Task "${task.title}" queued (${taskQueue.length} in queue)`)
+        return
       }
-      vscode.window.showInformationMessage(`Cortex: Executing "${title}"`)
-
-      const prompt = `[Cortex Task ${taskId}]\n\n${description}`
-      executeTaskInChat(prompt, taskId, log, needsNewConversation, isSubtask).catch((e) => {
-        log(`Task execution error: ${e instanceof Error ? e.message : String(e)}`)
-      })
+      vscode.window.showInformationMessage(`Cortex: Executing "${task.title}"`)
+      startTask(task, log).catch((e: unknown) => log(`Task ${task.taskId} could not start: ${messageOf(e)}`))
     })
 
-    // Forward task.completed to webview + handle review approvals + drain queue
-    client.on('task.completed', (msg: Record<string, unknown>) => {
-      const completedTaskId = msg['taskId'] as string
-      const completedBy = msg['agentId'] as string
-      const result = msg['result'] as Record<string, unknown> | undefined
-      log(`Task completed: ${completedTaskId} by ${completedBy}`)
+    // The hub took a task back: its agent reported through cortex_task_update, or it was cancelled,
+    // deleted or moved. Stop following it, and stop its conversation unless the agent finished it.
+    client.on('task.revoked', (msg: Record<string, unknown>) => {
+      const taskId = String(msg['taskId'] ?? '')
+      const reason = String(msg['reason'] ?? 'revoked')
+      log(`Task revoked: ${taskId} (${reason})`)
       forwardToWebview('taskUpdate', msg)
-
-      // If our current task was completed (e.g. server marked it done), drain queue
-      if (completedTaskId === currentTaskId) {
-        log(`Current task ${completedTaskId} completed — marking conversation done`)
-        conversationDone = true
-        if (completionMonitorStop) { completionMonitorStop(); completionMonitorStop = null }
-        client?.updateStatus('idle')
-        drainTaskQueue(log)
+      const at = taskQueue.findIndex((q) => q.taskId === taskId)
+      if (at >= 0) {
+        const [dropped] = taskQueue.splice(at, 1)
+        log(`Dropped queued task ${taskId}`)
+        void vscode.window.showInformationMessage(`Cortex: "${dropped?.title ?? taskId}" was taken off this window's queue (${reason})`)
+        return
       }
-
-      // Check if this is a review task completion → approve/reject the parent
-      const parentTaskId = (msg['parentTaskId'] as string) ?? (result?.['originalTaskId'] as string)
-      const reviewResult = (result?.['verdict'] as string) ?? (result?.['status'] as string) ?? 'approved'
-      const feedback = (result?.['feedback'] as string) ?? (result?.['message'] as string) ?? ''
-
-      if (parentTaskId && pendingReviews.has(parentTaskId)) {
-        if (reviewResult === 'approved' || reviewResult === 'approve') {
-          log(`Review APPROVED for task ${parentTaskId} by ${completedBy}`)
-          vscode.window.showInformationMessage(`Cortex: Review approved by ${completedBy} — proceeding with plan`)
-          proceedAfterApproval(parentTaskId, log)
-          pendingReviews.delete(parentTaskId)
-        } else {
-          log(`Review REJECTED for task ${parentTaskId}: ${feedback}`)
-          vscode.window.showWarningMessage(`Cortex: Review rejected by ${completedBy} — sending feedback`)
-          sendReviewFeedback(parentTaskId, feedback || 'Reviewer requested changes. Please revise.', log)
-        }
+      if (active?.taskId === taskId) {
+        const t = active
+        void vscode.window.showInformationMessage(`Cortex: "${t.title}" ended on the hub (${reason})`)
+        endTask(t, { kind: 'hub', why: reason, stopConversation: revokeStopsConversation(reason) }, log)
       }
     })
 
-    // Forward task.progress to webview + handle review feedback
+    // A task finished on the hub. If it is this window's own, the hub already knows: just move on.
+    client.on('task.completed', (msg: Record<string, unknown>) => {
+      const taskId = String(msg['taskId'] ?? '')
+      log(`Task completed: ${taskId} by ${String(msg['agentId'] ?? 'unknown')}`)
+      forwardToWebview('taskUpdate', msg)
+      const at = taskQueue.findIndex((q) => q.taskId === taskId)
+      if (at >= 0) taskQueue.splice(at, 1)
+      if (active?.taskId === taskId) endTask(active, { kind: 'hub', why: 'completed', stopConversation: false }, log)
+    })
+
     client.on('task.progress', (msg: Record<string, unknown>) => {
       log(`Task progress: ${msg['taskId']} — ${msg['message']} (${msg['percent'] ?? '?'}%)`)
       forwardToWebview('taskUpdate', msg)
+    })
 
-      // Check for review feedback mid-progress (reviewer sends inline feedback)
-      const progressMsg = msg['message'] as string
-      const parentTaskId = msg['parentTaskId'] as string
-      if (parentTaskId && pendingReviews.has(parentTaskId) && progressMsg?.includes('[feedback]')) {
-        const feedback = progressMsg.replace('[feedback]', '').trim()
-        log(`Inline review feedback for ${parentTaskId}: ${feedback}`)
-        sendReviewFeedback(parentTaskId, feedback, log)
-      }
+    // A direct message from another agent or the dashboard
+    client.on('agent.message', (msg: Record<string, unknown>) => {
+      const from = String(msg['from'] ?? 'unknown')
+      const raw = msg['content']
+      const content = typeof raw === 'string' ? raw : JSON.stringify(raw ?? '')
+      log(`Message from ${from}: ${content}`)
+      const short = content.length > 200 ? `${content.slice(0, 200)}…` : content
+      void vscode.window.showInformationMessage(`Cortex: message from ${from}: ${short}`)
     })
 
     client.on('agent.online', (msg: Record<string, unknown>) => {
@@ -825,6 +662,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand('cortex.showPanel', () => {
       CortexPanel.createOrShow(context.extensionUri)
+    }),
+  )
+
+  // cortex.reportTask — the result buttons for the running task, for when its toast is gone
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cortex.reportTask', () => {
+      if (!active) {
+        void vscode.window.showInformationMessage('Cortex: no task is running in this window')
+        return
+      }
+      offerReport(active, `Cortex: report the result of "${active.title}".`, false, log)
+    }),
+  )
+
+  // cortex.viewTask — a task card in the panel was clicked
+  context.subscriptions.push(
+    vscode.commands.registerCommand('cortex.viewTask', (taskId?: unknown) => {
+      const id = typeof taskId === 'string' ? taskId : ''
+      if (active && active.taskId === id) {
+        offerReport(active, `Cortex: "${active.title}" is running in this window.`, false, log)
+        return
+      }
+      const at = taskQueue.findIndex((q) => q.taskId === id)
+      if (at >= 0) {
+        void vscode.window.showInformationMessage(`Cortex: "${taskQueue[at]?.title}" is queued in this window (${at + 1} of ${taskQueue.length})`)
+        return
+      }
+      void vscode.window.showInformationMessage('Cortex: that task is not running in this window. Open the dashboard for its details.')
     }),
   )
 
@@ -970,7 +835,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
-  if (completionMonitorStop) { completionMonitorStop(); completionMonitorStop = null }
+  if (taskLoop) { clearInterval(taskLoop); taskLoop = null }
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
   if (client) { client.dispose(); client = null }
 }
