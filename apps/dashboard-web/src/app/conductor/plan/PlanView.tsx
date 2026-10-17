@@ -240,7 +240,14 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
           onCancel={() => void handleCancel(selected.id)}
           onDelete={() => handleDelete(selected.id)}
           actions={
-            <PlanTaskActions key={selected.id} task={selected} workers={workers} onDone={() => void mutate()} />
+            <PlanTaskActions
+              key={selected.id}
+              task={selected}
+              byId={byId}
+              workers={workers}
+              onDone={() => void mutate()}
+              onSelect={setSelectedId}
+            />
           }
         />
       )}

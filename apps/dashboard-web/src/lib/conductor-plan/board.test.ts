@@ -115,6 +115,16 @@ describe('boardLanes', () => {
     expect(chips.map((c) => [c.key, c.ghost])).toEqual([['IN', 'input'], ['M1', null], ['OUT', 'output']])
   })
 
+  it('tags a chip with its pull request, and a gate with none', () => {
+    const list = tasks(
+      { id: 'p', status: 'review', result: JSON.stringify({ summary: 's', prUrl: 'https://github.com/acme/app/pull/12' }) },
+      { id: 'q', status: 'completed', result: 'done, no PR' },
+      { id: 'g', kind: 'gate', approver: 'user', depends_on: deps('p') },
+    )
+    const chips = boardLanes(list, [], { now: NOW }).flatMap((l) => l.chips)
+    expect(chips.map((c) => [c.id, c.pr]).sort()).toEqual([['g', null], ['p', 'PR #12'], ['q', null]])
+  })
+
   it('never makes a chip of a group', () => {
     const list = tasks({ id: 'g1', kind: 'group' }, { id: 'a', parent_task_id: 'g1' })
     expect(boardLanes(list, [], { now: NOW }).flatMap((l) => l.chips).map((c) => c.id)).toEqual(['a'])

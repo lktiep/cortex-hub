@@ -109,6 +109,36 @@ describe('awaitingLead', () => {
   })
 })
 
+describe('artifacts in Needs you and Awaiting lead', () => {
+  const pr = (n: number, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ summary: 's', prUrl: `https://github.com/acme/app/pull/${n}`, ...extra })
+
+  it('a task in review leads with its PR and tests', () => {
+    const out = awaitingLead(plan([
+      { id: 'r', task_key: 'R', status: 'review', result: pr(12, { testOutput: 'ok' }) },
+      { id: 'n', task_key: 'N', status: 'review', result: 'plain text' },
+    ]))
+    expect(out.map((n) => [n.key, n.detail])).toEqual([
+      ['N', 'awaiting review'],
+      ['R', 'PR #12 · tests passed · awaiting review'],
+    ])
+  })
+
+  it('a gate sums up the PRs and tests of its dependencies', () => {
+    const tasks = plan([
+      { id: 'b1', task_key: 'B1', status: 'completed', result: pr(11, { error: 'tests failed (exit 1)' }) },
+      { id: 'b2', task_key: 'B2', status: 'completed', result: pr(12, { testOutput: 'ok' }) },
+      { id: 'b3', task_key: 'B3', status: 'completed', result: pr(13, { testOutput: 'ok' }) },
+      { id: 'g', task_key: 'G', kind: 'gate', approver: 'user', depends_on: '["b1","b2"]' },
+      { id: 'l', task_key: 'L', kind: 'gate', approver: 'lead', depends_on: '["b2","b3"]' },
+    ])
+    expect(needsYou(tasks, NOW).find((n) => n.key === 'G')?.detail)
+      .toBe('PRs #11, #12 · tests failed: B1 · awaiting your approval')
+    expect(awaitingLead(tasks).find((n) => n.key === 'L')?.detail)
+      .toBe('PRs #12, #13 · tests passed · awaiting lead approval')
+  })
+})
+
 describe('routeTally', () => {
   it('counts completed work tasks per executor·model', () => {
     const route = (executor: string, model: string) => JSON.stringify({ executor, model, effort: null })

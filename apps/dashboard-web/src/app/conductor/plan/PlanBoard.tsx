@@ -136,7 +136,7 @@ function Chip({ chip, selected, flash, onSelect }: {
       data-state={chip.state}
       className={classes}
       style={{ '--st': STATUS_COLOR[chip.state] } as CSSProperties}
-      title={chip.title}
+      title={chip.pr ? `${chip.title}\n${chip.pr}` : chip.title}
       aria-pressed={selected}
       onClick={() => onSelect(chip.id)}
     >
@@ -148,7 +148,12 @@ function Chip({ chip, selected, flash, onSelect }: {
         <span className={styles.chipSt}>{STATUS_LABEL[chip.state]}</span>
       </span>
       <span className={styles.chipTitle}>{chip.title}</span>
-      {chip.route && <span className={styles.chipRoute}>{chip.route}</span>}
+      {(chip.route || chip.pr) && (
+        <span className={styles.chipFoot}>
+          <span className={styles.chipRoute}>{chip.route}</span>
+          {chip.pr && <span className={styles.chipPr}>{chip.pr}</span>}
+        </span>
+      )}
       {chip.note && <span className={styles.chipNote}>{chip.note}</span>}
       {chip.ghost && <span className={styles.chipTag}>{chip.ghost === 'input' ? 'input' : 'unlocks'}</span>}
     </button>

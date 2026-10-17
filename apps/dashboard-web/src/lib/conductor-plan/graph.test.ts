@@ -328,4 +328,9 @@ describe('layoutGraph nodes', () => {
     expect(node(out, 'out')).toMatchObject({ ghost: 'output', route: 'claude·opus-5-5' })
     expect(node(out, 'g')).toMatchObject({ kind: 'gate', route: 'gate · approver user', attention: true })
   })
+
+  it('carry the pull request tag of the board chips', () => {
+    const list = tasks({ id: 'a', status: 'review', result: JSON.stringify({ summary: 's', prUrl: 'https://github.com/acme/app/pull/7' }) })
+    expect(node(build(list), 'a').pr).toBe('PR #7')
+  })
 })

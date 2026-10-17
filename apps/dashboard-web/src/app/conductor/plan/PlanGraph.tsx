@@ -20,6 +20,9 @@ const LEGEND_STATES: PlanState[] = ['done', 'review', 'running', 'waiting', 'rea
 /** Characters that fit the 176px text column of a node, per line. */
 const TITLE_CHARS = 27
 const ROUTE_CHARS = 27
+/** Mono route text and the PR tag's smaller mono text, in px per character. */
+const ROUTE_CHAR_W = 6.3
+const TAG_CHAR_W = 5.8
 
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100))
 
@@ -170,9 +173,12 @@ function Node({ node, selected, flash, onSelect }: {
     e.preventDefault()
     onSelect(node.id)
   }
-  const tip = [`${node.key}${attempt} — ${node.title}`, STATUS_LABEL[node.state], node.route, node.note]
+  const tip = [`${node.key}${attempt} — ${node.title}`, STATUS_LABEL[node.state], node.route, node.note, node.pr]
     .filter(Boolean)
     .join('\n')
+  // The PR tag sits at the right end of the route line, which is cut short to make room for it.
+  const tagW = node.pr ? Math.ceil(node.pr.length * TAG_CHAR_W + 10) : 0
+  const routeChars = node.pr ? Math.max(4, Math.floor((W - 10 - tagW - 6 - 14) / ROUTE_CHAR_W)) : ROUTE_CHARS
   return (
     <g
       className={classes}
@@ -182,7 +188,7 @@ function Node({ node, selected, flash, onSelect }: {
       role="button"
       tabIndex={0}
       aria-pressed={selected}
-      aria-label={`${node.key}: ${node.title}, ${STATUS_LABEL[node.state]}`}
+      aria-label={`${node.key}: ${node.title}, ${STATUS_LABEL[node.state]}${node.pr ? `, ${node.pr}` : ''}`}
       onClick={() => onSelect(node.id)}
       onKeyDown={onKeyDown}
     >
@@ -196,7 +202,13 @@ function Node({ node, selected, flash, onSelect }: {
       </text>
       <text className={styles.nodeSt} x={W - 10} y={21}>{label}</text>
       <text className={styles.nodeTitle} x={14} y={39}>{clip(node.title, TITLE_CHARS)}</text>
-      {node.route && <text className={styles.nodeRoute} x={14} y={55}>{clip(node.route, ROUTE_CHARS)}</text>}
+      {node.route && <text className={styles.nodeRoute} x={14} y={55}>{clip(node.route, routeChars)}</text>}
+      {node.pr && (
+        <g className={styles.nodePr}>
+          <rect x={W - 10 - tagW} y={45} width={tagW} height={14} rx={3} />
+          <text x={W - 10 - tagW / 2} y={55}>{node.pr}</text>
+        </g>
+      )}
     </g>
   )
 }

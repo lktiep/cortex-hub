@@ -1,25 +1,32 @@
 'use client'
 
-// Per-task actions for the plan drawer: approve, reject, clear escalation, reroute, review history.
-import { useRef, useState } from 'react'
+// Per-task actions for the plan drawer: the task's outcome, approve and reject (saying what each does),
+// clear escalation, reroute, review history.
+import { useMemo, useRef, useState } from 'react'
 import { EXECUTORS, reviewConductorTask, routeConductorTask } from '@/lib/api'
 import type { ConductorWorker, Executor } from '@/lib/api'
 import { actionErrorMessage, availableActions } from '@/lib/conductor-plan/actions'
 import type { PlanTask } from '@/lib/conductor-plan/model'
+import { approveContext, listKeys } from '@/lib/conductor-plan/outcome'
 import {
   modelOptions, pinOptions, routeBodyFromForm, routeFormFrom, type RouteForm,
 } from '@/lib/conductor-plan/route-form'
 import { formatTimeAgo } from '../components/shared'
+import { PlanOutcome } from './PlanOutcome'
 import styles from './plan.module.css'
 
 interface Props {
   task: PlanTask
+  /** Every task of the plan, for what approving releases and a gate's dependencies. */
+  byId: Map<string, PlanTask>
   workers: ConductorWorker[]
   onDone: () => void
+  onSelect: (id: string) => void
 }
 
-export function PlanTaskActions({ task, workers, onDone }: Props) {
+export function PlanTaskActions({ task, byId, workers, onDone, onSelect }: Props) {
   const avail = availableActions(task)
+  const ctx = useMemo(() => approveContext(task, byId), [task, byId])
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false) // state lags a same-tick double click; the ref does not
   const [error, setError] = useState<string | null>(null)
@@ -55,18 +62,29 @@ export function PlanTaskActions({ task, workers, onDone }: Props) {
 
   return (
     <div className={styles.actions}>
+      <PlanOutcome
+        task={task}
+        deps={task.kind === 'gate' ? ctx.deps : null}
+        external={ctx.external}
+        approving={avail.review}
+        onSelect={onSelect}
+      />
       {avail.review && (
-        <div className={styles.actionRow}>
-          <button
-            className={styles.actionBtn}
-            disabled={busy}
-            onClick={() => void run(() => reviewConductorTask(task.id, { verdict: 'approve', by: 'dashboard' }))}
-          >
-            Approve
-          </button>
-          <button className={styles.actionBtn} disabled={busy} onClick={() => setRejecting((v) => !v)}>
-            Reject
-          </button>
+        <div className={styles.approve}>
+          <div className={styles.actionRow}>
+            <button
+              className={`${styles.actionBtn} ${styles.actionPrimary}`}
+              disabled={busy || ctx.disabled !== null}
+              title={ctx.disabled ?? undefined}
+              onClick={() => void run(() => reviewConductorTask(task.id, { verdict: 'approve', by: 'dashboard' }))}
+            >
+              {ctx.label}
+            </button>
+            <button className={styles.actionBtn} disabled={busy} aria-expanded={rejecting} onClick={() => setRejecting((v) => !v)}>
+              Reject
+            </button>
+          </div>
+          <p className={styles.approveNote} data-blocked={ctx.disabled ? '1' : undefined}>{ctx.line}</p>
         </div>
       )}
       {avail.review && rejecting && (
@@ -74,13 +92,16 @@ export function PlanTaskActions({ task, workers, onDone }: Props) {
           <textarea
             className={styles.actionInput}
             rows={3}
-            placeholder="Feedback for the worker (required)"
+            aria-label={ctx.reject.returns.length > 0 ? `Feedback for ${listKeys(ctx.reject.returns)}` : 'Feedback'}
+            placeholder={ctx.reject.placeholder}
+            disabled={ctx.reject.disabled !== null}
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
           />
+          {ctx.reject.disabled && <p className={styles.approveNote} data-blocked="1">{ctx.reject.disabled}</p>}
           <button
             className={styles.actionBtn}
-            disabled={busy || feedback.trim() === ''}
+            disabled={busy || feedback.trim() === '' || ctx.reject.disabled !== null}
             onClick={() => void run(() => reviewConductorTask(task.id, { verdict: 'reject', feedback: feedback.trim(), by: 'dashboard' }), () => {
               setRejecting(false)
               setFeedback('')

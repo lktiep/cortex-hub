@@ -3,6 +3,7 @@
 import type { ConductorSession, ConductorWorker } from '../api'
 import { compareText, nodeNote, routeLabel } from './model'
 import type { PlanTask } from './model'
+import { artifactLine } from './outcome'
 
 export type ProgressBucket = 'done' | 'review' | 'running' | 'ready' | 'waiting' | 'blocked'
 
@@ -56,6 +57,12 @@ function item(t: PlanTask, kind: NeedItem['kind'], tone: NeedItem['tone'], detai
   return { kind, taskId: t.id, key: t.key, title: t.title, detail, tone }
 }
 
+/** What there is to approve first ("PR #12 · tests passed"), then `detail`. */
+function withArtifacts(t: PlanTask, byId: Map<string, PlanTask>, detail: string): string {
+  const artifacts = artifactLine(t, byId)
+  return artifacts ? `${artifacts} · ${detail}` : detail
+}
+
 export function needsYou(tasks: PlanTask[], now: Date): NeedItem[] {
   const byId = new Map(tasks.map((t) => [t.id, t]))
   const out: NeedItem[] = []
@@ -63,7 +70,7 @@ export function needsYou(tasks: PlanTask[], now: Date): NeedItem[] {
     if (t.state === 'escalated') {
       out.push(item(t, 'escalated', 'red', nodeNote(t, now) as string)) // an escalated task always has a note
     } else if (t.state === 'needs_user') {
-      out.push(item(t, 'user_gate', 'amber', nodeNote(t, now) ?? 'awaiting your approval'))
+      out.push(item(t, 'user_gate', 'amber', withArtifacts(t, byId, nodeNote(t, now) ?? 'awaiting your approval')))
     } else if (t.state === 'waiting' && t.waitReason === 'no_worker') {
       out.push(item(t, 'no_worker', 'amber', nodeNote(t, now) as string)) // a no_worker wait always has a note
     } else if (t.state === 'blocked') {
@@ -79,12 +86,14 @@ export function needsYou(tasks: PlanTask[], now: Date): NeedItem[] {
 }
 
 export function awaitingLead(tasks: PlanTask[]): NeedItem[] {
+  const byId = new Map(tasks.map((t) => [t.id, t]))
   const out: NeedItem[] = []
   for (const t of tasks) {
     if (t.state !== 'review' && t.state !== 'gate_lead') continue
     const last = t.reviews[t.reviews.length - 1]
     const fallback = t.state === 'review' ? 'awaiting review' : 'awaiting lead approval'
-    out.push(item(t, t.state === 'review' ? 'review' : 'lead_gate', 'violet', last ? last.feedback : fallback))
+    const detail = withArtifacts(t, byId, last ? last.feedback : fallback)
+    out.push(item(t, t.state === 'review' ? 'review' : 'lead_gate', 'violet', detail))
   }
   return out.sort(byKey)
 }

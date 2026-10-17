@@ -4,6 +4,7 @@ import type { ConductorWorker } from '../api'
 import { assignLanes, computeDepths, type PhaseSelection } from './layout'
 import { compareText, nodeNote, routeLabel } from './model'
 import type { PlanState, PlanTask } from './model'
+import { prLabel, taskOutcome } from './outcome'
 
 export interface BoardChip {
   id: string
@@ -15,6 +16,8 @@ export interface BoardChip {
   attempt: number | null
   route: string | null
   note: string | null
+  /** "PR #12" when the task opened a pull request; gates have none of their own. */
+  pr: string | null
   ghost: 'input' | 'output' | null
   /** Waiting on a person: the chip keeps blinking until someone acts. */
   attention: boolean
@@ -47,6 +50,7 @@ export function toChip(task: PlanTask, ghost: BoardChip['ghost'], now: Date): Bo
     attempt: attempt && attempt > 0 ? attempt : null,
     route: gate ? `gate · approver ${task.approver ?? 'user'}` : routeLabel(task.route ?? task.primary),
     note: gate ? null : nodeNote(task, now),
+    pr: gate ? null : prLabel(taskOutcome(task.row)),
     ghost,
     attention: ATTENTION.has(task.state),
   }
