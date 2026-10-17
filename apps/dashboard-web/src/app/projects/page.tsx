@@ -11,8 +11,11 @@ import {
   startMemNineEmbedding, buildDocsKnowledge,
   type IndexStatus, type IndexJobSummary, type BranchIndexStatus,
   getProjectState, type ProjectStateResponse,
+  getGitAccounts,
 } from '@/lib/api'
 import { parseDateSafe } from '@/lib/date'
+import { savedAccountFor, savedUsernames } from '@/lib/git-accounts'
+import ReuseTokenOption from '@/components/ReuseTokenOption'
 import { Link, Cloud, Monitor, Clock, Search, Brain, CheckCircle, XCircle, AlertTriangle, RefreshCw, Rocket, Puzzle, Plug, BookMarked, ClipboardList, BarChart3, Bot, Repeat, Timer, Play, type LucideIcon, ICON_INLINE } from '@/lib/icons'
 import styles from './page.module.css'
 
@@ -547,6 +550,7 @@ function ProjectContent() {
   const [gitProvider, setGitProvider] = useState('')
   const [gitUsername, setGitUsername] = useState('')
   const [gitToken, setGitToken] = useState('')
+  const [reuseToken, setReuseToken] = useState(false)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null)
@@ -585,11 +589,20 @@ function ProjectContent() {
     }
   }, [projectId])
 
+  const { data: gitAccountData } = useSWR(showEditGit ? 'git-accounts' : null, () => getGitAccounts())
+  const gitAccounts = gitAccountData?.accounts ?? []
+  // Offered only when another project holds the token: this project's own is kept anyway.
+  const matched = gitToken ? null : savedAccountFor(gitAccounts, gitUrl, gitUsername)
+  const savedToken = matched?.projects.some((p) => p.id !== projectId) ? matched : null
+
   const handleSaveGit = useCallback(async () => {
     if (!projectId) return
     setSaving(true)
     try {
-      await updateProject(projectId, { gitRepoUrl: gitUrl, gitProvider, gitUsername, gitToken })
+      await updateProject(projectId, {
+        gitRepoUrl: gitUrl, gitProvider, gitUsername, gitToken,
+        reuseGitToken: Boolean(savedToken && reuseToken),
+      })
       mutate()
       setShowEditGit(false)
     } catch {
@@ -597,7 +610,7 @@ function ProjectContent() {
     } finally {
       setSaving(false)
     }
-  }, [projectId, gitUrl, gitProvider, gitUsername, gitToken, mutate])
+  }, [projectId, gitUrl, gitProvider, gitUsername, gitToken, savedToken, reuseToken, mutate])
 
   if (!projectId) {
     return (
@@ -670,6 +683,8 @@ function ProjectContent() {
                 // The API does not hand the token back. An empty box means
                 // "keep the stored one"; typing replaces it.
                 setGitToken('')
+                // A project without a token takes the saved one unless unticked.
+                setReuseToken(!project.has_git_token)
                 setShowEditGit(true)
               }}
             >
@@ -887,8 +902,12 @@ function ProjectContent() {
                 type="text"
                 placeholder="username"
                 value={gitUsername}
+                list="git-username-suggestions"
                 onChange={(e) => setGitUsername(e.target.value)}
               />
+              <datalist id="git-username-suggestions">
+                {savedUsernames(gitAccounts).map((u) => <option key={u} value={u} />)}
+              </datalist>
             </div>
             <div className={styles.dialogField}>
               <label className={styles.dialogLabel}>Git Token / PAT (Optional)</label>
@@ -900,6 +919,9 @@ function ProjectContent() {
                 onChange={(e) => setGitToken(e.target.value)}
               />
             </div>
+            {savedToken && (
+              <ReuseTokenOption account={savedToken} checked={reuseToken} onChange={setReuseToken} />
+            )}
             <div className={styles.dialogActions}>
               <button className="btn btn-secondary" onClick={() => setShowEditGit(false)}>
                 Cancel

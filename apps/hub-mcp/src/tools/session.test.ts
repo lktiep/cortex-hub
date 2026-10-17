@@ -16,13 +16,14 @@ type Handler = (args: Record<string, unknown>) => Promise<Result>
 const realFetch = globalThis.fetch
 let calls: Array<{ url: string; body: unknown }>
 
-function register(endStatus = 200): Record<string, Handler> {
+function register(endStatus = 200, startReply?: Record<string, unknown>): Record<string, Handler> {
   calls = []
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null })
     const status = url.endsWith('/end') ? endStatus : 200
-    return new Response(JSON.stringify({ session: { id: 's1', status: 'abandoned' } }), { status })
+    const reply = startReply && url.endsWith('/api/sessions/start') ? startReply : { session: { id: 's1', status: 'abandoned' } }
+    return new Response(JSON.stringify(reply), { status })
   }) as unknown as typeof fetch
 
   const tools: Record<string, Handler> = {}
@@ -31,8 +32,8 @@ function register(endStatus = 200): Record<string, Handler> {
   return tools
 }
 
-function tool(name: string, endStatus?: number): Handler {
-  const handler = register(endStatus)[name]
+function tool(name: string, endStatus?: number, startReply?: Record<string, unknown>): Handler {
+  const handler = register(endStatus, startReply)[name]
   if (!handler) throw new Error(`${name} was not registered`)
   return handler
 }
@@ -74,5 +75,22 @@ describe('cortex_session_start', () => {
   it('sends none when the agent has none', async () => {
     await tool('cortex_session_start')({ repo: 'r' })
     expect(startBody()).not.toHaveProperty('clientSessionId')
+  })
+
+  it('tells the agent the hub registered the repo and is indexing it', async () => {
+    const autoRegistered = { projectId: 'proj-new', orgId: 'org-1', orgName: 'Org', username: 'acme', message: 'Registered sandbox in Org' }
+    const res = await tool('cortex_session_start', 200, {
+      sessionId: 'sess-1', project: { id: 'proj-new', orgId: 'org-1' }, autoRegistered,
+    })({ repo: 'https://github.com/acme/sandbox.git' })
+    const out = JSON.parse(res.content[0]!.text) as Record<string, unknown>
+    expect(out.auto_registered).toEqual(autoRegistered)
+    expect(out.project).toEqual({ id: 'proj-new', orgId: 'org-1' })
+  })
+
+  it('passes on how to register a repo the hub does not know', async () => {
+    const res = await tool('cortex_session_start', 200, { sessionId: 'sess-1', project: null, projectNote: 'not registered' })({ repo: 'r' })
+    const out = JSON.parse(res.content[0]!.text) as Record<string, unknown>
+    expect(out.project_note).toBe('not registered')
+    expect(out).not.toHaveProperty('auto_registered')
   })
 })

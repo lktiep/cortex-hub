@@ -322,6 +322,18 @@ export type Project = {
   stats?: { apiKeys: number; queryLogs: number; sessions: number }
 }
 
+/** A git username the hub holds a token for, and the projects that use it. Never carries the token. */
+export type GitAccount = {
+  host: string
+  username: string
+  projects: { id: string; name: string }[]
+  updatedAt: string
+}
+
+export async function getGitAccounts(host?: string) {
+  return apiFetch<{ accounts: GitAccount[] }>(`/api/projects/git-accounts${host ? `?host=${encodeURIComponent(host)}` : ''}`)
+}
+
 export async function getOrganizations() {
   return apiFetch<{ organizations: Organization[] }>('/api/orgs')
 }
@@ -349,6 +361,8 @@ export async function createProject(orgId: string, data: {
   gitProvider?: string
   gitUsername?: string
   gitToken?: string
+  /** Copy the token already saved for gitUsername on the URL's host, server-side. */
+  reuseGitToken?: boolean
 }) {
   return apiFetch<Project>(`/api/orgs/${orgId}/projects`, { method: 'POST', body: data })
 }
@@ -375,6 +389,8 @@ export async function updateProject(id: string, data: {
   gitProvider?: string
   gitUsername?: string
   gitToken?: string
+  /** Copy the token already saved for gitUsername on the URL's host, server-side. */
+  reuseGitToken?: boolean
   enabled?: number
 }) {
   return apiFetch<{ success: boolean }>(`/api/projects/${id}`, { method: 'PUT', body: data })

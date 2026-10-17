@@ -38,6 +38,13 @@ vi.mock('../db/client.js', () => ({
 // quality.ts reaches mem9 for its memory routes; /start never does.
 vi.mock('./mem9-proxy.js', () => ({ getMem9: vi.fn() }))
 
+// An auto-registered project is indexed in the background: no git, no clone here.
+const indexer = vi.hoisted(() => ({
+  checkRemoteAccess: vi.fn(async () => ({ ok: true, branch: 'main' })),
+  requestIndexing: vi.fn(),
+}))
+vi.mock('../services/indexer.js', () => indexer)
+
 import { Hono } from 'hono'
 import { sessionsRouter } from './quality.js'
 
@@ -170,5 +177,64 @@ describe('POST /api/sessions/start session reuse', () => {
     const first = await start({ key: null, body: bare })
     expect(await start({ key: null, body: bare })).toBe(first)
     expect(await start()).not.toBe(first)
+  })
+})
+
+describe('POST /api/sessions/start auto-registration', () => {
+  const SANDBOX = 'https://github.com/acme/sandbox.git'
+
+  async function startIn(repo: string) {
+    const res = await app.request('/api/sessions/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key-Owner': workspace.key },
+      body: JSON.stringify({ ...workspace.body, repo }),
+    })
+    expect(res.status).toBe(200)
+    return res.json() as Promise<{
+      project: { id: string; orgId: string } | null
+      autoRegistered?: { projectId: string; orgName: string; username: string; message: string }
+      projectNote?: string
+    }>
+  }
+
+  beforeEach(() => {
+    indexer.requestIndexing.mockClear()
+    testDb = createTestDb()
+    testDb.exec(`
+      ALTER TABLE index_jobs ADD COLUMN triggered_by TEXT;
+      INSERT INTO organizations (id, name, slug) VALUES ('org-1', 'Org', 'org');
+      INSERT INTO projects (id, org_id, name, slug, git_repo_url, git_username, git_token)
+        VALUES ('proj-hub', 'org-1', 'Hub', 'hub', '${HUB_URL}', 'acme', 'tok-saved');
+    `)
+  })
+
+  it('registers a repo of the saved account, binds the session to it and starts indexing', async () => {
+    const body = await startIn(SANDBOX)
+    expect(body.autoRegistered).toMatchObject({ orgName: 'Org', username: 'acme' })
+    expect(body.autoRegistered?.message).toContain('Indexing runs in the background')
+    expect(body.project).toMatchObject({ id: body.autoRegistered?.projectId, orgId: 'org-1' })
+    expect(body.projectNote).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain('tok-saved')
+
+    await vi.waitFor(() => expect(indexer.requestIndexing).toHaveBeenCalledWith(
+      body.autoRegistered?.projectId, 'main', { triggeredBy: 'auto-register' },
+    ))
+    const session = testDb.prepare('SELECT project_id FROM session_handoffs').get() as { project_id: string }
+    expect(session.project_id).toBe(body.autoRegistered?.projectId)
+  })
+
+  it('finds the project it registered on the next start instead of registering it again', async () => {
+    const first = await startIn(SANDBOX)
+    const second = await startIn('https://github.com/acme/sandbox')
+    expect(second.autoRegistered).toBeUndefined()
+    expect(second.project?.id).toBe(first.autoRegistered?.projectId)
+  })
+
+  it('leaves a repo of another owner unregistered and says how to add it', async () => {
+    const body = await startIn('https://github.com/someone/else.git')
+    expect(body.autoRegistered).toBeUndefined()
+    expect(body.project).toBeNull()
+    expect(body.projectNote).toContain('not registered')
+    expect(indexer.requestIndexing).not.toHaveBeenCalled()
   })
 })

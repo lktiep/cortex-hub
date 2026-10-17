@@ -71,16 +71,36 @@ export function buildAuthUrl(url: string, username?: string | null, token?: stri
  */
 export async function resolveDefaultBranch(projectId: string): Promise<string> {
   const project = db.prepare(
-    'SELECT git_repo_url, git_username, git_token, default_branch FROM projects WHERE id = ?'
-  ).get(projectId) as {
-    git_repo_url: string | null
-    git_username: string | null
-    git_token: string | null
-    default_branch: string | null
-  } | undefined
+    'SELECT git_repo_url, default_branch FROM projects WHERE id = ?'
+  ).get(projectId) as { git_repo_url: string | null; default_branch: string | null } | undefined
 
   if (project?.default_branch) return project.default_branch
   if (!project?.git_repo_url) return 'main'
+
+  const access = await checkRemoteAccess(projectId)
+  if (access.ok && access.branch) {
+    db.prepare('UPDATE projects SET default_branch = ? WHERE id = ?').run(access.branch, projectId)
+    logger.info(`Resolved default branch for ${projectId}: ${access.branch}`)
+    return access.branch
+  }
+  // A credential or network problem is the clone's business to report, not
+  // this helper's: fall through to the old default so nothing new breaks.
+  if (!access.ok) logger.warn(`Could not resolve default branch for ${projectId}: ${access.error.slice(0, 200)}`)
+  return 'main'
+}
+
+export type RemoteAccess = { ok: true; branch: string | null } | { ok: false; error: string }
+
+/**
+ * Read the remote's HEAD with the project's stored credentials. `branch` is
+ * what HEAD points at (null when the remote does not say); `error` is git's
+ * message with the credentials taken out.
+ */
+export async function checkRemoteAccess(projectId: string): Promise<RemoteAccess> {
+  const project = db.prepare(
+    'SELECT git_repo_url, git_username, git_token FROM projects WHERE id = ?'
+  ).get(projectId) as { git_repo_url: string | null; git_username: string | null; git_token: string | null } | undefined
+  if (!project?.git_repo_url) return { ok: false, error: 'The project has no git repository URL' }
 
   try {
     const authUrl = buildAuthUrl(project.git_repo_url, project.git_username, project.git_token)
@@ -88,21 +108,14 @@ export async function resolveDefaultBranch(projectId: string): Promise<string> {
     const { stdout: output } = await execFileAsync('git', ['ls-remote', '--symref', authUrl, 'HEAD'], {
       timeout: 15000,
       encoding: 'utf-8',
+      // A rejected token fails here at once instead of waiting out the timeout on a prompt.
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
     })
     const match = output.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m)
-    if (match?.[1]) {
-      db.prepare('UPDATE projects SET default_branch = ? WHERE id = ?').run(match[1], projectId)
-      logger.info(`Resolved default branch for ${projectId}: ${match[1]}`)
-      return match[1]
-    }
+    return { ok: true, branch: match?.[1] ?? null }
   } catch (err) {
-    // A credential or network problem is the clone's business to report, not
-    // this helper's: fall through to the old default so nothing new breaks.
-    const msg = redactCredentials(String(err))
-    logger.warn(`Could not resolve default branch for ${projectId}: ${msg.slice(0, 200)}`)
+    return { ok: false, error: redactCredentials(String(err)) }
   }
-
-  return 'main'
 }
 
 /**

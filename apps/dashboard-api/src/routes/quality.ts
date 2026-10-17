@@ -3,6 +3,7 @@ import { db } from '../db/client.js'
 import { findProjectByRepo, normalizeRepo } from '../lib/project-match.js'
 import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
 import { getMem9 } from './mem9-proxy.js'
+import { autoRegisterProject, indexRegisteredProject } from '../services/auto-register.js'
 import {
   calculateFromVerificationResults,
   scoreToGrade,
@@ -350,8 +351,17 @@ sessionsRouter.post('/start', async (c) => {
     // Shared with worker registration: git URL match, then slug/name/LIKE fallback.
     // The response below reads more columns than ProjectMatch carries, so load the row.
     const match = repo ? findProjectByRepo(repo as string) : null
-    const project = match
-      ? db.prepare('SELECT * FROM projects WHERE id = ?').get(match.id) as Record<string, unknown> | undefined
+    // A repo nobody registered yet, owned by an account whose token the hub
+    // already holds, is registered now and indexed in the background.
+    const registered = !match && repo ? autoRegisterProject(repo) : null
+    if (registered) {
+      indexRegisteredProject(registered.projectId).catch((err: unknown) => {
+        console.error(`[sessions] indexing auto-registered ${registered.projectId} failed:`, err)
+      })
+    }
+    const projectRowId = match?.id ?? registered?.projectId
+    const project = projectRowId
+      ? db.prepare('SELECT * FROM projects WHERE id = ?').get(projectRowId) as Record<string, unknown> | undefined
       : undefined
 
     const projectName = (project?.name as string) ?? 'Unknown Project'
@@ -463,6 +473,19 @@ sessionsRouter.post('/start', async (c) => {
         indexedAt: project.indexed_at,
         indexedSymbols: project.indexed_symbols,
       } : null,
+      autoRegistered: registered ? {
+        projectId: registered.projectId,
+        orgId: registered.orgId,
+        orgName: registered.orgName,
+        username: registered.username,
+        message: `Registered ${registered.name} in ${registered.orgName} with the git token saved for ${registered.username}. ` +
+          'Indexing runs in the background; code search covers this repo once it finishes. ' +
+          'If the token cannot read the repo, the project page on the dashboard says so.',
+      } : undefined,
+      projectNote: !project && repo
+        ? 'This repo is not registered with the hub, so code search and cortex_code_reindex do not cover it. ' +
+          'Add it on the dashboard: Organizations, then New Project.'
+        : undefined,
       standards: [
         'SOLID Principles',
         'Clean Architecture',

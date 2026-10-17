@@ -13,12 +13,15 @@ import {
   deleteProject,
   moveProject,
   getDashboardOverview,
+  getGitAccounts,
   type Organization,
   type Project,
   type ProjectSummary,
 } from '@/lib/api'
 import { Cloud, Link as LinkIcon, Package, Search, Brain, BarChart3, AlertTriangle, Building2, Folder, ArrowLeftRight, type LucideIcon, ICON_INLINE } from '@/lib/icons'
 import { parseDateSafe, formatTimeAgo } from '@/lib/date'
+import { savedAccountFor, savedUsernames } from '@/lib/git-accounts'
+import ReuseTokenOption from '@/components/ReuseTokenOption'
 import styles from './page.module.css'
 
 // ── Helpers ──
@@ -61,12 +64,15 @@ function CreateDialog({
   onSubmit,
   onCancel,
   onFieldChange,
+  extra,
 }: {
   title: string
-  fields: { key: string; label: string; placeholder: string; required?: boolean; type?: string }[]
+  fields: { key: string; label: string; placeholder: string; required?: boolean; type?: string; suggestions?: string[] }[]
   onSubmit: (data: Record<string, string>) => void
   onCancel: () => void
   onFieldChange?: (key: string, value: string, setValues: React.Dispatch<React.SetStateAction<Record<string, string>>>) => void
+  /** Rendered below the fields, for options that depend on what was typed. */
+  extra?: (values: Record<string, string>, setValues: React.Dispatch<React.SetStateAction<Record<string, string>>>) => React.ReactNode
 }) {
   const [values, setValues] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
@@ -101,6 +107,7 @@ function CreateDialog({
                 type={field.type || "text"}
                 placeholder={field.placeholder}
                 value={values[field.key] ?? ''}
+                list={field.suggestions?.length ? `${field.key}-suggestions` : undefined}
                 onChange={(e) => {
                   const newVal = e.target.value
                   setValues((v) => ({ ...v, [field.key]: newVal }))
@@ -108,8 +115,14 @@ function CreateDialog({
                 }}
               />
             )}
+            {field.suggestions?.length ? (
+              <datalist id={`${field.key}-suggestions`}>
+                {field.suggestions.map((s) => <option key={s} value={s} />)}
+              </datalist>
+            ) : null}
           </div>
         ))}
+        {extra?.(values, setValues)}
         <div className={styles.dialogActions}>
           <button className="btn btn-secondary" onClick={onCancel}>
             Cancel
@@ -376,6 +389,8 @@ function OrgSection({
   const [showCreateProject, setShowCreateProject] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isOver, setIsOver] = useState(false)
+  const { data: gitAccountData } = useSWR(showCreateProject ? 'git-accounts' : null, () => getGitAccounts())
+  const gitAccounts = gitAccountData?.accounts ?? []
 
   const projects = projectData?.projects ?? []
   const moveTargets = allOrgs.filter((o) => o.id !== org.id)
@@ -388,6 +403,7 @@ function OrgSection({
 
   const handleCreateProject = useCallback(
     async (data: Record<string, string>) => {
+      const saved = savedAccountFor(gitAccounts, data.gitRepoUrl ?? '', data.gitUsername ?? '')
       try {
         await createProject(org.id, {
           name: data.name ?? '',
@@ -396,6 +412,7 @@ function OrgSection({
           gitProvider: data.gitProvider,
           gitUsername: data.gitUsername,
           gitToken: data.gitToken,
+          reuseGitToken: Boolean(saved && !data.gitToken && data.reuseGitToken !== 'off'),
         })
         setShowCreateProject(false)
         mutateProjects()
@@ -403,7 +420,7 @@ function OrgSection({
         // handled by API module
       }
     },
-    [org.id, mutateProjects]
+    [org.id, mutateProjects, gitAccounts]
   )
 
   const handleDeleteProject = useCallback(
@@ -521,7 +538,7 @@ function OrgSection({
             { key: 'description', label: 'Description', placeholder: 'Project description...', type: 'textarea', required: false },
             { key: 'gitRepoUrl', label: 'Git Repository URL', placeholder: 'https://github.com/user/repo', required: false },
             { key: 'gitProvider', label: 'Git Provider', placeholder: 'auto-detected from URL', required: false },
-            { key: 'gitUsername', label: 'Git Username (Optional)', placeholder: 'username', required: false },
+            { key: 'gitUsername', label: 'Git Username (Optional)', placeholder: 'username', required: false, suggestions: savedUsernames(gitAccounts) },
             { key: 'gitToken', label: 'Git Token / PAT (Optional)', placeholder: 'Personal Access Token', type: 'password', required: false },
           ]}
           onSubmit={handleCreateProject}
@@ -537,6 +554,16 @@ function OrgSection({
               else if (url.includes('gitea.') || url.includes('codeberg.org')) provider = 'gitea'
               if (provider) setValues((v) => ({ ...v, gitProvider: provider }))
             }
+          }}
+          extra={(values, setValues) => {
+            const saved = values.gitToken ? null : savedAccountFor(gitAccounts, values.gitRepoUrl ?? '', values.gitUsername ?? '')
+            return saved && (
+              <ReuseTokenOption
+                account={saved}
+                checked={values.reuseGitToken !== 'off'}
+                onChange={(on) => setValues((v) => ({ ...v, reuseGitToken: on ? '' : 'off' }))}
+              />
+            )
           }}
         />
       )}

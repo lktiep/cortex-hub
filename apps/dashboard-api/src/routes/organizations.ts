@@ -2,8 +2,24 @@ import { Hono } from 'hono'
 import { db } from '../db/client.js'
 import { randomUUID } from 'crypto'
 import { getMem9 } from './mem9-proxy.js'
+import { parseRepoUrl, savedTokenFor, listGitAccounts } from '../lib/git-credentials.js'
 
 export const orgsRouter = new Hono()
+
+/**
+ * `reuseGitToken`: copy the newest token already saved for this username on
+ * the repository's host, so adding another repo of the same account does not
+ * ask for a PAT again. The token is copied in the database and never sent back.
+ */
+function reusedGitToken(repoUrl: string | null | undefined, username: string | null | undefined): { token: string } | { error: string } {
+  const ref = repoUrl ? parseRepoUrl(repoUrl) : null
+  if (!ref) return { error: 'A git repository URL is needed to reuse a saved token' }
+  const name = username?.trim()
+  if (!name) return { error: 'A git username is needed to reuse a saved token' }
+  const saved = savedTokenFor(ref.host, name)
+  if (!saved) return { error: `No saved token for ${name} on ${ref.host}` }
+  return { token: saved.token }
+}
 
 // ── List Organizations ──
 orgsRouter.get('/', (c) => {
@@ -127,13 +143,14 @@ orgsRouter.post('/:id/projects', async (c) => {
   const { id: orgId } = c.req.param()
   try {
     const body = await c.req.json()
-    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken } = body as {
+    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken, reuseGitToken } = body as {
       name: string
       description?: string
       gitRepoUrl?: string
       gitProvider?: string
       gitUsername?: string
       gitToken?: string
+      reuseGitToken?: boolean
     }
 
     if (!name || name.trim().length === 0) {
@@ -144,13 +161,20 @@ orgsRouter.post('/:id/projects', async (c) => {
     const org = db.prepare('SELECT id FROM organizations WHERE id = ?').get(orgId)
     if (!org) return c.json({ error: 'Organization not found' }, 404)
 
+    let token = gitToken ?? null
+    if (reuseGitToken && !gitToken) {
+      const reused = reusedGitToken(gitRepoUrl, gitUsername)
+      if ('error' in reused) return c.json({ error: reused.error }, 400)
+      token = reused.token
+    }
+
     const projectId = `proj-${randomUUID().slice(0, 8)}`
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
     db.prepare(
       `INSERT INTO projects (id, org_id, name, slug, description, git_repo_url, git_provider, git_username, git_token)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(projectId, orgId, name.trim(), slug, description ?? null, gitRepoUrl ?? null, gitProvider ?? null, gitUsername ?? null, gitToken ?? null)
+    ).run(projectId, orgId, name.trim(), slug, description ?? null, gitRepoUrl ?? null, gitProvider ?? null, gitUsername ?? null, token)
 
     return c.json({
       id: projectId,
@@ -161,6 +185,7 @@ orgsRouter.post('/:id/projects', async (c) => {
       gitRepoUrl: gitRepoUrl ?? null,
       gitProvider: gitProvider ?? null,
       gitUsername: gitUsername ?? null,
+      hasGitToken: Boolean(token),
     }, 201)
   } catch (error) {
     if (String(error).includes('UNIQUE constraint')) {
@@ -186,6 +211,15 @@ function redactProject<T extends Record<string, unknown>>(project: T): Omit<T, '
   const { git_token, ...rest } = project
   return { ...rest, has_git_token: Boolean(git_token) }
 }
+
+// ── Saved git accounts (username + projects, never the token) ──
+projectsRouter.get('/git-accounts', (c) => {
+  try {
+    return c.json({ accounts: listGitAccounts(c.req.query('host')) })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
 
 // ── Lookup project by repo URL, name or id ──
 projectsRouter.get('/lookup', (c) => {
@@ -285,7 +319,7 @@ projectsRouter.put('/:id', async (c) => {
   const { id } = c.req.param()
   try {
     const body = await c.req.json()
-    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken, enabled } = body as {
+    const { name, description, gitRepoUrl, gitProvider, gitUsername, gitToken, enabled, reuseGitToken } = body as {
       name?: string
       description?: string
       gitRepoUrl?: string
@@ -293,14 +327,22 @@ projectsRouter.put('/:id', async (c) => {
       gitUsername?: string
       gitToken?: string
       enabled?: boolean | number
+      reuseGitToken?: boolean
     }
 
-    const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(id)
+    const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Record<string, string | null> | undefined
     if (!existing) return c.json({ error: 'Project not found' }, 404)
+
+    let token = gitToken ?? null
+    if (reuseGitToken && !gitToken) {
+      const reused = reusedGitToken(gitRepoUrl || existing.git_repo_url, gitUsername ?? existing.git_username)
+      if ('error' in reused) return c.json({ error: reused.error }, 400)
+      token = reused.token
+    }
 
     const slug = name
       ? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-      : (existing as Record<string, string>).slug
+      : existing.slug
 
     db.prepare(
       `UPDATE projects SET 
@@ -321,7 +363,7 @@ projectsRouter.put('/:id', async (c) => {
       gitRepoUrl ?? null,
       gitProvider ?? null,
       gitUsername ?? null,
-      gitToken ?? null,
+      token,
       enabled !== undefined ? (enabled ? 1 : 0) : null,
       id
     )

@@ -39,6 +39,9 @@ export function registerSessionTools(server: McpServer, env: Env) {
       let resolvedProjectId: string | undefined
       let resolvedOrgId: string | undefined
       let recentSessions: unknown[] = []
+      // The hub registers a repo of a saved git account on first sight; the agent should say so.
+      let autoRegistered: unknown
+      let projectNote: string | undefined
       try {
         const response = await apiCall(env, '/api/sessions/start', {
           method: 'POST',
@@ -59,11 +62,19 @@ export function registerSessionTools(server: McpServer, env: Env) {
         })
 
         if (response.ok) {
-          const data = await response.json() as { sessionId?: string; project?: { id: string; orgId?: string }; recentSessions?: unknown[] }
+          const data = await response.json() as {
+            sessionId?: string
+            project?: { id: string; orgId?: string }
+            recentSessions?: unknown[]
+            autoRegistered?: unknown
+            projectNote?: string
+          }
           if (data.sessionId) sessionId = data.sessionId
           if (data.project?.id) resolvedProjectId = data.project.id
           if (data.project?.orgId) resolvedOrgId = data.project.orgId
           if (data.recentSessions) recentSessions = data.recentSessions
+          autoRegistered = data.autoRegistered
+          projectNote = data.projectNote
         }
       } catch {
         // Dashboard API unavailable — continue with local session ID
@@ -139,6 +150,8 @@ export function registerSessionTools(server: McpServer, env: Env) {
               // orgId is the boundary of a cross-repo search: code tools called without
               // `repo:` search every repo in this organization and nothing outside it.
               project: resolvedProjectId ? { id: resolvedProjectId, orgId: resolvedOrgId } : undefined,
+              auto_registered: autoRegistered,
+              project_note: projectNote,
               recent_sessions: recentSessions.length > 0 ? recentSessions : undefined,
               relevant_knowledge: relevantKnowledge.length > 0 ? relevantKnowledge : undefined,
             }, null, 2)
