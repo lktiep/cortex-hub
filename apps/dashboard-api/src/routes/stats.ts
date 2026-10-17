@@ -832,7 +832,11 @@ statsRouter.get('/hints/:agentId', (c) => {
     const has = (fragment: string) => calls.some(c2 => c2.tool.includes(fragment))
     const hints: string[] = []
 
-    if (!has('session_start')) {
+    // Not bounded by the window: a worker that started its session three hours ago has one. The
+    // call being answered may be session_start itself, whose log write is not awaited by hub-mcp.
+    const hasSession = has('session_start') || currentTool.includes('session_start')
+      || db.prepare(`SELECT 1 FROM query_logs WHERE agent_id = ? AND tool LIKE '%session_start%' LIMIT 1`).get(agentId) !== undefined
+    if (!hasSession) {
       hints.push('⚠️ Call cortex_session_start first — without it nothing you do is attached to a project, and the hooks block edits.')
     }
 

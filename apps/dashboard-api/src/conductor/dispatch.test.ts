@@ -273,6 +273,20 @@ describe('dispatch', () => {
     expect(ws.sent).toHaveLength(1)
   })
 
+  it('an IDE window (protocol 1) is pushed a loose task but never a plan task', () => {
+    insertTask(testDb, { id: 'plan', task_key: 'A3', title: 'Design', pinned_agent: 'ide' })
+    insertTask(testDb, { id: 'loose', title: 'Loose' })
+    const r = addConnection({
+      ws: fakeSocket(), agentId: 'ide', apiKeyOwner: 'o1', apiKeyProjectId: null, hostname: 'host-ide',
+      ide: 'vscode', platform: null, capabilities: [],
+    }, NOW)
+    if (!r.ok) throw new Error(r.reason)
+    updateConnection(r.conn.connectionId, { ready: true })
+
+    expect(dispatch(NOW)).toEqual([{ taskId: 'loose', agentId: 'ide', route: { executor: null, model: null, effort: null } }])
+    expect(row('plan')).toMatchObject({ status: 'pending', wait_reason: 'no_worker' })
+  })
+
   it('a lock wait is recorded without a notification', () => {
     insertTask(testDb, { id: 't0', title: 'Running', status: 'in_progress', assigned_to_agent: 'w9', files: '["src/a/"]' })
     insertTask(testDb, { id: 't1', title: 'Blocked', api_key_owner: 'lead', files: '["src/a/b.ts"]' })

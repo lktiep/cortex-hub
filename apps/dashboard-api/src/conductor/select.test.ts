@@ -29,7 +29,7 @@ function task(id: string, over: Partial<CandidateTask> = {}): CandidateTask {
   return {
     id, projectId: null, priority: 5, createdAt: '2026-10-16T10:00:00Z',
     dependsOn: [], requiredCapabilities: [], files: [],
-    routes: [route('claude', 'opus')], pinnedAgent: null, declined: [], lastAgent: null,
+    routes: [route('claude', 'opus')], pinnedAgent: null, declined: [], lastAgent: null, inPlan: false,
     ...over,
   }
 }
@@ -332,6 +332,23 @@ describe('selectAssignments', () => {
     expect(select({ pending: [free('p1')], workers: [scoped] }).assign).toHaveLength(1)
     expect(select({ pending: [free(null)], workers: [scoped] }).assign).toHaveLength(1)
     expect(select({ pending: [free('p2')], workers: [scoped] }).wait).toEqual([{ taskId: 'a', reason: 'no_worker', until: null }])
+  })
+
+  it('a legacy worker is never given a plan task, even one pinned to it; a v2 worker is', () => {
+    const legacy = worker('ide', { protocol: 1, engines: [] })
+    const free = route(null, null)
+    const planned = select({ pending: [task('a', { inPlan: true, routes: [free] })], workers: [legacy] })
+    expect(planned.assign).toEqual([])
+    expect(planned.wait).toEqual([{ taskId: 'a', reason: 'no_worker', until: null }])
+
+    const pinned = select({ pending: [task('a', { inPlan: true, routes: [free], pinnedAgent: 'ide' })], workers: [legacy] })
+    expect(pinned.wait).toEqual([{ taskId: 'a', reason: 'no_worker', until: null }])
+
+    const both = select({ pending: [task('a', { inPlan: true, routes: [free] })], workers: [legacy, worker('cli')] })
+    expect(both.assign).toEqual([{ taskId: 'a', agentId: 'cli', route: free }])
+
+    const loose = select({ pending: [task('a', { routes: [free], pinnedAgent: 'ide' })], workers: [legacy] })
+    expect(loose.assign).toEqual([{ taskId: 'a', agentId: 'ide', route: free }])
   })
 })
 

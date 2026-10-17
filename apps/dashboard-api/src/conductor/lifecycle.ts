@@ -114,9 +114,12 @@ interface Send {
 /**
  * What a committed step leaves to do: the messages to send, then the worker
  * whose task just left it (null for none) — idle from now (`markFreed`), or
- * busy if `state` says so — then the dispatch pass.
+ * busy if `state` says so — and the `freed` workers, idle from now (a
+ * cancelled group's), then the dispatch pass.
  */
-interface Settled<O extends { ok: boolean } = Outcome> { outcome: O; worker: string | null; state?: 'idle' | 'busy'; sends?: Send[] }
+interface Settled<O extends { ok: boolean } = Outcome> {
+  outcome: O; worker: string | null; state?: 'idle' | 'busy'; freed?: string[]; sends?: Send[]
+}
 
 /**
  * Pushes to workers (revokes, the dispatch pass) must follow a commit. Inside a
@@ -156,13 +159,14 @@ function flush(sends: Send[]): void {
 /** Runs `step` in one transaction; after a successful commit, sends, marks the worker and dispatches. */
 function settle<O extends { ok: boolean } = Outcome>(step: () => Settled<O>, now?: number): O {
   assertOutsideTransaction()
-  const { outcome, worker, state = 'idle', sends = [] } = db.transaction(step)()
+  const { outcome, worker, state = 'idle', freed = [], sends = [] } = db.transaction(step)()
   if (!outcome.ok) return outcome
   flush(sends)
   if (worker !== null) {
     if (state === 'idle') markFreed(worker, now)
     else setStatus(worker, state, now)
   }
+  for (const agentId of freed) markFreed(agentId, now)
   dispatch(now)
   return outcome
 }
@@ -549,23 +553,56 @@ export function revokeTask(taskId: string, reason: string): void {
   if (agentId) sendTo(agentId, { type: 'task.revoked', taskId, reason } satisfies TaskRevokedMsg)
 }
 
-/** Any task not yet finished → `cancelled`; an active one is revoked first and its worker freed. */
+/** The unfinished tasks under `parentId`, at any depth. */
+function openDescendants(parentId: string): TaskRow[] {
+  return db.prepare(`
+    WITH RECURSIVE subtree(id) AS (
+      SELECT id FROM conductor_tasks WHERE parent_task_id = ?
+      UNION SELECT t.id FROM conductor_tasks t JOIN subtree s ON t.parent_task_id = s.id
+    )
+    SELECT * FROM conductor_tasks
+    WHERE id IN (SELECT id FROM subtree) AND status NOT IN (${TERMINAL_STATUSES.map(() => '?').join(', ')})
+  `).all(parentId, ...TERMINAL_STATUSES) as TaskRow[]
+}
+
+function markCancelled(taskId: string, at: string): void {
+  db.prepare(`
+    UPDATE conductor_tasks
+    SET status = 'cancelled', completed_at = ?, lease_expires_at = NULL, wait_reason = NULL, wait_until = NULL
+    WHERE id = ?
+  `).run(at, taskId)
+}
+
+/**
+ * Any task not yet finished → `cancelled`; an active one is revoked first and
+ * its worker freed. A group takes every unfinished task under it along, the
+ * active ones revoked and their workers freed, and stays `cancelled`: so
+ * cancelling a plan's root stops the whole plan.
+ */
 export function cancelTask(taskId: string, by: string | null): Outcome {
   revokeBefore(taskId, 'cancelled')
   return settle((): Settled => {
     const loaded = load(taskId, by, 'cancel', (t) => !isTerminal(t.status))
     if (!loaded.ok) return refused(loaded)
     const { task } = loaded
-    db.prepare(`
-      UPDATE conductor_tasks
-      SET status = 'cancelled', completed_at = ?, lease_expires_at = NULL, wait_reason = NULL, wait_until = NULL
-      WHERE id = ?
-    `).run(isoSeconds(Date.now()), taskId)
+    const at = isoSeconds(Date.now())
+    const sends: Send[] = []
+    const freed: string[] = []
+    if (task.kind === 'group') {
+      for (const d of openDescendants(taskId)) {
+        markCancelled(d.id, at)
+        logTask(d.id, by, 'cancelled', `was ${d.status}; group ${taskLabel(task)} cancelled`)
+        if (isActive(d.status) && d.assigned_to_agent !== null) {
+          sends.push({ agentId: d.assigned_to_agent, msg: { type: 'task.revoked', taskId: d.id, reason: 'cancelled' } satisfies TaskRevokedMsg })
+          freed.push(d.assigned_to_agent)
+        }
+      }
+    }
+    markCancelled(taskId, at)
     logTask(taskId, by, 'cancelled', `was ${task.status}`)
     const updated = current(taskId)
-    const sends: Send[] = []
     checkParent(updated, sends)
-    return { outcome: { ok: true, task: updated }, worker: isActive(task.status) ? task.assigned_to_agent : null, sends }
+    return { outcome: { ok: true, task: updated }, worker: isActive(task.status) ? task.assigned_to_agent : null, freed, sends }
   })
 }
 

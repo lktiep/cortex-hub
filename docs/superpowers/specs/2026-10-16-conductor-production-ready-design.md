@@ -243,6 +243,9 @@ blocked ───────────────▶ pending ─────
   (`cortex_task_cancel`, the dashboard, or the existing cancel route). Rows already `failed` stay terminal. Dependents of
   a cancelled or failed task stay `blocked` and appear under "Needs you"; the
   lead unblocks them by editing their `dependsOn` (`cortex_task_route`).
+- Cancelling a group cancels every unfinished task under it, at any depth, and
+  revokes the active ones; the group stays `cancelled`. Cancelling the root
+  group stops the whole plan.
 - `kind = gate` is never dispatched. It is `blocked` until its dependencies
   complete, then `pending` meaning "awaiting approval". Approve → `completed`
   and the completion chain runs. Reject (with feedback) → each of its direct
@@ -319,7 +322,10 @@ Duplicates are dropped.
    lists the model, or lists `*`;
 6. no `conductor_quota` row for (its host, executor, model) with
    `exhausted_until > now`, where a row's model matches exactly, by prefix
-   (`foo-*`), or as `*`.
+   (`foo-*`), or as `*`;
+7. for a task created in a plan (it has a `task_key`), speaks protocol 2:
+   an IDE window or an old agent script cannot tell reliably when its run
+   has finished, so it is pushed loose tasks only.
 
 For each ready task, take the first route that has an eligible worker. Among
 eligible workers prefer `last_agent`, then the worker idle longest. A worker
@@ -433,7 +439,7 @@ A worker that reconnects with an `activeTaskId` that was reclaimed receives
 | `cortex_agents` *(new, read-only)* | Workers (host, OS, engines and models, capabilities, idle/busy, current task, quota until per model) plus MCP sessions from `session_handoffs` (agent, IDE, branch, last activity). The lead decides routing from this. |
 | `cortex_task_review` *(new)* | `taskId, verdict: 'approve'\|'reject', feedback?`. Works on `review` tasks and on gates with `approver: 'lead'`; refuses `approver: 'user'` gates (D8). |
 | `cortex_task_route` *(new)* | Change `executor`, `model`, `effort`, `fallback`, `pinnedAgent`, `priority`, `files` or `dependsOn` (cycle-checked) of a not-yet-completed task; `clearEscalation: true` resets the counters. An active task is revoked and returned to `pending` first. |
-| `cortex_task_cancel` *(new)* | `taskId, reason?`. Cancels a task the lead gives up on (revokes it if active). Its dependents stay `blocked` until rerouted. |
+| `cortex_task_cancel` *(new)* | `taskId, reason?`. Cancels a task the lead gives up on (revokes it if active). Its dependents stay `blocked` until rerouted. Cancelling a group cancels every unfinished task under it; cancel the root group to stop a plan. |
 | `cortex_task_create` *(fix)* | Maps priority labels to integers (critical 1, high 3, medium 5, low 8); accepts the routing fields; no longer pushes directly. |
 | `cortex_task_list` *(fix)* | Sends `assigned_to` and `projectId`, which the route now reads; adds `key`, `kind`, `wait_reason`, `escalated` to each row. |
 | `cortex_task_update` *(fix)* | Keeps its statuses; `review`/`completed`/`failed` go through `lifecycle.ts`; `message` is stored as a log row. |
@@ -609,7 +615,8 @@ Based on the approved mock (`proposed.tsx`, screenshots shot-3/4).
 - Columns are added on hub start; existing rows get `kind = 'work'`,
   `review_required = 0`, counters 0.
 - Old workers still connect. They receive `task.assigned` (they already handle
-  it) only for tasks with `executor` null, since they register no engines.
+  it) only for loose tasks with `executor` null, since they register no engines
+  and a plan task needs protocol 2 (§6.4).
 - Tasks already `in_progress` when the hub upgrades get a lease of
   now + `leaseHours`.
 - `cortex_task_*` tools keep their names and inputs; new fields are optional.

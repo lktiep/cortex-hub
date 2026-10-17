@@ -15,7 +15,7 @@ Needs Node.js 20 or newer, git and the GitHub CLI (`gh`).
 | P1 | Phase 1 | A group whose tasks run in parallel |
 | A1 | Add clamp() | Routing to the `claude` engine, priority `high` |
 | A2 | Add titleCase() | Routing to `agy` with no fallback: it waits for an agy worker |
-| A3 | Note phase 1 in CHANGELOG.md | Routing by capability (`design`) to an IDE window, after A1 and A2 |
+| A3 | Note phase 1 in CHANGELOG.md | Routing by capability (`design`) to `sbx-claude`, after A1 and A2 |
 | G1 | Sign off phase 1 | A gate only you can open, on the dashboard |
 | P2 | Phase 2 | A group that waits for G1 |
 | B1 | Add formatBytes() | `agy` first, `claude` as fallback |
@@ -109,7 +109,7 @@ engine added.
 macOS and Ubuntu:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | CORTEX_API_KEY=<worker-key-1> bash -s -- start --daemon --hub https://<your-mcp-host> --agent-id sbx-claude --engines claude
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | CORTEX_API_KEY=<worker-key-1> bash -s -- start --daemon --hub https://<your-mcp-host> --agent-id sbx-claude --engines claude --capabilities design
 curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.sh | CORTEX_API_KEY=<worker-key-2> bash -s -- start --daemon --hub https://<your-mcp-host> --agent-id sbx-agy --engines agy
 ```
 
@@ -117,17 +117,17 @@ Windows:
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1
-$env:CORTEX_API_KEY="<worker-key-1>"; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host> --agent-id sbx-claude --engines claude
+$env:CORTEX_API_KEY="<worker-key-1>"; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host> --agent-id sbx-claude --engines claude --capabilities design
 $env:CORTEX_API_KEY="<worker-key-2>"; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host> --agent-id sbx-agy --engines agy
 ```
 
-Then open the sandbox folder in Antigravity IDE with the Cortex extension
-([antigravity.md](../../docs/conductor/antigravity.md)). Click the pencil on its status bar item,
-set the name `sbx-ide`, the capability `design` and a third key, and Save. A3 goes to this window
-only: the two workers above have no capabilities.
+`sbx-claude` is the only agent with the capability `design`, so A3 goes to it. Leave IDE windows
+out of this drill. A window with the Cortex extension
+([antigravity.md](../../docs/conductor/antigravity.md)) is given loose tasks only, never a plan's:
+it cannot tell for sure when its agent has finished.
 
 Check: `node ~/.cortex/worker/cortex-worker.mjs status --agent-id sbx-claude` (and `sbx-agy`), and
-the three agents on the dashboard's Conductor page.
+the two agents on the dashboard's Conductor page.
 
 ## 4. Load the plan
 
@@ -151,7 +151,7 @@ without one can go to a worker in any of your repos.
 1. A1 goes to `sbx-claude` and A2 to `sbx-agy`, at the same time. A3 waits for both.
 2. Each opens a PR on a `cx/<key>-…` branch with a commit titled `<key>: <title>`. The lead merges it
    and approves the task.
-3. A3 goes to the IDE window, as the only agent with `design`.
+3. A3 goes to `sbx-claude`, the only agent with `design`, even when `sbx-agy` is free.
 4. P1 completes. G1 shows under "Needs you" on the dashboard. Nothing else moves until you approve it.
 5. B1 and B3 start. B2 waits until B1 lets go of `src/format.js`, then starts from the merged code.
    If `sbx-agy` is stopped or busy, B1 goes to `sbx-claude` instead.
@@ -167,7 +167,11 @@ fails. The worker still commits NOTES.md and opens a PR, then reports the run as
 is retried once on the same branch, then escalated to the lead, who sees it in "Needs you" and
 cancels it with `cortex_task_cancel` (or cancel it on the dashboard). Close the PR without merging.
 
-## 7. Run it again
+## 7. Stop it, run it again
+
+To stop a plan midway, the lead cancels its root group: `cortex_task_cancel` on SBX. Every
+unfinished task under it is cancelled, and the ones running are stopped. Close their PRs without
+merging.
 
 Keys are unique within a tree, not across trees, so the same plan can be loaded again as a new
 tree. Reset the code first:

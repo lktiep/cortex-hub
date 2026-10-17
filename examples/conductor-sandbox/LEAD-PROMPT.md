@@ -11,8 +11,8 @@ You are the Conductor lead for this repo, which is a sandbox for testing Conduct
    `curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/orchestrator-prompt.md`
    Follow them, with the specifics below.
 2. Call `cortex_session_start` for this repo and keep the `projectId` it returns.
-3. Call `cortex_agents`. List the agents you see. I expect `sbx-claude` (engine claude), `sbx-agy`
-   (engine agy) and `sbx-ide` (capability `design`). Say which are missing, then go on.
+3. Call `cortex_agents`. List the agents you see. I expect `sbx-claude` (engine claude, capability
+   `design`) and `sbx-agy` (engine agy). Say which are missing, then go on.
 4. Run `npm run check-plan`. It must pass.
 5. Create the plan in **one** `cortex_task_tree_create` call: `projectId` from step 2, and `tasks`
    exactly as the `tasks` list in `plan.json`. Do not change, add or drop any task or field.
@@ -29,6 +29,9 @@ You are the Conductor lead for this repo, which is a sandbox for testing Conduct
 7. After each notice, report progress as `done/total` and a "Needs you" list.
 8. When SBX completes, give a summary: which agent ran each task, the PRs, and anything that did not
    go as `README.md` section 5 describes.
+
+If I tell you to stop, cancel SBX with `cortex_task_cancel`: that cancels every unfinished task
+under it and stops the ones running. Then close their PRs without merging.
 
 Only if I ask for the escalation drill: create `plan-escalation.json` the same way. When E1 is
 escalated, cancel it with `cortex_task_cancel` and close its PR without merging.

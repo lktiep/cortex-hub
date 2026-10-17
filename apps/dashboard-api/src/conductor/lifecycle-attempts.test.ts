@@ -461,6 +461,47 @@ describe('cancel', () => {
     expect(cancelTask('missing', 'lead')).toMatchObject({ ok: false, status: 404 })
     expect([row('c').status, row('f').status]).toEqual(['completed', 'failed'])
   })
+
+  it('cancelling a group cancels every unfinished task under it, revokes the running ones and frees their workers', () => {
+    insertTask(testDb, { id: 'root', task_key: 'PLAN', kind: 'group', status: 'pending' })
+    insertTask(testDb, { id: 'done', status: 'completed', parent_task_id: 'root' })
+    insertTask(testDb, { id: 'phase', task_key: 'P2', kind: 'group', status: 'pending', parent_task_id: 'root' })
+    running('a', 'w1', { parent_task_id: 'phase' })
+    running('b', 'w2', { parent_task_id: 'root' })
+    insertTask(testDb, { id: 'c', status: 'blocked', depends_on: '["a"]', parent_task_id: 'phase' })
+    insertTask(testDb, { id: 'gate', kind: 'gate', status: 'blocked', parent_task_id: 'phase' })
+    insertTask(testDb, { id: 'r', status: 'review', assigned_to_agent: 'w3', parent_task_id: 'root' })
+    insertTask(testDb, { id: 'outside', status: 'blocked', depends_on: '["root"]' })
+    const ws1 = connect('w1')
+    const ws2 = connect('w2')
+    setStatus('w1', 'busy', NOW)
+    setStatus('w2', 'busy', NOW)
+
+    expect(cancelTask('root', 'lead')).toMatchObject({ ok: true, task: { status: 'cancelled' } })
+
+    for (const id of ['root', 'phase', 'a', 'b', 'c', 'gate', 'r']) expect([id, row(id).status]).toEqual([id, 'cancelled'])
+    expect(row('done').status).toBe('completed')
+    expect(row('outside').status).toBe('blocked')
+    expect(row('a').lease_expires_at).toBeNull()
+    expect(ws1.sent).toEqual([{ type: 'task.revoked', taskId: 'a', reason: 'cancelled' }])
+    expect(ws2.sent).toEqual([{ type: 'task.revoked', taskId: 'b', reason: 'cancelled' }])
+    expect([getByAgent('w1')?.status, getByAgent('w2')?.status]).toEqual(['idle', 'idle'])
+    expect(logs('a', 'cancelled')).toEqual([{ agent_id: 'lead', message: 'was in_progress; group PLAN cancelled' }])
+    expect(logs('root', 'cancelled')).toEqual([{ agent_id: 'lead', message: 'was pending' }])
+  })
+
+  it('cancelling a phase group leaves the rest of the plan alone', () => {
+    insertTask(testDb, { id: 'root', kind: 'group', status: 'pending' })
+    insertTask(testDb, { id: 'p1', kind: 'group', status: 'pending', parent_task_id: 'root' })
+    insertTask(testDb, { id: 'a', parent_task_id: 'p1' })
+    insertTask(testDb, { id: 'p2', kind: 'group', status: 'pending', parent_task_id: 'root' })
+    insertTask(testDb, { id: 'b', parent_task_id: 'p2' })
+
+    expect(cancelTask('p1', 'lead').ok).toBe(true)
+
+    expect([row('p1').status, row('a').status]).toEqual(['cancelled', 'cancelled'])
+    expect([row('root').status, row('p2').status, row('b').status]).toEqual(['pending', 'pending', 'pending'])
+  })
 })
 
 describe('attempt fence', () => {

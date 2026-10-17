@@ -166,7 +166,7 @@ export function registerConductorLeadTools(server: McpServer, env: Env): void {
 
   server.tool(
     'cortex_task_cancel',
-    'Cancel a task you give up on. Its dependents stay blocked until you reroute them.',
+    'Cancel a task you give up on. Its dependents stay blocked until you reroute them. Cancelling a group cancels every unfinished task under it and stops the ones running; to stop a whole plan, cancel its root group.',
     {
       taskId: z.string().describe('Task ID'),
       reason: z.string().optional(),

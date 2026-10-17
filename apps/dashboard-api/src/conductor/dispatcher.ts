@@ -19,6 +19,8 @@ export interface CandidateTask {
   id: string; projectId: string | null; priority: number; createdAt: string
   dependsOn: string[]; requiredCapabilities: string[]; files: string[]
   routes: RouteSpec[]; pinnedAgent: string | null; declined: string[]; lastAgent: string | null
+  /** Created as part of a plan (it has a `task_key`): only a protocol-2 worker takes it. */
+  inPlan: boolean
 }
 export interface CandidateWorker {
   agentId: string; host: string; projectId: string | null; protocol: 1 | 2
@@ -96,8 +98,15 @@ function fitsRoute(worker: CandidateWorker, route: RouteSpec): boolean {
   return fittingEngines(worker, route).length > 0
 }
 
+/**
+ * A plan's tasks are pushed only to protocol-2 workers (conductor-worker). A
+ * protocol-1 client (an IDE window, or the old cortex-agent scripts) cannot
+ * tell reliably when its agent has finished, so it is pushed loose tasks only;
+ * it can still claim a plan task in pull mode.
+ */
 function staticallyEligible(task: CandidateTask, route: RouteSpec, worker: CandidateWorker): boolean {
-  return servesProject(worker, task)
+  return (worker.protocol === 2 || !task.inPlan)
+    && servesProject(worker, task)
     && !task.declined.includes(worker.agentId)
     && (task.pinnedAgent === null || task.pinnedAgent === worker.agentId)
     && task.requiredCapabilities.every((c) => worker.capabilities.includes(c))
@@ -297,6 +306,7 @@ function toCandidate(row: TaskRow, defaultFallback: RouteSpec[]): CandidateTask 
     dependsOn: stringList(row.depends_on), requiredCapabilities: stringList(row.required_capabilities),
     files: stringList(row.files), routes: routesOf(row, defaultFallback),
     pinnedAgent: row.pinned_agent || null, declined: declinedBy(row), lastAgent: row.last_agent,
+    inPlan: row.task_key !== null,
   }
 }
 

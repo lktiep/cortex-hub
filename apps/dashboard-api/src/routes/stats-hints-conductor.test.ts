@@ -84,6 +84,19 @@ describe('GET /hints/:agentId conductor notifications', () => {
     expect(row.delivered_at).toBeNull()
   })
 
+  it('does not ask for a session the agent started more than two hours ago', async () => {
+    testDb
+      .prepare(`INSERT INTO query_logs (agent_id, tool, created_at) VALUES ('lead-key', 'cortex_session_start', '2020-01-01T00:00:00Z')`)
+      .run()
+    const body = await getHints('lead-key', 'cortex_task_status')
+    expect(body.hints.join('\n')).not.toContain('cortex_session_start first')
+  })
+
+  it('does not ask for a session on the session_start call itself, before its log lands', async () => {
+    const body = await getHints('lead-key', 'cortex_session_start')
+    expect(body.hints.join('\n')).not.toContain('cortex_session_start first')
+  })
+
   it('does not consume notices when the hint queries fail', async () => {
     seedNotice('lead-key', 'TT1 ready')
     testDb.exec('DROP TABLE query_logs')

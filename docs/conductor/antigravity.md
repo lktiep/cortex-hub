@@ -91,6 +91,11 @@ Open **Cortex: Open Agent Panel** and click the pencil next to the agent name. Y
 
 Click **Save**. The change applies to this window only, and the extension reconnects with it.
 
+A window is pushed loose tasks (`cortex_task_create`) only. A plan's tasks
+(`cortex_task_tree_create`) go to conductor-worker, which knows when its run has finished; a
+window cannot always tell. It can still claim one with `cortex_task_pickup`, if the task is pinned
+to it or asks for no engine and no capability.
+
 - **Where it is kept.** The name and capabilities go in the workspace state. The key goes in the
   OS keychain (Keychain on macOS, Credential Manager on Windows), through the editor's
   SecretStorage. Nothing is written to `settings.json`.
