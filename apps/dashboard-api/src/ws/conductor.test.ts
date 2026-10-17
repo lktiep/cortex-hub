@@ -526,6 +526,34 @@ describe('legacy workers', () => {
     expect(getAllConnectedAgents()).toEqual([expect.objectContaining({ agentId: 'ext', projectId: 'p1' })])
   })
 
+  it('request.data shows a project-scoped key only its own project, an unscoped key every project', async () => {
+    addKey('sk_p1', 'p1')
+    insertTask(testDb, { id: 't-p1', status: 'completed', project_id: 'p1' })
+    insertTask(testDb, { id: 't-p2', status: 'completed', project_id: 'p2' })
+    insertTask(testDb, { id: 't-none', status: 'completed' })
+    const handoff = testDb.prepare("INSERT INTO session_handoffs (id, from_agent, project, task_summary, context, project_id) VALUES (?, 'a', 'r', 's', '{}', ?)")
+    for (const [id, project] of [['s-p1', 'p1'], ['s-p2', 'p2'], ['s-none', null]]) handoff.run(id, project)
+    const report = testDb.prepare("INSERT INTO quality_reports (id, project_id, agent_id, gate_name, score_total) VALUES (?, ?, 'a', 'g', ?)")
+    for (const [id, project, score] of [['q-p1', 'p1', 80], ['q-p2', 'p2', 20], ['q-none', null, 50]]) report.run(id, project, score)
+    const ids = (rows: unknown): string[] => (rows as { id: string }[]).map((r) => r.id).sort()
+
+    // the tasks dispatch could give it (its project and project-less ones); its project's sessions and reports
+    const scoped = await connectLegacy('scoped', 'h-s', { apiKey: 'sk_p1' })
+    send(scoped, { type: 'request.data' })
+    const own = await next(scoped, 'data.response')
+    expect(ids(own.tasks)).toEqual(['t-none', 't-p1'])
+    expect(own.taskStats).toMatchObject({ total: 2, completed: 2 })
+    expect(ids(own.sessions)).toEqual(['s-p1'])
+    expect(own.quality).toEqual({ total: 1, avgScore: 80 })
+
+    const unscoped = await connectLegacy('unscoped', 'h-u')
+    send(unscoped, { type: 'request.data' })
+    const all = await next(unscoped, 'data.response')
+    expect(ids(all.tasks)).toEqual(['t-none', 't-p1', 't-p2'])
+    expect(ids(all.sessions)).toEqual(['s-none', 's-p1', 's-p2'])
+    expect(all.quality).toEqual({ total: 3, avgScore: 50 })
+  })
+
   it('a legacy client that reconnects is sent its never-accepted task again, not an accepted one', async () => {
     const lease = isoSeconds(Date.now() + 3600_000)
     insertTask(testDb, { id: 'sent', title: 'Sent', description: 'once', status: 'assigned', assigned_to_agent: 'ext', attempt: 1, lease_expires_at: lease })

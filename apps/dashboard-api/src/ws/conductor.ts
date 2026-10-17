@@ -543,18 +543,21 @@ function handleMessage(agent: WorkerConn, msg: Record<string, unknown>) {
     }
 
     case 'request.data': {
-      // Extension requests project data via WS (no HTTP needed)
+      // Extension requests project data via WS (no HTTP needed). A key scoped to a project sees
+      // the tasks dispatch could give it (its project's and project-less ones) and only its
+      // project's sessions and quality reports; a key scoped to no project sees every project.
+      const scope = agent.apiKeyProjectId
       const tasks = db.prepare(
-        'SELECT * FROM conductor_tasks ORDER BY created_at DESC LIMIT 30'
-      ).all() as Record<string, unknown>[]
+        'SELECT * FROM conductor_tasks WHERE (? IS NULL OR project_id IS NULL OR project_id = ?) ORDER BY created_at DESC LIMIT 30'
+      ).all(scope, scope) as Record<string, unknown>[]
 
       const sessions = db.prepare(
-        'SELECT * FROM session_handoffs ORDER BY created_at DESC LIMIT 10'
-      ).all() as Record<string, unknown>[]
+        'SELECT * FROM session_handoffs WHERE (? IS NULL OR project_id = ?) ORDER BY created_at DESC LIMIT 10'
+      ).all(scope, scope) as Record<string, unknown>[]
 
       const qualitySummary = db.prepare(
-        "SELECT COUNT(*) as total, AVG(score_total) as avgScore FROM quality_reports WHERE created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')"
-      ).get() as { total: number; avgScore: number | null } | undefined
+        "SELECT COUNT(*) as total, AVG(score_total) as avgScore FROM quality_reports WHERE (? IS NULL OR project_id = ?) AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')"
+      ).get(scope, scope) as { total: number; avgScore: number | null } | undefined
 
       const taskStats = {
         total: tasks.length,
