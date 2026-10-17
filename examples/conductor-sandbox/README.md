@@ -153,12 +153,18 @@ without one can go to a worker in any of your repos.
    and approves the task.
 3. A3 goes to `sbx-claude`, the only agent with `design`, even when `sbx-agy` is free.
 4. P1 completes. G1 shows under "Needs you" on the dashboard. Nothing else moves until you approve it.
-5. B1 and B3 start. B2 waits until B1 lets go of `src/format.js`, then starts from the merged code.
-   If `sbx-agy` is stopped or busy, B1 goes to `sbx-claude` instead.
+5. B1, B2 and B3 become ready together. B1 and B2 both change `src/format.js`, so they run one at a
+   time: whichever is dispatched first holds the file, and the other waits until it is done, then
+   starts from the merged code. Either order is right. B1 runs on `sbx-agy` when it can. If
+   `sbx-agy` is stopped, or agy fails B1, B1 moves to `sbx-claude`, its fallback.
 6. B3 finds nothing to correct and completes with no PR.
 7. The lead pulls, runs `npm test` and approves G2. SBX completes.
 
 After a full run, `npm test` on `main` reports at least 12 passing tests.
+
+`sbx-agy` runs agy in `accept-edits` mode: agy edits files but runs no commands, and the worker
+runs `node --test` itself. A task that fails with `agy stopped early: …` names the permission agy
+was refused; see [What agy may do on its own](../../docs/conductor/antigravity.md#what-agy-may-do-on-its-own).
 
 ## 6. Escalation drill
 

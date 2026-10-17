@@ -111,16 +111,27 @@ describe('agy classify', () => {
 
 describe('agy buildArgs', () => {
   const i = { prompt: 'do it', model: 'gemini-4-argon-low', effort: 'high' };
-  it('uses --mode auto on darwin/linux and accept-edits on win32', () => {
+  it('uses --mode accept-edits on every platform', () => {
     const a = createAgyAdapter({ bin: 'agy', env: {} });
-    for (const p of ['darwin', 'linux'] as const) {
+    for (const p of ['darwin', 'linux', 'win32'] as const) {
       expect(a.buildArgs(i, p).args).toEqual([
-        '-p', 'do it', '--output-format', 'stream-json', '--mode', 'auto',
+        '-p', 'do it', '--output-format', 'stream-json', '--mode', 'accept-edits',
         '--model', 'gemini-4-argon-low', '--effort', 'high',
       ]);
     }
-    const w = a.buildArgs(i, 'win32').args;
-    expect(w[w.indexOf('--mode') + 1]).toBe('accept-edits');
+  });
+
+  it('skips permissions only when asked: CORTEX_AGY_SKIP_PERMISSIONS=1, or the option', () => {
+    const flag = '--dangerously-skip-permissions';
+    expect(createAgyAdapter({ bin: 'agy', env: {} }).buildArgs(i, 'linux').args).not.toContain(flag);
+    for (const v of ['0', 'true', '']) {
+      const a = createAgyAdapter({ bin: 'agy', env: { CORTEX_AGY_SKIP_PERMISSIONS: v } });
+      expect(a.buildArgs(i, 'linux').args).not.toContain(flag);
+    }
+    const e = createAgyAdapter({ bin: 'agy', env: { CORTEX_AGY_SKIP_PERMISSIONS: '1' } });
+    expect(e.buildArgs(i, 'win32').args).toContain(flag);
+    const o = createAgyAdapter({ bin: 'agy', skipPermissions: false, env: { CORTEX_AGY_SKIP_PERMISSIONS: '1' } });
+    expect(o.buildArgs(i, 'linux').args).not.toContain(flag);
   });
 
   it('omits --model/--effort when null', () => {
@@ -141,6 +152,42 @@ describe('agy buildArgs', () => {
     const a = createAgyAdapter({ bin: 'agy', printTimeout: '30m', env: {} });
     const args = a.buildArgs(i, 'linux').args;
     expect(args.slice(-2)).toEqual(['--print-timeout', '30m']);
+  });
+});
+
+describe('agy permission refusals', () => {
+  it('refuses commands unless it runs in auto mode or skips permissions', () => {
+    expect(createAgyAdapter({ bin: 'agy', env: {} }).refusesCommands?.()).toBe(true);
+    expect(createAgyAdapter({ bin: 'agy', env: { CORTEX_AGY_MODE: 'auto' } }).refusesCommands?.()).toBe(false);
+    expect(createAgyAdapter({ bin: 'agy', env: { CORTEX_AGY_SKIP_PERMISSIONS: '1' } }).refusesCommands?.()).toBe(
+      false,
+    );
+  });
+
+  it('a refused run still exits SUCCESS, so classify stays ok and stoppedEarly says why', () => {
+    const out = fx('denied.stream.jsonl');
+    expect(agy.classify(0, out, fx('denied.stderr.txt'))).toEqual({ kind: 'ok' });
+    const why = agy.stoppedEarly?.(out, fx('denied.stderr.txt')) ?? '';
+    expect(why).toContain('agy stopped early');
+    // display names, each once, and the action when there is no display name
+    expect(why).toContain('refused RunCommand, write_file,');
+    expect(why).toContain('no auto mode');
+    expect(why).toContain('CORTEX_AGY_MODE=accept-edits');
+    expect(why).toContain('permissions.allow');
+    expect(why).toContain('CORTEX_AGY_SKIP_PERMISSIONS=1');
+  });
+
+  it('leaves out the auto-mode hint when the account has auto mode', () => {
+    const why = agy.stoppedEarly?.(fx('denied.stream.jsonl'), '') ?? '';
+    expect(why).toContain('agy stopped early');
+    expect(why).not.toContain('no auto mode');
+  });
+
+  it('a run with nothing refused did not stop early', () => {
+    expect(agy.stoppedEarly?.(fx('success.jsonl'), '')).toBeNull();
+    expect(agy.stoppedEarly?.('{"event":"result","result":{"status":"SUCCESS","denied_actions":[]}}', '')).toBeNull();
+    expect(agy.stoppedEarly?.('{"event":"result","result":{"status":"SUCCESS","denied_actions":"x"}}', '')).toBeNull();
+    expect(agy.stoppedEarly?.('', '')).toBeNull();
   });
 });
 

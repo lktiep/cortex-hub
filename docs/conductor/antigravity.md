@@ -185,7 +185,29 @@ Ubuntu takes the same command. Install Node.js 20 or newer first.
 $env:CORTEX_API_KEY="<worker-api-key>"; iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/run-agent.ps1 -OutFile $env:TEMP\run-agent.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\run-agent.ps1 start --daemon --hub https://<your-mcp-host> --engines agy --agent-id <host>-agy
 ```
 
-On Windows, agy runs with `--mode accept-edits`, because agy on Windows has no `auto` mode.
+### What agy may do on its own
+
+agy runs headless under the worker, so it cannot ask you for a permission. A tool call it would
+have to ask about is refused, and **a refusal ends the run on the spot**, with or without edits.
+
+- **Default: `--mode accept-edits`, on every platform.** File edits are allowed; shell commands
+  are not. The worker's prompt tells agy to read, search and edit with its file tools only, and
+  not to run the tests: the worker runs them after agy finishes.
+- **When a run is cut short anyway**, the task fails with
+  `engine made no changes: agy stopped early: it was refused <permission>…`, and the result
+  says what to change. The task then goes to its fallback engine, if it has one.
+- **`CORTEX_AGY_MODE=auto`** lets agy decide which commands to run. Windows has no auto mode, and
+  not every account has it: agy then prints `--mode auto is not available for this account` and
+  runs in its default mode, which refuses file edits too. Leave it unset unless `agy -p` in auto
+  mode works on that machine.
+- **Allow-rules.** To let agy run a few commands, list them under `permissions.allow` in agy's
+  `settings.json`. agy's refusal message shows the form, for example `command(ls)`.
+- **`CORTEX_AGY_SKIP_PERMISSIONS=1`** starts agy with `--dangerously-skip-permissions`: every tool
+  call is allowed, any command included, and nothing is asked. It is off by default. Use it only
+  on a machine where you would let agy run anything, such as a throwaway VM.
+
+Set these in the shell that starts the worker, for example `$env:CORTEX_AGY_MODE="accept-edits"`
+in PowerShell before the bootstrap line. Restart the worker after changing them.
 
 ### Which key does what
 

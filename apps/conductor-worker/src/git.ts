@@ -95,6 +95,42 @@ export function createGitRunner(o: { bin?: string; ceilingMs?: number } = {}): G
 
 export const git: GitRun = createGitRunner();
 
+/** Another git process holds one of the clone's locks: two workers sharing one clone. */
+const LOCK_CONTENTION =
+  /cannot lock ref|could not lock config file|Unable to create '[^']*\.lock'|unable to update local ref|is at [0-9a-f]+ but expected|Another git process seems to be running/i;
+/** Pauses before each retry: six attempts over about 8 s. */
+const LOCK_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 4000];
+
+export function isLockContention(r: RunResult): boolean {
+  return r.code !== 0 && LOCK_CONTENTION.test(`${r.stderr}\n${r.stdout}`);
+}
+
+/**
+ * Runs `attempt` again after a pause while it fails on a lock another git process holds, as
+ * when two workers share one clone and one fetches while the other adds a worktree.
+ * `beforeRetry` undoes what a failed attempt left behind. Any other failure returns at once.
+ */
+export async function retryOnLock(
+  attempt: () => Promise<RunResult>,
+  o: {
+    beforeRetry?: () => Promise<void>;
+    delaysMs?: readonly number[];
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<RunResult> {
+  const delays = o.delaysMs ?? LOCK_RETRY_DELAYS_MS;
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let r = await attempt();
+  for (const delay of delays) {
+    if (!isLockContention(r)) return r;
+    // jitter, so two waiting workers do not retry in step
+    await sleep(Math.round(delay * (0.75 + Math.random() / 2)));
+    await o.beforeRetry?.();
+    r = await attempt();
+  }
+  return r;
+}
+
 export function createGh(bin: string = process.env.CORTEX_GH_BIN ?? 'gh'): GhRun {
   return (args, opts) =>
     runChild(resolveCommand(bin) ?? bin, { GH_PROMPT_DISABLED: '1' }, args, opts, CEILING_MS);
@@ -270,7 +306,7 @@ export async function prepareWorktree(
   branch: string,
   baseBranch: string,
 ): Promise<{ from: 'branch' | 'base' | 'existing' }> {
-  const fetch = await git(['fetch', 'origin', '--prune'], { cwd: repo });
+  const fetch = await retryOnLock(() => git(['fetch', 'origin', '--prune'], { cwd: repo }));
   if (fetch.code !== 0) throw new Error(`git fetch failed: ${tail(fetch)}`);
 
   // no `git worktree prune`: it would also drop the user's own registrations of missing paths
@@ -311,7 +347,17 @@ export async function prepareWorktree(
   mkdirSync(path.dirname(dir), { recursive: true });
 
   const start = `origin/${from === 'branch' ? branch : baseBranch}`;
-  const add = await git(['worktree', 'add', '-B', branch, dir, start], { cwd: repo });
+  // --no-track: tracking would be written to the clone's shared .git/config, which another
+  // worker in the same clone may hold locked; the worker pushes and compares by name anyway
+  const addArgs = ['worktree', 'add', '--no-track', '-B', branch, dir, start];
+  const add = await retryOnLock(() => git(addArgs, { cwd: repo }), {
+    beforeRetry: async () => {
+      // a failed add can leave its registration and directory behind; the next add refuses both
+      const left = (await listWorktrees(repo)).some((e) => canonical(e.path) === here);
+      if (left) await git(['worktree', 'remove', '--force', dir], { cwd: repo });
+      if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    },
+  });
   if (add.code !== 0) {
     const used = parseBranchInUse(add.stderr);
     if (used !== null) throw new BranchInUseError(branch, used);
@@ -321,7 +367,7 @@ export async function prepareWorktree(
 }
 
 export async function removeWorktree(repo: string, dir: string): Promise<void> {
-  const r = await git(['worktree', 'remove', '--force', dir], { cwd: repo });
+  const r = await retryOnLock(() => git(['worktree', 'remove', '--force', dir], { cwd: repo }));
   if (r.code !== 0) throw new Error(`git worktree remove failed: ${tail(r)}`);
 }
 
@@ -355,8 +401,9 @@ export async function commitAll(
   return head.stdout.trim();
 }
 
+/** No `-u`: setting the upstream writes the clone's shared .git/config (see prepareWorktree). */
 export async function pushBranch(dir: string, branch: string): Promise<void> {
-  const r = await git(['push', '-u', 'origin', branch], { cwd: dir });
+  const r = await retryOnLock(() => git(['push', 'origin', branch], { cwd: dir }));
   if (r.code !== 0) throw new Error(`git push failed: ${tail(r)}`);
 }
 

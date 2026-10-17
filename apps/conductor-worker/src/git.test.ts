@@ -10,16 +10,18 @@ import {
   createGh,
   createGitRunner,
   git,
+  isLockContention,
   openPullRequest,
   originUrl,
   parseBranchInUse,
   prepareWorktree,
   pushBranch,
   removeWorktree,
+  retryOnLock,
   sanitizeRemoteUrl,
   scrubCredentials,
 } from './git.js';
-import type { GhRun } from './git.js';
+import type { GhRun, RunResult } from './git.js';
 import {
   FIXTURE_GIT_IDENTITY,
   createGitFixture,
@@ -217,6 +219,35 @@ describe('prepareWorktree', () => {
     );
   });
 
+  it("writes no tracking to the clone's config, so a worker sharing the clone cannot collide on it", async () => {
+    pushFromElsewhere('task/t2', 't2.txt');
+    // another worker in the same clone holding .git/config
+    writeFileSync(path.join(fx.repo, '.git', 'config.lock'), '');
+    await prepareWorktree(fx.repo, wt('t1'), 'task/t1', 'main');
+    await prepareWorktree(fx.repo, wt('t2'), 'task/t2', 'main');
+    rmSync(path.join(fx.repo, '.git', 'config.lock'));
+    for (const b of ['task/t1', 'task/t2']) {
+      expect((await git(['config', '--get', `branch.${b}.merge`], { cwd: fx.repo })).code).toBe(1);
+    }
+  });
+
+  it('waits out a ref lock held by another git process in the same clone', async () => {
+    const sha = pushFromElsewhere('main', 'moved.txt');
+    // a fetch by the other worker holds origin/main for a moment
+    const lock = path.join(fx.repo, '.git', 'refs', 'remotes', 'origin', 'main.lock');
+    mkdirSync(path.dirname(lock), { recursive: true });
+    writeFileSync(lock, '');
+    const release = setTimeout(() => rmSync(lock, { force: true }), 300);
+    try {
+      const dir = wt('locked');
+      await prepareWorktree(fx.repo, dir, 'task/locked', 'main');
+      expect(fx.run(dir, ['rev-parse', 'HEAD'])).toBe(sha);
+    } finally {
+      clearTimeout(release);
+      rmSync(lock, { force: true });
+    }
+  });
+
   it('throws with the stderr tail when fetch fails', async () => {
     fx.run(fx.repo, ['remote', 'set-url', 'origin', path.join(fx.root, 'missing.git')]);
     await expect(prepareWorktree(fx.repo, wt('f'), 'task/f', 'main')).rejects.toThrow(/fetch/i);
@@ -349,13 +380,14 @@ describe('pushBranch', () => {
     expect(fx.run(fx.origin, ['rev-parse', 'task/p'])).toBe(theirs);
   });
 
-  it('pushes a new branch and sets upstream', async () => {
+  it('pushes a new branch without writing an upstream to the shared config', async () => {
     const dir = wt('q');
     await prepareWorktree(fx.repo, dir, 'task/q', 'main');
     writeFileSync(path.join(dir, 'q.txt'), 'q');
     const sha = await commitAll(dir, 'q', { name: 'W', email: 'w@example.invalid' });
     await pushBranch(dir, 'task/q');
     expect(fx.run(fx.origin, ['rev-parse', 'task/q'])).toBe(sha);
+    expect((await git(['config', '--get', 'branch.task/q.remote'], { cwd: fx.repo })).code).toBe(1);
   });
 });
 
@@ -450,6 +482,60 @@ describe('removeWorktree', () => {
     await removeWorktree(fx.repo, dir);
     expect(existsSync(dir)).toBe(false);
     expect(fx.run(fx.repo, ['branch', '--list', 'task/r'])).toContain('task/r');
+  });
+});
+
+describe('retryOnLock', () => {
+  const locked = (stderr: string): RunResult => ({ code: 128, stdout: '', stderr });
+  const ok: RunResult = { code: 0, stdout: 'done', stderr: '' };
+  const noSleep = async (): Promise<void> => undefined;
+
+  it.each([
+    "error: cannot lock ref 'refs/remotes/origin/main': is at 1a2b but expected 3c4d",
+    'error: could not lock config file .git/config: File exists',
+    "fatal: Unable to create '/r/.git/refs/heads/x.lock': File exists.",
+    'Another git process seems to be running in this repository',
+  ])('recognises lock contention: %s', (stderr) => {
+    expect(isLockContention(locked(stderr))).toBe(true);
+  });
+
+  it('runs again after a lock failure, cleaning up first, and returns the success', async () => {
+    const results = [locked('error: could not lock config file .git/config: File exists'), ok];
+    const calls: string[] = [];
+    const r = await retryOnLock(
+      async () => {
+        calls.push('attempt');
+        return results.shift()!;
+      },
+      { beforeRetry: async () => void calls.push('cleanup'), sleep: noSleep },
+    );
+    expect(r).toBe(ok);
+    expect(calls).toEqual(['attempt', 'cleanup', 'attempt']);
+  });
+
+  it('returns any other failure at once', async () => {
+    let n = 0;
+    const failed: RunResult = { code: 128, stdout: '', stderr: 'fatal: invalid reference: origin/nope' };
+    const r = await retryOnLock(async () => (n++, failed), { sleep: noSleep });
+    expect(r).toBe(failed);
+    expect(n).toBe(1);
+  });
+
+  it('gives up after the last pause and returns the lock failure', async () => {
+    let n = 0;
+    const slept: number[] = [];
+    const busy = locked('Another git process seems to be running in this repository');
+    const r = await retryOnLock(async () => (n++, busy), {
+      delaysMs: [100, 200],
+      sleep: async (ms) => void slept.push(ms),
+    });
+    expect(r).toBe(busy);
+    expect(n).toBe(3);
+    // jittered by at most a quarter either way
+    expect(slept[0]).toBeGreaterThanOrEqual(75);
+    expect(slept[0]).toBeLessThanOrEqual(125);
+    expect(slept[1]).toBeGreaterThanOrEqual(150);
+    expect(slept[1]).toBeLessThanOrEqual(250);
   });
 });
 

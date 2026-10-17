@@ -16,6 +16,8 @@ interface AgyResult {
   status?: unknown;
   response?: unknown;
   error?: unknown;
+  /** Permissions headless agy refused, `{ action, display_name }`; a refusal ends the run. */
+  denied_actions?: unknown;
 }
 
 function parseJson(text: string): unknown {
@@ -59,6 +61,18 @@ function findAgyError(stderr: string): Record<string, unknown> | undefined {
   return undefined;
 }
 
+/** The refused permissions, by display name, without repeats. */
+function deniedActions(result: AgyResult | undefined): string[] {
+  if (!Array.isArray(result?.denied_actions)) return [];
+  const names: string[] = [];
+  for (const d of result.denied_actions) {
+    if (!isRecord(d)) continue;
+    const name = typeof d.display_name === 'string' && d.display_name !== '' ? d.display_name : d.action;
+    if (typeof name === 'string' && name !== '' && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
 function firstLine(text: string): string {
   return text.split('\n').find((l) => l.trim() !== '')?.trim() ?? '';
 }
@@ -77,6 +91,8 @@ export function createAgyAdapter(
     bin?: string;
     mode?: string;
     printTimeout?: string;
+    /** `--dangerously-skip-permissions`; CORTEX_AGY_SKIP_PERMISSIONS=1 when unset. Opt-in only. */
+    skipPermissions?: boolean;
     platform?: NodeJS.Platform;
     env?: NodeJS.ProcessEnv;
   } = {},
@@ -85,11 +101,14 @@ export function createAgyAdapter(
   const env = opts.env ?? process.env;
   const resolveBin = (): string | null =>
     opts.bin ?? (env.CORTEX_AGY_BIN || null) ?? resolveCommand('agy', platform, env);
+  // accept-edits on every platform: Windows has no auto mode, and an account without it falls
+  // back to the default mode, where headless agy is refused even its file edits
+  const mode = (): string => opts.mode ?? (env.CORTEX_AGY_MODE || undefined) ?? 'accept-edits';
+  const skipPermissions = (): boolean => opts.skipPermissions ?? env.CORTEX_AGY_SKIP_PERMISSIONS === '1';
 
-  const buildArgs: EngineAdapter['buildArgs'] = (i, targetPlatform) => {
-    const mode =
-      opts.mode ?? (env.CORTEX_AGY_MODE || undefined) ?? (targetPlatform === 'win32' ? 'accept-edits' : 'auto');
-    const args = ['-p', i.prompt, '--output-format', 'stream-json', '--mode', mode];
+  const buildArgs: EngineAdapter['buildArgs'] = (i) => {
+    const args = ['-p', i.prompt, '--output-format', 'stream-json', '--mode', mode()];
+    if (skipPermissions()) args.push('--dangerously-skip-permissions');
     if (i.model !== null) args.push('--model', i.model);
     if (i.effort !== null) args.push('--effort', i.effort);
     if (opts.printTimeout) args.push('--print-timeout', opts.printTimeout);
@@ -195,6 +214,24 @@ export function createAgyAdapter(
     summary(stdout) {
       const response = findResult(stdout)?.response;
       return typeof response === 'string' ? response.slice(0, SUMMARY_MAX) : '';
+    },
+
+    // headless agy cannot ask, so a command outside its allow-list is refused and ends the run;
+    // only auto mode (not on Windows, not on every account) or skipping permissions lets it run one
+    refusesCommands() {
+      return mode() !== 'auto' && !skipPermissions();
+    },
+
+    stoppedEarly(stdout, stderr) {
+      const denied = deniedActions(findResult(stdout));
+      if (denied.length === 0) return null;
+      const noAuto = /--mode auto is not available/i.test(stderr)
+        ? ' This account has no auto mode, so agy ran in its default mode, which refuses edits too: set CORTEX_AGY_MODE=accept-edits.'
+        : '';
+      return (
+        `agy stopped early: it was refused ${denied.join(', ')}, which headless agy cannot ask for, and that ended its run.${noAuto} ` +
+        "Allow what it needs under permissions.allow in agy's settings.json, or start the worker with CORTEX_AGY_SKIP_PERMISSIONS=1."
+      );
     },
   };
 }

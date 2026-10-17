@@ -12,7 +12,8 @@ import { assignedMsg, branchFor } from './messages.js'
 import { formatNotification, notifyLead } from './notify.js'
 import { listConnections, sendTo } from './registry.js'
 import {
-  ACTIVE_STATUSES, LOCKING_STATUSES, getTask, isoSeconds, logTask, parseJson, stringList, taskContext, type TaskRow,
+  ACTIVE_STATUSES, LOCKING_STATUSES, failedRoutesOf, getTask, isoSeconds, logTask, parseJson, routeKey, stringList,
+  taskContext, type TaskRow,
 } from './rows.js'
 
 export interface CandidateTask {
@@ -21,6 +22,8 @@ export interface CandidateTask {
   routes: RouteSpec[]; pinnedAgent: string | null; declined: string[]; lastAgent: string | null
   /** Created as part of a plan (it has a `task_key`): only a protocol-2 worker takes it. */
   inPlan: boolean
+  /** `routeKey`s of routes whose attempt failed, oldest first (`context.failedRoutes`). */
+  failedRoutes?: string[]
 }
 export interface CandidateWorker {
   agentId: string; host: string; projectId: string | null; protocol: 1 | 2
@@ -41,12 +44,25 @@ export function routeChain(primary: RouteSpec, fallback: RouteSpec[] | null, def
   const seen = new Set<string>()
   const chain: RouteSpec[] = []
   for (const route of [primary, ...(fallback ?? defaultFallback)]) {
-    const key = JSON.stringify([route.executor, route.model, route.effort])
+    const key = routeKey(route)
     if (seen.has(key)) continue
     seen.add(key)
     chain.push(route)
   }
   return chain
+}
+
+/**
+ * The routes in the order they are tried: those that have not failed, in chain order, then the
+ * failed ones, the longest ago first. A key no longer in the chain is ignored.
+ */
+export function routeOrder(routes: RouteSpec[], failedRoutes: string[]): { route: RouteSpec; failed: boolean }[] {
+  const fresh = routes.filter((r) => !failedRoutes.includes(routeKey(r))).map((route) => ({ route, failed: false }))
+  const failed = failedRoutes
+    .map((key) => routes.find((r) => routeKey(r) === key))
+    .filter((r): r is RouteSpec => r !== undefined)
+    .map((route) => ({ route, failed: true }))
+  return [...fresh, ...failed]
 }
 
 /** A quota row's model matches exactly, by prefix (`foo-*`), or as `*`. */
@@ -172,8 +188,11 @@ export function selectAssignments(input: SelectionInput): { assign: Assignment[]
     let onlyQuota = true
     let earliestReset: string | null = null
     let chosen: Assignment | null = null
+    /** A route that has not failed could run here, only not now: wait for it, not for a failed one. */
+    let freshRunnable = false
 
-    for (const route of task.routes) {
+    for (const { route, failed } of routeOrder(task.routes, task.failedRoutes ?? [])) {
+      if (failed && freshRunnable) break
       const available: CandidateWorker[] = []
       for (const worker of input.workers) {
         if (!staticallyEligible(task, route, worker)) continue
@@ -186,6 +205,7 @@ export function selectAssignments(input: SelectionInput): { assign: Assignment[]
           continue
         }
         onlyQuota = false
+        if (!failed) freshRunnable = true
         if (!worker.busy && !used.has(worker.agentId)) available.push(worker)
       }
       const picked = preferredWorker(available, task.lastAgent)
@@ -306,7 +326,7 @@ function toCandidate(row: TaskRow, defaultFallback: RouteSpec[]): CandidateTask 
     dependsOn: stringList(row.depends_on), requiredCapabilities: stringList(row.required_capabilities),
     files: stringList(row.files), routes: routesOf(row, defaultFallback),
     pinnedAgent: row.pinned_agent || null, declined: declinedBy(row), lastAgent: row.last_agent,
-    inPlan: row.task_key !== null,
+    inPlan: row.task_key !== null, failedRoutes: failedRoutesOf(row),
   }
 }
 
@@ -471,7 +491,7 @@ export function pickForPull(
         UPDATE conductor_tasks
         SET status = 'accepted', assigned_to_agent = ?, assigned_at = ?, accepted_at = ?, attempt = attempt + 1,
             lease_expires_at = ?, last_agent = ?, context = ?, branch = COALESCE(NULLIF(branch, ''), ?),
-            wait_reason = NULL, wait_until = NULL
+            wait_reason = NULL, wait_until = NULL, current_route = NULL
         WHERE id = ? AND status = 'pending'
       `).run(assignee, nowIso, nowIso, leaseUntil(now, cfg), assignee,
         JSON.stringify({ ...taskContext(row), pull: true }), branchFor(row, cfg.branchTemplate), row.id).changes

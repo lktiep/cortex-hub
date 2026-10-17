@@ -80,6 +80,8 @@ function fakeEngine(
     summary?: string;
     defaultModel?: string | null;
     promptLength?: (prompt: string) => number;
+    refusesCommands?: boolean;
+    stoppedEarly?: string;
   } = {},
 ): FakeEngine {
   const inputs: RunInput[] = [];
@@ -106,6 +108,8 @@ function fakeEngine(
     progressText: (line) => (line.startsWith('#') ? null : `p:${line}`),
     summary: () => o.summary ?? 'Wrote engine.txt.',
     ...(o.promptLength !== undefined ? { promptLength: o.promptLength } : {}),
+    ...(o.refusesCommands !== undefined ? { refusesCommands: () => o.refusesCommands === true } : {}),
+    ...(o.stoppedEarly !== undefined ? { stoppedEarly: () => o.stoppedEarly ?? null } : {}),
   };
   return { adapter, inputs, classified };
 }
@@ -320,6 +324,42 @@ describe('runTask', () => {
     });
     expect(remoteHas(BRANCH)).toBe(false);
     expect(h.ghCalls).toEqual([]);
+  });
+
+  it('says why the engine made no changes when its run was cut short, even where empty is allowed', async () => {
+    const early = 'agy stopped early: it was refused RunCommand.';
+    const engine = fakeEngine({ run: () => ({ exitCode: 0, stdout: '' }), summary: '', stoppedEarly: early });
+    const h = harness(engine.adapter);
+    const out = await run(makeTask({ context: { allowEmpty: true } }), h);
+
+    const msg = msgOf(out);
+    expect(out.kind).toBe('failed');
+    expect(msg.result.error).toBe(`engine made no changes: ${early}`);
+    expect(msg.result.summary).toBe(early);
+    expect(h.logs.some((l) => l.includes(early))).toBe(true);
+  });
+
+  it('keeps work an engine left before it was cut short, and notes the stop in the summary', async () => {
+    const early = 'agy stopped early: it was refused RunCommand.';
+    const h = harness(fakeEngine({ stoppedEarly: early }).adapter);
+    const out = await run(makeTask(), h);
+
+    expect(out.kind).toBe('completed');
+    expect(msgOf(out).result.summary).toBe(`Wrote engine.txt.\n\n${early}`);
+    expect(remoteHas(BRANCH)).toBe(true);
+  });
+
+  it('tells an engine that refuses commands not to run any', async () => {
+    const refusing = fakeEngine({ refusesCommands: true });
+    await run(makeTask({ testCommand: 'true' }), harness(refusing.adapter));
+    expect(refusing.inputs[0]?.prompt).toContain('Do not run shell commands');
+  });
+
+  it('lets an engine that can run commands check its own work', async () => {
+    const plain = fakeEngine();
+    await run(makeTask({ testCommand: 'true' }), harness(plain.adapter));
+    expect(plain.inputs[0]?.prompt).toContain('Run it yourself before you stop.');
+    expect(plain.inputs[0]?.prompt).not.toContain('Do not run shell commands');
   });
 
   posixOnly('fails when tests exit non-zero but still pushes and reports branch, commit and testOutput', async () => {

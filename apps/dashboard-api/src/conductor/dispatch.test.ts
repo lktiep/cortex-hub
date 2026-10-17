@@ -340,6 +340,12 @@ describe('pickForPull', () => {
     expect(row('first').status).toBe('pending')
   })
 
+  it('a pulled task runs on no route: the one an earlier attempt ran on is cleared', () => {
+    insertTask(testDb, { id: 'again', current_route: '{"executor":"claude","model":"opus","effort":null}' })
+
+    expect(pickForPull({ apiKeyOwner: 'o1', taskId: 'again' }, NOW)?.current_route).toBeNull()
+  })
+
   it('returns the task pinned to the caller as accepted, never an executor-bound unpinned one', () => {
     insertTask(testDb, { id: 'agy', title: 'Agy work', executor: 'agy', priority: 1 })
     insertTask(testDb, { id: 'pin', task_key: 'P1', title: 'Pinned work', pinned_agent: 'claude-code', executor: 'claude', context: '{"note":"x"}' })

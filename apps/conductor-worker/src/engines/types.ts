@@ -54,4 +54,11 @@ export interface EngineAdapter {
    * prompt in argv, which Windows quotes and escapes on the command line.
    */
   promptLength?(prompt: string): number;
+  /**
+   * True when a shell command would be refused and would end the run (headless agy outside
+   * auto mode), so the prompt tells the engine to use its file tools only.
+   */
+  refusesCommands?(): boolean;
+  /** Why a run that exited cleanly was cut short (agy: a permission it could not ask for), else null. */
+  stoppedEarly?(stdout: string, stderr: string): string | null;
 }

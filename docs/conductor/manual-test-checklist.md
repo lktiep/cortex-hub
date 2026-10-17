@@ -209,7 +209,9 @@ end-to-end test skips on Windows: `.cmd` shims, process-tree kill, `cmd.exe`.
 - [ ] Doctor exits 0 and finds the engines installed as `.cmd` shims (for example `agy` or
   `claude` from npm).
 - [ ] The first task ends with a branch and a pull request, as on macOS. agy runs with
-  `accept-edits` there, since Windows has no `--mode auto`.
+  `accept-edits`, as everywhere: it edits files and runs no commands.
+- [ ] A task whose agy run is refused a permission fails with `agy stopped early: …`, not with a
+  bare `engine made no changes`.
 - [ ] After `stop`, no engine process is left running in Task Manager.
 
 ## 9. `install.ps1` and `onboard.ps1` on Windows

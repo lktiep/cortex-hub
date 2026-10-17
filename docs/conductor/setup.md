@@ -113,7 +113,10 @@ Notes:
   vendor page).
 - Gemini CLI is replaced by Antigravity CLI for unpaid and Google One users (per the Gemini CLI
   README). Use `agy` if `gemini` does not fit your account.
-- **agy on Windows has no `--mode auto`.** The worker uses `accept-edits` there.
+- **agy runs with `--mode accept-edits` everywhere.** It may edit files but not run commands, since
+  headless agy cannot ask and a refused command ends its run. Windows and some accounts have no
+  `--mode auto`. See [Antigravity: what agy may do on its own](antigravity.md#what-agy-may-do-on-its-own)
+  for `CORTEX_AGY_MODE`, allow-rules and the opt-in `CORTEX_AGY_SKIP_PERMISSIONS=1`.
 - **agy starts slowly** (about 2 minutes), almost all of it spent starting its MCP servers. Remove
   MCP servers you do not need from its config to speed it up.
 - **agy quota is per model family**, not per account. One family can run out while another works.

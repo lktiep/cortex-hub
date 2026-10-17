@@ -93,9 +93,14 @@ those decisions and keeps the plan moving when a machine or a model runs out.
   Argon kept working at the same time, so quota is per model family, not per
   account.
 - An invalid model exits 1 and lists the valid ones.
-- Useful flags: `--mode accept-edits|auto|plan` (`auto` is macOS/Linux only and
-  soft-denies irreversible actions), `--effort`, `--print-timeout`,
-  `--add-dir`, `--sandbox`, `--continue`/`--conversation`.
+- Useful flags: `--mode accept-edits|auto|plan` (`auto` is macOS/Linux only, not
+  on every account, and soft-denies irreversible actions), `--effort`,
+  `--print-timeout`, `--add-dir`, `--sandbox`, `--continue`/`--conversation`.
+- Headless agy cannot ask for a permission. A tool outside its allow-list is
+  refused, and the refusal ends the run with `status: "SUCCESS"`, an empty
+  `response` and `denied_actions: [{action, display_name}]`. An account
+  without `auto` warns and falls back to the default mode, which refuses even
+  file edits.
 - `agentapi` drives the desktop app only and cannot be a worker.
 - `agy mcp list` prints MCP server secrets in plain text, and the cortex entry
   on this machine still points at the old hub URL. Part C covers both.
@@ -414,6 +419,13 @@ existing `task.create`, `task.comment`, `task.strategy`, `task.synthesis` and
   dispatches.
 - The final fallback is the project default (D5). If it too is exhausted or
   missing, the task waits (`capacity`) and the lead is told once.
+- A failed attempt (not a quota report) records the route it ran on in
+  `context.failedRoutes`. The next dispatch tries the routes that have not
+  failed first, in chain order, then the failed ones, the longest-ago failure
+  first. While a fresh route has a worker that is merely busy, the task waits
+  for it rather than retry a failed route. A pulled attempt runs on no route
+  and records none. `cortex_task_route` with `clearEscalation` or a new route
+  forgets the list.
 
 ### 6.8 Leases and reclaim
 
@@ -544,7 +556,7 @@ error`:
 
 | Executor | Command | Quota signal | Verified |
 |---|---|---|---|
-| `agy` | `agy -p <prompt> --model <m> --output-format stream-json --mode auto` (`accept-edits` on Windows; overridable), `--effort`, `--print-timeout` | exit 3, `result.status = "ERROR"` with "quota", `AGY_ERROR` with `RESOURCE_EXHAUSTED`/429; reset from `Resets in XhYmZs` | **Yes**, on this machine |
+| `agy` | `agy -p <prompt> --model <m> --output-format stream-json --mode accept-edits` (`CORTEX_AGY_MODE` overrides; `--dangerously-skip-permissions` only with `CORTEX_AGY_SKIP_PERMISSIONS=1`), `--effort`, `--print-timeout`; outside `auto` the prompt forbids shell commands, and a run ended by `denied_actions` fails as `agy stopped early: …` | exit 3, `result.status = "ERROR"` with "quota", `AGY_ERROR` with `RESOURCE_EXHAUSTED`/429; reset from `Resets in XhYmZs` | **Yes**, on this machine |
 | `claude` | `claude -p <prompt> --model <m> --permission-mode auto --output-format stream-json --verbose` | "usage limit" / "rate limit" text with a reset time | No — patterns best effort |
 | `codex` | `codex exec -m <m> --full-auto <prompt>` | "usage limit" / 429 text | No |
 | `gemini` | `gemini -p <prompt> -m <m> -y` | `RESOURCE_EXHAUSTED` / 429 | No |
@@ -648,7 +660,7 @@ Based on the approved mock (`proposed.tsx`, screenshots shot-3/4).
 |---|---|
 | Claude, Codex and Gemini quota messages are unverified. | Unknown output is `error`, so the worst case is an escalation, not a loop. Recorded fixtures are added when seen. |
 | agy start-up is ~2 min (MCP servers). | Not a correctness issue; `doctor` reports it; users can trim agy's MCP list. |
-| `--mode auto` soft-denies irreversible actions headless; Windows has no `auto`. | The worker owns git, so the engine never needs to push. Mode is configurable per engine. |
+| Headless agy is refused any permission outside its mode, and the refusal ends its run; `auto` is missing on Windows and on some accounts. | The worker runs agy in `accept-edits`, tells it not to run commands, owns git and the tests itself, and reports a refusal by name. Allow-rules or the opt-in skip flag widen it. |
 | Same-file locks are only as good as `files`. | Tasks without `files` never conflict; the dashboard marks them; the orchestrator prompt asks for `files`. |
 | A shared API key splits notifications. | D7: separate keys documented; the dashboard shows everything regardless. A machine that runs both the lead and a worker shares the key unless the worker's engines get their own MCP config; the setup doc says so. |
 | Hub restart forgets `lastSeen`. | Treated as the start time, so reclaim waits the full window. |

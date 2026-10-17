@@ -54,6 +54,8 @@ export interface TaskContext {
   estimate?: number
   allowEmpty?: boolean
   pull?: boolean
+  /** `routeKey`s of the routes whose attempt failed, oldest first; the dispatcher tries the others first. */
+  failedRoutes?: string[]
   [k: string]: unknown
 }
 
@@ -106,6 +108,17 @@ export function stringList(raw: string | null | undefined): string[] {
 export function taskContext(row: TaskRow): TaskContext {
   const parsed = parseJson<unknown>(row.context, {})
   return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as TaskContext) : {}
+}
+
+/** One route's identity, as the dispatcher deduplicates a route chain and remembers a failed route. */
+export function routeKey(route: { executor: string | null; model: string | null; effort: string | null }): string {
+  return JSON.stringify([route.executor, route.model, route.effort])
+}
+
+/** `context.failedRoutes`, oldest failure first. */
+export function failedRoutesOf(row: TaskRow): string[] {
+  const failed = taskContext(row).failedRoutes
+  return Array.isArray(failed) ? failed.filter((k): k is string => typeof k === 'string') : []
 }
 
 /** `YYYY-MM-DDTHH:MM:SSZ`, the shape SQLite's strftime writes (no milliseconds). */

@@ -1,0 +1,2 @@
+warning: --mode auto is not available for this account; continuing in the default mode.
+jetski: no output produced — a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow in settings.json (e.g. command(ls)). Alternatively, re-run with --dangerously-skip-permissions.

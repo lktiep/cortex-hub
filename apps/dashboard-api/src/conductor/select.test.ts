@@ -1,13 +1,14 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type Database from 'better-sqlite3'
 import type { EngineInfo, RouteSpec } from '@cortex/shared-types'
+import { routeKey } from './rows.js'
 import { createTestDb } from './testing.js'
 
 let testDb: Database.Database
 vi.mock('../db/client.js', () => ({ get db() { return testDb } }))
 
 import {
-  quotaModelMatches, routeChain, selectAssignments, servesProject,
+  quotaModelMatches, routeChain, routeOrder, selectAssignments, servesProject,
   type CandidateTask, type CandidateWorker, type QuotaRow, type SelectionInput,
 } from './dispatcher.js'
 
@@ -123,6 +124,46 @@ describe('selectAssignments', () => {
       quota: [quota('h1', 'agy', 'gemini-4-argon-*', T1)],
     })
     expect(r.assign).toEqual([{ taskId: 'a', agentId: 'w1', route: route('claude', 'opus') }])
+  })
+
+  describe('after a route failed', () => {
+    const AGY_LOW = route('agy', 'gemini-4-argon-low')
+    const OPUS = route('claude', 'opus')
+    const chain = { routes: [AGY_LOW, OPUS], failedRoutes: [routeKey(AGY_LOW)] }
+
+    it('gives the task to its fallback when the fallback has an idle worker', () => {
+      const r = select({
+        pending: [task('a', chain)],
+        workers: [worker('agy', { engines: [AGY], idleSince: 1 }), worker('cl', { engines: [CLAUDE], idleSince: 2 })],
+      })
+      expect(r.assign).toEqual([{ taskId: 'a', agentId: 'cl', route: OPUS }])
+    })
+
+    it('waits for a busy fallback rather than retry the route that failed', () => {
+      const r = select({
+        pending: [task('a', chain)],
+        workers: [worker('agy', { engines: [AGY] }), worker('cl', { engines: [CLAUDE], busy: true })],
+      })
+      expect(r.assign).toEqual([])
+      expect(r.wait).toEqual([{ taskId: 'a', reason: null, until: null }])
+    })
+
+    it('retries the failed route when no other route can run: no worker for it, or out of quota', () => {
+      const alone = select({ pending: [task('a', chain)], workers: [worker('agy', { host: 'h1', engines: [AGY] })] })
+      expect(alone.assign).toEqual([{ taskId: 'a', agentId: 'agy', route: AGY_LOW }])
+
+      const outOfQuota = select({
+        pending: [task('a', chain)],
+        workers: [worker('agy', { host: 'h1', engines: [AGY] }), worker('cl', { host: 'h2', engines: [CLAUDE] })],
+        quota: [quota('h2', 'claude', 'opus', T1)],
+      })
+      expect(outOfQuota.assign).toEqual([{ taskId: 'a', agentId: 'agy', route: AGY_LOW }])
+    })
+
+    it('one worker with both engines runs the fallback route', () => {
+      const r = select({ pending: [task('a', chain)], workers: [worker('w1', { engines: [AGY, CLAUDE] })] })
+      expect(r.assign).toEqual([{ taskId: 'a', agentId: 'w1', route: OPUS }])
+    })
   })
 
   it('quota pattern match', () => {
@@ -360,6 +401,22 @@ describe('servesProject', () => {
     expect(servesProject({ protocol: 2, projectId: null }, { projectId: 'p1' })).toBe(false)
     expect(servesProject({ protocol: 2, projectId: null }, { projectId: null })).toBe(true)
     expect(servesProject({ protocol: 2, projectId: 'p1' }, { projectId: 'p1' })).toBe(true)
+  })
+})
+
+describe('routeOrder', () => {
+  const a = route('agy', 'gemini-4-argon-low')
+  const b = route('claude', 'opus')
+  const c = route('claude', 'sonnet')
+  const flags = (o: ReturnType<typeof routeOrder>) => o.map(({ route: r, failed }) => `${r.model}${failed ? '!' : ''}`)
+
+  it('keeps the chain when nothing failed', () => {
+    expect(flags(routeOrder([a, b, c], []))).toEqual(['gemini-4-argon-low', 'opus', 'sonnet'])
+  })
+
+  it('moves failed routes last, the longest-ago failure first, and ignores keys not in the chain', () => {
+    const order = routeOrder([a, b, c], [routeKey(b), routeKey(route('codex', null)), routeKey(a)])
+    expect(flags(order)).toEqual(['sonnet', 'opus!', 'gemini-4-argon-low!'])
   })
 })
 

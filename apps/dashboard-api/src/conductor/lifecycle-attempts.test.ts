@@ -8,10 +8,10 @@ vi.mock('../db/client.js', () => ({ get db() { return testDb } }))
 
 import { dispatch } from './dispatcher.js'
 import {
-  acceptTask, cancelTask, completeTask, declineTask, failAttempt, quotaExhausted, recordProgress, returnTask,
+  acceptTask, cancelTask, completeTask, declineTask, failAttempt, quotaExhausted, recordProgress, rerouteTask, returnTask,
 } from './lifecycle.js'
 import { addConnection, getByAgent, resetRegistry, setStatus, updateConnection } from './registry.js'
-import { isoSeconds, type TaskRow } from './rows.js'
+import { isoSeconds, routeKey, type TaskRow } from './rows.js'
 
 const NOW = Date.UTC(2026, 9, 16, 12, 0, 0)
 const HOUR = 3600_000
@@ -322,6 +322,60 @@ describe('failures and returns', () => {
     expect(row('t1')).toEqual(before)
     expect(logs('t1', 'ignored')).toHaveLength(5)
     expect(quotaRows()).toEqual([])
+  })
+})
+
+describe('failed routes', () => {
+  const AGY_HIGH = { executor: 'agy', model: 'claude-sonnet-5-5-high', effort: null } as const
+  const OPUS = { executor: 'claude', model: 'opus', effort: null } as const
+  const onRoute = (route: typeof AGY_HIGH | typeof OPUS): Partial<TaskRow> => ({ current_route: JSON.stringify(route) })
+
+  it('a failure remembers the route it ran on, so the next dispatch hands the task to its fallback', () => {
+    insertTask(testDb, {
+      id: 't1', task_key: 'T1', title: 'Fix login', api_key_owner: 'lead',
+      executor: 'agy', model: 'claude-sonnet-5-5-high', fallback: JSON.stringify([OPUS]),
+    })
+    connect('w-agy', [AGY])
+    connect('w-cl', [CLAUDE])
+    dispatch(NOW)
+    expect(row('t1')).toMatchObject({ assigned_to_agent: 'w-agy', current_route: JSON.stringify(AGY_HIGH) })
+
+    expect(failAttempt('t1', 'w-agy', 'engine made no changes').ok).toBe(true)
+
+    // the idle agy worker could take it straight back; the fallback goes first
+    expect(row('t1')).toMatchObject({ status: 'assigned', assigned_to_agent: 'w-cl', current_route: JSON.stringify(OPUS) })
+    expect(context('t1').failedRoutes).toEqual([routeKey(AGY_HIGH)])
+  })
+
+  it('a route that fails again moves to the end of the list', () => {
+    running('t1', 'w1', { ...onRoute(AGY_HIGH), context: JSON.stringify({ failedRoutes: [routeKey(AGY_HIGH), routeKey(OPUS)] }) })
+
+    failAttempt('t1', 'w1', 'boom')
+
+    expect(context('t1').failedRoutes).toEqual([routeKey(OPUS), routeKey(AGY_HIGH)])
+  })
+
+  it('a pulled attempt ran on no route and records none', () => {
+    running('t1', 'w1', { current_route: null })
+
+    failAttempt('t1', 'w1', 'boom')
+
+    expect(context('t1').failedRoutes).toBeUndefined()
+  })
+
+  it('the lead clearing the escalation or choosing a route forgets them; other changes keep them', () => {
+    const failed = JSON.stringify({ note: 'x', failedRoutes: [routeKey(AGY_HIGH)] })
+    for (const id of ['clear', 'route', 'other']) {
+      insertTask(testDb, { id, title: id, api_key_owner: 'lead', status: 'pending', context: failed })
+    }
+
+    expect(rerouteTask('clear', { clearEscalation: true }, null).ok).toBe(true)
+    expect(rerouteTask('route', { fallback: [OPUS] }, null).ok).toBe(true)
+    expect(rerouteTask('other', { priority: 1 }, null).ok).toBe(true)
+
+    expect(context('clear')).toEqual({ note: 'x' })
+    expect(context('route')).toEqual({ note: 'x' })
+    expect(context('other').failedRoutes).toEqual([routeKey(AGY_HIGH)])
   })
 })
 

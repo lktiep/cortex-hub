@@ -6,7 +6,7 @@
 // sent, the worker it freed is marked idle and a dispatch pass runs, so every
 // push follows committed state.
 import type {
-  ReviewRequest, RoutePatch, TaskQuotaExhaustedMsg, TaskResult, TaskReview, TaskRevokedMsg,
+  ReviewRequest, RoutePatch, RouteSpec, TaskQuotaExhaustedMsg, TaskResult, TaskReview, TaskRevokedMsg,
 } from '@cortex/shared-types'
 import { db } from '../db/client.js'
 import { getConductorConfig } from './config.js'
@@ -15,7 +15,8 @@ import { formatNotification, notifyLead } from './notify.js'
 import { getByAgent, markFreed, sendTo, setStatus } from './registry.js'
 import { normalizeFiles } from './files.js'
 import {
-  ACTIVE_STATUSES, getTask, isoSeconds, logTask, parseJson, stringList, taskContext, taskLabel, type TaskRow,
+  ACTIVE_STATUSES, failedRoutesOf, getTask, isoSeconds, logTask, parseJson, routeKey, stringList, taskContext, taskLabel,
+  type TaskRow,
 } from './rows.js'
 import { fallbackProblem, findCycle, knownExecutor, priorityValue, stringListProblem } from './tree.js'
 
@@ -441,13 +442,33 @@ export function completeTask(
 }
 
 /**
- * A failed attempt, inside the caller's transaction: `fail_count` grows and
- * the task returns to `pending`; the second failure sets `escalated_at` (the
- * dispatcher then skips the task) and tells the lead, once.
+ * Remembers the route a failed attempt ran on (`context.failedRoutes`), so the
+ * next dispatch tries the task's other routes first. A pulled attempt ran on no route.
+ */
+function rememberFailedRoute(task: TaskRow): void {
+  const ran = parseJson<Partial<RouteSpec> | null>(task.current_route, null)
+  if (ran === null || typeof ran !== 'object' || Array.isArray(ran)) return
+  const key = routeKey({ executor: ran.executor ?? null, model: ran.model ?? null, effort: ran.effort ?? null })
+  saveContext(task, { failedRoutes: [...failedRoutesOf(task).filter((k) => k !== key), key] })
+}
+
+/** Forgets the failed routes: the lead cleared the escalation or chose the route. */
+function forgetFailedRoutes(taskId: string): void {
+  const { failedRoutes, ...rest } = taskContext(current(taskId))
+  if (failedRoutes === undefined) return
+  db.prepare('UPDATE conductor_tasks SET context = ? WHERE id = ?').run(JSON.stringify(rest), taskId)
+}
+
+/**
+ * A failed attempt, inside the caller's transaction: `fail_count` grows, the
+ * route it ran on is remembered, and the task returns to `pending`; the second
+ * failure sets `escalated_at` (the dispatcher then skips the task) and tells
+ * the lead, once.
  */
 function countFailure(task: TaskRow, error: string, now: number = Date.now()): Settled {
   const failCount = task.fail_count + 1
   db.prepare('UPDATE conductor_tasks SET fail_count = ? WHERE id = ?').run(failCount, task.id)
+  rememberFailedRoute(task)
   toPending(task, `failed: ${error}`)
   escalate(task, task.assigned_to_agent, failCount, 'failures', error, now)
   return { outcome: { ok: true, task: current(task.id) }, worker: task.assigned_to_agent }
@@ -805,6 +826,8 @@ export function rerouteTask(taskId: string, patch: RoutePatch, by: string | null
     if (wasActive) toPending(task, 'rerouted')
     const { sets, values } = patchColumns(patch)
     if (sets.length > 0) db.prepare(`UPDATE conductor_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values, taskId)
+    const routeChosen = [patch.executor, patch.model, patch.effort, patch.fallback].some((v) => v !== undefined)
+    if (patch.clearEscalation === true || routeChosen) forgetFailedRoutes(taskId)
     const patched = current(taskId)
     if (patched.status === 'pending' || patched.status === 'blocked') {
       const next = allCompleted(stringList(patched.depends_on)) ? 'pending' : 'blocked'

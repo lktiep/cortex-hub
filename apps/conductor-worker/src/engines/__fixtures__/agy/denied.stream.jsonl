@@ -1,0 +1,4 @@
+{"event":"init","init":{"model":"gemini-4-argon-low"}}
+{"event":"step_update","step_update":{"step_index":2,"state":"DONE","step_type":"tool","tool_name":"view_file","tool_info":{"parameters":{"AbsolutePath":"/work/src/format.js"}}}}
+{"event":"step_update","step_update":{"step_index":4,"state":"ERROR","step_type":"tool","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"ls -la"},"error":{"type":"permission","message":"permission check failed for command \"ls -la\""}}}}
+{"event":"result","result":{"status":"SUCCESS","response":"","num_turns":1,"denied_actions":[{"action":"command","display_name":"RunCommand"},{"action":"command","display_name":"RunCommand"},{"action":"write_file"}]}}

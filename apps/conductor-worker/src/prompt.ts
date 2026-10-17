@@ -15,10 +15,20 @@ const RULES = [
   '- Do not commit, push, or switch branches; the worker does that.',
   '- Stay inside this working tree.',
 ].join('\n')
+// for an engine that refuses commands (EngineAdapter.refusesCommands): a refused command ends its run
+const NO_COMMANDS =
+  '- Do not run shell commands, not even `ls`, `git` or the tests. This engine runs headless and ' +
+  'refuses every command, and a refused command ends your run on the spot, with or without your edits. ' +
+  'Read, search and edit with your file tools only.'
 const RESUMING = [
   '## Resuming',
   'A previous run of this task was interrupted. The working tree may already hold partial work.',
   'Inspect `git status` and `git diff`, then continue from where it stopped.',
+].join('\n')
+const RESUMING_NO_COMMANDS = [
+  '## Resuming',
+  'A previous run of this task was interrupted. The working tree may already hold partial work.',
+  'Read the files this task changes to see how far it got, then continue from there.',
 ].join('\n')
 
 interface ReviewLine {
@@ -37,6 +47,7 @@ interface Parts {
   note: string | null
   tests: string | null
   resumed: boolean
+  noCommands: boolean
 }
 
 function render(p: Parts): string {
@@ -55,9 +66,9 @@ function render(p: Parts): string {
     out.push(`## Previous review feedback\n${lines.join('\n')}`)
   }
   if (p.note !== null) out.push(`## Handoff from the previous run\n${p.note}`)
-  if (p.resumed) out.push(RESUMING)
+  if (p.resumed) out.push(p.noCommands ? RESUMING_NO_COMMANDS : RESUMING)
   if (p.tests !== null) out.push(p.tests)
-  out.push(RULES)
+  out.push(p.noCommands ? `${RULES}\n${NO_COMMANDS}` : RULES)
   return out.join('\n\n')
 }
 
@@ -107,6 +118,8 @@ export function buildPrompt(
     testCommand?: string | null
     /** How the prompt counts against PROMPT_LIMIT; its length unless the engine says otherwise. */
     measure?: (prompt: string) => number
+    /** The engine refuses shell commands (EngineAdapter.refusesCommands), so it is told not to run any. */
+    noCommands?: boolean
   } = {},
 ): string {
   const size = opts.measure ?? ((s: string): number => s.length)
@@ -119,6 +132,7 @@ export function buildPrompt(
       feedback: r.feedback.replace(/\r?\n/g, '\n  '),
     }))
   const command = opts.testCommand?.trim() ?? ''
+  const noCommands = opts.noCommands === true
   const note = task.handoff && task.handoff.note.trim() !== '' ? task.handoff.note : null
   const original = { title: oneLine(task.title), description: task.description, files: task.files.join('\n'), note }
 
@@ -133,8 +147,11 @@ export function buildPrompt(
     tests:
       command === ''
         ? null
-        : `## Tests\nAfter you finish, the worker runs \`${oneLine(command).slice(0, TEST_COMMAND_MAX)}\` in this working tree; if it fails, the task fails. Run it yourself before you stop.`,
+        : `## Tests\nAfter you finish, the worker runs \`${oneLine(command).slice(0, TEST_COMMAND_MAX)}\` in this working tree; if it fails, the task fails. ${
+            noCommands ? 'You cannot run it yourself here (see the rules), so read the tests it runs.' : 'Run it yourself before you stop.'
+          }`,
     resumed: opts.resumed === true,
+    noCommands,
   }
   const over = (): boolean => size(render(p)) > PROMPT_LIMIT
 

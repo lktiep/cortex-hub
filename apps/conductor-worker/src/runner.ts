@@ -244,6 +244,7 @@ export async function runTask(
       resumed: opts.resumed,
       testCommand,
       measure: (p) => adapter.promptLength?.(p) ?? p.length,
+      noCommands: adapter.refusesCommands?.() === true,
     });
     const throttle = createProgressThrottle((message) =>
       deps.send({ type: 'task.progress', taskId: task.id, message }),
@@ -321,6 +322,12 @@ export async function runTask(
     });
     if (verdict.kind === 'quota') return quotaHandoff(worktree, verdict);
     if (verdict.kind === 'error') return failWithWip(worktree, 'engine error', verdict.message);
+    // a clean exit can still be a run cut short (agy: a permission it could not ask for)
+    const early = adapter.stoppedEarly?.(run.stdout, run.stderr) ?? null;
+    if (early !== null) {
+      log('warn', early);
+      engineSummary = engineSummary.trim() === '' ? early : `${engineSummary}\n\n${early}`;
+    }
     // read now: whatever the test command writes (coverage/, junit.xml) is not the engine's work
     const changes = await treeState(worktree, task.baseBranch);
 
@@ -336,7 +343,9 @@ export async function runTask(
     const withTests = testOutput !== undefined ? { testOutput } : {};
 
     const noChanges = (): RunOutcome => {
-      if (testError !== null) return fail([testError], withTests);
+      if (testError !== null) return fail([testError, early], withTests);
+      // a run cut short has not found there was nothing to do, even where that is allowed
+      if (early !== null) return fail([`engine made no changes: ${early}`], withTests);
       if (task.context['allowEmpty'] !== true) return fail(['engine made no changes'], withTests);
       return complete('completed', { summary: engineSummary, ...withTests });
     };

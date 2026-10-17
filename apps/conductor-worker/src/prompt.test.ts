@@ -193,6 +193,27 @@ describe('buildPrompt', () => {
     expectSafe(buildPrompt(makeTask(), { testCommand: 'x\n'.repeat(5000) }))
   })
 
+  it('tells an engine that refuses commands to run none, and not to check its own work by running tests', () => {
+    const prompt = buildPrompt(makeTask(), { testCommand: 'pnpm test', resumed: true, noCommands: true })
+    expect(prompt).toContain('Do not run shell commands, not even `ls`, `git` or the tests.')
+    expect(prompt).toContain('a refused command ends your run on the spot')
+    expect(prompt).toContain('After you finish, the worker runs `pnpm test` in this working tree; if it fails, the task fails. You cannot run it yourself here')
+    expect(prompt).not.toContain('Run it yourself before you stop.')
+    // resuming without git: it reads the files instead
+    expect(prompt).toContain('## Resuming')
+    expect(prompt).not.toContain('git status')
+    expect(prompt).toContain('Read the files this task changes')
+    expect(prompt.indexOf('Do not run shell commands')).toBeGreaterThan(prompt.indexOf('## Rules'))
+    expectSafe(prompt)
+    expect(buildPrompt(makeTask())).not.toContain('Do not run shell commands')
+  })
+
+  it('keeps the no-commands rule through truncation', () => {
+    const prompt = buildPrompt(makeTask({ description: 'd'.repeat(100_000) }), { noCommands: true })
+    expectSafe(prompt)
+    expect(prompt).toContain('Do not run shell commands')
+  })
+
   it('survives 5000 file paths', () => {
     const files = Array.from({ length: 5000 }, (_, i) => `src/dir/file-${i}.ts`)
     expectSafe(buildPrompt(makeTask({ files })))
