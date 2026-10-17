@@ -1,12 +1,13 @@
 'use client'
 
-// Plan view: full-screen overlay for one plan tree — phase tabs, progress, diagram, side panel and task detail.
+// Plan view: full-screen overlay for one plan tree — phase tabs, progress, the board or the graph, side panel
+// and task detail.
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import useSWR from 'swr'
 import { cancelConductorTask, deleteConductorTask, getConductorTree } from '@/lib/api'
 import { actionErrorMessage } from '@/lib/conductor-plan/actions'
-import { criticalPath } from '@/lib/conductor-plan/analysis'
+import { criticalPath, fileConflicts } from '@/lib/conductor-plan/analysis'
 import { computeDepths, selectPhase } from '@/lib/conductor-plan/layout'
 import { toPlanTasks } from '@/lib/conductor-plan/model'
 import {
@@ -18,13 +19,22 @@ import {
   workerRows,
 } from '@/lib/conductor-plan/summary'
 import { TaskDetail } from '../components/TaskDetail'
-import { PlanDiagram } from './PlanDiagram'
+import { PlanBoard } from './PlanBoard'
+import { PlanGraph } from './PlanGraph'
 import { PlanProgress } from './PlanProgress'
 import { PlanSidePanel } from './PlanSidePanel'
 import { PlanTaskActions } from './PlanTaskActions'
 import styles from './plan.module.css'
+import { usePlanFlash } from './usePlanFlash'
 
 const isNotFound = (err: unknown) => (err as { status?: unknown } | null)?.status === 404
+
+type ViewMode = 'board' | 'graph'
+const VIEW_KEY = 'cortex.plan.view'
+const VIEWS: { id: ViewMode; label: string }[] = [
+  { id: 'board', label: 'Board' },
+  { id: 'graph', label: 'Graph' },
+]
 
 export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => void }) {
   const { data, error, mutate } = useSWR(
@@ -35,8 +45,26 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
   const [pickedGroup, setGroupId] = useState<string | null>(null)
   const [pickedId, setSelectedId] = useState<string | undefined>(undefined)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [view, setView] = useState<ViewMode>('board')
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
+  // The last view picked sticks across plans; storage can be blocked, and then Board it is.
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(VIEW_KEY)
+      if (saved === 'board' || saved === 'graph') setView(saved)
+    } catch {
+      // storage unavailable: keep the default
+    }
+  }, [])
+  const pickView = (next: ViewMode) => {
+    setView(next)
+    try {
+      window.localStorage.setItem(VIEW_KEY, next)
+    } catch {
+      // storage unavailable: the choice lasts until the overlay closes
+    }
+  }
   // The overlay covers the page; keep the page from scrolling underneath it.
   useEffect(() => {
     const previous = document.body.style.overflow
@@ -55,16 +83,18 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
   const selectedId = pickedId !== undefined && byId.has(pickedId) ? pickedId : undefined
   const phase = useMemo(() => (groupId ? selectPhase(tasks, groupId) : undefined), [tasks, groupId])
   const side = useMemo(() => {
-    const { cyclic } = computeDepths(tasks)
+    const { depth, cyclic } = computeDepths(tasks)
     return {
       counts: progressCounts(tasks),
       needs: needsYou(tasks, new Date()),
       awaiting: awaitingLead(tasks),
       tally: routeTally(tasks),
       critical: criticalPath(tasks, cyclic),
+      conflicts: fileConflicts(tasks, depth),
       workerRows: workerRows(workers, tasks, new Date()),
     }
   }, [tasks, workers])
+  const flashing = usePlanFlash(tasks)
 
   const selected = selectedId ? byId.get(selectedId) : undefined
   const drawable = tasks.some((t) => t.kind !== 'group')
@@ -116,30 +146,56 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
     body = <div className={styles.state}><p>This plan has no tasks yet</p></div>
   } else {
     body = (
-      <>
-        <PlanProgress counts={side.counts} />
-        <div className={styles.viewBody}>
-          <div className={styles.viewDiagram}>
-            <PlanDiagram
+      <div className={styles.viewBody}>
+        <section className={styles.viewDiagram}>
+          <div className={styles.boardTop}>
+            <PlanProgress counts={side.counts} />
+            <div className={styles.viewSwitch} role="group" aria-label="Plan view">
+              {VIEWS.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  aria-pressed={view === v.id}
+                  className={view === v.id ? styles.viewSwitchOn : ''}
+                  onClick={() => pickView(v.id)}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {view === 'board' ? (
+            <PlanBoard
               tasks={tasks}
               workers={workers}
               phase={phase}
               selectedId={selectedId}
+              flashing={flashing}
               onSelect={setSelectedId}
-              viewKey={`${rootId}:${groupId ?? ''}`}
             />
-          </div>
-          <PlanSidePanel
-            needs={side.needs}
-            awaiting={side.awaiting}
-            workers={side.workerRows}
-            tally={side.tally}
-            critical={side.critical}
-            byId={byId}
-            onSelect={setSelectedId}
-          />
-        </div>
-      </>
+          ) : (
+            <PlanGraph
+              tasks={tasks}
+              workers={workers}
+              phase={phase}
+              critical={side.critical}
+              conflicts={side.conflicts}
+              selectedId={selectedId}
+              flashing={flashing}
+              onSelect={setSelectedId}
+            />
+          )}
+        </section>
+        <PlanSidePanel
+          needs={side.needs}
+          awaiting={side.awaiting}
+          workers={side.workerRows}
+          tally={side.tally}
+          critical={side.critical}
+          byId={byId}
+          onSelect={setSelectedId}
+        />
+      </div>
     )
   }
 

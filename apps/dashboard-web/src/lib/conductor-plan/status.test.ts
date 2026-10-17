@@ -7,10 +7,10 @@ describe('status', () => {
     expect(Object.keys(STATUS_COLOR).sort()).toEqual(Object.keys(STATUS_LABEL).sort())
     expect(STATUS_COLOR.done).toBe('#34d399')
   })
-  it('summary and status stay free of flow (home must not ship xyflow)', () => {
-    for (const f of ['summary.ts', 'status.ts']) {
+  it('the plan model modules stay free of React and the DOM', () => {
+    for (const f of ['summary.ts', 'status.ts', 'board.ts', 'graph.ts', 'layout.ts']) {
       const src = readFileSync(new URL(`./${f}`, import.meta.url), 'utf8')
-      expect(src).not.toMatch(/from '\.\/flow'|@xyflow/)
+      expect(src).not.toMatch(/from 'react|@xyflow|document\.|window\./)
     }
   })
 })

@@ -3,7 +3,6 @@
 import type { ConductorSession, ConductorWorker } from '../api'
 import { compareText, nodeNote, routeLabel } from './model'
 import type { PlanTask } from './model'
-import { STATUS_COLOR } from './status'
 
 export type ProgressBucket = 'done' | 'review' | 'running' | 'ready' | 'waiting' | 'blocked'
 
@@ -137,14 +136,8 @@ export function formatDays(days: number): string {
   return String(Math.round(days * 10) / 10)
 }
 
-const BUCKETS: ProgressBucket[] = ['done', 'review', 'running', 'ready', 'waiting', 'blocked']
-
-export function progressSegments(counts: ProgressCounts): { bucket: ProgressBucket; count: number; percent: number; color: string }[] {
-  const sum = BUCKETS.reduce((a, b) => a + counts[b], 0)
-  return BUCKETS
-    .filter((b) => counts[b] > 0)
-    .map((b) => ({ bucket: b, count: counts[b], percent: (counts[b] / sum) * 100, color: STATUS_COLOR[b] }))
-}
+/** Progress buckets in bar order. */
+export const PROGRESS_BUCKETS: ProgressBucket[] = ['done', 'review', 'running', 'ready', 'waiting', 'blocked']
 
 /** One tab per group, in key order: its work-task count and the sum of their estimates (days). */
 export function groupTabs(tasks: PlanTask[]): { id: string; label: string; count: number; days: number }[] {

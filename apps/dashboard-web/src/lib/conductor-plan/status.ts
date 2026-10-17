@@ -1,4 +1,4 @@
-// Plan status colours and labels. Pure module — type-only import, so home can use it without xyflow.
+// Plan status colours and labels. Pure module — type-only import, so home can use it as is.
 import type { PlanState } from './model'
 
 export const STATUS_COLOR: Record<PlanState, string> = {

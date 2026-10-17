@@ -1,26 +1,9 @@
-// Plan layout: depth columns, machine lanes and the phase view as plain geometry.
-// Pure module — no React, no DOM; the diagram only renders what this returns.
+// Plan layout: dependency depth, machine lanes and the phase view.
+// Pure module — no React, no DOM; the board and the graph build on what this returns.
 import type { ConductorWorker } from '../api'
 import { compareText } from './model'
 import type { PlanTask } from './model'
 
-export interface Size {
-  W: number
-  H: number
-  COL_W: number
-  ROW_H: number
-  LABEL_W: number
-}
-
-export const SIZES: { compact: Size; detail: Size; HEAD_H: 34 } = {
-  // The gaps (COL_W − W, ROW_H − H) are where edges bend and the same-file arrow runs.
-  compact: { W: 168, H: 34, COL_W: 236, ROW_H: 56, LABEL_W: 160 },
-  detail: { W: 222, H: 112, COL_W: 290, ROW_H: 140, LABEL_W: 160 },
-  HEAD_H: 34,
-}
-
-const LANE_PAD = 24
-const CELL_INSET = 12
 const QUEUE = 'queue'
 
 export interface Lane {
@@ -36,26 +19,6 @@ export interface PhaseSelection {
   members: Set<string>
   inputs: Set<string>
   outputs: Set<string>
-}
-
-export interface Cell {
-  id: string
-  col: number
-  laneId: string
-  x: number
-  y: number
-  w: number
-  h: number
-  ghost: 'input' | 'output' | null
-}
-
-export interface PlanLayout {
-  cells: Cell[]
-  columns: { col: number; x: number; label: string }[]
-  lanes: (Lane & { y: number; height: number })[]
-  width: number
-  height: number
-  cyclic: Set<string>
 }
 
 const drawable = (t: PlanTask) => t.kind !== 'group'
@@ -240,102 +203,4 @@ export function selectPhase(tasks: PlanTask[], groupId: string): PhaseSelection 
     if (t.deps.some((d) => members.has(d))) outputs.add(t.id)
   }
   return { groupId, members, inputs, outputs }
-}
-
-export function layoutPlan(
-  tasks: PlanTask[],
-  workers: ConductorWorker[],
-  opts: { mode: 'compact' | 'detail'; phase?: PhaseSelection },
-): PlanLayout {
-  const { phase } = opts
-  const size = phase || opts.mode === 'detail' ? SIZES.detail : SIZES.compact
-  const nodes = tasks.filter(drawable)
-  const shown = phase ? nodes.filter((t) => phase.members.has(t.id) || phase.inputs.has(t.id) || phase.outputs.has(t.id)) : nodes
-
-  const colOf = new Map<string, number>()
-  const ghostOf = new Map<string, 'input' | 'output'>()
-  let cyclic: Set<string>
-  let columnCount: number
-  const hasInputs = phase !== undefined && phase.inputs.size > 0
-  const hasOutputs = phase !== undefined && phase.outputs.size > 0
-  if (phase) {
-    const own = computeDepths(nodes.filter((t) => phase.members.has(t.id)))
-    cyclic = own.cyclic
-    const shift = hasInputs ? 1 : 0
-    let last = shift - 1
-    for (const [id, d] of own.depth) {
-      colOf.set(id, d + shift)
-      last = Math.max(last, d + shift)
-    }
-    for (const id of phase.inputs) {
-      colOf.set(id, 0)
-      ghostOf.set(id, 'input')
-    }
-    for (const id of phase.outputs) {
-      colOf.set(id, last + 1)
-      ghostOf.set(id, 'output')
-    }
-    columnCount = hasOutputs ? last + 2 : last + 1
-  } else {
-    const all = computeDepths(nodes)
-    cyclic = all.cyclic
-    let max = -1
-    for (const [id, d] of all.depth) {
-      colOf.set(id, d)
-      max = Math.max(max, d)
-    }
-    columnCount = max + 1
-  }
-
-  const { lanes: allLanes, laneOf } = assignLanes(tasks, workers)
-  const buckets = new Map<string, Map<number, PlanTask[]>>()
-  for (const t of shown) {
-    const lane = laneOf.get(t.id) as string
-    const col = colOf.get(t.id) as number
-    let cols = buckets.get(lane)
-    if (!cols) buckets.set(lane, (cols = new Map()))
-    const list = cols.get(col)
-    if (list) list.push(t)
-    else cols.set(col, [t])
-  }
-
-  const cells: Cell[] = []
-  const lanes: PlanLayout['lanes'] = []
-  let top = SIZES.HEAD_H
-  for (const lane of allLanes) {
-    const cols = buckets.get(lane.id)
-    if (!cols) continue
-    let fullest = 0
-    for (const [col, list] of cols) {
-      list.sort((a, b) => a.priority - b.priority || byKey(a, b))
-      fullest = Math.max(fullest, list.length)
-      list.forEach((t, row) => {
-        cells.push({
-          id: t.id,
-          col,
-          laneId: lane.id,
-          x: size.LABEL_W + col * size.COL_W,
-          y: top + CELL_INSET + row * size.ROW_H,
-          w: size.W,
-          h: size.H,
-          ghost: ghostOf.get(t.id) ?? null,
-        })
-      })
-    }
-    const height = fullest * size.ROW_H + LANE_PAD
-    lanes.push({ ...lane, y: top, height })
-    top += height
-  }
-
-  const columns = Array.from({ length: columnCount }, (_, col) => {
-    let label = `Step ${col + 1}`
-    if (phase) {
-      if (hasInputs && col === 0) label = 'Inputs'
-      else if (hasOutputs && col === columnCount - 1) label = 'Unlocks next'
-      else label = `Step ${col - (hasInputs ? 1 : 0) + 1}`
-    }
-    return { col, x: size.LABEL_W + col * size.COL_W, label }
-  })
-
-  return { cells, columns, lanes, width: size.LABEL_W + columnCount * size.COL_W, height: top, cyclic }
 }
