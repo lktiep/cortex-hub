@@ -73,6 +73,11 @@ export function TaskNode({ data }: NodeProps<Node<TaskNodeData>>) {
         </>
       )}
       <Handle type="source" position={Position.Right} className={styles.h} />
+      {/* For a same-file arrow between two tasks in one column. After the two above, so plain edges keep Left/Right. */}
+      <Handle id="down-out" type="source" position={Position.Bottom} className={styles.h} />
+      <Handle id="down-in" type="target" position={Position.Top} className={styles.h} />
+      <Handle id="up-out" type="source" position={Position.Top} className={styles.h} />
+      <Handle id="up-in" type="target" position={Position.Bottom} className={styles.h} />
     </div>
   )
 }
@@ -117,7 +122,7 @@ export function LaneNode({ data }: NodeProps<Node<LaneNodeData>>) {
       className={cx(styles.lane, index % 2 === 1 && styles.laneAlt, !lane.online && styles.laneOffline)}
       style={{ width, height }}
     >
-      <div className={styles.laneLabel}>
+      <div className={styles.laneLabel} title={`${lane.label}\n${lane.sub}`}>
         <b>{lane.label}</b>
         <small>{lane.sub}</small>
       </div>

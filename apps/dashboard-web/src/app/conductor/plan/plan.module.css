@@ -13,17 +13,25 @@
 /* lanes and column heads */
 .lane { box-sizing: border-box; border-top: 1px solid var(--border-subtle); background: rgba(255,255,255,.012); position: relative; }
 .laneAlt { background: rgba(255,255,255,.03); }
-.laneLabel { position: absolute; left: 10px; top: 10px; display: flex; flex-direction: column; gap: 2px; width: 100px; }
-.laneLabel b { font-size: 14px; }
+.laneLabel { position: absolute; left: 10px; top: 10px; bottom: 6px; display: flex; flex-direction: column; gap: 2px; width: 140px; overflow: hidden; }
+.laneLabel b { font-size: 13px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; flex-shrink: 0; }
 .laneLabel small { font-size: 10px; color: var(--text-tertiary); line-height: 1.3; }
 .laneOffline b { color: var(--text-tertiary); }
 .colhead { font-size: 11px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
 
 /* task nodes */
-.tn { box-sizing: border-box; height: 100%; background: color-mix(in srgb, var(--st) 10%, #12141d); border: 1px solid color-mix(in srgb, var(--st) 45%, transparent); border-left: 4px solid var(--st); border-radius: 6px; color: var(--text-primary); cursor: pointer; }
+.tn { box-sizing: border-box; position: relative; height: 100%; background: color-mix(in srgb, var(--st) 10%, #12141d); border: 1px solid color-mix(in srgb, var(--st) 45%, transparent); border-left: 4px solid var(--st); border-radius: 6px; color: var(--text-primary); cursor: pointer; }
 .stBlocked { background: #12141d; color: var(--text-secondary); }
 .stReady { border-style: dashed; border-left-style: solid; }
 .stRunning { box-shadow: 0 0 0 1px var(--st), 0 0 14px rgba(96,165,250,.35); }
+/* a ring that keeps spreading out from a running task, so work in progress is visible at a glance */
+.stRunning::after { content: ''; position: absolute; inset: -1px -1px -1px -4px; border-radius: inherit; pointer-events: none; animation: planPulse 1.6s ease-out infinite; }
+@keyframes planPulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--st) 70%, transparent); }
+  70% { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .stRunning::after { animation: none; } }
 .tnSelected { box-shadow: 0 0 0 2px var(--text-primary); }
 .tnCritical { outline: 2px solid #f87171; outline-offset: 2px; }
 .tnGhost { opacity: .45; }

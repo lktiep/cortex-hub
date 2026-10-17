@@ -155,11 +155,19 @@ export function toFlow(
   }
 
   for (const c of conflicts) {
-    if (!cellById.has(c.from) || !cellById.has(c.to)) continue
+    const fromCell = cellById.get(c.from)
+    const toCell = cellById.get(c.to)
+    if (!fromCell || !toCell) continue
+    // Two tasks in one column: left-to-right handles would draw the arrow behind both boxes.
+    const vertical = fromCell.col === toCell.col
+    const down = fromCell.y < toCell.y
     edges.push({
       id: `file:${c.from}>${c.to}`,
       source: c.from,
       target: c.to,
+      ...(vertical && (down
+        ? { sourceHandle: 'down-out', targetHandle: 'down-in' }
+        : { sourceHandle: 'up-out', targetHandle: 'up-in' })),
       type: 'straight',
       label: mode === 'detail' ? basename(c.file) : undefined,
       labelStyle: { fill: EDGE_FILE, fontSize: 10 },

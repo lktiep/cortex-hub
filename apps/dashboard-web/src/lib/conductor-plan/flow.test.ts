@@ -122,6 +122,25 @@ describe('toFlow', () => {
     expect(detail?.label).toBe('shared.ts')
   })
 
+  it('a same-file edge between two tasks in one column runs from bottom to top, either way round', () => {
+    const list = tasks({ id: 'a' }, { id: 'b' })
+    const down = build(list, { conflicts: [{ from: 'a', to: 'b', file: 'x.ts' }] })
+    const y = (id: string) => down.nodes.find((n) => n.id === id)?.position.y ?? NaN
+    expect(y('a')).toBeLessThan(y('b'))
+    expect(down.edges.find((e) => e.id === 'file:a>b')).toMatchObject({ sourceHandle: 'down-out', targetHandle: 'down-in' })
+    const up = build(list, { conflicts: [{ from: 'b', to: 'a', file: 'x.ts' }] })
+    expect(up.edges.find((e) => e.id === 'file:b>a')).toMatchObject({ sourceHandle: 'up-out', targetHandle: 'up-in' })
+  })
+
+  it('a same-file edge across columns keeps the default left-to-right handles', () => {
+    const list = tasks({ id: 'a' }, { id: 'c', depends_on: deps('a') }, { id: 'b', depends_on: deps('c') })
+    const { edges } = build(list, { conflicts: [{ from: 'a', to: 'b', file: 'x.ts' }] })
+    const e = edges.find((x) => x.id === 'file:a>b')
+    expect(e).toBeDefined()
+    expect(e?.sourceHandle).toBeUndefined()
+    expect(e?.targetHandle).toBeUndefined()
+  })
+
   it('nodes carry critical, ghost, noFiles, note and route', () => {
     const list = tasks(
       { id: 'grp', kind: 'group' },

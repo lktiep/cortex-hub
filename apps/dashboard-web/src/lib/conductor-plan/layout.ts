@@ -13,8 +13,9 @@ export interface Size {
 }
 
 export const SIZES: { compact: Size; detail: Size; HEAD_H: 34 } = {
-  compact: { W: 168, H: 34, COL_W: 190, ROW_H: 40, LABEL_W: 120 },
-  detail: { W: 222, H: 112, COL_W: 248, ROW_H: 128, LABEL_W: 130 },
+  // The gaps (COL_W − W, ROW_H − H) are where edges bend and the same-file arrow runs.
+  compact: { W: 168, H: 34, COL_W: 236, ROW_H: 56, LABEL_W: 160 },
+  detail: { W: 222, H: 112, COL_W: 290, ROW_H: 140, LABEL_W: 160 },
   HEAD_H: 34,
 }
 
