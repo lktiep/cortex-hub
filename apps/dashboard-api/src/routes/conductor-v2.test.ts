@@ -2,7 +2,7 @@
 // against the real registry with fake sockets; only the database is mocked.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type Database from 'better-sqlite3'
-import type { EngineInfo, SessionView, WorkerView } from '@cortex/shared-types'
+import type { ClosedSessionView, EngineInfo, SessionView, WorkerView } from '@cortex/shared-types'
 import { createTestDb, fakeSocket, insertTask, type FakeSocket } from '../conductor/testing.js'
 
 let testDb: Database.Database
@@ -21,7 +21,7 @@ const CLAUDE: EngineInfo = { executor: 'claude', models: ['opus'], defaultModel:
 /** Every field the routes answer with; each test reads the ones its route sends. */
 interface Body {
   task?: TaskRow | null; tasks?: TaskRow[]; root?: TaskRow; workers?: WorkerView[]
-  agents?: WorkerView[]; online?: number; sessions?: SessionView[]
+  agents?: WorkerView[]; online?: number; sessions?: SessionView[]; closedSessions?: ClosedSessionView[]
   ids?: Record<string, string>; rootIds?: string[]; ready?: number
   error?: string; cycle?: string[]; message?: string; success?: boolean; id?: string
   assigned?: boolean; agentId?: string | null; delegated?: boolean; subtaskIds?: string[]
@@ -646,7 +646,7 @@ describe('POST /:id/route', () => {
 })
 
 describe('GET /agents', () => {
-  it('returns workers with engines and quota, and active sessions newest first', async () => {
+  it('returns workers with engines and quota, and open and closed sessions newest first', async () => {
     connect('w1', { projectId: 'p1' })
     const until = isoSeconds(Date.now() + 3600_000)
     testDb.prepare('INSERT INTO conductor_quota (host, executor, model, exhausted_until, reason) VALUES (?, ?, ?, ?, ?)')
@@ -658,6 +658,9 @@ describe('GET /agents', () => {
     session.run('s-old', 'claude-code', 'active', 'p1', 'key-a', 'mac', 'vscode', 'main', '2026-10-16T10:00:00Z', '2026-10-16T09:00:00Z')
     session.run('s-new', 'codex', 'active', null, null, null, null, null, null, '2026-10-16T11:00:00Z')
     session.run('s-done', 'claude-code', 'completed', 'p1', 'key-a', 'mac', 'vscode', 'main', '2026-10-16T12:00:00Z', '2026-10-16T12:00:00Z')
+    session.run('s-quit', 'codex', 'abandoned', null, null, null, null, null, '2026-10-16T08:00:00Z', '2026-10-16T08:00:00Z')
+    session.run('s-idle', 'codex', 'expired', null, null, null, null, null, null, '2026-10-16T07:00:00Z')
+    session.run('h-1', 'codex', 'pending', null, null, null, null, null, null, '2026-10-16T13:00:00Z')
 
     const res = await call('GET', '/agents')
     expect(res.status).toBe(200)
@@ -670,6 +673,15 @@ describe('GET /agents', () => {
       { sessionId: 's-new', agentId: 'codex', hostname: null, ide: null, branch: null, projectId: null, apiKeyName: null, lastActivity: '2026-10-16T11:00:00Z' },
       { sessionId: 's-old', agentId: 'claude-code', hostname: 'mac', ide: 'vscode', branch: 'main', projectId: 'p1', apiKeyName: 'key-a', lastActivity: '2026-10-16T10:00:00Z' },
     ])
+    expect(res.body.closedSessions?.map((s) => [s.sessionId, s.status])).toEqual([
+      ['s-done', 'completed'],
+      ['s-quit', 'abandoned'],
+      ['s-idle', 'expired'],
+    ])
+    expect(res.body.closedSessions?.[0]).toEqual({
+      sessionId: 's-done', agentId: 'claude-code', hostname: 'mac', ide: 'vscode', branch: 'main', projectId: 'p1',
+      apiKeyName: 'key-a', lastActivity: '2026-10-16T12:00:00Z', status: 'completed',
+    })
   })
 })
 

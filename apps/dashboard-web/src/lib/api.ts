@@ -1059,6 +1059,11 @@ export interface ConductorSession {
   lastActivity: string
 }
 
+// Mirrors ClosedSessionView: completed by cortex_session_end, abandoned by the IDE's exit hook, expired when idle
+export interface ConductorClosedSession extends ConductorSession {
+  status: 'completed' | 'abandoned' | 'expired'
+}
+
 export interface ConductorTree {
   root: ConductorTask
   tasks: ConductorTask[]
@@ -1080,7 +1085,13 @@ export interface RouteBody {
 }
 
 export async function getConductorAgents() {
-  return apiFetch<{ agents: ConductorWorker[]; online: number; sessions: ConductorSession[] }>('/api/conductor/agents')
+  // closedSessions is absent from a hub older than the dashboard
+  return apiFetch<{
+    agents: ConductorWorker[]
+    online: number
+    sessions: ConductorSession[]
+    closedSessions?: ConductorClosedSession[]
+  }>('/api/conductor/agents')
 }
 
 export async function getConductorTree(id: string) {

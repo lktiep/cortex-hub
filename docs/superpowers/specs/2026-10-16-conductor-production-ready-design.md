@@ -480,7 +480,7 @@ A worker that reconnects with an `activeTaskId` that was reclaimed receives
 | `POST /api/conductor/tree` *(new)* | Backend of `cortex_task_tree_create`. |
 | `POST /api/conductor/:id/review` *(new)* | Approve or reject (tasks and gates). Refuses a `user` gate when `X-API-Key-Owner` is present (D8). |
 | `POST /api/conductor/:id/route` *(new)* | Backend of `cortex_task_route`. |
-| `GET /api/conductor/agents` | Adds engines, models, quota and current task per worker; adds MCP sessions. |
+| `GET /api/conductor/agents` | Adds engines, models, quota and current task per worker; adds MCP sessions: `sessions` (open) and `closedSessions` (the 50 most recently active completed, abandoned or expired ones, each with its `status`). |
 | `POST /api/conductor`, `PUT /:id`, `/auto-assign`, `/:id/cancel` | Go through `lifecycle.ts`; no direct pushes; cancel revokes an active task. |
 | `/api/tasks` (task board) | `POST` with `assignTo`, `PATCH` status/assignee, `/:id/assign`, `/:id/cancel`, `DELETE` go through `lifecycle.ts` and the dispatcher instead of writing statuses directly. |
 
@@ -599,7 +599,7 @@ Based on the approved mock (`proposed.tsx`, screenshots shot-3/4).
   (dependencies outside the group) and "output" (dependents outside) columns.
 - **Actions:** approve or reject a review or a user gate, clear an
   escalation, change route — through the new REST routes.
-- **Agents Online** lists MCP sessions next to workers.
+- **Agents Online** lists MCP sessions next to workers. The list starts folded, showing only how many are open; opened, it shows the open sessions, with an Open / Closed switch for the recently closed ones.
 
 ## 8. Part C — Setup and URLs
 

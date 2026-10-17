@@ -20,6 +20,7 @@ import {
   TaskBriefingWizard,
   TaskDetail,
   AgentDetail,
+  SessionList,
   type StatusFilter,
   type TaskPrefill,
   type ResumeTask,
@@ -27,7 +28,6 @@ import {
   buildTaskTree,
   flattenTree,
   getIdeInfo,
-  formatTimeAgo,
   getCapColor,
   getResultSummary,
   getTaskDuration,
@@ -618,23 +618,7 @@ export default function ConductorPage() {
                 )
               })}
             </div>
-            {online.sessions.length > 0 && (
-              <div className={styles.sessionList}>
-                <span className={styles.sessionListLabel}>MCP sessions</span>
-                {online.sessions.map((s) => {
-                  const { icon, label, colorClass } = getIdeInfo(s.ide ?? undefined)
-                  return (
-                    <div key={s.sessionId} className={styles.sessionRow}>
-                      <span className={`${styles.agentIdeIcon} ${colorClass ? styles[colorClass] : ''}`} title={label}>{icon}</span>
-                      <strong className={styles.agentIdText}>{s.agentId}</strong>
-                      <span className={styles.sessionMeta}>{s.hostname ?? '-'}</span>
-                      <span className={styles.sessionMeta}>{s.branch ?? '-'}</span>
-                      <span className={styles.sessionMeta}>{formatTimeAgo(s.lastActivity)}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+            <SessionList open={online.sessions} closed={agentsData?.closedSessions ?? []} />
             </>
           )}
         </div>

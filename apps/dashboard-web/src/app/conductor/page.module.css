@@ -4182,6 +4182,90 @@
   letter-spacing: 0.05em;
 }
 
+.sessionToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.sessionToggle:hover {
+  opacity: 0.8;
+}
+
+.sessionFilter {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 2px;
+  margin: var(--space-1) 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.sessionFilterTab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px var(--space-3);
+  background: none;
+  border: none;
+  border-radius: calc(var(--radius-md) - 2px);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.sessionFilterTab:hover {
+  color: var(--text-primary);
+}
+
+.sessionFilterTabActive {
+  background: var(--accent-primary);
+  color: white;
+}
+
+.sessionFilterTabActive:hover {
+  color: white;
+}
+
+.sessionRows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.sessionRowClosed {
+  opacity: 0.6;
+}
+
+.sessionStatus {
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-size: 0.625rem;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.sessionTime {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.sessionEmpty {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
 .sessionRow {
   display: flex;
   align-items: center;

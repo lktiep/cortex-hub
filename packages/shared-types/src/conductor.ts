@@ -63,6 +63,9 @@ export interface SessionView {
   sessionId: string; agentId: string; hostname: string | null; ide: string | null
   branch: string | null; projectId: string | null; apiKeyName: string | null; lastActivity: string
 }
+/** How a session closed: `cortex_session_end`, the IDE's exit hook, or the idle sweep. */
+export type ClosedSessionStatus = 'completed' | 'abandoned' | 'expired'
+export interface ClosedSessionView extends SessionView { status: ClosedSessionStatus }
 export interface TreeTaskInput {
   key: string; title: string; description?: string; kind?: 'work' | 'gate' | 'group'
   parentKey?: string; dependsOn?: string[]; requiredCapabilities?: string[]

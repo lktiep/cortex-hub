@@ -1,6 +1,8 @@
 import { Hono, type Context } from 'hono'
 import { randomUUID } from 'crypto'
-import type { ReviewRequest, RoutePatch, RouteSpec, SessionView, TaskResult, TreeCreateRequest } from '@cortex/shared-types'
+import type {
+  ClosedSessionView, ReviewRequest, RoutePatch, RouteSpec, SessionView, TaskResult, TreeCreateRequest,
+} from '@cortex/shared-types'
 import { db } from '../db/client.js'
 import { getAllConnectedAgents, notifyAgents } from '../ws/conductor.js'
 import { dispatch, pickForPull, servesProject } from '../conductor/dispatcher.js'
@@ -66,6 +68,18 @@ function activeSessions(): SessionView[] {
   `).all(SESSION_LIMIT) as SessionView[]
 }
 
+/** Closed sessions, the most recently active first. */
+function closedSessions(): ClosedSessionView[] {
+  return db.prepare(`
+    SELECT id AS sessionId, from_agent AS agentId, hostname, ide, branch, project_id AS projectId,
+           api_key_name AS apiKeyName, COALESCE(last_activity, created_at) AS lastActivity, status
+    FROM session_handoffs
+    WHERE status IN ('completed', 'abandoned', 'expired')
+    ORDER BY lastActivity DESC
+    LIMIT ?
+  `).all(SESSION_LIMIT) as ClosedSessionView[]
+}
+
 function allCompleted(ids: string[]): boolean {
   if (ids.length === 0) return true
   const placeholders = ids.map(() => '?').join(',')
@@ -83,9 +97,10 @@ conductorRouter.get('/agents', (c) => {
       agents: connected,
       online: connected.length,
       sessions: activeSessions(),
+      closedSessions: closedSessions(),
     })
   } catch (error) {
-    return c.json({ agents: [], online: 0, sessions: [], error: String(error) }, 500)
+    return c.json({ agents: [], online: 0, sessions: [], closedSessions: [], error: String(error) }, 500)
   }
 })
 
