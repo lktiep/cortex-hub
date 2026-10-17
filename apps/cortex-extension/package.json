@@ -2,7 +2,7 @@
   "name": "cortex-agent",
   "displayName": "Cortex Agent",
   "description": "VS Code extension for Cortex Hub — real-time agent orchestration via WebSocket conductor",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "cortex-hub",
   "license": "MIT",
   "repository": {

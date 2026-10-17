@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
+import { basename, dirname } from 'node:path'
 import type { AntigravitySDK, Models } from 'antigravity-sdk'
 import { getConfig, type CortexConfig } from './config.js'
 import {
@@ -8,6 +9,7 @@ import {
 } from './conversation.js'
 import { maskKey, normaliseAgentId, type WindowAgent } from './identity.js'
 import { hubUrlProblem } from './mcp-config.js'
+import { ownStateDb, pointSdkAtStateDb } from './state-db.js'
 import {
   USER_REPORTS, decide, isReviewTask, outcomeFor, revokeStopsConversation, sameRun, startTracking, taskPrompt, timingsFor,
   untrackedProgress, untrackedToast, type Outcome, type TaskTracking, type UserReport,
@@ -387,6 +389,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { AntigravitySDK: Sdk, Models: models } = require('antigravity-sdk') as { AntigravitySDK: typeof AntigravitySDK; Models: typeof Models }
       const sdk = new Sdk(context)
+      // Open this IDE's own state database: the SDK's guess misses the "Antigravity IDE" folder
+      const stateDb = ownStateDb(context.globalStorageUri.fsPath)
+      if (!stateDb) log('No state database beside this extension\'s storage, so the Antigravity SDK looks for one itself')
+      else if (pointSdkAtStateDb(sdk, stateDb)) log(`Antigravity SDK reads this IDE's state database (${basename(dirname(dirname(dirname(stateDb))))})`)
+      else log('This Antigravity SDK has no state database lookup to point at this IDE, so it looks for one itself')
       sdkSettled = sdk.initialize().then(() => {
         antigravitySdk = asAgentSdk(sdk)
         sdkModels = models

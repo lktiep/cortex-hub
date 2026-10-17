@@ -256,6 +256,12 @@ the panel's text, or the log lines with hosts and keys removed.
   use the same name with an extension older than 1.0. Install 1.0 (section 1) and give each
   window its own name (section 2).
 - **"No API key configured".** Set one with the pencil, or see the lookup order in section 2.
+- **Every task goes to the clipboard, and the Cortex Agent output says "Antigravity SDK init
+  failed … Could not locate Antigravity state database".** Up to 1.0.1 the extension let the SDK
+  look for the IDE's state database in an `Antigravity` folder only. Antigravity IDE keeps it in
+  `Antigravity IDE`, so on a new install the SDK did not start. Install 1.0.2 or newer (section 1)
+  and reload the window. The output then says `Antigravity SDK reads this IDE's state database
+  (Antigravity IDE)` and `Antigravity SDK ready`.
 - **The old version still runs after installing.** Reload the window. If it still shows the old
   version, uninstall and install again (section 1).
 - **The script finds no editor.** Pass the VSIX by hand: `--vsix ./cortex-agent.vsix`
