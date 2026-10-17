@@ -77,6 +77,12 @@
 }
 
 /* Permissions */
+.permHint {
+  margin: 0 0 var(--space-2);
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+}
+
 .permGrid {
   display: flex;
   flex-direction: column;

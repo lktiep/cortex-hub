@@ -38,7 +38,8 @@ macOS and Ubuntu:
 
 ```bash
 git clone --depth 1 https://github.com/lktiep/cortex-hub.git /tmp/cortex-hub-src
-cp -R /tmp/cortex-hub-src/examples/conductor-sandbox ~/conductor-sandbox
+mkdir -p ~/conductor-sandbox
+cp -R /tmp/cortex-hub-src/examples/conductor-sandbox/. ~/conductor-sandbox
 cd ~/conductor-sandbox
 git init -b main && git add -A && git commit -m "Conductor sandbox"
 gh repo create <you>/conductor-sandbox --private --source . --push
@@ -49,16 +50,57 @@ Windows (PowerShell):
 
 ```powershell
 git clone --depth 1 https://github.com/lktiep/cortex-hub.git $env:TEMP\cortex-hub-src
-Copy-Item -Recurse $env:TEMP\cortex-hub-src\examples\conductor-sandbox $HOME\conductor-sandbox
+New-Item -ItemType Directory -Force $HOME\conductor-sandbox | Out-Null
+Copy-Item -Recurse -Force $env:TEMP\cortex-hub-src\examples\conductor-sandbox\* $HOME\conductor-sandbox
 cd $HOME\conductor-sandbox
 git init -b main; git add -A; git commit -m "Conductor sandbox"
 gh repo create <you>/conductor-sandbox --private --source . --push
 npm test
 ```
 
-`npm test` should report 8 passing tests.
+`npm test` should report 8 passing tests. Both copy the folder's contents, so running them again
+over an existing `conductor-sandbox` does not nest a second one inside it.
 
-## 2. Start the agents
+## 2. Set up the lead
+
+On the lead's machine, add the hub to Claude Code with the **lead** key (the snippet in
+[setup.md, section 5](../../docs/conductor/setup.md#5-point-each-engine-at-the-hub)). If Claude Code
+already has a `cortex-hub` entry with another key, run `claude mcp remove --scope user cortex-hub`
+first.
+
+```bash
+claude mcp add --transport http --scope user cortex-hub https://<your-mcp-host>/mcp \
+  --header "Authorization: Bearer <lead-api-key>"
+```
+
+Then install Cortex in your copy. Run it inside the folder.
+
+macOS and Ubuntu:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh | bash
+```
+
+Windows (PowerShell, with Python 3 installed):
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.ps1 -OutFile $env:TEMP\install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\install.ps1
+```
+
+Windows refuses to run a downloaded script directly ("running scripts is disabled on this
+system"). `-ExecutionPolicy Bypass` allows this one run and leaves the machine's policy as it is.
+
+The installer adds the session hooks and the `/cs` and `/ce` commands under `.claude/`, plus
+`CLAUDE.md` and `.cortex/`, and lists `.claude/` in `.gitignore`. Leave all of it uncommitted:
+the workers start from the GitHub repo and need none of it.
+
+Start Claude Code in the folder (or run `/mcp` and reconnect `cortex-hub` in a session that was
+already open) and run `/cs`. The lead needs `cortex_task_tree_create` and `cortex_agents`. If it
+says it does not have them, the lead key does not grant them: edit the key on the dashboard's API
+keys page, tick every box, save, and reconnect.
+
+## 3. Start the agents
 
 Give each agent its own worker key (Dashboard, API keys). Run these inside your copy. They are
 the commands from [setup.md](../../docs/conductor/setup.md#6-install-a-worker) with a name and an
@@ -87,10 +129,10 @@ only: the two workers above have no capabilities.
 Check: `node ~/.cortex/worker/cortex-worker.mjs status --agent-id sbx-claude` (and `sbx-agy`), and
 the three agents on the dashboard's Conductor page.
 
-## 3. Load the plan
+## 4. Load the plan
 
-**With a lead (recommended).** Open Claude Code in your copy, with the hub added under the lead key
-(setup.md, section 9), and paste the prompt in [LEAD-PROMPT.md](LEAD-PROMPT.md). The lead creates
+**With a lead (recommended).** In the Claude Code session from step 2, paste the prompt in
+[LEAD-PROMPT.md](LEAD-PROMPT.md). The lead creates
 the whole tree in one call, reviews and merges each PR, and reports progress.
 
 **Without a lead.** On the hub machine, with the project id the lead would use (from
@@ -104,7 +146,7 @@ curl -sS -X POST http://localhost:4000/api/conductor/tree -H 'Content-Type: appl
 Then approve each task's review on the Conductor page yourself. Always pass the project id: a task
 without one can go to a worker in any of your repos.
 
-## 4. What should happen
+## 5. What should happen
 
 1. A1 goes to `sbx-claude` and A2 to `sbx-agy`, at the same time. A3 waits for both.
 2. Each opens a PR on a `cx/<key>-…` branch with a commit titled `<key>: <title>`. The lead merges it
@@ -118,14 +160,14 @@ without one can go to a worker in any of your repos.
 
 After a full run, `npm test` on `main` reports at least 12 passing tests.
 
-## 5. Escalation drill
+## 6. Escalation drill
 
 Load `plan-escalation.json` the same way. E1's check is `node -e "process.exit(1)"`, so every run
 fails. The worker still commits NOTES.md and opens a PR, then reports the run as failed. The task
 is retried once on the same branch, then escalated to the lead, who sees it in "Needs you" and
 cancels it with `cortex_task_cancel` (or cancel it on the dashboard). Close the PR without merging.
 
-## 6. Run it again
+## 7. Run it again
 
 Keys are unique within a tree, not across trees, so the same plan can be loaded again as a new
 tree. Reset the code first:
@@ -135,7 +177,7 @@ git checkout main && git pull
 git reset --hard <first commit> && git push --force-with-lease origin main
 ```
 
-Or delete the GitHub repo and repeat step 1.
+Or delete the GitHub repo and repeat steps 1 and 2.
 
 ## Usage
 

@@ -2099,6 +2099,11 @@ $gitignoreEntries = @(
 # of truth. An ignore line for a tracked path does not untrack it, so nothing
 # breaks today - it breaks silently for whoever removes and re-adds the file.
 function Test-TrackedByGit($path) {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return $false }
+    # Windows PowerShell 5.1 turns a redirected native stderr line into an error record,
+    # and under the script's "Stop" that ends the install. "did not match any file(s)"
+    # is git's normal answer for an untracked path, so this function runs under Continue.
+    $ErrorActionPreference = "Continue"
     git ls-files --error-unmatch -- $path 2>$null | Out-Null
     return ($LASTEXITCODE -eq 0)
 }

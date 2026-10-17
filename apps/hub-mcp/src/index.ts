@@ -4,17 +4,8 @@ import { logger } from 'hono/logger'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 
-import { registerCodeTools } from './tools/code.js'
-import { registerHealthTools } from './tools/health.js'
-import { registerIndexingTools } from './tools/indexing.js'
-import { registerKnowledgeTools } from './tools/knowledge.js'
-import { registerMemoryTools } from './tools/memory.js'
-import { registerQualityTools } from './tools/quality.js'
-import { registerSessionTools } from './tools/session.js'
-import { registerChangeTools } from './tools/changes.js'
-import { registerAnalyticsTools } from './tools/analytics.js'
-import { registerTaskTools } from './tools/tasks.js'
-import { registerConductorLeadTools } from './tools/conductor-lead.js'
+import { allowedToolNames, MCP_TOOL_PERMISSIONS, toolNameForPermission } from '@cortex/shared-types'
+import { registerAllTools } from './tools/index.js'
 import { validateApiKey, invalidateTokenCache } from './middleware/auth.js'
 import { telemetryStorage } from './api-call.js'
 import { appendHintBlocks, canAppendHints } from './hint-blocks.js'
@@ -125,26 +116,7 @@ app.get('/', (c) => {
     version: c.env.MCP_SERVER_VERSION ?? '0.1.0',
     mcp: '/mcp',
     health: '/health',
-    tools: [
-      'cortex_health',
-      'cortex_memory_store',
-      'cortex_memory_search',
-      'cortex_memory_delete',
-      'cortex_knowledge_store',
-      'cortex_knowledge_search',
-      'cortex_code_search',
-      'cortex_code_impact',
-      'cortex_code_context',
-      'cortex_code_reindex',
-      'cortex_list_repos',
-      'cortex_cypher',
-      'cortex_detect_changes',
-      'cortex_quality_report',
-      'cortex_session_start',
-      'cortex_session_end',
-      'cortex_changes',
-      'cortex_plan_quality',
-    ],
+    tools: MCP_TOOL_PERMISSIONS.map((p) => toolNameForPermission(p.id)),
   })
 })
 
@@ -155,10 +127,8 @@ function createMcpServer(env: Env, permissions?: string[]) {
     version: env.MCP_SERVER_VERSION ?? '0.1.0',
   })
 
-  // Normalize permissions list if present (dots to underscores)
-  const allowedTools = permissions
-    ? new Set(permissions.map((p) => p.replace(/\./g, '_')))
-    : null
+  // A key's permissions name tools with dots for underscores; '*' lets every tool through.
+  const allowedTools = allowedToolNames(permissions)
 
   // Wrap server.tool to filter out unauthorized tools
   const originalTool = server.tool.bind(server)
@@ -180,17 +150,7 @@ function createMcpServer(env: Env, permissions?: string[]) {
     return originalTool(name, description, schema, handler)
   }
 
-  registerHealthTools(server, env)
-  registerMemoryTools(server, env)
-  registerKnowledgeTools(server, env)
-  registerCodeTools(server, env)
-  registerIndexingTools(server, env)
-  registerQualityTools(server, env)
-  registerSessionTools(server, env)
-  registerChangeTools(server, env)
-  registerAnalyticsTools(server, env)
-  registerTaskTools(server, env)
-  registerConductorLeadTools(server, env)
+  registerAllTools(server, env)
   return server
 }
 

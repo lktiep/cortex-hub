@@ -12,35 +12,8 @@ import type { ApiKey } from '@/lib/api'
 import { KeyRound, ClipboardList, AlertTriangle, XCircle, ICON_INLINE } from '@/lib/icons'
 import { copyToClipboard } from '@/lib/clipboard'
 import KeyQuickStart from '@/components/KeyQuickStart'
-
-const allPermissions = [
-  { id: 'cortex.session.start', label: 'Start Session (session_start)', group: 'Session' },
-  { id: 'cortex.session.end', label: 'End Session (session_end)', group: 'Session' },
-  { id: 'cortex.changes', label: 'Check Remote Changes (changes)', group: 'Changes' },
-  { id: 'cortex.code.search', label: 'Code Search (code_search)', group: 'Code' },
-  { id: 'cortex.code.context', label: 'Symbol Context (code_context)', group: 'Code' },
-  { id: 'cortex.code.impact', label: 'Blast Radius (code_impact)', group: 'Code' },
-  { id: 'cortex.code.reindex', label: 'Trigger Reindex (code_reindex)', group: 'Code' },
-  { id: 'cortex.list.repos', label: 'List Repositories (list_repos)', group: 'Code' },
-  { id: 'cortex.cypher', label: 'Cypher Graph Queries (cypher)', group: 'Code' },
-  { id: 'cortex.detect.changes', label: 'Pre-commit Change Risk (detect_changes)', group: 'Code' },
-  { id: 'cortex.memory.store', label: 'Store Memory (memory_store)', group: 'Memory' },
-  { id: 'cortex.memory.search', label: 'Search Memory (memory_search)', group: 'Memory' },
-  { id: 'cortex.memory.delete', label: 'Delete Memory (memory_delete)', group: 'Memory' },
-  { id: 'cortex.knowledge.store', label: 'Store Team Knowledge (knowledge_store)', group: 'Knowledge' },
-  { id: 'cortex.knowledge.search', label: 'Search Team Knowledge (knowledge_search)', group: 'Knowledge' },
-  { id: 'cortex.quality.report', label: 'Report Quality Gates (quality_report)', group: 'Quality' },
-  { id: 'cortex.plan.quality', label: 'Assess Plan Quality (plan_quality)', group: 'Quality' },
-  { id: 'cortex.task.create', label: 'Create Task (task_create)', group: 'Tasks' },
-  { id: 'cortex.task.pickup', label: 'Pickup Task (task_pickup)', group: 'Tasks' },
-  { id: 'cortex.task.accept', label: 'Accept Task (task_accept)', group: 'Tasks' },
-  { id: 'cortex.task.update', label: 'Update Task (task_update)', group: 'Tasks' },
-  { id: 'cortex.task.list', label: 'List Tasks (task_list)', group: 'Tasks' },
-  { id: 'cortex.task.status', label: 'Task Status (task_status)', group: 'Tasks' },
-  { id: 'cortex.task.submit.strategy', label: 'Submit Strategy (task_submit_strategy)', group: 'Tasks' },
-  { id: 'cortex.health', label: 'Health Diagnostics (health)', group: 'System' },
-  { id: 'cortex.tool.stats', label: 'Tool Usage Stats (tool_stats)', group: 'System' },
-]
+import { MCP_TOOL_PERMISSIONS } from '@cortex/shared-types'
+import { permissionsToSave, tickedPermissions } from '@/lib/key-permissions'
 
 export default function KeysPage() {
   const { data, mutate } = useSWR('api_keys', listApiKeys)
@@ -52,7 +25,7 @@ export default function KeysPage() {
   // Create key form state
   const [keyName, setKeyName] = useState('')
   const [keyScope, setKeyScope] = useState('all')
-  const [keyPerms, setKeyPerms] = useState<string[]>(allPermissions.map((p) => p.id))
+  const [keyPerms, setKeyPerms] = useState<string[]>(MCP_TOOL_PERMISSIONS.map((p) => p.id))
   const [keyExpiry, setKeyExpiry] = useState('never')
 
   // Edit key form state
@@ -80,7 +53,7 @@ export default function KeysPage() {
     setEditTarget(key)
     setEditName(key.name)
     setEditScope(key.scope)
-    setEditPerms(key.permissions ?? [])
+    setEditPerms(tickedPermissions(key.permissions))
     setShowEdit(true)
   }
 
@@ -95,7 +68,7 @@ export default function KeysPage() {
       await updateApiKey(editTarget.id, {
         name: editName,
         scope: editScope,
-        permissions: editPerms,
+        permissions: permissionsToSave(editPerms),
       })
       setShowEdit(false)
       setEditTarget(null)
@@ -113,7 +86,7 @@ export default function KeysPage() {
       const result = await createApiKey({
         name: keyName,
         scope: keyScope,
-        permissions: keyPerms,
+        permissions: permissionsToSave(keyPerms),
         expiresInDays: keyExpiry === 'never' ? undefined : parseInt(keyExpiry),
       })
 
@@ -265,8 +238,9 @@ export default function KeysPage() {
             </select>
 
             <label className={styles.fieldLabel} style={{ marginTop: 'var(--space-5)' }}>Permissions</label>
+            <p className={styles.permHint}>With every box ticked the key also gets tools added in later versions.</p>
             <div className={styles.permGrid}>
-              {allPermissions.map((p) => (
+              {MCP_TOOL_PERMISSIONS.map((p) => (
                 <label key={p.id} className={styles.permItem}>
                   <input
                     type="checkbox"
@@ -334,8 +308,9 @@ export default function KeysPage() {
             </select>
 
             <label className={styles.fieldLabel} style={{ marginTop: 'var(--space-5)' }}>Permissions</label>
+            <p className={styles.permHint}>With every box ticked the key also gets tools added in later versions.</p>
             <div className={styles.permGrid}>
-              {allPermissions.map((p) => (
+              {MCP_TOOL_PERMISSIONS.map((p) => (
                 <label key={p.id} className={styles.permItem}>
                   <input
                     type="checkbox"

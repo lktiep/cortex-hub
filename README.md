@@ -406,7 +406,7 @@ Or download [`cortex-agent.vsix`](https://github.com/lktiep/cortex-hub/releases/
 curl -fsSL "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.sh" | bash
 
 # Windows
-iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.ps1" -OutFile $env:TEMP\install.ps1; & $env:TEMP\install.ps1
+iwr -useb "https://raw.githubusercontent.com/lktiep/cortex-hub/master/scripts/install.ps1" -OutFile $env:TEMP\install.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\install.ps1
 ```
 
 **Or inside Claude Code:** type `/install`

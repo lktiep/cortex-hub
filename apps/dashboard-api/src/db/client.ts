@@ -5,6 +5,7 @@ import { readFileSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { applyConductorMigrations } from './conductor-migrations.js'
+import { grantAllToolsToFullKeys } from './key-permissions-migration.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -322,6 +323,13 @@ try {
   db.exec('CREATE INDEX IF NOT EXISTS idx_session_handoffs_agent_status ON session_handoffs(from_agent, status)')
 } catch (e) {
   console.warn('[Migration] Failed to create indexing indexes:', e)
+}
+
+try {
+  const granted = grantAllToolsToFullKeys(db)
+  if (granted > 0) console.log(`[Migration] ${granted} API key(s) with every box ticked now get every tool`)
+} catch (e) {
+  console.warn('[Migration] Failed to widen full API keys:', e)
 }
 
 export { db }

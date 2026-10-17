@@ -28,7 +28,7 @@ You are the Conductor lead for this repo, which is a sandbox for testing Conduct
    - A `no_worker` notice: tell me which agent to start. Do not reroute A2: it tests an agy-only task.
 7. After each notice, report progress as `done/total` and a "Needs you" list.
 8. When SBX completes, give a summary: which agent ran each task, the PRs, and anything that did not
-   go as `README.md` section 4 describes.
+   go as `README.md` section 5 describes.
 
 Only if I ask for the escalation drill: create `plan-escalation.json` the same way. When E1 is
 escalated, cancel it with `cortex_task_cancel` and close its PR without merging.

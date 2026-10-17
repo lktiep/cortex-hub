@@ -43,8 +43,8 @@ Or run directly:
 # macOS / Linux
 bash scripts/install.sh
 
-# Windows PowerShell
-.\scripts\install.ps1
+# Windows PowerShell (Bypass: Windows will not run a downloaded script by default)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
 
 # Specific IDEs only
 bash scripts/install.sh --tools claude,gemini,cursor
@@ -220,7 +220,7 @@ bash scripts/bootstrap.sh
 
 ```bash
 bash scripts/install.sh          # macOS/Linux
-.\scripts\onboard.ps1            # Windows
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\onboard.ps1   # Windows
 ```
 
 ### 3. Verify Connection
@@ -254,5 +254,5 @@ curl -s -X POST 'http://localhost:8318/mcp' \
 | MCP tools not available | Run `/install` or `bash scripts/install.sh --force` |
 | Hooks not enforcing | Check `.cortex/.hooks-version` — run `/install` to update |
 | Post-push webhook not firing | Set `CORTEX_API_URL` env var, or use default (localhost) |
-| Windows hooks not working | Use `.\scripts\install.ps1` to generate PS1 hooks |
+| Windows hooks not working | Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1` to regenerate them |
 | `/install` not found | Run `bash scripts/install.sh` from cortex-hub repo first |

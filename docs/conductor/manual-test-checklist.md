@@ -231,6 +231,9 @@ end-to-end test skips on Windows: `.cmd` shims, process-tree kill, `cmd.exe`.
 - [ ] Both scripts finish without errors under the default execution policy, in both PowerShell
   versions.
 - [ ] The second run changes nothing; `-CheckOnly` reports everything as set up.
+- [ ] In a fresh repo with no `.claude/` committed, `install.ps1` reaches its summary and
+  `.gitignore` lists `.claude/`. Windows PowerShell 5.1 used to stop at the `.gitignore` step with
+  `pathspec '.claude/' did not match any file(s) known to git`.
 - [ ] Each MCP config onboard writes points at `https://<your-mcp-host>/mcp` (check in an editor;
   do not paste the file).
 - [ ] A worker started afterwards (check 8) finds the hub and key without `--hub` or

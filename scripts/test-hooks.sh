@@ -665,6 +665,10 @@ for f in scripts/onboard.sh scripts/onboard.ps1 scripts/install.sh scripts/insta
   check "no STATE.md in $f"                0 "$(grep -q 'Read .*STATE.md' "$REPO/$f" && echo 1 || echo 0)"
   check "no old tool ladder in $f"         0 "$(grep -q 'Tool Priority' "$REPO/$f" && echo 1 || echo 0)"
 done
+# Windows PowerShell 5.1 under "Stop" ends the script on git's "did not match any file(s)"
+# once stderr is redirected, so a fresh project's install died before writing .gitignore.
+check "install.ps1 asks git about tracked paths under Continue" 0 \
+  "$(awk '/^function Test-TrackedByGit/,/^}/' "$REPO/scripts/install.ps1" | grep -q 'ErrorActionPreference = "Continue"' && echo 0 || echo 1)"
 
 echo "install.sh — the commit gate must actually be installed, not just configured"
 # Every case here was live on cortex-hub itself. `git hook run pre-commit` produced no
