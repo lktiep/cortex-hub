@@ -11,6 +11,7 @@ import { listApiKeys, createApiKey, revokeApiKey, updateApiKey } from '@/lib/api
 import type { ApiKey } from '@/lib/api'
 import { KeyRound, ClipboardList, AlertTriangle, XCircle, ICON_INLINE } from '@/lib/icons'
 import { copyToClipboard } from '@/lib/clipboard'
+import KeyQuickStart from '@/components/KeyQuickStart'
 
 const allPermissions = [
   { id: 'cortex.session.start', label: 'Start Session (session_start)', group: 'Session' },
@@ -207,7 +208,7 @@ export default function KeysPage() {
       {/* Portals for Modals (to avoid CSS transform stacking context bugs) */}
       {mounted && newKeyResult && createPortal(
         <div className={styles.modal}>
-          <div className={styles.modalContent} style={{ maxWidth: '500px', textAlign: 'center' }}>
+          <div className={styles.modalContent} style={{ maxWidth: '720px', textAlign: 'center' }}>
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 'var(--space-4)', color: 'var(--status-healthy)' }}>
               <KeyRound size={40} strokeWidth={1.5} />
             </div>
@@ -216,6 +217,7 @@ export default function KeysPage() {
               Copy this key now. For security reasons, you won't be able to see it again!
             </p>
             <code className={styles.newKeyValue} style={{ textAlign: 'left', background: 'var(--bg-primary)' }}>{newKeyResult}</code>
+            <KeyQuickStart apiKey={newKeyResult} />
             <div className={styles.modalActions} style={{ justifyContent: 'center', marginTop: 'var(--space-6)' }}>
               <button
                 className="btn btn-ghost"

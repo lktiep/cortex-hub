@@ -41,6 +41,10 @@
       {
         "command": "cortex.resetWindow",
         "title": "Cortex: Reset This Window's Agent and Key"
+      },
+      {
+        "command": "cortex.setHubUrl",
+        "title": "Cortex: Set Hub URL"
       }
     ],
     "viewsContainers": {
@@ -72,7 +76,7 @@
         "cortexHub.hubUrl": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Cortex Hub conductor WebSocket URL. Resolution order: this setting, then `CORTEX_HUB_WS_URL` / `CORTEX_HUB_URL` env vars, then MCP configs (Claude Code, `.mcp.json`, Gemini, Antigravity, Cursor, Windsurf, VS Code), then `ws://localhost:8318/ws/conductor`."
+          "markdownDescription": "Cortex Hub URL: the MCP URL from the dashboard (`https://<your-mcp-host>/mcp`) or the conductor WebSocket URL. The Agent Panel (pencil icon) and `Cortex: Set Hub URL` write it here for every window. Resolution order: this setting, then `CORTEX_HUB_WS_URL` / `CORTEX_HUB_URL` env vars, then MCP configs (Claude Code, `.mcp.json`, Gemini, Antigravity, Cursor, Windsurf, VS Code), then `ws://localhost:8318/ws/conductor`."
         },
         "cortexHub.agentId": {
           "type": "string",

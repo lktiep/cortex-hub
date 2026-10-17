@@ -38,6 +38,8 @@ const dom = {
   editHint: /** @type {HTMLElement} */ (document.getElementById('edit-hint')),
   agentKey: /** @type {HTMLElement} */ (document.getElementById('agent-key')),
   agentKeyInput: /** @type {HTMLInputElement} */ (document.getElementById('agent-key-input')),
+  agentHub: /** @type {HTMLElement} */ (document.getElementById('agent-hub')),
+  agentHubInput: /** @type {HTMLInputElement} */ (document.getElementById('agent-hub-input')),
 };
 
 // ── Message Handler ────────────────────────────────────────────────────────
@@ -69,7 +71,7 @@ window.addEventListener('message', (event) => {
 // ── Agent Status ───────────────────────────────────────────────────────────
 /**
  * @param {{ agentId: string; capabilities: string[]; connectionStatus: string; uptime: number;
- *   keyHint?: string; keySource?: string; note?: string }} agent
+ *   keyHint?: string; keySource?: string; hubUrl?: string; hubSource?: string; note?: string }} agent
  */
 function renderAgent(agent) {
   // A refresh arrives every 15 s; it must not undo what is being typed in the form.
@@ -85,6 +87,13 @@ function renderAgent(agent) {
   if (agent.keySource !== undefined) {
     dom.agentKey.textContent = agent.keyHint ? `${agent.keyHint} · ${agent.keySource}` : 'none';
     dom.agentKey.title = agent.keySource;
+  }
+  if (agent.hubUrl !== undefined) {
+    // 'default' is the localhost fallback: say that nothing was set, since that is the usual fault.
+    const unset = agent.hubSource === 'default';
+    dom.agentHub.textContent = unset ? `not set, trying ${agent.hubUrl}` : `${agent.hubUrl} · ${agent.hubSource}`;
+    dom.agentHub.title = agent.hubSource || '';
+    dom.agentHub.classList.toggle('unset', unset);
   }
 
   // Connection dot
@@ -395,6 +404,8 @@ function enterEditMode() {
   dom.agentNameInput.value = currentAgentId;
   dom.agentKeyInput.style.display = '';
   dom.agentKeyInput.value = '';
+  dom.agentHubInput.style.display = '';
+  dom.agentHubInput.value = '';
   dom.capabilityAdd.style.display = '';
   dom.editActions.style.display = '';
   dom.editHint.style.display = '';
@@ -409,6 +420,8 @@ function exitEditMode() {
   dom.agentNameInput.style.display = 'none';
   dom.agentKeyInput.style.display = 'none';
   dom.agentKeyInput.value = '';
+  dom.agentHubInput.style.display = 'none';
+  dom.agentHubInput.value = '';
   dom.capabilityAdd.style.display = 'none';
   dom.editActions.style.display = 'none';
   dom.editHint.style.display = 'none';
@@ -417,11 +430,12 @@ function exitEditMode() {
   renderCapabilityBadges();
 }
 
-/** One message for name, capabilities and key, so the extension reconnects once. It answers with a toast. */
+/** One message for name, capabilities, key and hub URL, so the extension reconnects once. It answers with a toast. */
 function saveEdits() {
   const agentId = dom.agentNameInput.value.trim() || currentAgentId;
   const apiKey = dom.agentKeyInput.value.trim() || undefined;
-  vscode.postMessage({ type: 'saveAgent', agentId, capabilities: [...currentCapabilities], apiKey });
+  const hubUrl = dom.agentHubInput.value.trim() || undefined;
+  vscode.postMessage({ type: 'saveAgent', agentId, capabilities: [...currentCapabilities], apiKey, hubUrl });
   exitEditMode();
 }
 

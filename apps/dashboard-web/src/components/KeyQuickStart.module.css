@@ -1,0 +1,115 @@
+.section {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  text-align: left;
+}
+
+.heading {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin-bottom: var(--space-3);
+}
+
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--space-4);
+}
+
+.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+}
+
+.tabActive {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-primary);
+}
+
+.urlRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.url {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--accent-secondary);
+  overflow-wrap: anywhere;
+}
+
+.urlInput {
+  flex: 1;
+  min-width: 12rem;
+}
+
+.hint {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin: var(--space-1) 0 var(--space-2);
+}
+
+.warn {
+  font-size: 0.8125rem;
+  color: var(--status-warning);
+  margin-top: var(--space-2);
+}
+
+.step {
+  margin-top: var(--space-5);
+}
+
+.stepHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.stepTitle {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+/* The global .btn has no disabled look; these stay off until the MCP URL is known. */
+.section button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Wrapped, not scrolled: the Copy button copies the exact line either way. */
+.cmd {
+  margin: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--accent-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

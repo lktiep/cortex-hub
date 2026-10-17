@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { getConfig, type CortexConfig } from './config.js'
 import { maskKey, normaliseAgentId, type WindowAgent } from './identity.js'
+import { hubUrlProblem } from './mcp-config.js'
 import { ConductorClient, type ConnectionState, type StopReason } from './ws-client.js'
 import { CortexWebviewProvider, CortexPanel, type AgentStatus } from './webview/panel.js'
 // hub-api.ts no longer needed — all data fetched via WS
@@ -440,8 +441,15 @@ function agentPayload(cfg: CortexConfig, connectionStatus: ConnectionState, note
     uptime: 0,
     keyHint: maskKey(cfg.apiKey),
     keySource: displaySource(cfg.keySource),
+    hubUrl: cfg.hubUrl,
+    hubSource: displaySource(cfg.hubSource),
     note,
   }
+}
+
+/** The hub, name and key a connection dials. A config with the same target can keep the connection. */
+function connectionTarget(cfg: CortexConfig): string {
+  return JSON.stringify([cfg.hubUrl, cfg.agentId, cfg.apiKey])
 }
 
 function postAgent(status: AgentStatus): void {
@@ -485,6 +493,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let current = await loadConfig()
   /** Why the hub last closed the connection on purpose; cleared when a connection starts. */
   let stoppedNote: string | undefined
+  /** connectionTarget() of the live client. */
+  let clientTarget: string | undefined
+  /** A hub answered since activation, so a missing hub URL is not what is wrong. */
+  let reachedHub = false
+  let hubUrlWarned = false
+
+  /** Ask for the hub's MCP URL and save it for every window on this machine. */
+  async function promptHubUrl(): Promise<void> {
+    const value = await vscode.window.showInputBox({
+      title: 'Cortex: hub URL',
+      prompt: 'The MCP URL from the dashboard (Home, Quick Connect). Saved for every window on this machine.',
+      placeHolder: 'https://<your-mcp-host>/mcp',
+      value: vscode.workspace.getConfiguration('cortexHub').get<string>('hubUrl', ''),
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim() ? hubUrlProblem(v) ?? null : null),
+    })
+    if (value && !hubUrlProblem(value)) await vscode.commands.executeCommand('cortex.saveAgent', { hubUrl: value })
+  }
+
+  /** Nothing names a hub and localhost did not answer: say so once, with the fix. */
+  function warnNoHubUrl(): void {
+    hubUrlWarned = true
+    log(`No hub URL in the cortexHub.hubUrl setting, env or MCP configs, and nothing answers at ${current.hubUrl}.`)
+    void vscode.window
+      .showWarningMessage(`Cortex: no hub URL is set, and nothing answers at ${current.hubUrl}. Paste the MCP URL from the dashboard.`, 'Set hub URL')
+      .then((pick) => {
+        if (pick === 'Set hub URL') void promptHubUrl()
+      })
+  }
 
   // Initialize Antigravity SDK if running in Antigravity IDE
   if (current.ide === 'antigravity') {
@@ -531,6 +568,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     stoppedNote = undefined
     client = new ConductorClient(current)
+    clientTarget = connectionTarget(current)
 
     client.on('stateChange', (state: ConnectionState) => {
       updateStatusBar(current.agentId, state)
@@ -538,6 +576,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
 
     client.on('connected', () => {
+      reachedHub = true
       vscode.window.showInformationMessage(`Cortex: Connected as ${current.agentId}`)
       postAgent(agentPayload(current, 'connected'))
 
@@ -551,6 +590,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     client.on('disconnected', (code: number, reason: string) => {
       log(`Disconnected: code=${code} reason=${reason}`)
       postAgent(agentPayload(current, 'disconnected'))
+      // The localhost fallback suits a hub on this machine. When nothing answers there either, the
+      // URL is what is missing, not a key or a name.
+      if (current.hubSource === 'default' && !reachedHub && !hubUrlWarned) warnNoHubUrl()
     })
 
     // The hub closed on purpose (replaced, id in use, key refused). Reconnecting would only fight
@@ -786,15 +828,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   )
 
-  /** Re-read who this window is and act on it: reconnect once if the name or key changed. */
-  async function applyWindowAgent(): Promise<void> {
-    const before = current
+  /**
+   * Re-read who this window is and act on it: reconnect once if the hub, name or key changed.
+   * `retryStopped` also restarts a connection the hub stopped, for a Save the user just made.
+   * Saving a hub URL changes the settings too, so this can run twice for one Save; whichever run
+   * comes second finds the client already dialing the new target and leaves it alone.
+   */
+  async function applyWindowAgent(retryStopped = true): Promise<void> {
     current = await loadConfig()
-    log(`This window: agentId=${current.agentId} capabilities=${current.capabilities.join(',')} apiKey=${maskKey(current.apiKey) || 'NONE'} keySource=${current.keySource}`)
-    const sameIdentity = current.agentId === before.agentId && current.apiKey === before.apiKey
-    if (client && client.state === 'connected' && sameIdentity) {
+    log(`This window: agentId=${current.agentId} capabilities=${current.capabilities.join(',')} hubUrl=${current.hubUrl} hubSource=${current.hubSource} apiKey=${maskKey(current.apiKey) || 'NONE'} keySource=${current.keySource}`)
+    const keep = client !== null && clientTarget === connectionTarget(current) && !(retryStopped && stoppedNote)
+    if (client && keep) {
       client.updateConfig(current)
-      client.sendCapabilitiesUpdate(current.capabilities)
+      if (client.state === 'connected') client.sendCapabilitiesUpdate(current.capabilities)
     } else if (current.apiKey) {
       initClient()
     } else {
@@ -805,11 +851,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     postAgent(agentPayload(current, client?.state ?? 'disconnected', stoppedNote))
   }
 
-  // cortex.saveAgent — the Agent Panel's Save: name, capabilities and key for this window only.
-  // A field left out keeps its current value; an empty key keeps the current key.
+  // cortex.saveAgent — the Agent Panel's Save: name, capabilities and key for this window only, and
+  // the hub URL for every window. A field left out keeps its current value, as does an empty key or URL.
   context.subscriptions.push(
-    vscode.commands.registerCommand('cortex.saveAgent', async (input?: { agentId?: string; capabilities?: string[]; apiKey?: string }) => {
+    vscode.commands.registerCommand('cortex.saveAgent', async (input?: { agentId?: string; capabilities?: string[]; apiKey?: string; hubUrl?: string }) => {
       const state = context.workspaceState
+      const hubUrl = input?.hubUrl?.trim()
+      const hubProblem = hubUrl ? hubUrlProblem(hubUrl) : undefined
+      if (hubProblem) {
+        toast(hubProblem, 'error')
+        return
+      }
       if (input?.agentId !== undefined) {
         const agentId = normaliseAgentId(input.agentId)
         if (!agentId) {
@@ -836,10 +888,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           return
         }
       }
+      if (hubUrl) {
+        // Every window on a machine talks to the same hub, so the URL is a user setting, not window state.
+        const settings = vscode.workspace.getConfiguration('cortexHub')
+        try {
+          await settings.update('hubUrl', hubUrl, vscode.ConfigurationTarget.Global)
+        } catch (e) {
+          log(`Could not save cortexHub.hubUrl: ${e instanceof Error ? e.message : String(e)}`)
+          toast('Could not save the hub URL to settings. See Output > Cortex Agent.', 'error')
+          return
+        }
+        const scoped = settings.inspect<string>('hubUrl')
+        if (scoped?.workspaceValue || scoped?.workspaceFolderValue) {
+          void vscode.window.showWarningMessage("Cortex: this workspace's own cortexHub.hubUrl setting still applies in this window.")
+        }
+      }
       await applyWindowAgent()
-      toast('Saved for this window', 'success')
+      toast(hubUrl ? 'Saved. The hub URL applies to every window on this machine' : 'Saved for this window', 'success')
     }),
   )
+
+  context.subscriptions.push(vscode.commands.registerCommand('cortex.setHubUrl', promptHubUrl))
 
   // cortex.resetWindow — forget this window's own agent and key; the cortexHub settings apply again
   context.subscriptions.push(
@@ -863,13 +932,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Re-read config on settings change
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(async (e) => {
-      if (e.affectsConfiguration('cortexHub')) {
+      if (!e.affectsConfiguration('cortexHub')) return
+      if (client) {
+        // A new hub URL, name or key needs a new connection; anything else is picked up in place.
+        log('Config updated from settings')
+        await applyWindowAgent(false)
+      } else {
         current = await loadConfig()
-        if (client) {
-          client.updateConfig(current)
-          log('Config updated from settings')
-        }
-        updateStatusBar(current.agentId, client?.state ?? 'disconnected')
+        updateStatusBar(current.agentId, 'disconnected')
+        postAgent(agentPayload(current, 'disconnected', stoppedNote))
       }
     }),
   )
@@ -881,7 +952,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     initClient()
   } else if (!current.apiKey) {
     log('No API key found. Set one for this window in the Agent Panel (pencil icon), set cortexHub.apiKey, or configure MCP; then run "Cortex: Connect to Hub".')
-    vscode.window.showWarningMessage('Cortex Agent: No API key detected. Check Output > Cortex Agent for details.')
+    if (current.hubSource === 'default') {
+      hubUrlWarned = true
+      log(`No hub URL found either, so the default ${current.hubUrl} applies.`)
+      void vscode.window
+        .showWarningMessage(
+          'Cortex Agent: no hub URL or API key found. Click the pencil in the Agent Panel and paste both from the dashboard.',
+          'Open Agent Panel',
+        )
+        .then((pick) => {
+          if (pick === 'Open Agent Panel') void vscode.commands.executeCommand('cortex.showPanel')
+        })
+    } else {
+      vscode.window.showWarningMessage('Cortex Agent: No API key detected. Check Output > Cortex Agent for details.')
+    }
   }
 }
 

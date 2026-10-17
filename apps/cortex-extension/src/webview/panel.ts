@@ -9,6 +9,10 @@ export interface AgentStatus {
   keyHint?: string;
   /** Where the key came from: 'window', 'setting', 'env:<NAME>', a config path or 'none'. */
   keySource?: string;
+  /** The conductor URL this window dials. */
+  hubUrl?: string;
+  /** Where hubUrl came from: 'setting', 'env:<NAME>', a config path or 'default' (localhost). */
+  hubSource?: string;
   /** Why the connection stopped, when the hub closed it on purpose. */
   note?: string;
 }
@@ -43,7 +47,7 @@ type ExtensionMessage =
   | { type: 'webviewReady' }
   | { type: 'pickupTask'; taskId: string }
   | { type: 'viewTask'; taskId: string }
-  | { type: 'saveAgent'; agentId: string; capabilities: string[]; apiKey?: string }
+  | { type: 'saveAgent'; agentId: string; capabilities: string[]; apiKey?: string; hubUrl?: string }
   | { type: 'resetWindow' };
 
 /** The sidebar and the editor-tab panel send the same messages; both land here. */
@@ -64,6 +68,7 @@ function dispatch(message: ExtensionMessage): void {
         agentId: message.agentId,
         capabilities: message.capabilities,
         apiKey: message.apiKey,
+        hubUrl: message.hubUrl,
       });
       break;
     case 'resetWindow':
@@ -104,6 +109,11 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
     <span class="value mono" id="agent-key">--</span>
     <input class="edit-input agent-key-input" id="agent-key-input" type="password" autocomplete="off" spellcheck="false" placeholder="New key for this window (empty keeps it)" style="display:none" />
   </div>
+  <div class="agent-key agent-hub">
+    <span class="label">Hub</span>
+    <span class="value mono" id="agent-hub">--</span>
+    <input class="edit-input agent-key-input" id="agent-hub-input" type="url" autocomplete="off" spellcheck="false" placeholder="https://&lt;your-mcp-host&gt;/mcp from the dashboard (empty keeps it)" style="display:none" />
+  </div>
   <div class="capabilities" id="capabilities"></div>
   <div class="capability-add" id="capability-add" style="display:none">
     <select class="cap-select" id="cap-select">
@@ -127,7 +137,7 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
     <button class="btn-cancel" id="edit-cancel">Cancel</button>
     <button class="btn-cancel btn-reset" id="edit-reset" title="Forget this window's name, capabilities and key, and use the cortexHub settings again">Reset window</button>
   </div>
-  <div class="edit-hint" id="edit-hint" style="display:none">Saved for this window only. The key goes to the OS keychain, not settings.json.</div>
+  <div class="edit-hint" id="edit-hint" style="display:none">Name, capabilities and key are for this window only; the key goes to the OS keychain, not settings.json. The hub URL is for every window on this machine.</div>
   <div class="connection-status" id="connection-status">Disconnected</div>
 </section>
 <section class="card stats-card" id="stats-section">

@@ -45,6 +45,14 @@ export function toConductorWsUrl(raw: string): string | undefined {
   return `${protocol}//${url.host}${path}`
 }
 
+/** Why a typed hub URL can't be used, or undefined when it can. The fix names the dashboard's MCP URL. */
+export function hubUrlProblem(raw: string): string | undefined {
+  const value = raw.trim()
+  if (!value) return 'Paste the MCP URL from the dashboard, like https://hub.example.com/mcp'
+  if (!toConductorWsUrl(value)) return 'Not an http(s) or ws(s) URL. Paste the MCP URL from the dashboard, like https://hub.example.com/mcp'
+  return undefined
+}
+
 /** Config files that may hold the cortex entry, in the order scripts/install.sh resolves them. */
 export function mcpSources(home: string, workspace?: string): Array<{ path: string; project?: string }> {
   const out: Array<{ path: string; project?: string }> = []

@@ -161,6 +161,10 @@ h2 {
   font-weight: 400;
 }
 
+.agent-hub .value.unset {
+  color: var(--color-warning);
+}
+
 /* Connection dot — animated pulse */
 .connection-dot {
   width: 8px;

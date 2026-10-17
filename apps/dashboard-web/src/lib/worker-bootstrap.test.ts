@@ -63,6 +63,13 @@ describe('workerBootstrap', () => {
     }
   });
 
+  it('puts a given key in place of the placeholder', () => {
+    const b = workerBootstrap('https://mcp.example.com/mcp', 'sk_ctx_ab12');
+    expect(b.unix).toContain('CORTEX_API_KEY=sk_ctx_ab12 bash');
+    expect(b.windows).toContain('$env:CORTEX_API_KEY="sk_ctx_ab12"');
+    for (const cmd of [b.unix, b.windows]) expect(cmd).not.toContain('<worker-api-key>');
+  });
+
   it.each(['', '   '])('treats blank input %j like null', (v) => {
     const b = workerBootstrap(v);
     expect(b.hubBase).toBeNull();

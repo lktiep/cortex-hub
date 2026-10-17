@@ -6,6 +6,7 @@ import {
   conductorConnectUrl,
   detectHub,
   entryEndpoint,
+  hubUrlProblem,
   mcpSources,
   resolveApiKey,
   resolveHubUrl,
@@ -43,6 +44,20 @@ describe('toConductorWsUrl', () => {
 
   it('default fallback is a conductor URL', () => {
     expect(DEFAULT_HUB_WS_URL.endsWith('/ws/conductor')).toBe(true)
+  })
+})
+
+describe('hubUrlProblem', () => {
+  it('accepts what the dashboard shows, with stray spaces', () => {
+    expect(hubUrlProblem('https://mcp.example.com/mcp')).toBeUndefined()
+    expect(hubUrlProblem('  http://localhost:8318/mcp \n')).toBeUndefined()
+    expect(hubUrlProblem('wss://mcp.example.com/ws/conductor')).toBeUndefined()
+  })
+
+  it('names the fix for an empty value, a bare host or another scheme', () => {
+    for (const raw of ['', '   ', 'mcp.example.com/mcp', 'ftp://mcp.example.com/mcp']) {
+      expect(hubUrlProblem(raw), JSON.stringify(raw)).toMatch(/https:\/\/.+\/mcp/)
+    }
   })
 })
 
