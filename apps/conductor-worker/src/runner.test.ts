@@ -803,6 +803,21 @@ describe('runTask', () => {
     expect(remoteHas(BRANCH)).toBe(false);
   });
 
+  posixOnly('tells the pre-push hook a WIP push with CORTEX_WIP_PUSH=1, and not the final push', async () => {
+    const seen = path.join(fx.root, 'pre-push.seen');
+    const hook = path.join(fx.repo, '.git', 'hooks', 'pre-push');
+    writeFileSync(hook, `#!/bin/sh\necho "[$CORTEX_WIP_PUSH]" >> "${seen}"\n`);
+    chmodSync(hook, 0o755);
+
+    const failed = await run(makeTask(), harness(fakeEngine({ classify: { kind: 'error', message: 'x' } }).adapter));
+    expect(failed.kind).toBe('failed');
+    expect(remoteSubject()).toBe('WIP K-1: engine error');
+    const done = await run(makeTask({ id: 'task_done', branch: 'task/done' }), harness(fakeEngine().adapter));
+    expect(done.kind).toBe('completed');
+
+    expect(readFileSync(seen, 'utf8')).toBe('[1]\n[]\n');
+  });
+
   it('removes the worktree after every outcome, but keeps the branch', async () => {
     const cases: Array<{ id: string; engine: FakeEngine; kind: RunOutcome['kind'] }> = [
       { id: 'task_done', engine: fakeEngine(), kind: 'completed' },

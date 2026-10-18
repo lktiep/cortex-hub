@@ -399,6 +399,19 @@ describe('pushBranch', () => {
     expect(err?.message).toContain('failed to push some refs');
   });
 
+  it.skipIf(process.platform === 'win32')('hands the pre-push hook the env it is given', async () => {
+    const dir = wt('e');
+    await prepareWorktree(fx.repo, dir, 'task/e', 'main');
+    writeFileSync(path.join(dir, 'e.txt'), 'e');
+    const sha = await commitAll(dir, 'e', { name: 'W', email: 'w@example.invalid' });
+    const hook = path.join(fx.repo, '.git', 'hooks', 'pre-push');
+    writeFileSync(hook, '#!/bin/sh\n[ "$CORTEX_WIP_PUSH" = 1 ] || { echo "not a WIP push"; exit 1; }\n');
+    chmodSync(hook, 0o755);
+    await expect(pushBranch(dir, 'task/e')).rejects.toThrow('not a WIP push');
+    await pushBranch(dir, 'task/e', undefined, { CORTEX_WIP_PUSH: '1' });
+    expect(fx.run(fx.origin, ['rev-parse', 'task/e'])).toBe(sha);
+  });
+
   it('pushes a new branch without writing an upstream to the shared config', async () => {
     const dir = wt('q');
     await prepareWorktree(fx.repo, dir, 'task/q', 'main');
@@ -599,6 +612,13 @@ describe('runners', () => {
     const run = createGitRunner({ bin: process.execPath, ceilingMs: 200 });
     const r = await run(['-e', 'setTimeout(() => console.log("done"), 600)'], { cwd: fx.root, timeoutMs: 10_000 });
     expect(r).toMatchObject({ code: 0, stdout: 'done\n' });
+  });
+
+  it('adds the env it is given, but never over its own no-prompt settings', async () => {
+    const run = createGitRunner({ bin: process.execPath });
+    const print = 'console.log(process.env.CORTEX_WIP_PUSH, process.env.GIT_TERMINAL_PROMPT)';
+    const r = await run(['-e', print], { cwd: fx.root, env: { CORTEX_WIP_PUSH: '1', GIT_TERMINAL_PROMPT: '1' } });
+    expect(r).toMatchObject({ code: 0, stdout: '1 0\n' });
   });
 
   it('a missing gh binary resolves with code 127', async () => {

@@ -295,7 +295,7 @@ Options (add them after `start`):
 | `--repo <path>` | The clone to work in. Default: the current directory. |
 | `--engines claude,agy` | Engines to look for, in order. Default: `agy,claude,codex,gemini`. |
 | `--capabilities a,b` | Tags the hub can match tasks on. Use ids from the hub's `.cortex/capability-templates.json` (`plan, orchestrate, backend, frontend, design, review, godot, resources, game-logic, server, build-game, database, devops, security, testing, docker, deploy`). Unknown tags are dropped, with a warning on the hub. |
-| `--engine-timeout <min>` | Minutes an engine may run per task. Default: 90. The setup and test commands, and the commit and push with the project's own git hooks, get the same limit. |
+| `--engine-timeout <min>` | Minutes an engine may run per task. Default: 90. The setup and test commands, and the commit and push with the project's own git hooks, get the same limit. Saving unfinished work (a WIP commit and push) gets 10 minutes (section 10). |
 | `--hub <url>`, `--api-key <key>` | Override the detected hub and key. |
 
 Before it starts the worker, the bootstrap runs `cw check --if-changed` on the same repo
@@ -566,6 +566,20 @@ Other problems:
 - `git push failed (stopped after 90 min)`: the project's pre-push hook ran longer than the engine
   limit. Raise `--engine-timeout`, or make the hook faster. A failed commit or push shows what the
   hook printed.
+- The log says `the WIP commit … was not pushed`: after a failure, a timeout or a quota handoff
+  the worker commits the unfinished work and pushes it, hooks included, within 10 minutes. A
+  pre-push hook that runs the full checks can take longer, more so with several workers testing
+  at once. The commit is safe on the local branch, in the worktree the worker keeps. The worker
+  sets `CORTEX_WIP_PUSH=1` for that push only, so the project's hook can skip its slow checks
+  there:
+
+  ```sh
+  # in the pre-push hook, or the script it runs
+  [ "$CORTEX_WIP_PUSH" = 1 ] && exit 0  # unfinished work from a Cortex worker
+  ```
+
+  The push that opens the pull request does not set it and runs every check. The worker never
+  pushes with `--no-verify`: what a WIP push skips is the project's choice.
 
 ## 11. Security
 

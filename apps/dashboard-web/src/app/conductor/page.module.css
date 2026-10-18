@@ -380,6 +380,14 @@
   font-size: 0.75rem;
 }
 
+.activityNote {
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  border-left: 2px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
 .activityLog {
   max-height: 420px;
   overflow-y: auto;

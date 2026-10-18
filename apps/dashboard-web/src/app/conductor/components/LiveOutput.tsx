@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getLogActionLabel } from './shared'
 import { ICON_INLINE } from '@/lib/icons'
-import { currentStep, lastLogId, lineTone, liveness, logTime, mergeLogs, span } from '@/lib/task-activity'
+import { currentStep, lastLogId, lineTone, liveness, logTime, mergeLogs, reportsSteps, span } from '@/lib/task-activity'
 import type { LineTone, TaskLog } from '@/lib/task-activity'
 import styles from '../page.module.css'
 
@@ -96,8 +96,11 @@ export function LiveOutput({ taskId, isActive }: { taskId: string; isActive: boo
 
 function ActivityStrip({ logs, now }: { logs: TaskLog[]; now: number }) {
   const step = currentStep(logs)
+  // An older worker sends no steps and no heartbeat, so its silence does not mean it is gone.
+  const older = reportsSteps(logs) === false
   const { lastOutputAt, heartbeat } = liveness(logs)
   const lastSeen = logs.reduce((max, l) => Math.max(max, logTime(l.created_at) || 0), 0)
+  const silentFor = lastSeen > 0 ? now - lastSeen : 0
   const quietFor = lastOutputAt === null ? null : now - lastOutputAt
 
   return (
@@ -106,7 +109,7 @@ function ActivityStrip({ logs, now }: { logs: TaskLog[]; now: number }) {
         <div className={styles.activityItem}>
           <span className={styles.activityLabel}>Current step</span>
           <span className={styles.activityValue} title={step?.text}>
-            {step ? step.text : 'not started yet'}
+            {step ? step.text : older ? 'not reported by this worker' : 'not started yet'}
           </span>
         </div>
         <div className={styles.activityItem}>
@@ -125,11 +128,26 @@ function ActivityStrip({ logs, now }: { logs: TaskLog[]; now: number }) {
           </div>
         )}
       </div>
-      {lastSeen > 0 && now - lastSeen > WORKER_LOST_MS && (
-        <div className={styles.activityWarn}>
-          Nothing from the worker for {span(now - lastSeen)}. If it does not come back, run{' '}
-          <code>cw status</code> on its machine.
+      {older ? (
+        <div className={styles.activityNote}>
+          An older worker runs this task: it sends the engine&apos;s text, but no steps, and does not
+          check in while the engine is quiet.
+          {silentFor > WORKER_LOST_MS && (
+            <>
+              {' '}Nothing for {span(silentFor)} can be a long command; <code>cw status</code> on its
+              machine tells.
+            </>
+          )}{' '}
+          Once it is free, re-run its install command, or <code>cw update</code> then{' '}
+          <code>cw restart --all</code>, to see its steps here.
         </div>
+      ) : (
+        silentFor > WORKER_LOST_MS && (
+          <div className={styles.activityWarn}>
+            Nothing from the worker for {span(silentFor)}. If it does not come back, run{' '}
+            <code>cw status</code> on its machine.
+          </div>
+        )
       )}
     </>
   )

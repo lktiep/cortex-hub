@@ -67,6 +67,22 @@ export function currentStep(logs: TaskLog[]): Step | null {
   return null
 }
 
+/**
+ * Whether the task's worker reports its steps and checks in while the engine is quiet; null
+ * before the first progress. A worker older than this view sends only the engine's text, so its
+ * rows carry no marked line and it sends no heartbeat. A newer one starts with `• engine: …`.
+ */
+export function reportsSteps(logs: TaskLog[]): boolean | null {
+  let progress = false
+  for (const log of logs) {
+    if (log.action === 'quiet') return true
+    if (log.action !== 'progress' || log.message === null) continue
+    progress = true
+    if (log.message.split('\n').some((line) => lineTone(line) !== 'text')) return true
+  }
+  return progress ? false : null
+}
+
 export interface Liveness {
   /** When the engine last printed something, in ms; null before the first line. */
   lastOutputAt: number | null

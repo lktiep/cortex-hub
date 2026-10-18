@@ -59,6 +59,12 @@ const TEST_TAIL_LINES = 200;
 const SETUP_TAIL_LINES = 40;
 /** GitHub rejects a PR body over 65 536 chars; the summary is at most 4 000. */
 const PR_TEST_TAIL_MAX = 50_000;
+/**
+ * Set for the hooks of a WIP push, so a project's pre-push can skip its slow checks for work that
+ * is not done; the push that opens the pull request runs them all. The hooks still run: never
+ * `--no-verify`.
+ */
+const WIP_PUSH_ENV = { CORTEX_WIP_PUSH: '1' };
 
 function taskHead(task: AssignedTask): string {
   return task.key ?? task.id.slice(0, 8);
@@ -208,7 +214,7 @@ export async function runTask(
     }
     if (commit === null) return { commit: null, pushed: false, problem: null };
     try {
-      await pushBranch(worktree, task.branch);
+      await pushBranch(worktree, task.branch, undefined, WIP_PUSH_ENV);
       return { commit, pushed: true, problem: null };
     } catch (err) {
       // the commit lives only on the local branch, which a fresh `worktree add -B` would reset

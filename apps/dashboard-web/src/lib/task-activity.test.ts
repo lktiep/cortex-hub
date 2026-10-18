@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { currentStep, lastLogId, lineTone, liveness, logTime, mergeLogs, span } from './task-activity'
+import { currentStep, lastLogId, lineTone, liveness, logTime, mergeLogs, reportsSteps, span } from './task-activity'
 import type { TaskLog } from './task-activity'
 
 const row = (id: number, action: string, message: string | null, createdAt = '2026-10-18T09:00:00Z'): TaskLog => ({
@@ -68,6 +68,29 @@ describe('currentStep', () => {
 
   it('is null before any step', () => {
     expect(currentStep([row(1, 'picked_up', null), row(2, 'progress', 'plain text')])).toBeNull()
+  })
+})
+
+describe('reportsSteps', () => {
+  it('is unknown before the first progress', () => {
+    expect(reportsSteps([])).toBeNull()
+    expect(reportsSteps([row(1, 'created', 'Task created'), row(2, 'picked_up', null)])).toBeNull()
+  })
+
+  it('is false for a worker that sends only the engine text', () => {
+    const logs = [
+      row(1, 'picked_up', null),
+      row(2, 'progress', 'agy started (gemini)'),
+      row(3, 'progress', 'Looking at the parser first. [Bash]'),
+    ]
+    expect(reportsSteps(logs)).toBe(false)
+  })
+
+  it('is true once a marked line or a heartbeat comes', () => {
+    expect(reportsSteps([row(1, 'progress', 'text'), row(2, 'progress', '• engine: agy (gemini)')])).toBe(true)
+    expect(reportsSteps([row(1, 'progress', 'text\n→ Bash: pnpm test')])).toBe(true)
+    expect(reportsSteps([row(1, 'progress', '(3 earlier lines left out; cw tail on the worker shows them)\nok')])).toBe(true)
+    expect(reportsSteps([row(1, 'progress', 'text'), row(2, 'quiet', 'still running: x, no output for 2 min')])).toBe(true)
   })
 })
 

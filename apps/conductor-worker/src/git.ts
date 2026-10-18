@@ -9,9 +9,13 @@ export interface RunResult {
 }
 /**
  * `timeoutMs` replaces the ceiling, for a command that runs the repository's own hooks: a
- * pre-push verify can take longer than any network wait.
+ * pre-push verify can take longer than any network wait. `env` adds variables for the command
+ * and the hooks it runs.
  */
-export type GitRun = (args: string[], opts: { cwd: string; input?: string; timeoutMs?: number }) => Promise<RunResult>;
+export type GitRun = (
+  args: string[],
+  opts: { cwd: string; input?: string; timeoutMs?: number; env?: Record<string, string> },
+) => Promise<RunResult>;
 export type GhRun = (args: string[], opts: { cwd: string; input?: string }) => Promise<RunResult>;
 
 const CEILING_MS = 10 * 60 * 1000;
@@ -24,7 +28,7 @@ function runChild(
   bin: string,
   extraEnv: Record<string, string>,
   args: string[],
-  opts: { cwd: string; input?: string; timeoutMs?: number },
+  opts: { cwd: string; input?: string; timeoutMs?: number; env?: Record<string, string> },
   ceilingMs: number,
 ): Promise<RunResult> {
   return (async (): Promise<RunResult> => {
@@ -32,8 +36,9 @@ function runChild(
     try {
       tracked = spawnTracked(bin, args, {
         cwd: opts.cwd,
-        // read at call time so a test (or the user) changing process.env is honoured
-        env: { ...process.env, ...extraEnv },
+        // read at call time so a test (or the user) changing process.env is honoured; a
+        // caller's env never turns the prompts back on
+        env: { ...process.env, ...opts.env, ...extraEnv },
         ...(opts.input !== undefined ? { stdin: opts.input } : {}),
       });
     } catch (err) {
@@ -413,10 +418,18 @@ export async function commitAll(
 
 /**
  * No `-u`: setting the upstream writes the clone's shared .git/config (see prepareWorktree).
- * `hookTimeoutMs` bounds the push and its pre-push hook; the ceiling by default.
+ * `hookTimeoutMs` bounds the push and its pre-push hook; the ceiling by default. `env` reaches
+ * the hook.
  */
-export async function pushBranch(dir: string, branch: string, hookTimeoutMs = CEILING_MS): Promise<void> {
-  const r = await retryOnLock(() => git(['push', 'origin', branch], { cwd: dir, timeoutMs: hookTimeoutMs }));
+export async function pushBranch(
+  dir: string,
+  branch: string,
+  hookTimeoutMs = CEILING_MS,
+  env?: Record<string, string>,
+): Promise<void> {
+  const r = await retryOnLock(() =>
+    git(['push', 'origin', branch], { cwd: dir, timeoutMs: hookTimeoutMs, ...(env !== undefined ? { env } : {}) }),
+  );
   if (r.code !== 0) throw new Error(failed('git push', r, hookTimeoutMs));
 }
 
