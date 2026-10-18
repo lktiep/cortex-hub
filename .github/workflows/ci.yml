@@ -142,12 +142,21 @@ jobs:
         run: |
           for f in scripts/install.sh scripts/onboard.sh scripts/bootstrap.sh \
                    scripts/sync-install-templates.sh scripts/test-hooks.sh \
+                   scripts/run-agent.sh scripts/test-run-agent.sh \
                    .claude/hooks/*.sh .gemini/hooks/*.sh; do
             bash -n "$f"
           done
 
       - name: Enforcement hook tests
         run: bash scripts/test-hooks.sh
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: run-agent.sh installs the cw command
+        run: bash scripts/test-run-agent.sh
 
       - name: Installers match the hooks they ship
         run: bash scripts/sync-install-templates.sh --check

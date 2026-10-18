@@ -192,6 +192,10 @@ export function detectHubBase(input: DetectInput): { hubBase: string; source: st
   return hubBaseOf(input, mcpEntries(input));
 }
 
+/** `source.key` when the key was given to the worker itself rather than read from an MCP config. */
+export const KEY_FROM_FLAG = '--api-key';
+export const KEY_FROM_ENV = 'env CORTEX_API_KEY';
+
 export function detectHubConfig(input: DetectInput): HubConfig | { error: string } {
   const { flags, env } = input;
   const entries = mcpEntries(input);
@@ -202,8 +206,8 @@ export function detectHubConfig(input: DetectInput): HubConfig | { error: string
 
   let apiKey: string | null;
   let keySource: string;
-  if ((apiKey = str(flags.apiKey)) !== null) keySource = '--api-key';
-  else if ((apiKey = str(env['CORTEX_API_KEY'])) !== null) keySource = 'env CORTEX_API_KEY';
+  if ((apiKey = str(flags.apiKey)) !== null) keySource = KEY_FROM_FLAG;
+  else if ((apiKey = str(env['CORTEX_API_KEY'])) !== null) keySource = KEY_FROM_ENV;
   else {
     const match = entries().find((e) => e.apiKey !== null && hubBaseFromUrl(e.url) === hubBase);
     apiKey = match?.apiKey ?? null;

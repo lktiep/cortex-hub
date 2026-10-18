@@ -10,6 +10,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
@@ -34,6 +35,7 @@ import type { WorkerState } from '../state.js';
 import { createGitFixture } from '../test-utils/git-fixture.js';
 import type { GitFixture } from '../test-utils/git-fixture.js';
 import { WORKER_VERSION } from '../version.js';
+import { readStartConfig } from './agents.js';
 import { claimPidFile, isAlive, printLogs, readPid, startDaemon, statusText, stopWorker } from './daemon.js';
 
 const posixOnly = it.skipIf(process.platform === 'win32');
@@ -340,7 +342,7 @@ process.stdout.write(JSON.stringify(r));
     const pid = readInfo().pid;
     strayPids.push(pid);
     expect(r).toEqual({ error: expect.stringContaining(`pid ${pid}`) });
-    expect(r).toEqual({ error: expect.stringMatching(/may still be starting.*cortex-worker status --agent-id a.*worker\.log/) });
+    expect(r).toEqual({ error: expect.stringMatching(/may still be starting.*cw status a.*worker\.log/) });
     // the child is left running: it may just be slow
     expect(isAlive(pid)).toBe(true);
   });
@@ -841,6 +843,56 @@ describe('start', () => {
     expect(await startForeground(startArgs(), h.opts)).toBe(1);
     expect(String(err.mock.calls[0]?.[0])).toMatch(/origin/);
     expect(existsSync(h.paths.pidFile)).toBe(false);
+  });
+
+  const registered = (): boolean => hub?.frames.some((f) => f['type'] === 'worker.register') === true;
+
+  posixOnly('saves the settings it ran with for restart, owner-only, with the key it was given', async () => {
+    hub = await startHub();
+    const h = harness(hub);
+    h.opts.env = { ...h.opts.env, CORTEX_SETUP_CMD: 'pnpm install', CORTEX_AGY_MODE: '' };
+    void launch(h, startArgs(['--capabilities', 'web', '--engines', 'claude', '--engine-timeout', '30']));
+    await until(registered, 'worker.register');
+    expect(statSync(h.paths.startFile).mode & 0o777).toBe(0o600);
+    expect(readStartConfig(h.paths.startFile)).toEqual({
+      agentId: 'w1',
+      repo: fx.repo,
+      hub: hub.base,
+      apiKey: KEY,
+      engines: ['claude'],
+      capabilities: ['web'],
+      engineTimeoutMin: 30,
+      env: { CORTEX_SETUP_CMD: 'pnpm install' },
+    });
+  });
+
+  it('saves no key it read from an MCP config, so a restart reads it there again', async () => {
+    hub = await startHub();
+    const h = harness(hub);
+    const env = { ...h.opts.env };
+    delete env.CORTEX_API_KEY;
+    h.opts.env = env;
+    const cursor = path.join(h.opts.homeDir ?? '', '.cursor');
+    mkdirSync(cursor, { recursive: true });
+    writeFileSync(
+      path.join(cursor, 'mcp.json'),
+      JSON.stringify({ mcpServers: { 'cortex-hub': { url: `${hub.base}/mcp`, headers: { Authorization: `Bearer ${KEY}` } } } }),
+    );
+    void launch(h);
+    await until(registered, 'worker.register');
+    expect(hub.requests[0]?.headers.authorization).toBe(`Bearer ${KEY}`);
+    expect(readStartConfig(h.paths.startFile)).toMatchObject({ agentId: 'w1', hub: hub.base });
+    expect(readStartConfig(h.paths.startFile)?.apiKey).toBeUndefined();
+    expect(readFileSync(h.paths.startFile, 'utf8')).not.toContain(KEY);
+  });
+
+  it('still starts when its settings cannot be saved', async () => {
+    hub = await startHub();
+    const h = harness(hub);
+    mkdirSync(path.join(h.paths.startFile, 'in-the-way'), { recursive: true });
+    void launch(h);
+    await until(registered, 'worker.register');
+    expect(h.log()).toMatch(/could not save the start settings/);
   });
 
   it('exits 1 when no hub is configured', async () => {

@@ -289,13 +289,19 @@ Options (add them after `start`):
 
 | Flag | Meaning |
 |---|---|
-| `--agent-id <id>` | Worker name. Default: `CORTEX_AGENT_ID`, else `<host>-<repo folder>`. Use a different one for each worker on a machine. |
+| `--agent-id <id>` | Worker name (`cw start <id>` is the same). Default: `CORTEX_AGENT_ID`, else `<host>-<repo folder>`. Use a different one for each worker on a machine. |
 | `--repo <path>` | The clone to work in. Default: the current directory. |
 | `--engines claude,agy` | Engines to look for, in order. Default: `agy,claude,codex,gemini`. |
 | `--capabilities a,b` | Tags the hub can match tasks on. Use ids from the hub's `.cortex/capability-templates.json` (`plan, orchestrate, backend, frontend, design, review, godot, resources, game-logic, server, build-game, database, devops, security, testing, docker, deploy`). Unknown tags are dropped, with a warning on the hub. |
 | `--hub <url>`, `--api-key <key>` | Override the detected hub and key. |
 
-There is no `cortex-worker` command on your PATH. After the first run, call the worker with node:
+The bootstrap also installs the `cw` command, short for cortex-worker: `~/.local/bin/cw` on
+macOS and Linux, `%USERPROFILE%\.local\bin\cw.cmd` on Windows. When that folder is not on your
+PATH yet, it adds it: one line at the end of `~/.zshrc`, `~/.bashrc` or `~/.profile` (by your
+shell), or your user PATH on Windows. Open a new terminal to use `cw`. A `cw` that is not the
+Cortex one is left as it is, and `CORTEX_SKIP_CW=1` skips all of this.
+
+Without `cw`, call the worker with node, which takes the same commands:
 
 - macOS and Linux: `node ~/.cortex/worker/cortex-worker.mjs <command>`
 - Windows: `node $HOME\.cortex\worker\cortex-worker.mjs <command>`
@@ -310,10 +316,10 @@ State, the pid file and the log live in `~/.cortex/worker/<agentId>/`. Task work
 Run this inside the clone:
 
 ```bash
-node ~/.cortex/worker/cortex-worker.mjs doctor
+cw doctor
 ```
 
-On Windows: `node $HOME\.cortex\worker\cortex-worker.mjs doctor`. Add `--probe` to also send a
+Add `--probe` to also send a
 tiny prompt through each engine, which proves its login works. Doctor prints one line per check,
 with a fix under each failure. A required check that fails makes the exit code 1.
 
@@ -326,7 +332,7 @@ with a fix under each failure. A required check that fails makes the exit code 1
 | `engines` | At least one engine is usable | Same as the row above. |
 | `hub config` | A hub URL and key were found | Pass `--hub` and `--api-key`, or set `CORTEX_HUB_URL` and `CORTEX_API_KEY`. |
 | `hub health` | `<hub>/health` answers 200 | Check the hub URL and your network, and that the hub is running. |
-| `worker version` (optional) | Same version as the hub serves | `node ~/.cortex/worker/cortex-worker.mjs update`. |
+| `worker version` (optional) | Same version as the hub serves | `cw update`, then `cw restart --all`. |
 | `handshake` | The hub accepts the key and sends its welcome | Check the key in `--api-key`, `CORTEX_API_KEY` or the MCP config. `closed 4001` or `closed 4003` (or a 401 from a proxy) means a rejected key; see section 10. |
 | `origin` | The repo has a remote named `origin` | Run doctor inside a clone, or pass `--repo <path>`. |
 | `project mapping` (optional) | Shows the project the hub mapped this repo to | Reads "unknown until first start" before the worker has connected once. |
@@ -337,17 +343,44 @@ The key is validated by the `handshake` row. There is no separate key row.
 ## 8. Run as a daemon
 
 ```bash
-node ~/.cortex/worker/cortex-worker.mjs start --daemon   # or -d; output goes to the log
-node ~/.cortex/worker/cortex-worker.mjs status           # running? task? last registration
-node ~/.cortex/worker/cortex-worker.mjs logs -f          # last 200 lines, then follow
-node ~/.cortex/worker/cortex-worker.mjs stop             # waits for a running task to wrap up
-node ~/.cortex/worker/cortex-worker.mjs update           # fetch the hub's worker version
+cw start acme -d     # start agent "acme" in the background (inside its clone); output goes to the log
+cw ls                # every agent on this machine, numbered
+cw status 2          # agent 2 of that list: running? task? last registration
+cw logs 2 -f         # its last 200 lines, then follow (Ctrl+C to quit)
+cw restart 2         # stop it, then start it again with the settings it last started with
+cw stop 2            # waits for a running task to wrap up
+cw stop --all        # every running agent
+cw restart --all     # every agent, running or not
+cw update            # fetch the hub's worker version
 ```
 
-Use `--agent-id <id>` with `status`, `logs` and `stop` when you run more than one worker on a
-machine. After `update`, stop and start the worker to use the new version.
+`cw ls` prints a table like this:
 
-The daemon does not survive a reboot. Nothing restarts it, so run `start --daemon` again after a
+```
+#  AGENT  STATE              TASK  ENGINES  REPO
+1  acme   running (pid 812)  -     claude   /src/acme
+2  mini   stopped            -     agy      /src/mini
+```
+
+An agent is its name or its number in `cw ls`. The numbers go by name and count this machine
+only, so they differ from the worker numbers on the dashboard, which count the online workers of
+every machine. A number that is also an agent's name (an agent called `2`) means that agent.
+`cw status` without an agent prints the list. `logs`, `stop` and `restart` without one take the
+agent of the current folder, or the only agent there is, and otherwise ask which one.
+
+**What `restart` reuses.** `start` saves the settings it ran with in
+`~/.cortex/worker/<agentId>/start.json`: the repo, hub, engines, capabilities, engine timeout,
+`CORTEX_SETUP_CMD`, `CORTEX_TEST_CMD`, `CORTEX_GH_BIN` and the `CORTEX_AGY_*` settings. It saves the key too when
+you gave it with `--api-key` or `CORTEX_API_KEY`, so the file is readable by you only (mode 600;
+on Windows, your profile folder's permissions). A key the worker read from an MCP config is not
+saved, and `restart` reads it from there again. `cw ls` never shows the key. Delete the agent's
+folder to forget it all. To change a setting, `cw stop` the agent and `cw start` it again with the
+new value. An agent last started by an older worker has no `start.json`: start it once with
+`cw start <name> -d`.
+
+After `update`, run `cw restart --all` to use the new version.
+
+The daemon does not survive a reboot. Nothing restarts it, so run `cw restart --all` after a
 restart. Starting it on boot is not covered here.
 
 ## 9. Lead setup

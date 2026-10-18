@@ -9,6 +9,7 @@ describe('paths', () => {
     expect(p.logFile).toBe(path.join('/h', '.cortex', 'worker', 'a1', 'worker.log'));
     expect(p.stateFile).toBe(path.join('/h', '.cortex', 'worker', 'a1', 'state.json'));
     expect(p.stopFile).toBe(path.join('/h', '.cortex', 'worker', 'a1', 'worker.stop'));
+    expect(p.startFile).toBe(path.join('/h', '.cortex', 'worker', 'a1', 'start.json'));
     expect(p.worktrees).toBe(path.join('/h', '.cortex', 'worker', 'a1', 'wt'));
     expect(p.root).toBe(workerRoot('/h'));
     expect(worktreePath(p, 't1')).toBe(path.join(p.home, 'wt', 't1'));

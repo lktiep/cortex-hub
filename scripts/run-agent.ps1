@@ -26,4 +26,49 @@ if ($rc -ne 0) {
   if (-not (Test-Path $W)) { Die "could not download the worker from $Hub" }
   Write-Warning 'download failed; using cached worker'
 } else { Move-Item -Force "$W.tmp.$PID" $W }
+# The cw command: `cw ls`, `cw logs 2 -f`, `cw restart --all` instead of `node <path> ...`.
+# It is only ever a small wrapper around this worker, so a cw.cmd that is not ours stays as it is.
+function Install-Cw {
+  $bin = Join-Path $HOME '.local\bin'
+  $cw = Join-Path $bin 'cw.cmd'
+  $w = (Resolve-Path -LiteralPath $W).ProviderPath
+  if ((Test-Path -LiteralPath $cw) -and -not (Select-String -LiteralPath $cw -SimpleMatch 'cortex-worker.mjs' -Quiet)) {
+    [Console]::Error.WriteLine("[cortex] $cw is not the Cortex one, so it stays; run the worker with: node `"$w`""); return
+  }
+  # cmd reads the file in the console code page: keep it ASCII by naming the profile folder by its variable
+  $target = $w -replace '%', '%%'
+  $profileDir = $env:USERPROFILE.TrimEnd('\')
+  if ($profileDir -and $w.StartsWith("$profileDir\", [StringComparison]::OrdinalIgnoreCase)) {
+    $target = '%USERPROFILE%' + ($w.Substring($profileDir.Length) -replace '%', '%%')
+  }
+  $body = "@echo off`r`nrem cw: shortcut for the Cortex worker (written by run-agent.ps1)`r`nnode `"$target`" %*`r`nexit /b %errorlevel%`r`n"
+  $old = if (Test-Path -LiteralPath $cw) { [IO.File]::ReadAllText($cw) } else { $null }
+  if ($old -ne $body) {
+    New-Item -ItemType Directory -Force -Path $bin | Out-Null
+    $tmp = "$cw.tmp.$PID"
+    [IO.File]::WriteAllText($tmp, $body, [Text.Encoding]::ASCII)
+    Move-Item -Force -LiteralPath $tmp -Destination $cw
+    [Console]::Error.WriteLine("[cortex] installed the cw command ($cw); try: cw ls")
+  }
+  # The user PATH, raw so that entries like %USERPROFILE%\bin stay as they are
+  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+  try {
+    $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $parts = @($raw -split ';' | Where-Object { $_ })
+    $have = @($parts | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') })
+    if ($have -notcontains $bin.TrimEnd('\')) {
+      $key.SetValue('Path', (($parts + $bin) -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
+      # setting any user variable tells Explorer and new terminals that PATH changed
+      [Environment]::SetEnvironmentVariable('CORTEX_PATH_REFRESH', $null, 'User')
+      [Console]::Error.WriteLine("[cortex] added $bin to your PATH; cw works in a new terminal")
+    }
+  } finally { $key.Close() }
+  $found = Get-Command cw -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($found -and $found.Source -and $found.Source -ne $cw) {
+    [Console]::Error.WriteLine("[cortex] another cw comes first on PATH ($($found.Source)); run this one as $cw")
+  }
+}
+if ($env:CORTEX_SKIP_CW -ne '1') {
+  try { Install-Cw } catch { Write-Warning "could not install the cw command ($($_.Exception.Message)); run the worker with: node `"$W`"" }
+}
 & node $W @args; exit $LASTEXITCODE

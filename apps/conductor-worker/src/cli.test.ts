@@ -15,8 +15,10 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { envWithoutSecret, isEntrypoint, main, parseCli, resolveAgentId, scrubSecret } from './cli.js';
+import { saveStartConfig } from './commands/agents.js';
+import type { StartConfig } from './commands/agents.js';
 import { DEFAULT_STOP_GRACE_MS, isAlive } from './commands/daemon.js';
-import { workerPaths } from './paths.js';
+import { workerPaths, workerRoot } from './paths.js';
 import { WORKER_VERSION } from './version.js';
 
 const posixOnly = it.skipIf(process.platform === 'win32');
@@ -53,6 +55,7 @@ describe('parseCli', () => {
       daemon: true,
       follow: false,
       probe: false,
+      all: false,
       agentId: 'a',
       engines: ['claude', 'agy'],
       capabilities: ['x', 'y'],
@@ -95,15 +98,40 @@ describe('parseCli', () => {
   it('parses logs -f, doctor --probe, stop, status, update and hub-url', () => {
     expect(parseCli(['logs', '-f'])).toMatchObject({ command: 'logs', follow: true });
     expect(parseCli(['doctor', '--probe'])).toMatchObject({ command: 'doctor', probe: true });
-    for (const c of ['stop', 'status', 'update', 'hub-url'] as const) {
-      expect(parseCli([c])).toMatchObject({ command: c, daemon: false, follow: false, probe: false });
+    for (const c of ['stop', 'restart', 'status', 'ls', 'update', 'hub-url'] as const) {
+      expect(parseCli([c])).toMatchObject({ command: c, daemon: false, follow: false, probe: false, all: false });
     }
   });
 
   it('rejects unknown options, a missing value and extra arguments', () => {
     expect(parseCli(['start', '--bogus'])).toEqual({ error: expect.stringMatching(/bogus/) });
     expect(parseCli(['start', '--agent-id'])).toEqual({ error: expect.stringMatching(/agent-id/) });
-    expect(parseCli(['start', 'extra'])).toEqual({ error: expect.stringMatching(/unexpected argument: extra/) });
+    expect(parseCli(['start', 'a', 'extra'])).toEqual({ error: expect.stringMatching(/unexpected argument: extra/) });
+  });
+
+  it('takes the agent after the command: a name for start, a name or number for the rest', () => {
+    expect(parseCli(['start', 'acme', '-d'])).toMatchObject({ command: 'start', agentId: 'acme', daemon: true });
+    expect(parseCli(['logs', '2', '-f'])).toMatchObject({ command: 'logs', agent: '2', follow: true });
+    expect(parseCli(['logs', '2'])).not.toHaveProperty('agentId');
+    for (const c of ['stop', 'restart', 'status', 'doctor'] as const) {
+      expect(parseCli([c, 'acme'])).toMatchObject({ command: c, agent: 'acme' });
+    }
+  });
+
+  it('rejects an agent where none fits, one given twice, or a number for start', () => {
+    for (const c of ['ls', 'update', 'hub-url']) {
+      expect(parseCli([c, 'x'])).toEqual({ error: expect.stringMatching(/unexpected argument: x/) });
+    }
+    expect(parseCli(['logs', 'a', '--agent-id', 'b'])).toEqual({ error: expect.stringMatching(/agent once/) });
+    expect(parseCli(['start', '2'])).toEqual({ error: expect.stringMatching(/cw restart 2/) });
+  });
+
+  it('takes --all for stop and restart only, and not with an agent', () => {
+    expect(parseCli(['stop', '--all'])).toMatchObject({ command: 'stop', all: true });
+    expect(parseCli(['restart', '--all'])).toMatchObject({ command: 'restart', all: true });
+    expect(parseCli(['logs', '--all'])).toEqual({ error: expect.stringMatching(/--all works with stop and restart/) });
+    expect(parseCli(['stop', '2', '--all'])).toEqual({ error: expect.stringMatching(/not both/) });
+    expect(parseCli(['stop', '--all', '--agent-id', 'a'])).toEqual({ error: expect.stringMatching(/not both/) });
   });
 
   it('wants the command first', () => {
@@ -157,7 +185,7 @@ describe('scrubSecret', () => {
 });
 
 describe('resolveAgentId', () => {
-  const base = { command: 'status', daemon: false, follow: false, probe: false } as const;
+  const base = { command: 'status', daemon: false, follow: false, probe: false, all: false } as const;
 
   it('takes --agent-id, then CORTEX_AGENT_ID, then host + repo folder', () => {
     expect(resolveAgentId({ ...base, agentId: 'flag' }, { CORTEX_AGENT_ID: 'env' }, 'Box', '/x/repo')).toBe('flag');
@@ -220,11 +248,42 @@ setInterval(() => {}, 1000);
 
 const SHEBANG = '#!/usr/bin/env node';
 
+/** Stands in for a background worker: records how it was started, then runs until its stop file appears. */
+const FAKE_AGENT = `
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const argv = process.argv.slice(2);
+const home = join(process.env.FAKE_ROOT, argv[argv.indexOf('--agent-id') + 1]);
+mkdirSync(home, { recursive: true });
+writeFileSync(join(home, 'info.json'), JSON.stringify({
+  pid: process.pid,
+  argv,
+  apiKey: process.env.CORTEX_API_KEY ?? null,
+  setup: process.env.CORTEX_SETUP_CMD ?? null,
+}));
+writeFileSync(join(home, 'worker.pid'), process.pid + '\\n');
+const timer = setInterval(() => {
+  if (!existsSync(join(home, 'worker.stop'))) return;
+  clearInterval(timer);
+  rmSync(join(home, 'worker.pid'), { force: true });
+  process.exit(0);
+}, 20);
+`;
+
 describe('main', () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'cw-main-')));
   const savedArgv = [...process.argv];
   const strays: number[] = [];
-  afterAll(() => rmSync(home, { recursive: true, force: true }));
+  const homes: string[] = [home];
+  /** A home of its own, for a test that must not see the agents the others leave behind. */
+  const freshHome = (): string => {
+    const h = realpathSync(mkdtempSync(join(tmpdir(), 'cw-main-')));
+    homes.push(h);
+    return h;
+  };
+  afterAll(() => {
+    for (const h of homes) rmSync(h, { recursive: true, force: true });
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     process.argv.splice(0, process.argv.length, ...savedArgv);
@@ -282,6 +341,7 @@ describe('main', () => {
     const { log } = quiet();
     expect(await main(['help'], { homeDir: home, env: {} })).toBe(0);
     expect(String(log.mock.calls[0]?.[0])).toContain(`waits up to ${DEFAULT_STOP_GRACE_MS / 1000} s`);
+    expect(String(log.mock.calls[0]?.[0])).toContain('cw logs 2 -f');
   });
 
   it('start -d re-runs process.argv[1] detached, without the daemon flag or the key in its argv', async () => {
@@ -310,6 +370,7 @@ describe('main', () => {
     expect(log.mock.calls).toEqual([
       [`cortex-worker started in the background (pid ${got.pid})`],
       [`log: ${paths.logFile}`],
+      ['see it: cw status m1    follow its log: cw logs m1 -f'],
     ]);
   });
 
@@ -369,10 +430,167 @@ describe('main', () => {
 
   it('stop and status find the worker by the same agent id as start', async () => {
     const { log } = quiet();
-    const opts = { homeDir: home, env: {}, hostname: 'Box', cwd: '/x/my-repo' };
+    const opts = { homeDir: freshHome(), env: {}, hostname: 'Box', cwd: '/x/my-repo' };
     expect(await main(['stop'], opts)).toBe(0);
     expect(String(log.mock.calls.at(-1)?.[0])).toMatch(/box-my-repo is not running/);
     expect(await main(['status', '--agent-id', 'w1'], opts)).toBe(0);
-    expect(String(log.mock.calls.at(-1)?.[0])).toContain(workerPaths('w1', home).logFile);
+    expect(String(log.mock.calls.at(-1)?.[0])).toContain(workerPaths('w1', opts.homeDir).logFile);
+  });
+
+  describe('agents by number', () => {
+    const saveAgent = (h: string, id: string, extra: Partial<StartConfig> = {}): void =>
+      saveStartConfig(workerPaths(id, h).startFile, {
+        agentId: id,
+        repo: `/src/${id}`,
+        hub: 'https://hub.example',
+        engines: ['claude'],
+        capabilities: [],
+        engineTimeoutMin: 90,
+        env: {},
+        ...extra,
+      });
+    const logOnly = (h: string, id: string, text = ''): void => {
+      const p = workerPaths(id, h);
+      mkdirSync(p.home, { recursive: true });
+      writeFileSync(p.logFile, text);
+    };
+    const stdout = (): string[] => {
+      const chunks: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+        chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+        return true;
+      }) as typeof process.stdout.write);
+      return chunks;
+    };
+    interface FakeInfo {
+      pid: number;
+      argv: string[];
+      apiKey: string | null;
+      setup: string | null;
+    }
+    const fakeAgent = (h: string): { script: string; env: NodeJS.ProcessEnv; info: (id: string) => FakeInfo } => {
+      const script = join(h, 'fake-agent.mjs');
+      writeFileSync(script, FAKE_AGENT);
+      return {
+        script,
+        env: { PATH: process.env.PATH, FAKE_ROOT: workerRoot(h), CORTEX_API_KEY: 'other', CORTEX_SETUP_CMD: 'npm ci' },
+        info: (id) => {
+          const got = JSON.parse(readFileSync(join(workerRoot(h), id, 'info.json'), 'utf8')) as FakeInfo;
+          strays.push(got.pid);
+          return got;
+        },
+      };
+    };
+
+    it('ls and status without an agent print the numbered list and what to do with it', async () => {
+      const { log } = quiet();
+      const h = freshHome();
+      expect(await main(['ls'], { homeDir: h, env: {} })).toBe(0);
+      expect(String(log.mock.calls.at(-1)?.[0])).toMatch(/no agents on this machine yet/);
+      saveAgent(h, 'acme');
+      logOnly(h, 'mini');
+      for (const cmd of ['ls', 'status']) {
+        expect(await main([cmd], { homeDir: h, env: {} })).toBe(0);
+        const lines = String(log.mock.calls.at(-1)?.[0]).split('\n');
+        expect(lines[0]).toMatch(/^#\s+AGENT\s+STATE/);
+        expect(lines[1]).toMatch(/^1\s+acme\s+stopped\s+-\s+claude\s+\/src\/acme$/);
+        expect(lines[2]).toMatch(/^2\s+mini\s+stopped/);
+        expect(lines).toContain('cw logs <#|name> -f    follow its log (Ctrl+C to quit)');
+      }
+      expect(await main(['status', '2'], { homeDir: h, env: {} })).toBe(0);
+      expect(String(log.mock.calls.at(-1)?.[0])).toMatch(/^agent id:\s+mini$/m);
+    });
+
+    it('logs takes the number from the list, and asks which agent when there are several', async () => {
+      const { err } = quiet();
+      const h = freshHome();
+      logOnly(h, 'acme', 'acme line\n');
+      logOnly(h, 'mini', 'mini line\n');
+      const out = stdout();
+      expect(await main(['logs', '2'], { homeDir: h, env: {} })).toBe(0);
+      expect(out.join('')).toContain('mini line');
+      expect(out.join('')).not.toContain('acme line');
+
+      expect(await main(['logs'], { homeDir: h, env: {}, hostname: 'box', cwd: '/x/repo' })).toBe(1);
+      const asked = String(err.mock.calls.at(-1)?.[0]);
+      expect(asked).toMatch(/^2\s+mini/m);
+      expect(asked).toContain('which agent? cw logs <#|name>');
+
+      expect(await main(['logs', '3'], { homeDir: h, env: {} })).toBe(1);
+      expect(String(err.mock.calls.at(-1)?.[0])).toMatch(/no agent number 3/);
+    });
+
+    it('logs without an agent takes the only one', async () => {
+      quiet();
+      const h = freshHome();
+      logOnly(h, 'solo', 'solo line\n');
+      const out = stdout();
+      expect(await main(['logs'], { homeDir: h, env: {}, hostname: 'box', cwd: '/x/repo' })).toBe(0);
+      expect(out.join('')).toContain('solo line');
+    });
+
+    it('restart runs a stopped agent again with its saved settings and key, and a running one after stopping it', async () => {
+      const { log, err } = quiet();
+      const h = freshHome();
+      const fake = fakeAgent(h);
+      saveAgent(h, 'acme', { apiKey: 'k-sekrit', capabilities: ['web'], env: { CORTEX_SETUP_CMD: 'pnpm install' } });
+      const opts = { homeDir: h, env: fake.env, scriptPath: fake.script };
+
+      expect(await main(['restart', '1'], opts)).toBe(0);
+      expect(err.mock.calls).toEqual([]);
+      const first = fake.info('acme');
+      expect(first).toEqual({
+        pid: first.pid,
+        argv: [
+          'start',
+          '--agent-id', 'acme',
+          '--repo', '/src/acme',
+          '--hub', 'https://hub.example',
+          '--engines', 'claude',
+          '--engine-timeout', '90',
+          '--capabilities', 'web',
+        ],
+        apiKey: 'k-sekrit',
+        setup: 'pnpm install',
+      });
+      expect(log.mock.calls.at(-1)).toEqual([`acme started in the background (pid ${first.pid})`]);
+
+      expect(await main(['restart', 'acme'], opts)).toBe(0);
+      expect(log.mock.calls.flat()).toContainEqual(expect.stringMatching(/^stopping acme; a running task gets up to/));
+      const second = fake.info('acme');
+      expect(second.pid).not.toBe(first.pid);
+      expect(isAlive(first.pid)).toBe(false);
+    });
+
+    it('restart says how to save the settings of an agent that has none', async () => {
+      const { err } = quiet();
+      const h = freshHome();
+      logOnly(h, 'mini');
+      expect(await main(['restart', 'mini'], { homeDir: h, env: {}, scriptPath: join(h, 'none.mjs') })).toBe(1);
+      expect(String(err.mock.calls.at(-1)?.[0])).toMatch(/mini has no saved start settings yet: start it once with cw start mini -d/);
+    });
+
+    it('restart --all skips the agents without settings, and stop --all stops every running one', async () => {
+      const { log } = quiet();
+      const h = freshHome();
+      const fake = fakeAgent(h);
+      saveAgent(h, 'acme');
+      saveAgent(h, 'beta');
+      logOnly(h, 'mini');
+      const opts = { homeDir: h, env: fake.env, scriptPath: fake.script };
+
+      expect(await main(['restart', '--all'], opts)).toBe(0);
+      const pids = [fake.info('acme').pid, fake.info('beta').pid];
+      const said = log.mock.calls.flat().map(String);
+      expect(said).toContainEqual(expect.stringMatching(/^skipping mini: no saved start settings yet/));
+      expect(said).toContain(`acme started in the background (pid ${pids[0]})`);
+      expect(said).toContain(`beta started in the background (pid ${pids[1]})`);
+
+      expect(await main(['stop', '--all'], opts)).toBe(0);
+      expect(log.mock.calls.flat().map(String).slice(-2)).toEqual(['acme stopped', 'beta stopped']);
+      for (const pid of pids) expect(isAlive(pid)).toBe(false);
+      expect(await main(['stop', '--all'], opts)).toBe(0);
+      expect(log.mock.calls.at(-1)).toEqual(['no agent is running']);
+    });
   });
 });

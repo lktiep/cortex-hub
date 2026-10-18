@@ -6,6 +6,17 @@ import { parseArgs } from 'node:util';
 import { CONDUCTOR_PROTOCOL_VERSION, EXECUTORS } from '@cortex/shared-types';
 import type { Executor } from '@cortex/shared-types';
 import {
+  formatAgentTable,
+  listAgents,
+  readStartConfig,
+  rememberedEnv,
+  resolveAgentRef,
+  restartArgv,
+  restartEnv,
+  saveStartConfig,
+} from './commands/agents.js';
+import type { StartConfig } from './commands/agents.js';
+import {
   DEFAULT_STOP_GRACE_MS,
   claimPidFile,
   isAlive,
@@ -18,7 +29,7 @@ import {
 import { runDoctor, formatChecks } from './commands/doctor.js';
 import type { DoctorContext } from './commands/doctor.js';
 import { updateBundle } from './commands/update.js';
-import { detectHubBase, detectHubConfig } from './config.js';
+import { KEY_FROM_ENV, KEY_FROM_FLAG, detectHubBase, detectHubConfig } from './config.js';
 import { createAdapters, describeEngines } from './engines/index.js';
 import { installHint } from './engines/install.js';
 import type { EngineAdapter } from './engines/types.js';
@@ -28,15 +39,31 @@ import type { FatalReason } from './hub-client.js';
 import { createLogger, redact } from './logger.js';
 import type { Logger } from './logger.js';
 import { defaultAgentId, workerPaths } from './paths.js';
+import type { WorkerPaths } from './paths.js';
 import { readState } from './state.js';
 import { WORKER_VERSION } from './version.js';
 import { Worker } from './worker.js';
 
 export interface CliArgs {
-  command: 'start' | 'stop' | 'status' | 'logs' | 'doctor' | 'update' | 'hub-url' | 'version' | 'help';
+  command:
+    | 'start'
+    | 'stop'
+    | 'restart'
+    | 'status'
+    | 'ls'
+    | 'logs'
+    | 'doctor'
+    | 'update'
+    | 'hub-url'
+    | 'version'
+    | 'help';
   daemon: boolean;
   follow: boolean;
   probe: boolean;
+  /** stop and restart: every agent on this machine. */
+  all: boolean;
+  /** The agent named on the command line: a name or its number in `cw ls` (not for start). */
+  agent?: string;
   agentId?: string;
   repo?: string;
   engines?: Executor[];
@@ -54,7 +81,9 @@ const DEFAULT_STOP_POLL_MS = 2_000;
 const EXIT_SAFETY_MS = 5_000;
 const WORKER_IDENTITY = { name: 'Cortex Worker', email: 'cortex-worker@localhost' };
 
-const RUN_COMMANDS = ['start', 'stop', 'status', 'logs', 'doctor', 'update', 'hub-url'] as const;
+const RUN_COMMANDS = ['start', 'stop', 'restart', 'status', 'ls', 'logs', 'doctor', 'update', 'hub-url'] as const;
+/** The commands that take an agent after them. */
+const AGENT_COMMANDS: ReadonlySet<string> = new Set(['start', 'stop', 'restart', 'status', 'logs', 'doctor']);
 type RunCommand = (typeof RUN_COMMANDS)[number];
 const isRunCommand = (s: string): s is RunCommand => (RUN_COMMANDS as readonly string[]).includes(s);
 const isExecutor = (s: string): s is Executor => (EXECUTORS as readonly string[]).includes(s);
@@ -64,7 +93,7 @@ function commaList(raw: string): string[] {
   return [...new Set(raw.split(',').map((s) => s.trim()).filter((s) => s !== ''))];
 }
 
-const bare = (command: CliArgs['command']): CliArgs => ({ command, daemon: false, follow: false, probe: false });
+const bare = (command: CliArgs['command']): CliArgs => ({ command, daemon: false, follow: false, probe: false, all: false });
 
 export function parseCli(argv: string[]): CliArgs | { error: string } {
   const first = argv[0];
@@ -84,6 +113,7 @@ export function parseCli(argv: string[]): CliArgs | { error: string } {
         daemon: { type: 'boolean', short: 'd' },
         follow: { type: 'boolean', short: 'f' },
         probe: { type: 'boolean' },
+        all: { type: 'boolean' },
         'agent-id': { type: 'string' },
         repo: { type: 'string' },
         engines: { type: 'string' },
@@ -97,7 +127,19 @@ export function parseCli(argv: string[]): CliArgs | { error: string } {
     return { error: err instanceof Error ? err.message : String(err) };
   }
   const { values, positionals } = parsed;
-  if (positionals.length > 0) return { error: `unexpected argument: ${positionals[0]}` };
+  if (positionals.length > 1) return { error: `unexpected argument: ${positionals[1]}` };
+  const ref = positionals[0];
+  if (ref !== undefined) {
+    if (!AGENT_COMMANDS.has(first)) return { error: `unexpected argument: ${ref}` };
+    if (values['agent-id'] !== undefined) return { error: 'give the agent once: as a name or with --agent-id' };
+    if (first === 'start' && /^\d+$/.test(ref)) {
+      return { error: `start takes a name, not a number; to start agent ${ref} of cw ls again: cw restart ${ref}` };
+    }
+  }
+  if (values.all === true) {
+    if (first !== 'stop' && first !== 'restart') return { error: '--all works with stop and restart' };
+    if (ref !== undefined || values['agent-id'] !== undefined) return { error: '--all or an agent, not both' };
+  }
 
   let engines: Executor[] = [...DEFAULT_ENGINES];
   if (values.engines !== undefined) {
@@ -125,11 +167,16 @@ export function parseCli(argv: string[]): CliArgs | { error: string } {
     daemon: values.daemon ?? false,
     follow: values.follow ?? false,
     probe: values.probe ?? false,
+    all: values.all ?? false,
     engines,
     capabilities: values.capabilities === undefined ? [] : commaList(values.capabilities),
     engineTimeoutMin,
   };
   if (values['agent-id'] !== undefined) args.agentId = values['agent-id'];
+  if (ref !== undefined) {
+    if (first === 'start') args.agentId = ref;
+    else args.agent = ref;
+  }
   if (values.repo !== undefined) args.repo = values.repo;
   if (values.hub !== undefined) args.hub = values.hub;
   if (values['api-key'] !== undefined) args.apiKey = values['api-key'];
@@ -140,13 +187,16 @@ function helpText(): string {
   return [
     `cortex-worker ${WORKER_VERSION} (protocol ${CONDUCTOR_PROTOCOL_VERSION})`,
     '',
-    'Usage: cortex-worker <command> [options]',
+    'Usage: cw <command> [agent] [options]    (cw is the shortcut for cortex-worker)',
+    '  [agent] is an agent name, or its number in `cw ls`',
     '',
     'Commands:',
+    '  ls         list the agents on this machine, numbered',
     '  start      run the worker for this repo (foreground; -d to run it in the background)',
-    `  stop       stop the background worker (waits up to ${DEFAULT_STOP_GRACE_MS / 1000} s for a task to wrap up)`,
-    '  status     show whether the worker runs, its task and its last registration',
-    '  logs       print the last 200 log lines (-f to follow)',
+    `  stop       stop a background worker (waits up to ${DEFAULT_STOP_GRACE_MS / 1000} s for a task to wrap up)`,
+    '  restart    stop it, then start it in the background with the settings it last started with',
+    '  status     show whether it runs, its task and its last registration (no agent: list them)',
+    '  logs       print its last 200 log lines (-f to follow)',
     '  update     replace this cortex-worker.mjs with the hub\'s version',
     '  hub-url    print the hub URL the worker would use',
     '  doctor     check the setup (--probe also runs each engine)',
@@ -156,6 +206,7 @@ function helpText(): string {
     'Options:',
     '  -d, --daemon              start in the background; output goes to the log',
     '  -f, --follow              logs: keep printing new lines',
+    '  --all                     stop, restart: every agent on this machine',
     '  --agent-id <id>           worker identity (default: CORTEX_AGENT_ID, else <host>-<repo folder>)',
     '  --repo <path>             the repo to work in (default: the current directory)',
     `  --engines <list>          engines to look for, in order (default: ${DEFAULT_ENGINES.join(',')})`,
@@ -164,8 +215,33 @@ function helpText(): string {
     '  --api-key <key>           hub api key (default: CORTEX_API_KEY, else the cortex-hub MCP config)',
     `  --engine-timeout <min>    minutes an engine may run per task (default: ${DEFAULT_ENGINE_TIMEOUT_MIN})`,
     '  --probe                   doctor: also run a tiny prompt through each engine',
+    '',
+    'Examples:',
+    '  cw ls                     the agents, numbered',
+    '  cw logs 2 -f              follow the log of agent 2 (Ctrl+C to quit)',
+    '  cw restart --all          restart every agent, e.g. after cw update',
   ].join('\n');
 }
+
+/** Printed under the agent list. */
+const AGENT_HINT = [
+  '',
+  'cw status <#|name>     details of one agent',
+  'cw logs <#|name> -f    follow its log (Ctrl+C to quit)',
+  'cw restart <#|name>    restart it with the settings it last started with (--all: every agent)',
+  'cw stop <#|name>       stop it (--all: every agent)',
+].join('\n');
+
+function agentList(homeDir: string): string {
+  const agents = listAgents(homeDir);
+  return agents.length === 0 ? formatAgentTable(agents) : `${formatAgentTable(agents)}\n${AGENT_HINT}`;
+}
+
+function stopLine(id: string, r: Awaited<ReturnType<typeof stopWorker>>): string {
+  return r === 'not-running' ? `${id} is not running` : r === 'stopped' ? `${id} stopped` : `${id} did not stop in time and was killed`;
+}
+
+const graceNote = `a running task gets up to ${DEFAULT_STOP_GRACE_MS / 1000} s to push its work…`;
 
 function canonical(path: string): string {
   try {
@@ -331,6 +407,23 @@ export async function startForeground(args: CliArgs, opts: StartOptions = {}): P
   }
   logger.info(`engines: ${described.engines.map((e) => e.executor).join(', ')}`);
 
+  const saved: StartConfig = {
+    agentId,
+    repo,
+    hub: hub.hubBase,
+    engines: names,
+    capabilities: args.capabilities ?? [],
+    engineTimeoutMin: args.engineTimeoutMin ?? DEFAULT_ENGINE_TIMEOUT_MIN,
+    env: rememberedEnv(childEnv),
+  };
+  // a key from an MCP config is read there again on restart; only one given to the worker is kept
+  if (hub.source.key === KEY_FROM_FLAG || hub.source.key === KEY_FROM_ENV) saved.apiKey = hub.apiKey;
+  try {
+    saveStartConfig(paths.startFile, saved);
+  } catch (err) {
+    logger.warn(`could not save the start settings, so cw restart cannot restart this agent: ${messageOf(err)}`);
+  }
+
   let finishing = false;
   let resolveDone: (code: number) => void = () => undefined;
   const done = new Promise<number>((r) => {
@@ -455,9 +548,87 @@ export async function main(argv: string[], opts: MainOptions = {}): Promise<numb
   const hostname = opts.hostname ?? os.hostname();
   const signals: SignalSource = opts.signals ?? process;
   const agentId = (): string => resolveAgentId(args, env, hostname, cwd);
+  /** The agent the command line names (a name or its `cw ls` number), else --agent-id, else CORTEX_AGENT_ID. */
+  const namedAgent = (): string | { error: string } | null => {
+    if (args.agent !== undefined) return resolveAgentRef(args.agent, listAgents(homeDir));
+    return args.agentId ?? (env['CORTEX_AGENT_ID'] || null);
+  };
+  /**
+   * The agent for stop, logs and restart: the named one, else this repo's own when it has
+   * one (or when there are no agents), else the only agent. With several, it asks which.
+   */
+  const pickAgent = (verb: string): string | { error: string } => {
+    const named = namedAgent();
+    if (named !== null) return named;
+    const own = resolveAgentId(args, env, hostname, cwd);
+    const agents = listAgents(homeDir);
+    if (agents.length === 0 || agents.some((a) => a.id === own)) return own;
+    const only = agents.length === 1 ? agents[0] : undefined;
+    if (only !== undefined) return only.id;
+    return { error: `${formatAgentTable(agents)}\n\nwhich agent? cw ${verb} <#|name>` };
+  };
   const hubBase = (): { hubBase: string } | { error: string } =>
     detectHubBase({ flags: { hub: args.hub }, env, homeDir, repoPath: path.resolve(cwd, args.repo ?? '.') });
   const script = opts.scriptPath ?? process.argv[1] ?? '';
+
+  /** Stops the agents, then starts each in the background with its saved settings. */
+  const restart = async (): Promise<number> => {
+    if (script === '') {
+      console.error('cannot tell which script to run in the background');
+      return 1;
+    }
+    const targets: Array<{ id: string; paths: WorkerPaths; config: StartConfig }> = [];
+    if (args.all) {
+      for (const a of listAgents(homeDir)) {
+        if (a.config !== null) targets.push({ id: a.id, paths: a.paths, config: a.config });
+        else console.log(`skipping ${a.id}: no saved start settings yet (start it once with: cw start ${a.id} -d)`);
+      }
+      if (targets.length === 0) {
+        console.error('nothing to restart: no agent has saved start settings yet');
+        return 1;
+      }
+    } else {
+      const id = pickAgent('restart');
+      if (typeof id !== 'string') {
+        console.error(id.error);
+        return 1;
+      }
+      const paths = workerPaths(id, homeDir);
+      const config = readStartConfig(paths.startFile);
+      if (config === null) {
+        console.error(
+          `${id} has no saved start settings yet: start it once with cw start ${id} -d --repo <path> ` +
+            '(a worker of this version remembers them from then on)',
+        );
+        return 1;
+      }
+      targets.push({ id, paths, config });
+    }
+
+    const live = targets.filter((t) => {
+      const pid = readPid(t.paths);
+      return pid !== null && isAlive(pid);
+    });
+    if (live.length > 0) console.log(`stopping ${live.map((t) => t.id).join(', ')}; ${graceNote}`);
+    await Promise.all(targets.map((t) => stopWorker(t.paths)));
+
+    let failed = false;
+    for (const t of targets) {
+      const argv2 = restartArgv(t.config);
+      const startArgs = parseCli(['start', ...argv2]);
+      const r =
+        'error' in startArgs
+          ? startArgs
+          : await startDaemon(startArgs, t.paths, script, argv2, { env: restartEnv(env, t.config) });
+      if ('error' in r) {
+        console.error(`${t.id}: ${r.error}`);
+        failed = true;
+      } else {
+        console.log(`${t.id} started in the background (pid ${r.pid})`);
+      }
+    }
+    return failed ? 1 : 0;
+  };
 
   try {
     switch (args.command) {
@@ -468,13 +639,19 @@ export async function main(argv: string[], opts: MainOptions = {}): Promise<numb
         console.log(WORKER_VERSION);
         return 0;
       case 'doctor': {
+        const named = namedAgent();
+        if (named !== null && typeof named !== 'string') {
+          console.error(named.error);
+          return 1;
+        }
+        const doctorAgent = named ?? agentId();
         const repo = path.resolve(cwd, args.repo ?? '.');
         const checks = await runDoctor({
           nodeVersion: process.version,
           repo,
           homeDir,
           env,
-          flags: { hub: args.hub, apiKey: args.apiKey, agentId: agentId() },
+          flags: { hub: args.hub, apiKey: args.apiKey, agentId: doctorAgent },
           engines: args.engines ?? [...DEFAULT_ENGINES],
           probe: args.probe,
           ...opts.doctor,
@@ -514,34 +691,58 @@ export async function main(argv: string[], opts: MainOptions = {}): Promise<numb
         }
         console.log(`cortex-worker started in the background (pid ${r.pid})`);
         console.log(`log: ${paths.logFile}`);
+        console.log(`see it: cw status ${path.basename(paths.home)}    follow its log: cw logs ${path.basename(paths.home)} -f`);
         return 0;
       }
+      case 'ls':
+        console.log(agentList(homeDir));
+        return 0;
       case 'stop': {
-        const id = agentId();
+        if (args.all) {
+          const live = listAgents(homeDir).filter((a) => a.pid !== null);
+          if (live.length === 0) {
+            console.log('no agent is running');
+            return 0;
+          }
+          console.log(`stopping ${live.map((a) => a.id).join(', ')}; ${graceNote}`);
+          const results = await Promise.all(live.map((a) => stopWorker(a.paths)));
+          live.forEach((a, i) => console.log(stopLine(a.id, results[i] ?? 'not-running')));
+          return 0;
+        }
+        const id = pickAgent('stop');
+        if (typeof id !== 'string') {
+          console.error(id.error);
+          return 1;
+        }
         const paths = workerPaths(id, homeDir);
         const pid = readPid(paths);
-        if (pid !== null && isAlive(pid)) {
-          console.log(
-            `stopping ${id} (pid ${pid}); a running task gets up to ${DEFAULT_STOP_GRACE_MS / 1000} s to push its work…`,
-          );
-        }
-        const r = await stopWorker(paths);
-        console.log(
-          r === 'not-running'
-            ? `${id} is not running`
-            : r === 'stopped'
-              ? `${id} stopped`
-              : `${id} did not stop in time and was killed`,
-        );
+        if (pid !== null && isAlive(pid)) console.log(`stopping ${id} (pid ${pid}); ${graceNote}`);
+        console.log(stopLine(id, await stopWorker(paths)));
         return 0;
       }
+      case 'restart':
+        return await restart();
       case 'status': {
-        const paths = workerPaths(agentId(), homeDir);
+        const named = namedAgent();
+        if (named === null) {
+          console.log(agentList(homeDir));
+          return 0;
+        }
+        if (typeof named !== 'string') {
+          console.error(named.error);
+          return 1;
+        }
+        const paths = workerPaths(named, homeDir);
         console.log(statusText(paths, readState(paths.stateFile)));
         return 0;
       }
       case 'logs': {
-        const paths = workerPaths(agentId(), homeDir);
+        const id = pickAgent('logs');
+        if (typeof id !== 'string') {
+          console.error(id.error);
+          return 1;
+        }
+        const paths = workerPaths(id, homeDir);
         const ac = new AbortController();
         const abort = (): void => ac.abort();
         if (args.follow) {

@@ -29,4 +29,34 @@ if [ "$rc" -ne 0 ]; then
   rm -f "$W.tmp.$$"; [ -f "$W" ] || die "could not download the worker from $HUB"
   echo "[cortex] warning: download failed; using cached worker" >&2
 else mv "$W.tmp.$$" "$W"; fi
+# The cw command: `cw ls`, `cw logs 2 -f`, `cw restart --all` instead of `node <path> ...`.
+# It is only ever a two-line wrapper around this worker, so a cw that is not ours stays as it is.
+install_cw() {
+  local bin="$HOME/.local/bin" cw w q body tmp rc found
+  cw="$bin/cw"
+  w="$(cd "$HOME_DIR" && pwd -P)/cortex-worker.mjs" || return 1
+  if [ -e "$cw" ] && ! grep -q 'cortex-worker\.mjs' "$cw" 2>/dev/null; then
+    echo "[cortex] $cw is not the Cortex one, so it stays; run the worker with: node $w" >&2; return 0
+  fi
+  q="$(printf '%s' "$w" | sed "s/'/'\\\\''/g")"
+  body="$(printf '#!/bin/sh\n# cw: shortcut for the Cortex worker (written by run-agent.sh)\nexec node '\''%s'\'' "$@"' "$q")"
+  if [ ! -f "$cw" ] || [ "$(cat "$cw")" != "$body" ]; then
+    mkdir -p "$bin" || return 1
+    tmp="$cw.tmp.$$"
+    { printf '%s\n' "$body" > "$tmp" && chmod 755 "$tmp" && mv "$tmp" "$cw"; } || { rm -f "$tmp"; return 1; }
+    echo "[cortex] installed the cw command ($cw); try: cw ls" >&2
+  fi
+  case ":$PATH:" in
+    *":$bin:"*)
+      found="$(command -v cw 2>/dev/null || true)"
+      [ "$found" = "$cw" ] || echo "[cortex] another cw comes first on PATH ($found); run this one as $cw" >&2 ;;
+    *)
+      case "${SHELL##*/}" in zsh) rc="$HOME/.zshrc" ;; bash) rc="$HOME/.bashrc" ;; *) rc="$HOME/.profile" ;; esac
+      if ! grep -qF '# Added by Cortex run-agent.sh' "$rc" 2>/dev/null; then
+        printf '\n# Added by Cortex run-agent.sh: puts the cw command on PATH\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc" || return 1
+        echo "[cortex] added ~/.local/bin to PATH in $rc; cw works in a new terminal" >&2
+      fi ;;
+  esac
+}
+if [ "${CORTEX_SKIP_CW:-}" != 1 ]; then install_cw || echo "[cortex] warning: could not install the cw command; run the worker with: node $W" >&2; fi
 exec node "$W" "$@"

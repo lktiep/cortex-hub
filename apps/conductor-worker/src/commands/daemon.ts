@@ -199,7 +199,7 @@ export async function startDaemon(
       return {
         error:
           `the worker (pid ${pid ?? '?'}) wrote no pid file within ${timeoutMs / 1000} s and may still be starting; ` +
-          `run \`cortex-worker status --agent-id ${path.basename(paths.home)}\` to check, and see ${paths.logFile}`,
+          `run \`cw status ${path.basename(paths.home)}\` to check, and see ${paths.logFile}`,
       };
     }
     await sleep(pollMs);

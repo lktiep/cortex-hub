@@ -207,7 +207,9 @@ have to ask about is refused, and **a refusal ends the run on the spot**, with o
   on a machine where you would let agy run anything, such as a throwaway VM.
 
 Set these in the shell that starts the worker, for example `$env:CORTEX_AGY_MODE="accept-edits"`
-in PowerShell before the bootstrap line. Restart the worker after changing them.
+in PowerShell before the bootstrap line. The worker saves them, and `cw restart` starts it with the
+saved values. To change one, `cw stop` the worker and start it again with the new value set. An
+allow-rule in agy's `settings.json` needs only `cw restart <#|name>`.
 
 ### Which key does what
 
@@ -220,17 +222,21 @@ in PowerShell before the bootstrap line. Restart the worker after changing them.
 ### Manage it
 
 ```bash
-node ~/.cortex/worker/cortex-worker.mjs doctor --engines agy --agent-id <host>-agy --probe
-node ~/.cortex/worker/cortex-worker.mjs status --agent-id <host>-agy
-node ~/.cortex/worker/cortex-worker.mjs logs -f --agent-id <host>-agy
-node ~/.cortex/worker/cortex-worker.mjs stop --agent-id <host>-agy
+cw ls                                         # the agents on this machine, numbered
+cw doctor <host>-agy --engines agy --probe
+cw status <host>-agy                          # or its number from cw ls
+cw logs <host>-agy -f
+cw restart <host>-agy
+cw stop <host>-agy
 ```
 
-On Windows, use `node $HOME\.cortex\worker\cortex-worker.mjs ...`. To run a second headless agy
-with another key, start it with another `--agent-id` and another `CORTEX_API_KEY`.
+The bootstrap installs `cw` (setup guide, section 6). Without it, use
+`node ~/.cortex/worker/cortex-worker.mjs ...`, or `node $HOME\.cortex\worker\cortex-worker.mjs ...`
+on Windows. To run a second headless agy with another key, start it with another `--agent-id` and
+another `CORTEX_API_KEY`.
 
-The daemon does not survive a reboot: run `start --daemon` again after a restart. Keep in mind
-that agy takes about 2 minutes to start, almost all of it spent starting its MCP servers.
+The daemon does not survive a reboot: run `cw restart --all` after a restart. Keep in mind that
+agy takes about 2 minutes to start, almost all of it spent starting its MCP servers.
 
 ## 5. Checklist
 

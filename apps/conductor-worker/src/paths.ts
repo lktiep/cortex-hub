@@ -7,6 +7,8 @@ export interface WorkerPaths {
   logFile: string;
   stateFile: string;
   stopFile: string;
+  /** The settings `start` ran with, so `restart` can run it again (may hold the key; owner-only). */
+  startFile: string;
   worktrees: string;
 }
 
@@ -33,6 +35,7 @@ export function workerPaths(agentId: string, homeDir: string): WorkerPaths {
     logFile: path.join(home, 'worker.log'),
     stateFile: path.join(home, 'state.json'),
     stopFile: path.join(home, 'worker.stop'),
+    startFile: path.join(home, 'start.json'),
     worktrees: path.join(home, 'wt'),
   };
 }
