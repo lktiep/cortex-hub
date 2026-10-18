@@ -170,7 +170,7 @@ describe('runCli', () => {
     const r = await runCli(process.execPath, { args }, input().input, opts);
     expect(r.stdout.length).toBeLessThanOrEqual(8 * 1024 * 1024);
     expect(r.stdout.endsWith('END')).toBe(true);
-  });
+  }, 30_000); // 9 MiB through a pipe: past 5 s while the pre-push build runs alongside
 
   it('never hands onLine an over-cap partial line', async () => {
     const args = script(
@@ -181,7 +181,7 @@ describe('runCli', () => {
     expect(r.exitCode).toBe(0);
     expect(i.lines).toEqual(['before', '{"ok":1}']);
     expect(r.stdout.endsWith('{"ok":1}\n')).toBe(true);
-  });
+  }, 30_000); // 9 MiB through a pipe, as above
 
   it('survives a throwing onLine callback', async () => {
     const args = script(`console.log('x');`);
