@@ -27,13 +27,15 @@ function measure(root: HTMLElement): Map<string, Point> {
 interface PlanBoardProps {
   tasks: PlanTask[]
   workers: ConductorWorker[]
+  /** Worker numbers from the Workers panel, for the chip on a running task. */
+  agentNo: ReadonlyMap<string, number>
   phase?: PhaseSelection
   selectedId?: string
   flashing: ReadonlySet<string>
   onSelect: (id: string) => void
 }
 
-export function PlanBoard({ tasks, workers, phase, selectedId, flashing, onSelect }: PlanBoardProps) {
+export function PlanBoard({ tasks, workers, agentNo, phase, selectedId, flashing, onSelect }: PlanBoardProps) {
   const lanes = useMemo(() => boardLanes(tasks, workers, { phase, now: new Date() }), [tasks, workers, phase])
   const root = useRef<HTMLDivElement>(null)
   const last = useRef(new Map<string, Point>())
@@ -102,6 +104,7 @@ export function PlanBoard({ tasks, workers, phase, selectedId, flashing, onSelec
                 <Chip
                   key={chip.id}
                   chip={chip}
+                  agentNo={chip.agent === null ? undefined : agentNo.get(chip.agent)}
                   selected={chip.id === selectedId}
                   flash={flashing.has(chip.id)}
                   onSelect={onSelect}
@@ -115,8 +118,9 @@ export function PlanBoard({ tasks, workers, phase, selectedId, flashing, onSelec
   )
 }
 
-function Chip({ chip, selected, flash, onSelect }: {
+function Chip({ chip, agentNo, selected, flash, onSelect }: {
   chip: BoardChip
+  agentNo: number | undefined
   selected: boolean
   flash: boolean
   onSelect: (id: string) => void
@@ -146,6 +150,9 @@ function Chip({ chip, selected, flash, onSelect }: {
           {chip.attempt !== null && <span className={styles.chipAtt}>#{chip.attempt}</span>}
         </span>
         <span className={styles.chipSt}>{STATUS_LABEL[chip.state]}</span>
+        {agentNo !== undefined && (
+          <span className={styles.agentNo} title={`agent ${agentNo} · ${chip.agent}`}>{agentNo}</span>
+        )}
       </span>
       <span className={styles.chipTitle}>{chip.title}</span>
       {(chip.route || chip.pr) && (

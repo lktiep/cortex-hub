@@ -125,6 +125,17 @@ describe('boardLanes', () => {
     expect(chips.map((c) => [c.id, c.pr]).sort()).toEqual([['g', null], ['p', 'PR #12'], ['q', null]])
   })
 
+  it('names the agent on a running chip only', () => {
+    const list = tasks(
+      { id: 'run', status: 'in_progress', assigned_to_agent: 'w-studio' },
+      { id: 'rev', status: 'review', assigned_to_agent: 'w-mini' },
+      { id: 'old', status: 'completed', last_agent: 'w-mini' },
+      { id: 'q' },
+    )
+    const chips = boardLanes(list, [studio, mini], { now: NOW }).flatMap((l) => l.chips)
+    expect(chips.map((c) => [c.id, c.agent]).sort()).toEqual([['old', null], ['q', null], ['rev', null], ['run', 'w-studio']])
+  })
+
   it('never makes a chip of a group', () => {
     const list = tasks({ id: 'g1', kind: 'group' }, { id: 'a', parent_task_id: 'g1' })
     expect(boardLanes(list, [], { now: NOW }).flatMap((l) => l.chips).map((c) => c.id)).toEqual(['a'])

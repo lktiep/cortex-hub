@@ -19,6 +19,8 @@ export interface NeedItem {
 }
 
 export interface WorkerRow {
+  /** 1..N in list order; a running task's chip shows the same number. */
+  no: number
   agentId: string
   hostname: string
   os: string | null
@@ -114,7 +116,7 @@ export function workerRows(workers: ConductorWorker[], tasks: PlanTask[], now: D
   const byId = new Map(tasks.map((t) => [t.id, t]))
   const nowMs = now.getTime()
   return workers
-    .map((w): WorkerRow => {
+    .map((w): Omit<WorkerRow, 'no'> => {
       const cur = w.currentTaskId === null ? null : byId.get(w.currentTaskId)
       return {
         agentId: w.agentId,
@@ -133,6 +135,12 @@ export function workerRows(workers: ConductorWorker[], tasks: PlanTask[], now: D
       }
     })
     .sort((a, b) => compareText(a.hostname, b.hostname) || compareText(a.agentId, b.agentId))
+    .map((r, i) => ({ no: i + 1, ...r }))
+}
+
+/** Agent id → worker number, from `workerRows`, so the Workers panel and the task chips agree. */
+export function agentNumbers(rows: WorkerRow[]): Map<string, number> {
+  return new Map(rows.map((r) => [r.agentId, r.no]))
 }
 
 /** Whole-number percent of work tasks done. */

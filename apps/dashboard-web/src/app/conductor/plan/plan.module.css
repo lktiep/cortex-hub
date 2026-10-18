@@ -93,6 +93,7 @@
 .chipFoot .chipRoute { flex: 1; min-width: 0; }
 .chipPr { flex-shrink: 0; padding: 1px 4px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--bg-2); font: 600 9.5px/1.2 var(--font-mono); color: var(--text); }
 .chipNote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 10.5px/1.3 var(--font-mono); color: var(--st); }
+.agentNo { flex-shrink: 0; box-sizing: border-box; min-width: 16px; height: 16px; padding: 0 4px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg-2); font: 600 10px/1 var(--font-mono); color: var(--text); }
 .chipTag { align-self: flex-start; padding: 2px 4px; border: 1px dashed var(--line-strong); border-radius: 3px; font: 600 9.5px/1 var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
 .chip[data-state='running'], .chip[data-state='review'] { background: color-mix(in srgb, var(--st) 6%, var(--surface)); }
 .chip[data-state='needs_user'], .chip[data-state='gate_lead'], .chip[data-state='escalated'] { background: color-mix(in srgb, var(--st) 7%, var(--surface)); }
@@ -156,6 +157,8 @@
 .nodeRoute { font: 500 10.5px var(--font-mono); fill: var(--muted); }
 .nodePr rect { fill: var(--bg-2); stroke: var(--line-strong); stroke-width: 1; }
 .nodePr text { font: 600 9.5px var(--font-mono); fill: var(--text); text-anchor: middle; }
+.nodeAgent rect { fill: var(--bg-2); stroke: var(--line-strong); stroke-width: 1; }
+.nodeAgent text { font: 600 10px var(--font-mono); fill: var(--text); text-anchor: middle; }
 .node[data-state='done'] .nodeTitle, .node[data-state='waiting'] .nodeTitle,
 .node[data-state='blocked'] .nodeTitle, .node[data-state='stopped'] .nodeTitle { fill: var(--muted); }
 .nodeAttention .box { animation: planBlinkStroke 1.4s ease-in-out infinite; }
@@ -217,7 +220,7 @@
 .red { border-color: #f87171; }
 .amber { border-color: #fbbf24; }
 .violet { border-color: #a78bfa; }
-.worker { font-size: .72rem; display: grid; grid-template-columns: 10px auto 1fr; gap: 6px; align-items: center; color: var(--muted); margin: 0; }
+.worker { font-size: .72rem; display: grid; grid-template-columns: 10px auto auto 1fr; gap: 6px; align-items: center; color: var(--muted); margin: 0; }
 .worker i { width: 8px; height: 8px; border-radius: 50%; }
 .worker b { color: var(--text); font-family: var(--font-mono); font-weight: 500; }
 .muted { font-size: .68rem; color: var(--faint); line-height: 1.4; margin: 0; }

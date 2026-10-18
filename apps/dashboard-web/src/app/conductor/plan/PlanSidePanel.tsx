@@ -56,6 +56,7 @@ export function PlanSidePanel({ needs, awaiting, workers, tally, critical, byId,
           <div key={w.agentId}>
             <p className={styles.worker}>
               <i style={{ background: w.status === 'busy' ? BUSY_COLOR : IDLE_COLOR }} />
+              <span className={styles.agentNo}>{w.no}</span>
               <b>{w.agentId}</b>
               <span>{w.hostname}</span>
             </p>

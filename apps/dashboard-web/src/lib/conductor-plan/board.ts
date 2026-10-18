@@ -21,6 +21,8 @@ export interface BoardChip {
   ghost: 'input' | 'output' | null
   /** Waiting on a person: the chip keeps blinking until someone acts. */
   attention: boolean
+  /** The agent running the task; null unless it is running. */
+  agent: string | null
 }
 
 export interface BoardLane {
@@ -53,6 +55,7 @@ export function toChip(task: PlanTask, ghost: BoardChip['ghost'], now: Date): Bo
     pr: gate ? null : prLabel(taskOutcome(task.row)),
     ghost,
     attention: ATTENTION.has(task.state),
+    agent: task.state === 'running' ? task.agent : null,
   }
 }
 

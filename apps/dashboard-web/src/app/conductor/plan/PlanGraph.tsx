@@ -23,6 +23,8 @@ const ROUTE_CHARS = 27
 /** Mono route text and the PR tag's smaller mono text, in px per character. */
 const ROUTE_CHAR_W = 6.3
 const TAG_CHAR_W = 5.8
+/** The agent-number badge's mono text, in px per character. */
+const AGENT_CHAR_W = 6.3
 
 const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100))
 
@@ -34,6 +36,8 @@ function clip(text: string, max: number): string {
 interface PlanGraphProps {
   tasks: PlanTask[]
   workers: ConductorWorker[]
+  /** Worker numbers from the Workers panel, for the badge on a running task. */
+  agentNo: ReadonlyMap<string, number>
   phase?: PhaseSelection
   critical: CriticalPath
   conflicts: FileConflict[]
@@ -42,7 +46,7 @@ interface PlanGraphProps {
   onSelect: (id: string) => void
 }
 
-export function PlanGraph({ tasks, workers, phase, critical, conflicts, selectedId, flashing, onSelect }: PlanGraphProps) {
+export function PlanGraph({ tasks, workers, agentNo, phase, critical, conflicts, selectedId, flashing, onSelect }: PlanGraphProps) {
   const layout = useMemo(
     () => layoutGraph(tasks, workers, { phase, critical, conflicts, now: new Date() }),
     [tasks, workers, phase, critical, conflicts],
@@ -129,6 +133,7 @@ export function PlanGraph({ tasks, workers, phase, critical, conflicts, selected
             <Node
               key={n.id}
               node={n}
+              agentNo={n.agent === null ? undefined : agentNo.get(n.agent)}
               selected={n.id === selectedId}
               flash={flashing.has(n.id)}
               onSelect={onSelect}
@@ -149,15 +154,19 @@ export function PlanGraph({ tasks, workers, phase, critical, conflicts, selected
   )
 }
 
-function Node({ node, selected, flash, onSelect }: {
+function Node({ node, agentNo, selected, flash, onSelect }: {
   node: GraphNode
+  agentNo: number | undefined
   selected: boolean
   flash: boolean
   onSelect: (id: string) => void
 }) {
   const label = STATUS_LABEL[node.state].toUpperCase()
+  // The agent badge takes the top-right corner and pushes the status label left.
+  const badgeW = agentNo === undefined ? 0 : Math.max(16, Math.ceil(String(agentNo).length * AGENT_CHAR_W + 9))
+  const stRight = W - 10 - (badgeW ? badgeW + 6 : 0)
   // Mono key at ~7.75px a character, beside a status label at ~6.3px a character.
-  const keyChars = Math.max(4, Math.floor((176 - label.length * 6.3 - 10) / 7.75))
+  const keyChars = Math.max(4, Math.floor((176 - label.length * 6.3 - 10 - (badgeW ? badgeW + 6 : 0)) / 7.75))
   const attempt = node.attempt !== null ? ` #${node.attempt}` : ''
   const classes = [
     styles.node,
@@ -173,7 +182,8 @@ function Node({ node, selected, flash, onSelect }: {
     e.preventDefault()
     onSelect(node.id)
   }
-  const tip = [`${node.key}${attempt} — ${node.title}`, STATUS_LABEL[node.state], node.route, node.note, node.pr]
+  const runBy = agentNo === undefined ? null : `agent ${agentNo} · ${node.agent}`
+  const tip = [`${node.key}${attempt} — ${node.title}`, STATUS_LABEL[node.state], runBy, node.route, node.note, node.pr]
     .filter(Boolean)
     .join('\n')
   // The PR tag sits at the right end of the route line, which is cut short to make room for it.
@@ -188,7 +198,7 @@ function Node({ node, selected, flash, onSelect }: {
       role="button"
       tabIndex={0}
       aria-pressed={selected}
-      aria-label={`${node.key}: ${node.title}, ${STATUS_LABEL[node.state]}${node.pr ? `, ${node.pr}` : ''}`}
+      aria-label={`${node.key}: ${node.title}, ${STATUS_LABEL[node.state]}${runBy ? `, ${runBy}` : ''}${node.pr ? `, ${node.pr}` : ''}`}
       onClick={() => onSelect(node.id)}
       onKeyDown={onKeyDown}
     >
@@ -200,7 +210,13 @@ function Node({ node, selected, flash, onSelect }: {
         {clip(node.key, keyChars)}
         {attempt && <tspan className={styles.nodeAtt}>{attempt}</tspan>}
       </text>
-      <text className={styles.nodeSt} x={W - 10} y={21}>{label}</text>
+      <text className={styles.nodeSt} x={stRight} y={21}>{label}</text>
+      {agentNo !== undefined && (
+        <g className={styles.nodeAgent}>
+          <rect x={W - 10 - badgeW} y={9} width={badgeW} height={16} rx={8} />
+          <text x={W - 10 - badgeW / 2} y={21}>{agentNo}</text>
+        </g>
+      )}
       <text className={styles.nodeTitle} x={14} y={39}>{clip(node.title, TITLE_CHARS)}</text>
       {node.route && <text className={styles.nodeRoute} x={14} y={55}>{clip(node.route, routeChars)}</text>}
       {node.pr && (

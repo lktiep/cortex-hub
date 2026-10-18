@@ -12,6 +12,7 @@ import { computeDepths, selectPhase } from '@/lib/conductor-plan/layout'
 import { toPlanTasks } from '@/lib/conductor-plan/model'
 import { taskOutcome } from '@/lib/conductor-plan/outcome'
 import {
+  agentNumbers,
   awaitingLead,
   groupTabs,
   needsYou,
@@ -85,6 +86,7 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
   const phase = useMemo(() => (groupId ? selectPhase(tasks, groupId) : undefined), [tasks, groupId])
   const side = useMemo(() => {
     const { depth, cyclic } = computeDepths(tasks)
+    const rows = workerRows(workers, tasks, new Date())
     return {
       counts: progressCounts(tasks),
       needs: needsYou(tasks, new Date()),
@@ -92,7 +94,8 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
       tally: routeTally(tasks),
       critical: criticalPath(tasks, cyclic),
       conflicts: fileConflicts(tasks, depth),
-      workerRows: workerRows(workers, tasks, new Date()),
+      workerRows: rows,
+      agentNo: agentNumbers(rows),
     }
   }, [tasks, workers])
   const flashing = usePlanFlash(tasks)
@@ -169,6 +172,7 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
             <PlanBoard
               tasks={tasks}
               workers={workers}
+              agentNo={side.agentNo}
               phase={phase}
               selectedId={selectedId}
               flashing={flashing}
@@ -178,6 +182,7 @@ export function PlanView({ rootId, onClose }: { rootId: string; onClose: () => v
             <PlanGraph
               tasks={tasks}
               workers={workers}
+              agentNo={side.agentNo}
               phase={phase}
               critical={side.critical}
               conflicts={side.conflicts}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { toPlanTasks } from './model'
 import type { PlanTask } from './model'
-import { agentsOnline, awaitingLead, formatDays, groupTabs, needsYou, progressPercent, progressCounts, routeTally, workerRows } from './summary'
+import { agentNumbers, agentsOnline, awaitingLead, formatDays, groupTabs, needsYou, progressPercent, progressCounts, routeTally, workerRows } from './summary'
 import { row, session, worker } from './test-fixtures'
 import type { ConductorTask } from '../api'
 
@@ -216,7 +216,7 @@ describe('workerRows', () => {
       }),
     ], tasks, NOW)
     expect(rows).toEqual([{
-      agentId: 'w1', hostname: 'host-b', os: 'darwin', status: 'busy',
+      no: 1, agentId: 'w1', hostname: 'host-b', os: 'darwin', status: 'busy',
       currentTask: { id: 'cur', key: 'T4', title: 'Do it' },
       engines: 'claude, agy',
       quota: [{ label: 'agy·argon-low', until: '2026-10-16T13:00:00.000Z' }],
@@ -236,6 +236,30 @@ describe('workerRows', () => {
     ], tasks, NOW)
     expect(rows.map((r) => [r.hostname, r.agentId])).toEqual([['same', 'a'], ['same', 'b'], ['z', 'z']])
     expect(rows[0]?.currentTask).toBeNull()
+  })
+
+  it('numbers workers 1..N in the order they are listed, whatever order the hub sent', () => {
+    const one = workerRows([worker({ agentId: 'w-mini', hostname: 'mini' }), worker({ agentId: 'w-acme', hostname: 'acme' })], tasks, NOW)
+    const two = workerRows([worker({ agentId: 'w-acme', hostname: 'acme' }), worker({ agentId: 'w-mini', hostname: 'mini' })], tasks, NOW)
+    expect(one.map((r) => [r.no, r.agentId])).toEqual([[1, 'w-acme'], [2, 'w-mini']])
+    expect(two).toEqual(one)
+  })
+})
+
+describe('agentNumbers', () => {
+  it('maps each listed agent to its number and knows no other agent', () => {
+    const rows = workerRows([
+      worker({ agentId: 'w-studio', hostname: 'studio' }),
+      worker({ agentId: 'w-mini-2', hostname: 'mini' }),
+      worker({ agentId: 'w-mini-1', hostname: 'mini' }),
+    ], [], NOW)
+    const numbers = agentNumbers(rows)
+    expect([...numbers]).toEqual([['w-mini-1', 1], ['w-mini-2', 2], ['w-studio', 3]])
+    expect(numbers.get('w-gone')).toBeUndefined()
+  })
+
+  it('is empty with no workers', () => {
+    expect(agentNumbers([]).size).toBe(0)
   })
 })
 
