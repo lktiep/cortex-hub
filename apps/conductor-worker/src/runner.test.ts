@@ -189,6 +189,17 @@ function quotaOf(out: RunOutcome) {
 const dirOf = (id = TASK_ID): string => worktreePath(paths, id);
 const remoteSubject = (branch = BRANCH): string => fx.run(fx.origin, ['log', '-1', '--format=%s', branch]);
 const remoteSha = (branch = BRANCH): string => fx.run(fx.origin, ['rev-parse', branch]);
+/** Commits `files` on main and pushes them, so the next task's worktree has them. */
+function publishOnMain(files: Record<string, string>): void {
+  for (const [rel, content] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(fx.repo, rel)), { recursive: true });
+    writeFileSync(path.join(fx.repo, rel), content);
+    fx.run(fx.repo, ['add', rel]);
+  }
+  fx.run(fx.repo, ['commit', '-m', 'project files']);
+  fx.run(fx.repo, ['push', 'origin', 'main']);
+}
+
 function remoteHas(branch: string): boolean {
   try {
     fx.run(fx.origin, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
@@ -751,6 +762,39 @@ describe('runTask', () => {
     expect(bad.inputs).toEqual([]);
     expect(existsSync(dirOf('task_setup'))).toBe(false);
     expect(remoteHas('task/setup')).toBe(false);
+  });
+
+  posixOnly('runs the install the lockfile asks for, unless the profile turns it off', async () => {
+    const bin = path.join(fx.root, 'bin');
+    const marker = path.join(fx.root, 'installed');
+    mkdirSync(bin);
+    writeFileSync(path.join(bin, 'pnpm'), `#!/bin/sh\necho "$@" > "${marker}"\n`);
+    chmodSync(path.join(bin, 'pnpm'), 0o755);
+    const env = { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` };
+
+    publishOnMain({ 'package.json': '{}', 'pnpm-lock.yaml': "lockfileVersion: '9.0'\n" });
+    const inferred = await run(makeTask(), harness(fakeEngine().adapter, { env }));
+    expect(inferred.kind).toBe('completed');
+    expect(readFileSync(marker, 'utf8').trim()).toBe('install --frozen-lockfile');
+
+    rmSync(marker);
+    publishOnMain({ '.cortex/project-profile.json': JSON.stringify({ worker: { setupCommand: '', testCommand: 'echo profile tests' } }) });
+    const off = await run(makeTask({ id: 'task_off', branch: 'task/off' }), harness(fakeEngine().adapter, { env }));
+    expect(off.kind).toBe('completed');
+    expect(existsSync(marker)).toBe(false);
+    expect(msgOf(off).result.testOutput).toBe('profile tests');
+  });
+
+  posixOnly('gives the pre-push hook the engine limit, and says when the limit stopped it', async () => {
+    const hook = path.join(fx.repo, '.git', 'hooks', 'pre-push');
+    writeFileSync(hook, '#!/bin/sh\necho verifying\nsleep 5\n');
+    chmodSync(hook, 0o755);
+    const out = await run(makeTask(), harness(fakeEngine().adapter, { engineTimeoutMs: 1500 }));
+
+    expect(out.kind).toBe('failed');
+    const error = msgOf(out).result.error ?? '';
+    expect(error).toContain('git push failed (stopped after 2 s): verifying');
+    expect(remoteHas(BRANCH)).toBe(false);
   });
 
   it('removes the worktree after every outcome, but keeps the branch', async () => {

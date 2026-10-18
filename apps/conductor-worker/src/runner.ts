@@ -6,6 +6,7 @@ import type {
   TaskResult,
 } from '@cortex/shared-types';
 import type { Classification, EngineAdapter, RunOutput } from './engines/types.js';
+import { projectCommands } from './env/requirements.js';
 import {
   BranchInUseError,
   commitAll,
@@ -96,7 +97,7 @@ function prBody(task: AssignedTask, summary: string, testOutput: string | undefi
 }
 
 function gitTail(r: RunResult): string {
-  return scrubCredentials(lastLines((r.stderr.trim() !== '' ? r.stderr : r.stdout).trim(), 20));
+  return scrubCredentials(lastLines(`${r.stdout}\n${r.stderr}`.trim(), 20));
 }
 
 interface TreeState {
@@ -294,8 +295,9 @@ export async function runTask(
 
     const shellOpts = { signal, timeoutMs: deps.engineTimeoutMs, env: deps.env };
 
-    // 2. setup
-    const setupCommand = nonEmpty(task.context['setupCommand']) ?? nonEmpty(deps.env['CORTEX_SETUP_CMD']);
+    // 2. setup: the task's own, else this machine's, else the project's (its profile or lockfile)
+    const project = projectCommands(worktree, deps.env);
+    const setupCommand = nonEmpty(task.context['setupCommand']) ?? project.setup;
     if (setupCommand !== null) {
       const setup = await runShell(setupCommand, worktree, shellOpts);
       if (signal.aborted) return aborted();
@@ -306,7 +308,7 @@ export async function runTask(
     }
 
     // 3. engine
-    const testCommand = nonEmpty(task.testCommand) ?? nonEmpty(deps.env['CORTEX_TEST_CMD']);
+    const testCommand = nonEmpty(task.testCommand) ?? project.test;
     const run = await runEngine(worktree, testCommand);
     engineSummary = adapter.summary(run.stdout);
     log('info', `engine exited with ${String(run.exitCode)}${run.timedOut ? ' (timed out)' : ''}`);
@@ -356,7 +358,8 @@ export async function runTask(
     let commit: string | null = null;
     if (changes.dirty) {
       try {
-        commit = await commitAll(worktree, commitTitle(task), deps.identity);
+        // the repository's hooks are its own code, like the tests: they get the engine's limit
+        commit = await commitAll(worktree, commitTitle(task), deps.identity, deps.engineTimeoutMs);
       } catch (err) {
         keepWorktree = true;
         return fail([testError, `could not commit the work; the worktree is kept at ${worktree}\n${messageOf(err)}`], withTests);
@@ -366,9 +369,9 @@ export async function runTask(
     if (commit === null) return noChanges();
     committed = true;
 
-    // 7. push and pull request
+    // 7. push and pull request; a pre-push hook may run the whole verify again
     try {
-      await pushBranch(worktree, task.branch);
+      await pushBranch(worktree, task.branch, deps.engineTimeoutMs);
     } catch (err) {
       // the commit lives only on the local branch, which a fresh `worktree add -B` would reset
       keepWorktree = true;

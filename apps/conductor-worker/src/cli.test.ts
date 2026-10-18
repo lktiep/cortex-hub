@@ -19,6 +19,7 @@ import { saveStartConfig } from './commands/agents.js';
 import type { StartConfig } from './commands/agents.js';
 import { DEFAULT_STOP_GRACE_MS, isAlive } from './commands/daemon.js';
 import { workerPaths, workerRoot } from './paths.js';
+import { createGitFixture, FIXTURE_GIT_IDENTITY, isolateGitConfig } from './test-utils/git-fixture.js';
 import { WORKER_VERSION } from './version.js';
 
 const posixOnly = it.skipIf(process.platform === 'win32');
@@ -136,6 +137,21 @@ describe('parseCli', () => {
 
   it('wants the command first', () => {
     expect(parseCli(['--daemon', 'start'])).toEqual({ error: expect.stringMatching(/command/) });
+  });
+
+  it('parses check: an agent, -y, --if-changed, and engines only when given', () => {
+    const c = parseCli(['check', '2', '-y', '--if-changed']);
+    expect(c).toMatchObject({ command: 'check', agent: '2', yes: true, ifChanged: true });
+    expect(c).not.toHaveProperty('engines');
+    expect(parseCli(['check', '--engines', 'claude'])).toMatchObject({ engines: ['claude'] });
+    expect(parseCli(['check'])).not.toHaveProperty('yes');
+    expect(parseCli(['start', '--yes'])).toEqual({ error: '--yes works with check' });
+    expect(parseCli(['doctor', '--if-changed'])).toEqual({ error: '--if-changed works with check' });
+  });
+
+  it("takes a start's arguments for check, as run-agent runs it before a start", () => {
+    const argv = ['acme', '-d', '--repo', '/src/app', '--hub', 'http://localhost:4000', '--capabilities', 'web', '--engine-timeout', '30'];
+    expect(parseCli(['check', '--if-changed', ...argv])).toMatchObject({ command: 'check', agent: 'acme', repo: '/src/app', ifChanged: true });
   });
 });
 
@@ -592,5 +608,55 @@ describe('main', () => {
       expect(await main(['stop', '--all'], opts)).toBe(0);
       expect(log.mock.calls.at(-1)).toEqual(['no agent is running']);
     });
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('main check', () => {
+  it("checks an agent's saved repo with its engines and test command, and keeps the hub key from that command", async () => {
+    const fx = createGitFixture();
+    const restoreGit = isolateGitConfig(fx.root, FIXTURE_GIT_IDENTITY);
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'cw-check-')));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      saveStartConfig(workerPaths('acme', home).startFile, {
+        agentId: 'acme',
+        repo: fx.repo,
+        hub: 'https://hub.example',
+        apiKey: 'k-sekrit',
+        engines: ['codex'],
+        capabilities: [],
+        engineTimeoutMin: 90,
+        env: { CORTEX_TEST_CMD: 'echo "key:${CORTEX_API_KEY:-none}"; env | grep -c "=k-sekri[t]$"; exit 3' },
+      });
+      const wanted: string[][] = [];
+      const code = await main(['check', 'acme'], {
+        homeDir: home,
+        cwd: fx.scratch,
+        env: { PATH: process.env.PATH, ALSO_THE_KEY: 'k-sekrit' },
+        signals: new EventEmitter() as unknown as NodeJS.Process,
+        check: {
+          probe: {
+            platform: 'darwin',
+            resolve: (n) => `/fake/${n}`,
+            run: () => Promise.resolve({ code: 0, output: '1.0.0' }),
+            findPython: () => Promise.resolve(null),
+          },
+          availableEngines: (w) => {
+            wanted.push(w);
+            return Promise.resolve(w);
+          },
+          ask: () => Promise.resolve(null),
+        },
+      });
+      const out = log.mock.calls.map((c) => String(c[0]));
+      expect(code).toBe(1);
+      expect(out[0]).toBe(`cw check: ${fx.repo}`);
+      expect(wanted[0]).toEqual(['codex']);
+      expect(out).toEqual(expect.arrayContaining(['✗ test: echo "key:${CORTEX_API_KEY:-none}"; env | grep -c "=k-sekri[t]$"; exit 3 (exit code 3)', '      key:none', '      0']));
+    } finally {
+      restoreGit();
+      fx.cleanup();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

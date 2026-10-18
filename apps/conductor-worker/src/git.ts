@@ -7,7 +7,11 @@ export interface RunResult {
   stdout: string;
   stderr: string;
 }
-export type GitRun = (args: string[], opts: { cwd: string; input?: string }) => Promise<RunResult>;
+/**
+ * `timeoutMs` replaces the ceiling, for a command that runs the repository's own hooks: a
+ * pre-push verify can take longer than any network wait.
+ */
+export type GitRun = (args: string[], opts: { cwd: string; input?: string; timeoutMs?: number }) => Promise<RunResult>;
 export type GhRun = (args: string[], opts: { cwd: string; input?: string }) => Promise<RunResult>;
 
 const CEILING_MS = 10 * 60 * 1000;
@@ -20,7 +24,7 @@ function runChild(
   bin: string,
   extraEnv: Record<string, string>,
   args: string[],
-  opts: { cwd: string; input?: string },
+  opts: { cwd: string; input?: string; timeoutMs?: number },
   ceilingMs: number,
 ): Promise<RunResult> {
   return (async (): Promise<RunResult> => {
@@ -53,7 +57,7 @@ function runChild(
     const timer = setTimeout(() => {
       timedOut = true;
       void killTree(tracked.pid);
-    }, ceilingMs);
+    }, opts.timeoutMs ?? ceilingMs);
     const { code, signal } = await tracked.exited;
     clearTimeout(timer);
 
@@ -218,8 +222,16 @@ function canonical(p: string): string {
   }
 }
 
-function tail(r: RunResult): string {
-  return scrubCredentials(lastLines((r.stderr.trim() !== '' ? r.stderr : r.stdout).trim(), 20));
+/** The end of what git printed. Both streams: hooks print their reasons on stdout. */
+function tail(r: RunResult, lines = 20): string {
+  return scrubCredentials(lastLines(`${r.stdout}\n${r.stderr}`.trim(), lines));
+}
+
+/** `what` failed: said plainly when it was the time limit that stopped it. */
+function failed(what: string, r: RunResult, timeoutMs: number): string {
+  const after = timeoutMs >= 60_000 ? `${String(Math.round(timeoutMs / 60_000))} min` : `${String(Math.round(timeoutMs / 1000))} s`;
+  const limit = r.code === TIMEOUT_CODE ? ` (stopped after ${after})` : '';
+  return `${what} failed${limit}: ${tail(r, 40)}`;
 }
 
 interface WorktreeEntry {
@@ -373,10 +385,12 @@ export async function removeWorktree(repo: string, dir: string): Promise<void> {
 
 // --- commit, push, PR ---
 
+/** `hookTimeoutMs` bounds the commit and its hooks; the ceiling by default. */
 export async function commitAll(
   dir: string,
   message: string,
   fallbackIdentity: { name: string; email: string },
+  hookTimeoutMs = CEILING_MS,
 ): Promise<string | null> {
   const add = await git(['add', '-A'], { cwd: dir });
   if (add.code !== 0) throw new Error(`git add failed: ${tail(add)}`);
@@ -389,22 +403,21 @@ export async function commitAll(
     email.code !== 0 || email.stdout.trim() === ''
       ? ['-c', `user.name=${fallbackIdentity.name}`, '-c', `user.email=${fallbackIdentity.email}`]
       : [];
-  const commit = await git([...identity, 'commit', '-F', '-'], { cwd: dir, input: message });
-  if (commit.code !== 0) {
-    // hooks print to either stream
-    throw new Error(
-      `git commit failed: ${scrubCredentials(lastLines(`${commit.stdout}\n${commit.stderr}`.trim(), 40))}`,
-    );
-  }
+  const commit = await git([...identity, 'commit', '-F', '-'], { cwd: dir, input: message, timeoutMs: hookTimeoutMs });
+  // hooks print to either stream
+  if (commit.code !== 0) throw new Error(failed('git commit', commit, hookTimeoutMs));
   const head = await git(['rev-parse', 'HEAD'], { cwd: dir });
   if (head.code !== 0) throw new Error(`git rev-parse failed: ${tail(head)}`);
   return head.stdout.trim();
 }
 
-/** No `-u`: setting the upstream writes the clone's shared .git/config (see prepareWorktree). */
-export async function pushBranch(dir: string, branch: string): Promise<void> {
-  const r = await retryOnLock(() => git(['push', 'origin', branch], { cwd: dir }));
-  if (r.code !== 0) throw new Error(`git push failed: ${tail(r)}`);
+/**
+ * No `-u`: setting the upstream writes the clone's shared .git/config (see prepareWorktree).
+ * `hookTimeoutMs` bounds the push and its pre-push hook; the ceiling by default.
+ */
+export async function pushBranch(dir: string, branch: string, hookTimeoutMs = CEILING_MS): Promise<void> {
+  const r = await retryOnLock(() => git(['push', 'origin', branch], { cwd: dir, timeoutMs: hookTimeoutMs }));
+  if (r.code !== 0) throw new Error(failed('git push', r, hookTimeoutMs));
 }
 
 export async function openPullRequest(

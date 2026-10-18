@@ -129,9 +129,9 @@ describe('listAgents', () => {
     make('mini-b', { 'worker.log': 'x\n' });
     make('acme-app', {
       'start.json': JSON.stringify(cfg()),
-      'state.json': JSON.stringify({ activeTaskId: 'task-1' }),
+      'state.json': JSON.stringify({ activeTaskId: 'task-1', notReady: ['docker: not found'] }),
     });
-    make('studio', { 'worker.pid': `${process.pid}\n` });
+    make('studio', { 'worker.pid': `${process.pid}\n`, 'state.json': JSON.stringify({ notReady: ['pnpm: not found'] }) });
     mkdirSync(join(workerRoot(home), 'empty'));
     writeFileSync(join(workerRoot(home), 'cortex-worker.mjs'), '#!/usr/bin/env node\n');
 
@@ -141,9 +141,10 @@ describe('listAgents', () => {
       [2, 'mini-b'],
       [3, 'studio'],
     ]);
-    expect(agents[0]).toMatchObject({ pid: null, activeTaskId: 'task-1', config: cfg() });
-    expect(agents[1]).toMatchObject({ pid: null, activeTaskId: null, config: null });
-    expect(agents[2]?.pid).toBe(process.pid);
+    // a stopped agent's finding is stale, so only the running one says it is not ready
+    expect(agents[0]).toMatchObject({ pid: null, activeTaskId: 'task-1', config: cfg(), notReady: null });
+    expect(agents[1]).toMatchObject({ pid: null, activeTaskId: null, config: null, notReady: null });
+    expect(agents[2]).toMatchObject({ pid: process.pid, notReady: ['pnpm: not found'] });
     expect(agents[2]?.paths).toEqual(workerPaths('studio', home));
   });
 
@@ -153,7 +154,7 @@ describe('listAgents', () => {
     expect(lines[0]).toMatch(/^#\s+AGENT\s+STATE\s+TASK\s+ENGINES\s+REPO$/);
     expect(lines[1]).toMatch(/^1\s+acme-app\s+stopped\s+task-1\s+agy,claude\s+\/src\/app$/);
     expect(lines[2]).toMatch(/^2\s+mini-b\s+stopped\s+-\s+-\s+-$/);
-    expect(lines[3]).toMatch(new RegExp(`^3\\s+studio\\s+running \\(pid ${process.pid}\\)\\s+-`));
+    expect(lines[3]).toMatch(new RegExp(`^3\\s+studio\\s+running \\(pid ${process.pid}\\), not ready\\s+-`));
     expect(table).not.toContain(KEY);
   });
 

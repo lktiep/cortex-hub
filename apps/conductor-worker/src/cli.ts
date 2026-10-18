@@ -16,6 +16,8 @@ import {
   saveStartConfig,
 } from './commands/agents.js';
 import type { StartConfig } from './commands/agents.js';
+import { defaultCheckDeps, runCheck, terminalAsk } from './commands/check.js';
+import type { CheckDeps } from './commands/check.js';
 import {
   DEFAULT_STOP_GRACE_MS,
   claimPidFile,
@@ -32,6 +34,7 @@ import { updateBundle } from './commands/update.js';
 import { KEY_FROM_ENV, KEY_FROM_FLAG, detectHubBase, detectHubConfig } from './config.js';
 import { createAdapters, describeEngines } from './engines/index.js';
 import { installHint } from './engines/install.js';
+import { defaultReadiness } from './env/readiness.js';
 import type { EngineAdapter } from './engines/types.js';
 import { createGh, originUrl } from './git.js';
 import { HubClient } from './hub-client.js';
@@ -53,6 +56,7 @@ export interface CliArgs {
     | 'ls'
     | 'logs'
     | 'doctor'
+    | 'check'
     | 'update'
     | 'hub-url'
     | 'version'
@@ -62,10 +66,15 @@ export interface CliArgs {
   probe: boolean;
   /** stop and restart: every agent on this machine. */
   all: boolean;
+  /** check: install what is missing without asking. */
+  yes?: boolean;
+  /** check: skip the trial run when it passed before and nothing it rests on has changed. */
+  ifChanged?: boolean;
   /** The agent named on the command line: a name or its number in `cw ls` (not for start). */
   agent?: string;
   agentId?: string;
   repo?: string;
+  /** Always set, except for check without --engines: it then takes the agent's own. */
   engines?: Executor[];
   capabilities?: string[];
   hub?: string;
@@ -81,9 +90,9 @@ const DEFAULT_STOP_POLL_MS = 2_000;
 const EXIT_SAFETY_MS = 5_000;
 const WORKER_IDENTITY = { name: 'Cortex Worker', email: 'cortex-worker@localhost' };
 
-const RUN_COMMANDS = ['start', 'stop', 'restart', 'status', 'ls', 'logs', 'doctor', 'update', 'hub-url'] as const;
+const RUN_COMMANDS = ['start', 'stop', 'restart', 'status', 'ls', 'logs', 'doctor', 'check', 'update', 'hub-url'] as const;
 /** The commands that take an agent after them. */
-const AGENT_COMMANDS: ReadonlySet<string> = new Set(['start', 'stop', 'restart', 'status', 'logs', 'doctor']);
+const AGENT_COMMANDS: ReadonlySet<string> = new Set(['start', 'stop', 'restart', 'status', 'logs', 'doctor', 'check']);
 type RunCommand = (typeof RUN_COMMANDS)[number];
 const isRunCommand = (s: string): s is RunCommand => (RUN_COMMANDS as readonly string[]).includes(s);
 const isExecutor = (s: string): s is Executor => (EXECUTORS as readonly string[]).includes(s);
@@ -114,6 +123,8 @@ export function parseCli(argv: string[]): CliArgs | { error: string } {
         follow: { type: 'boolean', short: 'f' },
         probe: { type: 'boolean' },
         all: { type: 'boolean' },
+        yes: { type: 'boolean', short: 'y' },
+        'if-changed': { type: 'boolean' },
         'agent-id': { type: 'string' },
         repo: { type: 'string' },
         engines: { type: 'string' },
@@ -140,8 +151,12 @@ export function parseCli(argv: string[]): CliArgs | { error: string } {
     if (first !== 'stop' && first !== 'restart') return { error: '--all works with stop and restart' };
     if (ref !== undefined || values['agent-id'] !== undefined) return { error: '--all or an agent, not both' };
   }
+  if (first !== 'check') {
+    if (values.yes === true) return { error: '--yes works with check' };
+    if (values['if-changed'] === true) return { error: '--if-changed works with check' };
+  }
 
-  let engines: Executor[] = [...DEFAULT_ENGINES];
+  let engines: Executor[] | undefined = first === 'check' ? undefined : [...DEFAULT_ENGINES];
   if (values.engines !== undefined) {
     const names = commaList(values.engines);
     if (names.length === 0) return { error: `--engines needs at least one of ${EXECUTORS.join(', ')}` };
@@ -168,10 +183,12 @@ export function parseCli(argv: string[]): CliArgs | { error: string } {
     follow: values.follow ?? false,
     probe: values.probe ?? false,
     all: values.all ?? false,
-    engines,
     capabilities: values.capabilities === undefined ? [] : commaList(values.capabilities),
     engineTimeoutMin,
   };
+  if (engines !== undefined) args.engines = engines;
+  if (values.yes === true) args.yes = true;
+  if (values['if-changed'] === true) args.ifChanged = true;
   if (values['agent-id'] !== undefined) args.agentId = values['agent-id'];
   if (ref !== undefined) {
     if (first === 'start') args.agentId = ref;
@@ -200,6 +217,8 @@ function helpText(): string {
     '  update     replace this cortex-worker.mjs with the hub\'s version',
     '  hub-url    print the hub URL the worker would use',
     '  doctor     check the setup (--probe also runs each engine)',
+    '  check      list what this machine lacks for the repo\'s tasks, offer to install it,',
+    '             then run the setup and test commands once in a temporary worktree',
     '  version    print the worker version',
     '  help       show this help',
     '',
@@ -215,9 +234,13 @@ function helpText(): string {
     '  --api-key <key>           hub api key (default: CORTEX_API_KEY, else the cortex-hub MCP config)',
     `  --engine-timeout <min>    minutes an engine may run per task (default: ${DEFAULT_ENGINE_TIMEOUT_MIN})`,
     '  --probe                   doctor: also run a tiny prompt through each engine',
+    '  -y, --yes                 check: install what is missing without asking',
+    '  --if-changed              check: skip the trial run if it passed before and nothing it rests on changed',
     '',
     'Examples:',
     '  cw ls                     the agents, numbered',
+    '  cw check                  can this machine do the tasks of the repo here?',
+    '  cw check 2 --yes          the same for agent 2, installing what is missing without asking',
     '  cw logs 2 -f              follow the log of agent 2 (Ctrl+C to quit)',
     '  cw restart --all          restart every agent, e.g. after cw update',
   ].join('\n');
@@ -406,6 +429,8 @@ export async function startForeground(args: CliArgs, opts: StartOptions = {}): P
     return 1;
   }
   logger.info(`engines: ${described.engines.map((e) => e.executor).join(', ')}`);
+  const skipReadiness = env['CORTEX_SKIP_READINESS'] === '1';
+  if (skipReadiness) logger.warn('CORTEX_SKIP_READINESS=1: taking tasks without checking that this machine has what they need');
 
   const saved: StartConfig = {
     agentId,
@@ -449,6 +474,8 @@ export async function startForeground(args: CliArgs, opts: StartOptions = {}): P
     engineTimeoutMs: (args.engineTimeoutMin ?? DEFAULT_ENGINE_TIMEOUT_MIN) * 60_000,
     identity: WORKER_IDENTITY,
     isRegistered: () => client.registered,
+    // what `cw check` would mark ✗ declines each task as busy until it is fixed
+    ...(skipReadiness ? {} : { readiness: defaultReadiness(repo, process.platform, childEnv) }),
   });
 
   const finish = async (code: number, why: string): Promise<void> => {
@@ -533,6 +560,8 @@ export interface MainOptions extends StartOptions {
   scriptPath?: string;
   /** Replaces parts of the doctor context (tests inject fetch, gh, engines and the socket). */
   doctor?: Partial<DoctorContext>;
+  /** Replaces parts of what check probes and runs with. */
+  check?: Partial<CheckDeps>;
 }
 
 export async function main(argv: string[], opts: MainOptions = {}): Promise<number> {
@@ -661,6 +690,45 @@ export async function main(argv: string[], opts: MainOptions = {}): Promise<numb
         if (args.apiKey !== undefined) secrets.push(args.apiKey);
         console.log(redact(formatChecks(checks), secrets));
         return checks.some((c) => c.required && !c.ok) ? 1 : 0;
+      }
+      case 'check': {
+        const named = namedAgent();
+        if (named !== null && typeof named !== 'string') {
+          console.error(named.error);
+          return 1;
+        }
+        // the agent's own repo, engines and setup/test commands, unless the command line says otherwise
+        const cfg = readStartConfig(workerPaths(named ?? agentId(), homeDir).startFile);
+        const repo = path.resolve(cwd, args.repo ?? cfg?.repo ?? '.');
+        const baseEnv = cfg === null ? { ...env } : restartEnv(env, cfg);
+        const hub = detectHubConfig({ flags: { hub: args.hub ?? cfg?.hub, apiKey: args.apiKey }, env: baseEnv, homeDir, repoPath: repo });
+        // the project's own commands run here, as in a task: the hub key stays out of their reach
+        const checkEnv = { ...baseEnv };
+        for (const key of ['error' in hub ? '' : hub.apiKey, args.apiKey ?? '']) {
+          scrubSecret(checkEnv, key);
+          scrubSecret(process.env, key);
+        }
+        delete checkEnv['CORTEX_API_KEY'];
+        const ac = new AbortController();
+        const abort = (): void => ac.abort();
+        signals.on('SIGINT', abort);
+        signals.on('SIGTERM', abort);
+        try {
+          const deps = defaultCheckDeps({
+            platform: process.platform,
+            env: checkEnv,
+            signal: ac.signal,
+            ask: terminalAsk(ac),
+            out: (line) => console.log(line),
+          });
+          return await runCheck(
+            { repo, engines: args.engines ?? cfg?.engines ?? [...DEFAULT_ENGINES], homeDir, yes: args.yes === true, ifChanged: args.ifChanged === true },
+            { ...deps, ...opts.check },
+          );
+        } finally {
+          signals.off('SIGINT', abort);
+          signals.off('SIGTERM', abort);
+        }
       }
       case 'hub-url': {
         const hub = hubBase();

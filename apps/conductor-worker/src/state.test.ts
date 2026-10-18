@@ -7,7 +7,7 @@ import { readState, writeState, type WorkerState } from './state.js';
 const dir = mkdtempSync(path.join(os.tmpdir(), 'cw-state-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-const empty: WorkerState = { activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null };
+const empty: WorkerState = { activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null };
 
 describe('state', () => {
   it('readState returns the empty state for a missing or corrupt file', () => {
@@ -28,6 +28,7 @@ describe('state', () => {
       unconfirmed: null,
       lastRegistered: { projectId: null, hubVersion: '1.0.0', at: '2026-01-01T00:00:00.000Z' },
       engineGroup: 4242,
+      notReady: ['docker: not found'],
     };
     writeState(file, s);
     expect(readState(file)).toEqual(s);
@@ -57,7 +58,7 @@ describe('state', () => {
     const ok = { taskId: 't', msg: { type: 'task.complete' } };
     expect(read({ unconfirmed: ok }).unconfirmed).toEqual(ok);
     const part = read({ activeTaskId: 't9', unconfirmed: { taskId: 1 }, lastRegistered: 5 });
-    expect(part).toEqual({ activeTaskId: 't9', unconfirmed: null, lastRegistered: null, engineGroup: null });
+    expect(part).toEqual({ activeTaskId: 't9', unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
   });
 
   it('keeps an engine group only when it is a positive integer', () => {
@@ -70,5 +71,15 @@ describe('state', () => {
     for (const bad of [0, -7, 1.5, '4242', null, true]) expect(group(bad)).toBeNull();
     writeFileSync(f, '{}');
     expect(readState(f).engineGroup).toBeNull();
+  });
+
+  it('keeps what the machine lacks only as a list of lines', () => {
+    const f = path.join(dir, 'ready.json');
+    const notReady = (v: unknown): string[] | null => {
+      writeFileSync(f, JSON.stringify({ notReady: v }));
+      return readState(f).notReady;
+    };
+    expect(notReady(['docker: not found', 'pnpm: not found'])).toEqual(['docker: not found', 'pnpm: not found']);
+    for (const bad of [[], ['docker', 7], 'docker: not found', {}, null, true]) expect(notReady(bad)).toBeNull();
   });
 });

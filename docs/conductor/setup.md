@@ -37,6 +37,8 @@ Each worker machine needs:
 - **gh, logged in** with `gh auth login` (optional). Without it, the worker reports a compare URL
   instead of opening a pull request.
 - A clone of the project, with a git remote named `origin`. Run the worker inside it.
+- What the project itself needs: its package manager, and the tools its git hooks call, such as
+  docker or python3. `cw check` (section 7) lists them and offers to install them.
 
 #### macOS
 
@@ -293,7 +295,14 @@ Options (add them after `start`):
 | `--repo <path>` | The clone to work in. Default: the current directory. |
 | `--engines claude,agy` | Engines to look for, in order. Default: `agy,claude,codex,gemini`. |
 | `--capabilities a,b` | Tags the hub can match tasks on. Use ids from the hub's `.cortex/capability-templates.json` (`plan, orchestrate, backend, frontend, design, review, godot, resources, game-logic, server, build-game, database, devops, security, testing, docker, deploy`). Unknown tags are dropped, with a warning on the hub. |
+| `--engine-timeout <min>` | Minutes an engine may run per task. Default: 90. The setup and test commands, and the commit and push with the project's own git hooks, get the same limit. |
 | `--hub <url>`, `--api-key <key>` | Override the detected hub and key. |
+
+Before it starts the worker, the bootstrap runs `cw check --if-changed` on the same repo
+(section 7): one list of what this machine lacks, one question before it installs anything, then
+a trial run of the project's setup and test commands. It never stops the start: a worker on a
+machine that is not ready takes no tasks until it is (section 8). Under `curl | bash` it asks on
+the terminal; with no terminal to ask in, it installs nothing. `CORTEX_SKIP_CHECK=1` skips it.
 
 The bootstrap also installs the `cw` command, short for cortex-worker: `~/.local/bin/cw` on
 macOS and Linux, `%USERPROFILE%\.local\bin\cw.cmd` on Windows. When that folder is not on your
@@ -340,6 +349,100 @@ with a fix under each failure. A required check that fails makes the exit code 1
 
 The key is validated by the `handshake` row. There is no separate key row.
 
+### What the project needs: `cw check`
+
+`doctor` checks the worker. `cw check` checks the project: can this machine do its tasks?
+
+```bash
+cw check             # the repo of the current folder
+cw check 2           # agent 2's repo, engines, and setup and test commands
+cw check --yes       # install what is missing without asking (or -y)
+```
+
+It works out what the project needs from its own files:
+
+| Where | What it needs |
+|---|---|
+| always | git, and gh as a warning |
+| `package.json` `engines.node` | that Node; without it, Node 20 or newer |
+| `.nvmrc` or `.node-version` | that Node major, as a warning |
+| `packageManager` (like `pnpm@9.12.0`), else the lockfile | pnpm, yarn or bun, the same major |
+| the git hooks: lefthook files, `.husky/`, `.githooks/`, the package scripts they run and the files those run | docker or python3, when they call it |
+| `worker.requires` in the project's profile (below) | each command listed, in place of the hook scan |
+| `--engines`, or the agent's own | one of those engines |
+
+It prints one list. `✓` is what it found, `✗` stops tasks, `!` is a warning, and each has a fix:
+
+```
+cw check: /src/acme
+
+✓ git 2.47.1, node 22.12.0, engines: claude
+✗ pnpm — not found; package.json packageManager is pnpm@9.12.0
+    fix: npm install -g pnpm@9.12.0
+! gh — not found; opens the pull requests (without it a task ends with a compare link)
+    fix: brew install gh
+
+cw check can do these for you:
+  brew install gh
+  npm install -g pnpm@9.12.0
+Go ahead? [Y/n]
+```
+
+**Installing.** It asks once, and Enter means yes. It uses winget on Windows, Homebrew on macOS,
+and `npm install -g` for pnpm, yarn, bun and the claude, codex and gemini CLIs. On Linux it
+installs only through npm and prints the command for the rest; it never runs sudo. Some fixes stay
+yours: a Node on the wrong version, a Docker that is installed but not running, `gh auth login`. When a new tool is not on
+this terminal's PATH yet, it says so: open a new terminal and run `cw check` again.
+
+**Python on Windows.** Hooks often call `python3`, but Python from python.org or winget has only
+`python` and `py`. When Python is installed, `cw check --yes` adds `python3.cmd` (for cmd and
+PowerShell) and `python3` (for the sh that git hooks run in) to `%USERPROFILE%\.local\bin`, next
+to `cw`. Both run that python.exe. A `python3` there that `cw check` did not write is left alone.
+When `python3` opens the Microsoft Store, turn off the python.exe and python3.exe aliases in
+Settings → Apps → Advanced app settings → App execution aliases.
+
+**The trial run.** Once no `✗` is left, it runs the project's setup and test commands once, as a
+task runs them, in a temporary worktree of the branch tasks start from (`origin/HEAD`). The
+worktree is removed afterwards. A step that fails shows its last 40 lines; tasks would fail the
+same way. Each step may run for 20 minutes. The hub key is kept out of these commands and out of
+the installers.
+
+```
+trial run: the setup and test commands, as a task runs them, in a temporary worktree
+✓ setup: pnpm install --frozen-lockfile
+✓ test: pnpm test
+ready: this machine can take tasks for /src/acme
+```
+
+The exit code is 0 when the machine is ready, and 1 when it is not. `--if-changed` skips the trial
+when it passed before and nothing it rests on has changed: the branch's `package.json`, lockfiles,
+`.nvmrc`, `.node-version`, profile and hook files, and this machine's `CORTEX_SETUP_CMD` and
+`CORTEX_TEST_CMD`.
+
+### Project settings: the `worker` section
+
+What the files cannot show goes in the project's own `.cortex/project-profile.json`, committed to
+the branch tasks start from:
+
+```json
+{
+  "worker": {
+    "setupCommand": "pnpm install --frozen-lockfile",
+    "testCommand": "pnpm test",
+    "requires": ["docker", "python3"]
+  }
+}
+```
+
+| Key | Meaning | Without it |
+|---|---|---|
+| `setupCommand` | Runs in each task's new worktree, before the engine. `""` turns it off. | The lockfile's install: `pnpm install --frozen-lockfile`, `yarn install --frozen-lockfile`, `bun install --frozen-lockfile` or `npm ci`. No lockfile, no install. |
+| `testCommand` | The engine is told to run it. The worker runs it again after the engine, and puts its output in the pull request. | None. |
+| `requires` | Commands the project needs that its files do not show. It replaces the hook scan; `cw check` notes a tool a hook calls that the list leaves out. | What the hooks call. |
+
+A task uses the first of: the setup or test command the task itself carries, this machine's
+`CORTEX_SETUP_CMD` or `CORTEX_TEST_CMD`, then the profile (and the lockfile, for setup).
+
 ## 8. Run as a daemon
 
 ```bash
@@ -357,9 +460,10 @@ cw update            # fetch the hub's worker version
 `cw ls` prints a table like this:
 
 ```
-#  AGENT  STATE              TASK  ENGINES  REPO
-1  acme   running (pid 812)  -     claude   /src/acme
-2  mini   stopped            -     agy      /src/mini
+#  AGENT   STATE                         TASK  ENGINES  REPO
+1  acme    running (pid 812)             -     claude   /src/acme
+2  mini    stopped                       -     agy      /src/mini
+3  studio  running (pid 905), not ready  -     claude   /src/studio
 ```
 
 An agent is its name or its number in `cw ls`. The numbers go by name and count this machine
@@ -368,9 +472,23 @@ every machine. A number that is also an agent's name (an agent called `2`) means
 `cw status` without an agent prints the list. `logs`, `stop` and `restart` without one take the
 agent of the current folder, or the only agent there is, and otherwise ask which one.
 
+**When the machine is not ready.** Before each task, the worker looks for what `cw check` would
+mark `✗` (not the trial run, which is too slow). When something is missing, it turns the task
+down as busy, so the hub gives it to another worker or keeps it waiting, and the log says what is
+missing:
+
+```
+machine not ready, so it takes no tasks: pnpm: not found; package.json packageManager is pnpm@9.12.0 (run cw check)
+```
+
+It looks again every minute. Once you fix it, the log says `machine ready: taking tasks again`
+and the worker asks for work. Until then `cw ls` shows `not ready`, and `cw status` has a
+`not ready:` line. A look that fails or takes over 30 seconds does not hold tasks up.
+`CORTEX_SKIP_READINESS=1` on `start` turns this off.
+
 **What `restart` reuses.** `start` saves the settings it ran with in
 `~/.cortex/worker/<agentId>/start.json`: the repo, hub, engines, capabilities, engine timeout,
-`CORTEX_SETUP_CMD`, `CORTEX_TEST_CMD`, `CORTEX_GH_BIN` and the `CORTEX_AGY_*` settings. It saves the key too when
+`CORTEX_SETUP_CMD`, `CORTEX_TEST_CMD`, `CORTEX_GH_BIN`, `CORTEX_SKIP_READINESS` and the `CORTEX_AGY_*` settings. It saves the key too when
 you gave it with `--api-key` or `CORTEX_API_KEY`, so the file is readable by you only (mode 600;
 on Windows, your profile folder's permissions). A key the worker read from an MCP config is not
 saved, and `restart` reads it from there again. `cw ls` never shows the key. Delete the agent's
@@ -419,6 +537,15 @@ Other problems:
 - The extension shows a URL with `/ws/conductor/ws/conductor`: update the extension.
 - `agy` is slow to start: see the notes in section 4.
 - A task ran against the wrong hub: run `doctor` and read the `engine MCP configs` row.
+- A worker takes no tasks and `cw ls` says `not ready`: run `cw check <agent>`, fix the `✗` items,
+  and it takes tasks again within a minute (section 8).
+- A hook fails with `python3: not found` on Windows: run `cw check --yes` (section 7).
+- `cw check` passes but tasks fail in setup: the task may carry its own setup command, which the
+  trial does not run. The task's error, `setup command failed (exit N)`, ends with the last lines
+  the command printed.
+- `git push failed (stopped after 90 min)`: the project's pre-push hook ran longer than the engine
+  limit. Raise `--engine-timeout`, or make the hook faster. A failed commit or push shows what the
+  hook printed.
 
 ## 11. Security
 

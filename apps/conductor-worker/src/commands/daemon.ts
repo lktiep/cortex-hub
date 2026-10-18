@@ -263,14 +263,18 @@ export async function stopWorker(
 
 export function statusText(paths: WorkerPaths, state: WorkerState): string {
   const pid = readPid(paths);
-  const running =
-    pid === null ? 'stopped' : isAlive(pid) ? `running (pid ${pid})` : `stopped (stale pid file: ${pid})`;
+  const live = pid !== null && isAlive(pid);
+  const running = pid === null ? 'stopped' : live ? `running (pid ${pid})` : `stopped (stale pid file: ${pid})`;
   const lr = state.lastRegistered;
   const lines = [
     `agent id:        ${path.basename(paths.home)}`,
     `state:           ${running}`,
     `active task:     ${state.activeTaskId ?? 'none'}`,
   ];
+  // a stopped worker's finding is stale: the next start checks again
+  if (live && state.notReady !== null) {
+    lines.push(`not ready:       ${state.notReady.join('; ')} — it takes no tasks until fixed (run cw check)`);
+  }
   if (state.unconfirmed !== null) {
     lines.push(`unconfirmed:     ${state.unconfirmed.msg.type} for ${state.unconfirmed.taskId}, not yet seen by the hub`);
   }

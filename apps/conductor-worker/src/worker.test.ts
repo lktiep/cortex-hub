@@ -230,11 +230,11 @@ describe('registerPayload', () => {
 
   it('reports the unconfirmed task, else the persisted active task', () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
     expect(new Worker(h.deps).registerPayload().activeTaskId).toBe(TASK_B);
 
     const msg = done(makeTask());
-    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg }, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg }, lastRegistered: null, engineGroup: null, notReady: null });
     expect(new Worker(h.deps).registerPayload().activeTaskId).toBe(TASK_A);
   });
 });
@@ -272,7 +272,7 @@ describe('task.assigned', () => {
       { via: 'send', msg: IDLE },
     ]);
     expect(w.busy).toBe(false);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: done(task) }, lastRegistered: null, engineGroup: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: done(task) }, lastRegistered: null, engineGroup: null, notReady: null });
   });
 
   it.each([
@@ -293,7 +293,7 @@ describe('task.assigned', () => {
     await w.idle();
 
     if (outcome.kind !== 'completed' && outcome.kind !== 'failed' && outcome.kind !== 'quota') throw new Error('unreachable');
-    expect(seen).toEqual([{ activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: outcome.msg }, lastRegistered: null, engineGroup: null }]);
+    expect(seen).toEqual([{ activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: outcome.msg }, lastRegistered: null, engineGroup: null, notReady: null }]);
     expect(h.sent.slice(-2)).toEqual([
       { via: 'reliable', msg: outcome.msg },
       { via: 'send', msg: IDLE },
@@ -364,7 +364,7 @@ describe('task.assigned', () => {
         { via: 'send', msg: IDLE },
       ]);
       expect(h.calls).toHaveLength(1);
-      expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
+      expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
     },
   );
 
@@ -389,6 +389,7 @@ describe('task.assigned', () => {
       unconfirmed: { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) },
       lastRegistered: null,
       engineGroup: null,
+      notReady: null,
     });
     const seen: WorkerState[] = [];
     h.onReliable.fn = (m) => {
@@ -397,13 +398,13 @@ describe('task.assigned', () => {
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask()));
     await started(h);
-    expect(seen).toEqual([{ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null }]);
+    expect(seen).toEqual([{ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null }]);
   });
 
   it("declines when the route's executor is not available", async () => {
     const h = harness();
     const unconfirmed = { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) };
-    writeState(paths.stateFile, { activeTaskId: null, unconfirmed, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed, lastRegistered: null, engineGroup: null, notReady: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask({ route: { executor: 'codex', model: null, effort: null } })));
     await w.idle();
@@ -415,7 +416,7 @@ describe('task.assigned', () => {
     ]);
     expect(h.calls).toHaveLength(0);
     expect(w.busy).toBe(false);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed, lastRegistered: null, engineGroup: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed, lastRegistered: null, engineGroup: null, notReady: null });
   });
 
   it('declines when there is no route executor and no default engine', async () => {
@@ -451,7 +452,7 @@ describe('task.assigned', () => {
 
   it('declines an unsafe task id before accepting and leaves the state alone', async () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask({ id: '../escape' })));
     await w.idle();
@@ -489,7 +490,7 @@ describe('task.assigned', () => {
       { via: 'reliable', msg: { type: 'task.decline', taskId: TASK_A, reason: 'branch-in-use: /elsewhere', attempt: 3 } },
       { via: 'send', msg: IDLE },
     ]);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
   });
 
   it('clears an unconfirmed outcome once a new task is accepted', async () => {
@@ -499,11 +500,12 @@ describe('task.assigned', () => {
       unconfirmed: { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) },
       lastRegistered: null,
       engineGroup: null,
+      notReady: null,
     });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask()));
     await started(h);
-    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
   });
 
   it('reports a run that throws as a failed task', async () => {
@@ -557,7 +559,7 @@ describe('task.resumed', () => {
   it('re-sends the stored outcome when the hub resumes a finished task', async () => {
     const h = harness();
     const msg = done(makeTask());
-    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg }, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg }, lastRegistered: null, engineGroup: null, notReady: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask(), 'task.resumed'));
     await w.idle();
@@ -570,18 +572,18 @@ describe('task.resumed', () => {
   it('runs a resumed task afresh when the stored outcome is for another attempt', async () => {
     const h = harness();
     const old = done(makeTask({ attempt: 1 }));
-    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: old }, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: { taskId: TASK_A, msg: old }, lastRegistered: null, engineGroup: null, notReady: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask({ attempt: 2 }), 'task.resumed'));
     const call = await started(h);
     expect(call.opts).toEqual({ resumed: true });
     expect(h.sent).toEqual([accept(), { via: 'send', msg: BUSY }]);
-    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
   });
 
   it('runs the task the worker stopped with, as resumed', async () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask(), 'task.resumed'));
     expect((await started(h)).opts).toEqual({ resumed: true });
@@ -597,6 +599,7 @@ describe('task.revoked', () => {
       unconfirmed: { taskId: TASK_A, msg: done(makeTask()) },
       lastRegistered: null,
       engineGroup: null,
+      notReady: null,
     });
     const w = new Worker(h.deps);
     w.handle(revoked(TASK_A));
@@ -607,7 +610,7 @@ describe('task.revoked', () => {
 
   it('clears a persisted active task on task.revoked and logs an unknown one', () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
     const w = new Worker(h.deps);
     w.handle(revoked(TASK_B));
     expect(state().activeTaskId).toBe(TASK_A);
@@ -627,12 +630,12 @@ describe('task.revoked', () => {
     expect(call.signal.reason).toBe('revoked');
     await w.idle();
     expect(types(h)).toEqual(['task.accept', 'status.update:busy', 'status.update:idle']);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
   });
 
   it('drops a task revoked while it is still being checked', async () => {
     const h = harness();
-    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask(), 'task.resumed'));
     w.handle(revoked(TASK_A));
@@ -651,7 +654,7 @@ describe('task.revoked', () => {
     expect(h.sent).toEqual([{ via: 'send', msg: IDLE }]);
     expect(h.calls).toHaveLength(0);
     expect(w.busy).toBe(false);
-    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    expect(state()).toEqual({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
   });
 });
 
@@ -659,7 +662,7 @@ describe('registered gate', () => {
   it('drops task.assigned and task.resumed while not registered but honours task.revoked', async () => {
     const h = harness();
     h.registered.value = false;
-    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    writeState(paths.stateFile, { activeTaskId: TASK_B, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
     const w = new Worker(h.deps);
     w.handle(assigned(makeTask()));
     w.handle(assigned(makeTask(), 'task.resumed'));
@@ -701,6 +704,7 @@ describe('stop', () => {
       unconfirmed: { taskId: TASK_B, msg: done(makeTask({ id: TASK_B })) },
       lastRegistered: null,
       engineGroup: null,
+      notReady: null,
     };
     writeState(paths.stateFile, before);
     const w = new Worker(h.deps);
@@ -773,7 +777,7 @@ describe('engine process group', () => {
     const call = await started(h);
     expect(state().engineGroup).toBeNull();
     call.deps.onEngineGroup?.(4242);
-    expect(state()).toMatchObject({ activeTaskId: TASK_A, engineGroup: 4242 });
+    expect(state()).toMatchObject({ activeTaskId: TASK_A, engineGroup: 4242, notReady: null });
     call.deps.onEngineGroup?.(null);
     expect(state().engineGroup).toBeNull();
     call.finish({ kind: 'completed', msg: done(call.task) });
@@ -781,9 +785,9 @@ describe('engine process group', () => {
   });
 
   it('forgets a group an earlier process recorded: its id may belong to another process by now', () => {
-    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: 4242 });
+    writeState(paths.stateFile, { activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: 4242, notReady: null });
     const w = new Worker(harness().deps);
-    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null });
+    expect(state()).toEqual({ activeTaskId: TASK_A, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null });
     expect(w.registerPayload().activeTaskId).toBe(TASK_A);
   });
 });
@@ -807,5 +811,136 @@ describe('a throw before the run', () => {
     call.finish({ kind: 'completed', msg: done(call.task) });
     await w.idle();
     expect(w.busy).toBe(false);
+  });
+});
+
+describe('machine readiness', () => {
+  const LACKS = ['docker: not found'];
+  const declinedBusy = (attempt = 3, taskId = TASK_A): Sent => ({
+    via: 'reliable',
+    msg: { type: 'task.decline', taskId, reason: 'busy', attempt },
+  });
+  const notReadyWarn = (problems: string[]): string =>
+    `WARN machine not ready, so it takes no tasks: ${problems.join('; ')} (run cw check)`;
+
+  /** A readiness check that reports `lacks.value`, counting its calls. */
+  function readinessOf(lacks: { value: string[] }): { fn: () => Promise<string[]>; calls: { n: number } } {
+    const calls = { n: 0 };
+    return {
+      calls,
+      fn: () => {
+        calls.n += 1;
+        return Promise.resolve(lacks.value);
+      },
+    };
+  }
+
+  it('declines as busy while the machine lacks something, and says idle once it no longer does', async () => {
+    const lacks = { value: LACKS };
+    const r = readinessOf(lacks);
+    const h = harness({ readiness: r.fn, readinessTiming: { recheckMs: 20, timeoutMs: 5_000 } });
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    await vi.waitFor(() => expect(h.sent).toEqual([declinedBusy()]), { timeout: 5_000 });
+    expect(h.calls).toHaveLength(0);
+    expect(w.busy).toBe(false);
+    expect(state()).toMatchObject({ activeTaskId: null, notReady: LACKS });
+    expect(h.logs).toContain(notReadyWarn(LACKS));
+    expect(h.logs).toContain(`INFO task ${TASK_A}: attempt 3 declined as busy (this machine is not ready)`);
+
+    lacks.value = [];
+    await vi.waitFor(() => expect(h.sent).toEqual([declinedBusy(), { via: 'send', msg: IDLE }]), { timeout: 5_000 });
+    expect(state().notReady).toBeNull();
+    expect(h.logs).toContain('INFO machine ready: taking tasks again');
+
+    // ready again: the next task runs, and no more checks are scheduled for it
+    w.handle(assigned(makeTask({ id: TASK_B, branch: 'task/k-2' })));
+    const call = await started(h);
+    expect(call.task.id).toBe(TASK_B);
+    call.finish({ kind: 'completed', msg: done(call.task) });
+    await w.stop();
+  });
+
+  it('warns once per change in what is missing, not on every recheck', async () => {
+    const lacks = { value: LACKS };
+    const r = readinessOf(lacks);
+    const h = harness({ readiness: r.fn, readinessTiming: { recheckMs: 10, timeoutMs: 5_000 } });
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    await vi.waitFor(() => expect(r.calls.n).toBeGreaterThanOrEqual(4), { timeout: 5_000 });
+    const warns = (): string[] => h.logs.filter((l) => l.startsWith('WARN'));
+    expect(warns()).toEqual([notReadyWarn(LACKS)]);
+
+    const more = [...LACKS, 'pnpm: not found'];
+    lacks.value = more;
+    await vi.waitFor(() => expect(warns()).toEqual([notReadyWarn(LACKS), notReadyWarn(more)]), { timeout: 5_000 });
+    expect(state().notReady).toEqual(more);
+    // still not ready, so the hub hears nothing new
+    expect(h.sent).toEqual([declinedBusy()]);
+    await w.stop();
+  });
+
+  it.each([
+    ['throws', (): Promise<string[]> => Promise.reject(new Error('probe crashed')), /^WARN checking this machine failed: probe crashed; taking tasks without it$/],
+    ['takes too long', (): Promise<string[]> => new Promise<string[]>(() => undefined), /^WARN checking this machine took over \d+ s; taking tasks without waiting for it$/],
+  ])('takes the task when the check %s', async (_what, readiness, warn) => {
+    const h = harness({ readiness, readinessTiming: { recheckMs: 20, timeoutMs: 30 } });
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    const call = await started(h);
+    expect(h.logs.filter((l) => l.startsWith('WARN'))).toEqual([expect.stringMatching(warn)]);
+    expect(state().notReady).toBeNull();
+    call.finish({ kind: 'completed', msg: done(call.task) });
+    await w.stop();
+  });
+
+  it('says busy on registering while not ready, and nothing when ready', async () => {
+    const lacks = { value: LACKS };
+    const h = harness({ readiness: readinessOf(lacks).fn, readinessTiming: { recheckMs: 60_000, timeoutMs: 5_000 } });
+    const w = new Worker(h.deps);
+    const reg: RegisteredMsg = { type: 'registered', connectionId: 'c1', projectId: 'proj-1', hubVersion: WORKER_VERSION };
+    w.onRegistered(reg);
+    expect(h.sent).toEqual([]);
+
+    w.handle(assigned(makeTask()));
+    await vi.waitFor(() => expect(h.sent).toEqual([declinedBusy()]), { timeout: 5_000 });
+    // a reconnect registers without a task, which the hub takes for idle
+    w.onRegistered({ ...reg, connectionId: 'c2' });
+    expect(h.sent).toEqual([declinedBusy(), { via: 'send', msg: BUSY }]);
+    await w.stop();
+  });
+
+  it('stops checking again once the worker stops', async () => {
+    const lacks = { value: LACKS };
+    const r = readinessOf(lacks);
+    const h = harness({ readiness: r.fn, readinessTiming: { recheckMs: 30, timeoutMs: 5_000 } });
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    await vi.waitFor(() => expect(h.sent).toEqual([declinedBusy()]), { timeout: 5_000 });
+    await w.stop();
+    const checks = r.calls.n;
+    lacks.value = [];
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(r.calls.n).toBe(checks);
+    expect(h.sent).toEqual([declinedBusy()]);
+  });
+
+  it('stop during a slow check sends nothing', async () => {
+    const h = harness({ readiness: () => new Promise<string[]>(() => undefined), readinessTiming: { recheckMs: 20, timeoutMs: 60_000 } });
+    const w = new Worker(h.deps);
+    w.handle(assigned(makeTask()));
+    await w.stop();
+    expect(h.sent).toEqual([]);
+    expect(h.calls).toHaveLength(0);
+    expect(w.busy).toBe(false);
+  });
+
+  it('forgets what an earlier process found missing: the next task checks again', () => {
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: LACKS });
+    const h = harness();
+    const w = new Worker(h.deps);
+    expect(state().notReady).toBeNull();
+    w.onRegistered({ type: 'registered', connectionId: 'c1', projectId: 'proj-1', hubVersion: WORKER_VERSION });
+    expect(h.sent).toEqual([]);
   });
 });

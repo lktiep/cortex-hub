@@ -71,4 +71,17 @@ function Install-Cw {
 if ($env:CORTEX_SKIP_CW -ne '1') {
   try { Install-Cw } catch { Write-Warning "could not install the cw command ($($_.Exception.Message)); run the worker with: node `"$W`"" }
 }
+# Before a start: what the project needs and this machine lacks, in one list, asked about once.
+# It never stops the start: the worker itself takes no task until the machine is ready.
+if ($args.Count -gt 0 -and $args[0] -eq 'start' -and $env:CORTEX_SKIP_CHECK -ne '1') {
+  $rest = @($args | Select-Object -Skip 1)
+  & node $W check --if-changed @rest
+  # what it installed is on the PATH of new terminals; the worker started next needs it too
+  $have = @($env:Path -split ';' | Where-Object { $_ })
+  foreach ($scope in 'Machine', 'User') {
+    foreach ($p in ([Environment]::GetEnvironmentVariable('Path', $scope) -split ';')) {
+      if ($p -and $have -notcontains $p) { $env:Path = "$env:Path;$p"; $have += $p }
+    }
+  }
+}
 & node $W @args; exit $LASTEXITCODE

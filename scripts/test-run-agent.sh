@@ -20,6 +20,7 @@ yes_no() { if eval "$1"; then echo yes; else echo no; fi; }
 cat > "$T/worker.mjs" <<'EOF'
 #!/usr/bin/env node
 console.log('worker: ' + process.argv.slice(2).join(' '));
+if (process.argv[2] === 'check' && process.env.CHECK_FAILS === '1') process.exit(3);
 EOF
 node -e '
 const fs = require("node:fs");
@@ -87,6 +88,19 @@ run "$H" /bin/zsh -- ls
 chmod 755 "$H/.local"
 check "cannot write cw: still runs the worker" yes "$(yes_no "grep -q '^worker: ls' '$T/out'")"
 check "and warns"                             yes "$(yes_no "grep -q 'could not install the cw command' '$T/out'")"
+
+echo "run-agent.sh - checks the machine before a start"
+H="$T/check-home"; mkdir -p "$H"
+calls() { sed -n 's/^worker: \([a-z-]*\).*/\1/p' "$T/out" | tr '\n' ' '; }
+run "$H" /bin/zsh -- start acme -d
+check "start: check first, then start"        "check start " "$(calls)"
+check "check gets the start's arguments"      yes "$(yes_no "grep -q '^worker: check --if-changed acme -d --hub' '$T/out'")"
+run "$H" /bin/zsh -- ls
+check "no check for other commands"           "ls " "$(calls)"
+run "$H" /bin/zsh CHECK_FAILS=1 -- start acme
+check "a failed check still starts"           "check start " "$(calls)"
+run "$H" /bin/zsh CORTEX_SKIP_CHECK=1 -- start acme
+check "CORTEX_SKIP_CHECK=1: no check"         "start " "$(calls)"
 
 echo "run-agent.sh - a worker folder with a quote and a space in its name"
 H="$T/quote-home"; mkdir -p "$H"

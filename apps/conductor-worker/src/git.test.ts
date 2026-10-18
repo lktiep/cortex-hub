@@ -380,6 +380,25 @@ describe('pushBranch', () => {
     expect(fx.run(fx.origin, ['rev-parse', 'task/p'])).toBe(theirs);
   });
 
+  it.skipIf(process.platform === 'win32')("shows what the pre-push hook printed on stdout", async () => {
+    const dir = wt('h');
+    await prepareWorktree(fx.repo, dir, 'task/h', 'main');
+    writeFileSync(path.join(dir, 'h.txt'), 'h');
+    await commitAll(dir, 'h', { name: 'W', email: 'w@example.invalid' });
+    // lefthook and husky print the failing step on stdout; git adds its own lines on stderr
+    const hook = path.join(fx.repo, '.git', 'hooks', 'pre-push');
+    const steps = Array.from({ length: 30 }, (_, i) => `echo "step ${i} ok"`).join('\n');
+    writeFileSync(hook, `#!/bin/sh\necho "verify: docker not found"\n${steps}\necho "hook noise" >&2\nexit 1\n`);
+    chmodSync(hook, 0o755);
+    const err = await pushBranch(dir, 'task/h').then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err?.message).toMatch(/^git push failed: /);
+    expect(err?.message).toContain('verify: docker not found');
+    expect(err?.message).toContain('failed to push some refs');
+  });
+
   it('pushes a new branch without writing an upstream to the shared config', async () => {
     const dir = wt('q');
     await prepareWorktree(fx.repo, dir, 'task/q', 'main');
@@ -574,6 +593,12 @@ describe('runners', () => {
       }
     }
     expect(alive).toBe(false);
+  });
+
+  it('a timeoutMs replaces the ceiling, for a command that runs hooks', async () => {
+    const run = createGitRunner({ bin: process.execPath, ceilingMs: 200 });
+    const r = await run(['-e', 'setTimeout(() => console.log("done"), 600)'], { cwd: fx.root, timeoutMs: 10_000 });
+    expect(r).toMatchObject({ code: 0, stdout: 'done\n' });
   });
 
   it('a missing gh binary resolves with code 127', async () => {

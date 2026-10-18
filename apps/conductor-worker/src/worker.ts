@@ -42,8 +42,12 @@ export interface WorkerDeps {
   engineTimeoutMs: number;
   identity: { name: string; email: string };
   isRegistered: () => boolean;
+  /** What this machine lacks for the project's tasks, one line each; tasks wait until it lacks nothing. */
+  readiness?: () => Promise<string[]>;
   /** Injectable for tests. */
   run?: typeof runTask;
+  /** Injectable for tests: how often a machine that is not ready is checked again, and how long a check may take. */
+  readinessTiming?: { recheckMs: number; timeoutMs: number };
 }
 
 /** The task this worker holds: being checked before `task.accept`, or running. */
@@ -56,6 +60,10 @@ interface Slot {
 
 const IDLE: StatusUpdateMsg = { type: 'status.update', state: 'idle' };
 const BUSY: StatusUpdateMsg = { type: 'status.update', state: 'busy' };
+/** A machine that is not ready is checked again this often. */
+export const READINESS_RECHECK_MS = 60_000;
+/** A check that takes longer does not hold a task back. */
+export const READINESS_TIMEOUT_MS = 30_000;
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -79,13 +87,20 @@ export class Worker {
   /** The hub version last warned about, so a reconnect does not repeat it. */
   private warnedHubVersion: string | null = null;
   private warnedNoProject = false;
+  private readonly timing: { recheckMs: number; timeoutMs: number };
+  private recheckTimer: NodeJS.Timeout | null = null;
 
   constructor(deps: WorkerDeps) {
     this.deps = deps;
     this.run = deps.run ?? runTask;
+    this.timing = deps.readinessTiming ?? { recheckMs: READINESS_RECHECK_MS, timeoutMs: READINESS_TIMEOUT_MS };
     this.state = readState(deps.paths.stateFile);
+    const stale: Partial<WorkerState> = {};
     // a group an earlier process recorded is not this one's to kill: its id may be reused by now
-    if (this.state.engineGroup !== null) this.update({ engineGroup: null });
+    if (this.state.engineGroup !== null) stale.engineGroup = null;
+    // what an earlier process found missing may be there by now; the next task checks again
+    if (this.state.notReady !== null) stale.notReady = null;
+    if (Object.keys(stale).length > 0) this.update(stale);
   }
 
   get busy(): boolean {
@@ -117,6 +132,8 @@ export class Worker {
     }
     if (m.projectId === null && !this.warnedNoProject) logger.warn("this repo's origin maps to no hub project");
     this.warnedNoProject = m.projectId === null;
+    // the hub takes a worker that registers without a task for idle
+    if (this.state.notReady !== null && this.current === null) this.deps.send(BUSY);
   }
 
   /** Never throws: the hub client's event loop must survive any message. */
@@ -139,6 +156,8 @@ export class Worker {
   /** Stops the running task without reporting it; its id stays in the state file for the next start. */
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.recheckTimer !== null) clearTimeout(this.recheckTimer);
+    this.recheckTimer = null;
     this.current?.controller.abort('stopping' satisfies AbortReason);
     await this.idle();
   }
@@ -217,8 +236,14 @@ export class Worker {
     else this.log(taskId, 'ignored task.revoked for a task this worker does not hold');
   }
 
-  /** The adapter to run the task with, or why this worker cannot take it. A throw is a reason too. */
-  private async check(task: AssignedTask): Promise<{ adapter: EngineAdapter } | { refusal: string }> {
+  /**
+   * The adapter to run the task with, why this worker cannot take it (a throw is a reason too), or
+   * what this machine lacks for any task.
+   */
+  private async check(task: AssignedTask, signal: AbortSignal): Promise<{ adapter: EngineAdapter } | { refusal: string } | { notReady: string[] }> {
+    const problems = await this.machineProblems(signal);
+    this.noteReadiness(problems);
+    if (problems.length > 0) return { notReady: problems };
     const host = this.deps.hostname;
     try {
       const executor = task.route.executor ?? this.deps.defaultExecutor;
@@ -241,7 +266,7 @@ export class Worker {
   private async execute(slot: Slot, resumed: boolean): Promise<void> {
     const { task } = slot;
     const { signal } = slot.controller;
-    const checked = await this.check(task);
+    const checked = await this.check(task, signal);
     if (signal.aborted) {
       this.release(slot);
       const reason = abortReason(signal);
@@ -252,6 +277,13 @@ export class Worker {
         this.deps.send(IDLE);
       }
       // 'stopping' sends nothing: the next start registers with whatever the state file holds
+      return;
+    }
+    if ('notReady' in checked) {
+      this.release(slot);
+      // busy puts the task back for any worker, and keeps this one out until it says idle
+      this.log(task.id, `attempt ${task.attempt} declined as busy (this machine is not ready)`);
+      this.decline(task, 'busy');
       return;
     }
     if ('refusal' in checked) {
@@ -336,6 +368,77 @@ export class Worker {
         this.update({ engineGroup });
       },
     };
+  }
+
+  /**
+   * What `deps.readiness` finds this machine lacks. A check that throws, or takes longer than the
+   * limit, does not hold tasks back: it is logged and counts as nothing lacking.
+   */
+  private async machineProblems(signal?: AbortSignal): Promise<string[]> {
+    const { readiness, logger } = this.deps;
+    if (readiness === undefined) return [];
+    const limit = this.timing.timeoutMs;
+    let timer: NodeJS.Timeout | undefined;
+    let onAbort = (): void => undefined;
+    try {
+      const result = await Promise.race([
+        readiness(),
+        new Promise<'late'>((resolve) => {
+          timer = setTimeout(() => resolve('late'), limit);
+        }),
+        new Promise<'aborted'>((resolve) => {
+          onAbort = () => resolve('aborted');
+          signal?.addEventListener('abort', onAbort, { once: true });
+        }),
+      ]);
+      if (result === 'aborted') return [];
+      if (result === 'late') {
+        logger.warn(`checking this machine took over ${Math.round(limit / 1000)} s; taking tasks without waiting for it`);
+        return [];
+      }
+      return result;
+    } catch (err) {
+      logger.warn(`checking this machine failed: ${messageOf(err)}; taking tasks without it`);
+      return [];
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  /** Records what a check found, saying so when it changes; a machine that is not ready is checked again until it is. */
+  private noteReadiness(problems: string[]): void {
+    const was = this.state.notReady;
+    if (problems.length === 0) {
+      if (was === null) return;
+      this.update({ notReady: null });
+      this.deps.logger.info('machine ready: taking tasks again');
+      return;
+    }
+    if (was === null || was.join('\n') !== problems.join('\n')) {
+      this.update({ notReady: problems });
+      this.deps.logger.warn(`machine not ready, so it takes no tasks: ${problems.join('; ')} (run cw check)`);
+    }
+    this.scheduleRecheck();
+  }
+
+  private scheduleRecheck(): void {
+    if (this.recheckTimer !== null || this.stopping) return;
+    const timer = setTimeout(() => {
+      this.recheckTimer = null;
+      void this.recheck();
+    }, this.timing.recheckMs);
+    timer.unref();
+    this.recheckTimer = timer;
+  }
+
+  private async recheck(): Promise<void> {
+    if (this.stopping || this.state.notReady === null) return;
+    const problems = await this.machineProblems();
+    if (this.stopping) return;
+    this.noteReadiness(problems);
+    // declining as busy left the hub taking this worker for busy; idle brings tasks back
+    if (problems.length === 0 && this.current === null && this.deps.isRegistered()) this.deps.send(IDLE);
   }
 
   private decline(task: AssignedTask, reason: string): void {

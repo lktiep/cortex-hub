@@ -59,4 +59,11 @@ install_cw() {
   esac
 }
 if [ "${CORTEX_SKIP_CW:-}" != 1 ]; then install_cw || echo "[cortex] warning: could not install the cw command; run the worker with: node $W" >&2; fi
+# Before a start: what the project needs and this machine lacks, in one list, asked about once.
+# It never stops the start: the worker itself takes no task until the machine is ready.
+# Under `curl | bash` stdin is this script, so the question goes to the terminal.
+if [ "${1:-}" = start ] && [ "${CORTEX_SKIP_CHECK:-}" != 1 ]; then
+  if { : </dev/tty; } 2>/dev/null; then node "$W" check --if-changed "${@:2}" </dev/tty || true
+  else node "$W" check --if-changed "${@:2}" </dev/null || true; fi
+fi
 exec node "$W" "$@"

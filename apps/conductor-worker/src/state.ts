@@ -12,9 +12,17 @@ export interface WorkerState {
    * engine runs, and always on Windows, where the worker's tree kill covers the engine.
    */
   engineGroup: number | null;
+  /** What this machine lacks for the project's tasks, as the last check found; null when ready or unchecked. */
+  notReady: string[] | null;
 }
 
-const emptyState = (): WorkerState => ({ activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null });
+const emptyState = (): WorkerState => ({
+  activeTaskId: null,
+  unconfirmed: null,
+  lastRegistered: null,
+  engineGroup: null,
+  notReady: null,
+});
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -42,7 +50,9 @@ export function readState(file: string): WorkerState {
         : null;
     const eg = raw.engineGroup;
     const engineGroup = typeof eg === 'number' && Number.isInteger(eg) && eg > 0 ? eg : null;
-    return { activeTaskId, unconfirmed, lastRegistered, engineGroup };
+    const nr = raw.notReady;
+    const notReady = Array.isArray(nr) && nr.length > 0 && nr.every((p) => typeof p === 'string') ? (nr as string[]) : null;
+    return { activeTaskId, unconfirmed, lastRegistered, engineGroup, notReady };
   } catch {
     return emptyState();
   }

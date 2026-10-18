@@ -422,7 +422,7 @@ describe('stopWorker', () => {
     await until(() => existsSync(engineFile), 'the engine');
     const engine = Number(readFileSync(engineFile, 'utf8'));
     strayPids.push(engine);
-    writeState(paths.stateFile, { activeTaskId: 't-1', unconfirmed: null, lastRegistered: null, engineGroup: engine });
+    writeState(paths.stateFile, { activeTaskId: 't-1', unconfirmed: null, lastRegistered: null, engineGroup: engine, notReady: null });
     writePid(paths, w.pid ?? 0);
     expect(await stopWorker(paths, { graceMs: 200 })).toBe('killed');
     expect(isAlive(w.pid ?? 0)).toBe(false);
@@ -432,7 +432,7 @@ describe('stopWorker', () => {
   posixOnly('a recorded engine group that is gone already does not fail the stop', async () => {
     const paths = freshPaths();
     const w = spawnNode('setInterval(() => {}, 1000)', { detached: true });
-    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: await deadPid() });
+    writeState(paths.stateFile, { activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: await deadPid(), notReady: null });
     writePid(paths, w.pid ?? 0);
     expect(await stopWorker(paths, { graceMs: 200 })).toBe('killed');
     expect(isAlive(w.pid ?? 0)).toBe(false);
@@ -461,6 +461,7 @@ describe('statusText', () => {
     unconfirmed: null,
     lastRegistered: { projectId: 'p-1', hubVersion: '1.2.3', at: '2026-10-17T10:00:00.000Z' },
     engineGroup: null,
+    notReady: null,
   };
 
   it('shows running, the pid, the agent id, the task and the last registration', () => {
@@ -476,13 +477,22 @@ describe('statusText', () => {
 
   it('shows stopped, a stale pid, no task and never registered', async () => {
     const paths = freshPaths();
-    const empty: WorkerState = { activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null };
+    const empty: WorkerState = { activeTaskId: null, unconfirmed: null, lastRegistered: null, engineGroup: null, notReady: null };
     expect(statusText(paths, empty)).toMatch(/stopped/);
     expect(statusText(paths, empty)).toMatch(/active task:\s+none/);
     expect(statusText(paths, empty)).toMatch(/last registered:\s+never/);
     const dead = await deadPid();
     writePid(paths, dead);
     expect(statusText(paths, empty)).toMatch(new RegExp(`stopped.*stale.*${dead}`));
+  });
+
+  it('says what the running worker found missing, and nothing of a stopped one', () => {
+    const paths = freshPaths();
+    const lacking: WorkerState = { ...state, notReady: ['docker: not found', 'pnpm: not found'] };
+    expect(statusText(paths, lacking)).not.toContain('not ready');
+    writePid(paths, process.pid);
+    expect(statusText(paths, lacking)).toMatch(/not ready:\s+docker: not found; pnpm: not found — .*cw check/);
+    expect(statusText(paths, state)).not.toContain('not ready');
   });
 });
 
@@ -893,6 +903,16 @@ describe('start', () => {
     void launch(h);
     await until(registered, 'worker.register');
     expect(h.log()).toMatch(/could not save the start settings/);
+  });
+
+  it('says it takes tasks unchecked with CORTEX_SKIP_READINESS=1, and keeps that for restart', async () => {
+    hub = await startHub();
+    const h = harness(hub);
+    h.opts.env = { ...h.opts.env, CORTEX_SKIP_READINESS: '1' };
+    void launch(h);
+    await until(registered, 'worker.register');
+    expect(h.log()).toMatch(/CORTEX_SKIP_READINESS=1: taking tasks without checking/);
+    expect(readStartConfig(h.paths.startFile)?.env).toEqual({ CORTEX_SKIP_READINESS: '1' });
   });
 
   it('exits 1 when no hub is configured', async () => {

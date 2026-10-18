@@ -15,6 +15,7 @@ export const REMEMBERED_ENV: readonly string[] = [
   'CORTEX_AGY_SKIP_PERMISSIONS',
   'CORTEX_AGY_BIN',
   'CORTEX_GH_BIN',
+  'CORTEX_SKIP_READINESS',
 ];
 
 /** What `start` ran with, saved so `restart` can run it again. */
@@ -39,6 +40,8 @@ export interface AgentInfo {
   pid: number | null;
   config: StartConfig | null;
   activeTaskId: string | null;
+  /** What the running worker last found this machine lacks; null when nothing, or when it is stopped. */
+  notReady: string[] | null;
 }
 
 type Obj = Record<string, unknown>;
@@ -149,13 +152,17 @@ export function listAgents(homeDir: string): AgentInfo[] {
     // a folder sanitizeAgentId would not produce is not one the worker made
     if (path.basename(paths.home) !== id || !AGENT_FILES.some((k) => exists(paths[k]))) continue;
     const pid = readPid(paths);
+    const live = pid !== null && isAlive(pid);
+    const state = readState(paths.stateFile);
     agents.push({
       no: agents.length + 1,
       id,
       paths,
-      pid: pid !== null && isAlive(pid) ? pid : null,
+      pid: live ? pid : null,
       config: readStartConfig(paths.startFile),
-      activeTaskId: readState(paths.stateFile).activeTaskId,
+      activeTaskId: state.activeTaskId,
+      // a stopped worker's finding is stale: the next start checks again
+      notReady: live ? state.notReady : null,
     });
   }
   return agents;
@@ -186,7 +193,7 @@ export function formatAgentTable(agents: AgentInfo[]): string {
   const rows = agents.map((a) => [
     String(a.no),
     a.id,
-    a.pid === null ? 'stopped' : `running (pid ${a.pid})`,
+    a.pid === null ? 'stopped' : `running (pid ${a.pid})${a.notReady === null ? '' : ', not ready'}`,
     a.activeTaskId ?? '-',
     a.config?.engines.join(',') ?? '-',
     a.config?.repo ?? '-',
