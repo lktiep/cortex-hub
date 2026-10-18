@@ -48,7 +48,7 @@ function adapter(
       (o.run as EngineAdapter['run'] | undefined) ??
       (async () => ({ exitCode: 0, stdout: 'OK', stderr: '', timedOut: false, aborted: false })),
     classify: () => o.classify ?? { kind: 'ok' },
-    progressText: () => null,
+    progress: () => ({ line: () => [], errLine: () => [], end: () => [] }),
     summary: () => '',
   };
 }

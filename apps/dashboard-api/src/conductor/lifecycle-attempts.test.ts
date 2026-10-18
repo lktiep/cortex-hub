@@ -104,12 +104,41 @@ describe('accept and progress', () => {
     expect(logs('t1', 'in_progress')).toHaveLength(1)
   })
 
-  it('progress keeps the last 50 rows', () => {
+  it('progress keeps the last 200 rows', () => {
     running('t1', 'w1')
 
-    for (let i = 0; i < 55; i++) recordProgress('t1', 'w1', `step ${i}`, undefined, NOW)
+    for (let i = 0; i < 205; i++) recordProgress('t1', 'w1', `step ${i}`, undefined, NOW)
 
-    expect(logs('t1', 'progress').map((l) => l.message)).toEqual(Array.from({ length: 50 }, (_, i) => `step ${i + 5}`))
+    expect(logs('t1', 'progress').map((l) => l.message)).toEqual(Array.from({ length: 200 }, (_, i) => `step ${i + 5}`))
+  })
+
+  it('a heartbeat is kept as the one quiet row, apart from the progress', () => {
+    running('t1', 'w1', { status: 'accepted', lease_expires_at: isoSeconds(NOW + HOUR) })
+    recordProgress('t1', 'w1', 'reading the code', undefined, NOW)
+
+    expect(recordProgress('t1', 'w1', 'still running: Bash: pnpm test, no output for 1 min', undefined, NOW + 61_000, 61_000).ok).toBe(true)
+    recordProgress('t1', 'w1', 'still running: Bash: pnpm test, no output for 2 min', undefined, NOW + 122_000, 122_000)
+
+    expect(logs('t1', 'quiet').map((l) => l.message)).toEqual(['still running: Bash: pnpm test, no output for 2 min'])
+    expect(logs('t1', 'progress').map((l) => l.message)).toEqual(['reading the code'])
+    expect(row('t1').lease_expires_at).toBe(isoSeconds(NOW + 122_000 + 24 * HOUR))
+  })
+
+  it('a heartbeat moves accepted to in_progress too', () => {
+    running('t1', 'w1', { status: 'accepted' })
+
+    recordProgress('t1', 'w1', 'still running: starting, no output for 1 min', undefined, NOW, 60_000)
+
+    expect(row('t1').status).toBe('in_progress')
+    expect(logs('t1', 'in_progress')).toHaveLength(1)
+    expect(logs('t1', 'progress')).toEqual([])
+  })
+
+  it('a heartbeat for a task the worker does not hold is refused', () => {
+    running('t1', 'w2')
+
+    expect(recordProgress('t1', 'w1', 'still running', undefined, NOW, 60_000).ok).toBe(false)
+    expect(logs('t1', 'quiet')).toEqual([])
   })
 })
 

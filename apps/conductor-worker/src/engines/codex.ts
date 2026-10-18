@@ -1,4 +1,4 @@
-import { RAW_MAX, cliPlumbing, errorMessage, plainProgress, stderrTail, tailSummary } from './common.js';
+import { RAW_MAX, cliPlumbing, errorMessage, plainReader, stderrTail, tailSummary } from './common.js';
 import type { CliAdapterOpts } from './common.js';
 import type { Classification, EngineAdapter } from './types.js';
 
@@ -23,7 +23,7 @@ export function createCodexAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
       return { kind: 'error', message: errorMessage(exitCode, stderr, stdout, 'codex') };
     },
 
-    progressText: plainProgress,
+    progress: plainReader,
     summary: tailSummary,
   };
 }

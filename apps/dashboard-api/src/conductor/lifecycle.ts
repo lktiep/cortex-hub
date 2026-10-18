@@ -23,7 +23,7 @@ import { fallbackProblem, findCycle, knownExecutor, priorityValue, stringListPro
 export type Outcome = { ok: true; task: TaskRow } | { ok: false; status: 403 | 404 | 409; error: string }
 
 const TERMINAL_STATUSES = ['completed', 'cancelled', 'failed'] as const
-const PROGRESS_KEPT = 50
+const PROGRESS_KEPT = 200
 const LOG_MESSAGE_MAX = 4000
 const LEASE_STEP_MS = 60_000
 const QUOTA_DEFAULT_MS = 3600_000
@@ -363,24 +363,30 @@ export function acceptTask(taskId: string, agentId: string): Outcome {
 }
 
 /**
- * Logs the progress (the newest 50 rows are kept), moves `accepted → in_progress`,
+ * Logs the progress (the newest 200 rows are kept), moves `accepted → in_progress`,
  * and extends the lease to now + `leaseHours` when that is more than a minute
- * past the stored one.
+ * past the stored one. With `idleMs` it is a heartbeat from a run that has printed
+ * nothing for that long: it is logged as `quiet`, replacing the task's previous one.
  */
 export function recordProgress(
-  taskId: string, agentId: string, message: string, percent?: number, now: number = Date.now(),
+  taskId: string, agentId: string, message: string, percent?: number, now: number = Date.now(), idleMs?: number,
 ): Outcome {
   return db.transaction((): Outcome => {
     const loaded = load(taskId, agentId, 'progress', heldBy(agentId))
     if (!loaded.ok) return loaded
     const { task } = loaded
 
-    const text = typeof percent === 'number' && Number.isFinite(percent) ? `[${Math.round(percent)}%] ${message}` : message
-    logTask(taskId, agentId, 'progress', text.slice(0, LOG_MESSAGE_MAX))
-    db.prepare(`
-      DELETE FROM conductor_task_logs WHERE task_id = ? AND action = 'progress' AND id NOT IN
-        (SELECT id FROM conductor_task_logs WHERE task_id = ? AND action = 'progress' ORDER BY id DESC LIMIT ?)
-    `).run(taskId, taskId, PROGRESS_KEPT)
+    if (typeof idleMs === 'number' && Number.isFinite(idleMs) && idleMs >= 0) {
+      db.prepare("DELETE FROM conductor_task_logs WHERE task_id = ? AND action = 'quiet'").run(taskId)
+      logTask(taskId, agentId, 'quiet', message.slice(0, LOG_MESSAGE_MAX))
+    } else {
+      const text = typeof percent === 'number' && Number.isFinite(percent) ? `[${Math.round(percent)}%] ${message}` : message
+      logTask(taskId, agentId, 'progress', text.slice(0, LOG_MESSAGE_MAX))
+      db.prepare(`
+        DELETE FROM conductor_task_logs WHERE task_id = ? AND action = 'progress' AND id NOT IN
+          (SELECT id FROM conductor_task_logs WHERE task_id = ? AND action = 'progress' ORDER BY id DESC LIMIT ?)
+      `).run(taskId, taskId, PROGRESS_KEPT)
+    }
 
     const leaseMs = now + getConductorConfig().leaseHours * 3600_000
     const storedMs = Date.parse(task.lease_expires_at ?? '')

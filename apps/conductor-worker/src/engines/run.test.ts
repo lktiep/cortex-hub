@@ -54,6 +54,20 @@ describe('runCli', () => {
     expect(r.aborted).toBe(false);
   });
 
+  it('hands stderr lines to onErrLine when one is given', async () => {
+    const args = script(`
+      process.stderr.write('warn one\\nwarn');
+      setTimeout(() => { process.stderr.write(' two'); console.log('out'); }, 80);
+    `);
+    const errs: string[] = [];
+    const i = input({ onErrLine: (l) => errs.push(l) });
+    const r = await runCli(process.execPath, { args }, i.input, opts);
+    expect(r.exitCode).toBe(0);
+    expect(errs).toEqual(['warn one', 'warn two']);
+    expect(i.lines).toEqual(['out']);
+    expect(r.stderr).toBe('warn one\nwarn two');
+  });
+
   it('captures stderr and a non-zero exit code', async () => {
     const args = script(`console.error('boom'); process.exit(3);`);
     const r = await runCli(process.execPath, { args }, input().input, opts);

@@ -29,6 +29,7 @@ import {
   stopWorker,
 } from './commands/daemon.js';
 import { runDoctor, formatChecks } from './commands/doctor.js';
+import { printTranscript } from './commands/tail.js';
 import type { DoctorContext } from './commands/doctor.js';
 import { updateBundle } from './commands/update.js';
 import { KEY_FROM_ENV, KEY_FROM_FLAG, detectHubBase, detectHubConfig } from './config.js';
@@ -55,6 +56,7 @@ export interface CliArgs {
     | 'status'
     | 'ls'
     | 'logs'
+    | 'tail'
     | 'doctor'
     | 'check'
     | 'update'
@@ -90,9 +92,9 @@ const DEFAULT_STOP_POLL_MS = 2_000;
 const EXIT_SAFETY_MS = 5_000;
 const WORKER_IDENTITY = { name: 'Cortex Worker', email: 'cortex-worker@localhost' };
 
-const RUN_COMMANDS = ['start', 'stop', 'restart', 'status', 'ls', 'logs', 'doctor', 'check', 'update', 'hub-url'] as const;
+const RUN_COMMANDS = ['start', 'stop', 'restart', 'status', 'ls', 'logs', 'tail', 'doctor', 'check', 'update', 'hub-url'] as const;
 /** The commands that take an agent after them. */
-const AGENT_COMMANDS: ReadonlySet<string> = new Set(['start', 'stop', 'restart', 'status', 'logs', 'doctor', 'check']);
+const AGENT_COMMANDS: ReadonlySet<string> = new Set(['start', 'stop', 'restart', 'status', 'logs', 'tail', 'doctor', 'check']);
 type RunCommand = (typeof RUN_COMMANDS)[number];
 const isRunCommand = (s: string): s is RunCommand => (RUN_COMMANDS as readonly string[]).includes(s);
 const isExecutor = (s: string): s is Executor => (EXECUTORS as readonly string[]).includes(s);
@@ -214,6 +216,7 @@ function helpText(): string {
     '  restart    stop it, then start it in the background with the settings it last started with',
     '  status     show whether it runs, its task and its last registration (no agent: list them)',
     '  logs       print its last 200 log lines (-f to follow)',
+    '  tail       print the end of what the engine printed on its latest task (-f to follow)',
     '  update     replace this cortex-worker.mjs with the hub\'s version',
     '  hub-url    print the hub URL the worker would use',
     '  doctor     check the setup (--probe also runs each engine)',
@@ -224,7 +227,7 @@ function helpText(): string {
     '',
     'Options:',
     '  -d, --daemon              start in the background; output goes to the log',
-    '  -f, --follow              logs: keep printing new lines',
+    '  -f, --follow              logs, tail: keep printing new lines',
     '  --all                     stop, restart: every agent on this machine',
     '  --agent-id <id>           worker identity (default: CORTEX_AGENT_ID, else <host>-<repo folder>)',
     '  --repo <path>             the repo to work in (default: the current directory)',
@@ -242,6 +245,7 @@ function helpText(): string {
     '  cw check                  can this machine do the tasks of the repo here?',
     '  cw check 2 --yes          the same for agent 2, installing what is missing without asking',
     '  cw logs 2 -f              follow the log of agent 2 (Ctrl+C to quit)',
+    '  cw tail 2 -f              watch what the engine of agent 2 is doing on its task',
     '  cw restart --all          restart every agent, e.g. after cw update',
   ].join('\n');
 }
@@ -251,6 +255,7 @@ const AGENT_HINT = [
   '',
   'cw status <#|name>     details of one agent',
   'cw logs <#|name> -f    follow its log (Ctrl+C to quit)',
+  'cw tail <#|name> -f    follow what its engine prints on the current task',
   'cw restart <#|name>    restart it with the settings it last started with (--all: every agent)',
   'cw stop <#|name>       stop it (--all: every agent)',
 ].join('\n');
@@ -583,7 +588,7 @@ export async function main(argv: string[], opts: MainOptions = {}): Promise<numb
     return args.agentId ?? (env['CORTEX_AGENT_ID'] || null);
   };
   /**
-   * The agent for stop, logs and restart: the named one, else this repo's own when it has
+   * The agent for stop, logs, tail and restart: the named one, else this repo's own when it has
    * one (or when there are no agents), else the only agent. With several, it asks which.
    */
   const pickAgent = (verb: string): string | { error: string } => {
@@ -819,6 +824,27 @@ export async function main(argv: string[], opts: MainOptions = {}): Promise<numb
         }
         try {
           await printLogs(paths, { follow: args.follow, signal: ac.signal });
+        } finally {
+          signals.off('SIGINT', abort);
+          signals.off('SIGTERM', abort);
+        }
+        return 0;
+      }
+      case 'tail': {
+        const id = pickAgent('tail');
+        if (typeof id !== 'string') {
+          console.error(id.error);
+          return 1;
+        }
+        const paths = workerPaths(id, homeDir);
+        const ac = new AbortController();
+        const abort = (): void => ac.abort();
+        if (args.follow) {
+          signals.on('SIGINT', abort);
+          signals.on('SIGTERM', abort);
+        }
+        try {
+          await printTranscript(paths, { follow: args.follow, signal: ac.signal });
         } finally {
           signals.off('SIGINT', abort);
           signals.off('SIGTERM', abort);

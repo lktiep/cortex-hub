@@ -1,6 +1,6 @@
-import { PROGRESS_MAX, RAW_MAX, SUMMARY_MAX, cliPlumbing, errorMessage, tail, tailSummary } from './common.js';
+import { RAW_MAX, SUMMARY_MAX, cliPlumbing, errorMessage, item, resultHead, tail, tailSummary } from './common.js';
 import type { CliAdapterOpts } from './common.js';
-import type { Classification, EngineAdapter } from './types.js';
+import type { Classification, EngineAdapter, ProgressItem } from './types.js';
 
 const RESULT_QUOTA = /usage limit|rate limit|hit your limit/i;
 const STDERR_QUOTA = /usage limit|hit your limit/i;
@@ -29,6 +29,84 @@ function lastResult(stdout: string): Record<string, unknown> | undefined {
     if (obj?.type === 'result') found = obj;
   }
   return found;
+}
+
+/** What a tool call works on, from its input: the command, the file, the pattern. */
+function toolTarget(name: string, input: unknown): string {
+  if (!isRecord(input)) return '';
+  const str = (key: string): string => {
+    const v = input[key];
+    return typeof v === 'string' ? v : '';
+  };
+  switch (name) {
+    case 'Bash':
+      return str('command');
+    case 'Read':
+    case 'Write':
+    case 'Edit':
+    case 'MultiEdit':
+      return str('file_path');
+    case 'NotebookEdit':
+      return str('notebook_path');
+    case 'Grep':
+      return [str('pattern'), str('path')].filter((s) => s !== '').join(' in ');
+    case 'Glob':
+      return str('pattern');
+    case 'WebFetch':
+      return str('url');
+    case 'WebSearch':
+      return str('query');
+    case 'Task':
+    case 'Agent':
+      return str('description');
+    case 'TodoWrite': {
+      const todos: unknown[] = Array.isArray(input.todos) ? input.todos : [];
+      const current = todos.find((t) => isRecord(t) && t.status === 'in_progress');
+      return isRecord(current) && typeof current.content === 'string' ? current.content : `${todos.length} todos`;
+    }
+    default:
+      return Object.values(input).find((v): v is string => typeof v === 'string' && v.trim() !== '') ?? '';
+  }
+}
+
+/** The text of a tool_result's content: a string, or a list of text blocks. */
+function resultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((b) => (isRecord(b) && typeof b.text === 'string' ? b.text : ''))
+    .filter((t) => t !== '')
+    .join('\n');
+}
+
+/** The progress items of one stream-json line. */
+function readLine(raw: string): ProgressItem[] {
+  const obj = parseLine(raw);
+  if (obj === undefined) return [];
+  if (obj.type === 'system' && obj.subtype === 'init') {
+    return item('info', typeof obj.model === 'string' ? `claude started (${obj.model})` : 'claude started');
+  }
+  if (obj.type === 'result') {
+    return obj.is_error === true && typeof obj.result === 'string' ? item('error', obj.result) : [];
+  }
+  if (!isRecord(obj.message) || !Array.isArray(obj.message.content)) return [];
+  const out: ProgressItem[] = [];
+  for (const block of obj.message.content as unknown[]) {
+    if (!isRecord(block)) continue;
+    if (obj.type === 'assistant') {
+      if (block.type === 'text' && typeof block.text === 'string') out.push(...item('text', block.text));
+      else if (block.type === 'thinking' && typeof block.thinking === 'string') out.push(...item('thinking', block.thinking));
+      else if (block.type === 'tool_use' && typeof block.name === 'string') {
+        const target = toolTarget(block.name, block.input);
+        out.push(...item('tool', target === '' ? block.name : `${block.name}: ${target}`));
+      }
+    } else if (obj.type === 'user' && block.type === 'tool_result') {
+      const text = resultText(block.content);
+      if (block.is_error === true) out.push(...item('error', text === '' ? 'the tool failed' : text));
+      else out.push(...item('result', resultHead(text)));
+    }
+  }
+  return out;
 }
 
 export function createClaudeAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
@@ -60,21 +138,8 @@ export function createClaudeAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
       return { kind: 'error', message };
     },
 
-    progressText(line) {
-      const obj = parseLine(line);
-      if (obj?.type !== 'assistant' || !isRecord(obj.message)) return null;
-      const content = obj.message.content;
-      if (!Array.isArray(content)) return null;
-      const parts: string[] = [];
-      for (const block of content as unknown[]) {
-        if (!isRecord(block)) continue;
-        if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
-          parts.push(block.text.trim());
-        } else if (block.type === 'tool_use' && typeof block.name === 'string') {
-          parts.push(`[${block.name}]`);
-        }
-      }
-      return parts.length > 0 ? parts.join(' ').slice(0, PROGRESS_MAX) : null;
+    progress() {
+      return { line: readLine, errLine: (raw) => item('log', raw), end: () => [] };
     },
 
     summary(stdout) {

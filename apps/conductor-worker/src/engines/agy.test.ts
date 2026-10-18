@@ -202,15 +202,45 @@ describe('agy promptLength', () => {
   });
 });
 
-describe('agy progressText and summary', () => {
+describe('agy progress and summary', () => {
   const lines = fx('success.jsonl').trimEnd().split('\n');
-  it('progressText extracts text_delta, init and ignores the rest', () => {
-    expect(agy.progressText(lines[0]!)).toBe('agy started (gemini-4-argon-low)');
-    expect(agy.progressText(lines[1]!)).toBeNull();
-    expect(agy.progressText(lines[2]!)).toBe('OK');
-    expect(agy.progressText(lines[3]!)).toBeNull(); // whitespace-only delta
-    expect(agy.progressText(lines[4]!)).toBeNull();
-    expect(agy.progressText('not json')).toBeNull();
+  const step = (index: number, state: string, extra: Record<string, unknown>): string =>
+    JSON.stringify({ event: 'step_update', step_update: { step_index: index, state, step_type: 'agent_response', ...extra } });
+
+  it('reads the start and joins a response into lines', () => {
+    const reader = agy.progress();
+    expect(reader.line(lines[0]!)).toEqual([{ kind: 'info', text: 'agy started (gemini-4-argon-low)' }]);
+    expect(reader.line(lines[1]!)).toEqual([]);
+    expect(reader.line(lines[2]!)).toEqual([]); // "OK" waits for the rest of its line
+    expect(reader.line(lines[3]!)).toEqual([{ kind: 'text', text: 'OK' }]);
+    expect(reader.line(lines[4]!)).toEqual([]);
+    expect(reader.line('not json')).toEqual([]);
+    expect(reader.end()).toEqual([]);
+  });
+  it('hands on whole lines as fragments come in, and the rest at the end', () => {
+    const reader = agy.progress();
+    expect(reader.line(step(3, 'ACTIVE', { text_delta: 'Looking at ' }))).toEqual([]);
+    expect(reader.line(step(3, 'ACTIVE', { text_delta: 'the parser.\nThe bug' }))).toEqual([
+      { kind: 'text', text: 'Looking at the parser.' },
+    ]);
+    expect(reader.line(step(3, 'ACTIVE', { text_delta: ' is in' }))).toEqual([]);
+    expect(reader.end()).toEqual([{ kind: 'text', text: 'The bug is in' }]);
+  });
+  it('names a tool once, and again when it fails', () => {
+    const [viewed, failed] = fx('denied.stream.jsonl').trimEnd().split('\n').slice(1, 3);
+    const reader = agy.progress();
+    expect(reader.line(viewed!)).toEqual([{ kind: 'tool', text: 'view_file: /work/src/format.js' }]);
+    expect(reader.line(viewed!)).toEqual([]);
+    expect(reader.line(failed!)).toEqual([
+      { kind: 'error', text: 'run_command: ls -la failed: permission check failed for command "ls -la"' },
+    ]);
+  });
+  it('reads a failed result as an error, and stderr as log', () => {
+    const reader = agy.progress();
+    expect(reader.line(fx('quota.stream.jsonl').trim())).toEqual([
+      { kind: 'error', text: expect.stringContaining('Individual quota reached') as string },
+    ]);
+    expect(reader.errLine('AGY_ERROR: {}')).toEqual([{ kind: 'log', text: 'AGY_ERROR: {}' }]);
   });
   it('summary returns result.response, capped at 4000 chars', () => {
     expect(agy.summary(fx('success.jsonl'))).toBe('OK\n');

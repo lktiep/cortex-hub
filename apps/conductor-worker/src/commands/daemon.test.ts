@@ -627,7 +627,7 @@ function fakeAdapter(executor: Executor, found = true): EngineAdapter {
     buildArgs: () => ({ args: [] }),
     run: () => Promise.reject(new Error('no engine in this test')),
     classify: () => ({ kind: 'ok' }),
-    progressText: () => null,
+    progress: () => ({ line: () => [], errLine: () => [], end: () => [] }),
     summary: () => '',
   };
 }

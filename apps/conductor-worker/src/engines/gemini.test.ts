@@ -60,11 +60,10 @@ describe('gemini classify', () => {
   });
 });
 
-describe('gemini progressText, summary, models', () => {
-  it('progressText and summary follow the plain-text rules', () => {
-    expect(gemini.progressText(' step ')).toBe('step');
-    expect(gemini.progressText('')).toBeNull();
-    expect(gemini.progressText('y'.repeat(900))?.length).toBe(500);
+describe('gemini progress, summary, models', () => {
+  it('progress and summary follow the plain-text rules', () => {
+    expect(gemini.progress().line(' step ')).toEqual([{ kind: 'text', text: 'step' }]);
+    expect(gemini.progress().line('')).toEqual([]);
     expect(gemini.summary(`${'a'.repeat(5000)}\n`)).toBe('a'.repeat(4000));
   });
   it('models fall back through opts, env, *', async () => {

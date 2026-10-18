@@ -15,7 +15,51 @@ function tailCap(text: string, cap: number): string {
 }
 
 /**
- * Runs an engine CLI to completion, streaming stdout lines to `input.onLine`.
+ * Splits a stream's chunks into lines for `onLine`, which must not throw into the run. A line
+ * longer than `cap` is dropped up to its newline. `end()` hands on what is left.
+ */
+function lineSplitter(cap: number, onLine: (line: string) => void): { push(chunk: string): void; end(): void } {
+  let pending = '';
+  // set when a line outgrew the cap: its remainder is dropped up to the next newline
+  let skipping = false;
+  const emit = (line: string): void => {
+    try {
+      onLine(line.endsWith('\r') ? line.slice(0, -1) : line);
+    } catch {
+      // a broken progress callback must not break the run
+    }
+  };
+  return {
+    push(chunk) {
+      let rest = chunk;
+      if (skipping) {
+        const end = rest.indexOf('\n');
+        if (end === -1) return;
+        rest = rest.slice(end + 1);
+        skipping = false;
+      }
+      pending += rest;
+      let nl = pending.indexOf('\n');
+      while (nl !== -1) {
+        emit(pending.slice(0, nl));
+        pending = pending.slice(nl + 1);
+        nl = pending.indexOf('\n');
+      }
+      if (pending.length > cap) {
+        pending = '';
+        skipping = true;
+      }
+    },
+    end() {
+      if (pending !== '') emit(pending);
+      pending = '';
+    },
+  };
+}
+
+/**
+ * Runs an engine CLI to completion, streaming stdout lines to `input.onLine`, and stderr lines
+ * to `input.onErrLine` when it is given.
  * Never rejects: a failure to start resolves exit code 127 with the reason in `stderr`.
  */
 export async function runCli(
@@ -63,43 +107,20 @@ export async function runCli(
 
   let stdout = '';
   let stderr = '';
-  let pending = '';
-  // set when a line outgrew the cap: its remainder is dropped up to the next newline
-  let skipping = false;
-  const emit = (line: string): void => {
-    try {
-      input.onLine(line.endsWith('\r') ? line.slice(0, -1) : line);
-    } catch {
-      // a broken progress callback must not break the run
-    }
-  };
+  const outLines = lineSplitter(STDOUT_CAP, input.onLine);
+  const onErrLine = input.onErrLine;
+  const errLines = onErrLine === undefined ? undefined : lineSplitter(STDERR_CAP, onErrLine);
   tracked.stdout.setEncoding('utf8');
   tracked.stderr.setEncoding('utf8');
   tracked.stdout.on('data', (chunk: string) => {
     stdout += chunk;
     if (stdout.length > STDOUT_CAP * 2) stdout = stdout.slice(-STDOUT_CAP);
-    let rest = chunk;
-    if (skipping) {
-      const end = rest.indexOf('\n');
-      if (end === -1) return;
-      rest = rest.slice(end + 1);
-      skipping = false;
-    }
-    pending += rest;
-    let nl = pending.indexOf('\n');
-    while (nl !== -1) {
-      emit(pending.slice(0, nl));
-      pending = pending.slice(nl + 1);
-      nl = pending.indexOf('\n');
-    }
-    if (pending.length > STDOUT_CAP) {
-      pending = '';
-      skipping = true;
-    }
+    outLines.push(chunk);
   });
   tracked.stderr.on('data', (chunk: string) => {
     stderr += chunk;
     if (stderr.length > STDERR_CAP * 2) stderr = stderr.slice(-STDERR_CAP);
+    errLines?.push(chunk);
   });
 
   let timedOut = false;
@@ -138,7 +159,8 @@ export async function runCli(
   clearTimeout(drainTimer);
   tracked.stdout.destroy();
   tracked.stderr.destroy();
-  if (pending !== '') emit(pending);
+  outLines.end();
+  errLines?.end();
 
   const exitCode = exitCodeOf(code, signal);
   if (exitCode === SPAWN_FAILED_CODE && tracked.spawnError !== undefined) {

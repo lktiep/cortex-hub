@@ -62,11 +62,14 @@ describe('codex classify', () => {
   });
 });
 
-describe('codex progressText, summary, models', () => {
-  it('progressText is the trimmed line capped at 500, else null', () => {
-    expect(codex.progressText('  hi  ')).toBe('hi');
-    expect(codex.progressText('   ')).toBeNull();
-    expect(codex.progressText('x'.repeat(600))?.length).toBe(500);
+describe('codex progress, summary, models', () => {
+  it('progress reads each line of either stream as text, trimmed', () => {
+    const reader = codex.progress();
+    expect(reader.line('  hi  ')).toEqual([{ kind: 'text', text: 'hi' }]);
+    expect(reader.line('   ')).toEqual([]);
+    expect(reader.errLine('exec pnpm test')).toEqual([{ kind: 'text', text: 'exec pnpm test' }]);
+    expect(reader.line('x'.repeat(9000))[0]?.text).toHaveLength(8001);
+    expect(reader.end()).toEqual([]);
   });
   it('summary is the last 4000 chars of trimmed stdout', () => {
     expect(codex.summary(`\n${'a'.repeat(10)}${'b'.repeat(4000)}\n`)).toBe('b'.repeat(4000));

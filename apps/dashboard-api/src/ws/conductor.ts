@@ -466,13 +466,16 @@ function handleMessage(agent: WorkerConn, msg: Record<string, unknown>) {
       if (taskId === null) break
       const message = (typeof msg['message'] === 'string' ? msg['message'] : '').slice(0, PROGRESS_MAX)
       const percent = typeof msg['percent'] === 'number' ? msg['percent'] : undefined
-      if (!applied(agent, 'task.progress', recordProgress(taskId, agent.agentId, message, percent))) break
+      // a heartbeat: the run has printed nothing for this long
+      const idleMs = typeof msg['idleMs'] === 'number' ? msg['idleMs'] : undefined
+      if (!applied(agent, 'task.progress', recordProgress(taskId, agent.agentId, message, percent, Date.now(), idleMs))) break
       broadcastToOwner(agent.apiKeyOwner, {
         type: 'task.progress',
         taskId,
         agentId: agent.agentId,
         message,
         percent,
+        ...(idleMs !== undefined ? { idleMs } : {}),
         timestamp: new Date().toISOString(),
       })
       break

@@ -6,6 +6,17 @@ import { apiCall } from '../api-call.js'
 import { executorEnum, priorityField, routeSpec } from './conductor-lead.js'
 
 /**
+ * A log message on one line. A worker's progress row holds several lines of engine output,
+ * so its last three stand for it, with a count of the rest.
+ */
+function logLine(message: string | null | undefined, max = 400): string {
+  const lines = (message ?? '').split('\n').map((l) => l.trim()).filter(Boolean)
+  const last = lines.slice(-3).join(' | ')
+  const text = lines.length > 3 ? `(+${lines.length - 3} lines) ${last}` : last
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+/**
  * Register Cortex Conductor task management tools.
  * All tools use the /api/conductor endpoints (orchestration-aware).
  */
@@ -323,7 +334,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
             depends_on?: string; context?: string; result?: string
           }
           subtasks?: Array<{ id: string; title: string; status: string; assigned_to_agent?: string }>
-          logs?: Array<{ action: string; agent_id: string; message: string; created_at: string }>
+          logs?: Array<{ action: string; agent_id: string | null; message: string | null; created_at: string }>
         }
         const task = data.task
 
@@ -361,7 +372,7 @@ export function registerTaskTools(server: McpServer, env: Env) {
         if (data.logs && data.logs.length > 0) {
           lines.push(`\n### Activity Log`)
           for (const log of data.logs) {
-            lines.push(`- **${log.created_at}** [${log.action}] ${log.message ?? ''}`)
+            lines.push(`- **${log.created_at}** [${log.action}] ${logLine(log.message)}`)
           }
         }
 

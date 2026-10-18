@@ -10,6 +10,8 @@ export interface WorkerPaths {
   /** The settings `start` ran with, so `restart` can run it again (may hold the key; owner-only). */
   startFile: string;
   worktrees: string;
+  /** Each task's full engine output, `<taskId>.log` (owner-only; the newest few are kept). */
+  transcripts: string;
 }
 
 export function workerRoot(homeDir: string): string {
@@ -37,6 +39,7 @@ export function workerPaths(agentId: string, homeDir: string): WorkerPaths {
     stopFile: path.join(home, 'worker.stop'),
     startFile: path.join(home, 'start.json'),
     worktrees: path.join(home, 'wt'),
+    transcripts: path.join(home, 'tasks'),
   };
 }
 

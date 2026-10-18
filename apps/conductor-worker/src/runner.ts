@@ -5,7 +5,9 @@ import type {
   TaskQuotaExhaustedMsg,
   TaskResult,
 } from '@cortex/shared-types';
-import type { Classification, EngineAdapter, RunOutput } from './engines/types.js';
+import os from 'node:os';
+import { createActivity, pathStripper } from './activity.js';
+import type { Classification, EngineAdapter, ProgressItem, RunOutput } from './engines/types.js';
 import { projectCommands } from './env/requirements.js';
 import {
   BranchInUseError,
@@ -22,8 +24,8 @@ import type { Logger } from './logger.js';
 import { worktreePath } from './paths.js';
 import type { WorkerPaths } from './paths.js';
 import { lastLines, runShell } from './process.js';
-import { createProgressThrottle } from './progress.js';
 import { buildPrompt } from './prompt.js';
+import { openTranscript } from './transcript.js';
 
 /**
  * What a run needs from the worker. The runner never sends an outcome: the worker
@@ -160,6 +162,25 @@ export async function runTask(
   let engineSummary = '';
 
   const log = (level: 'info' | 'warn' | 'error', m: string): void => logger[level](`task ${task.id}: ${m}`);
+  let stripRoot = '';
+  try {
+    stripRoot = worktreePath(deps.paths, task.id);
+  } catch {
+    // an unsafe id fails at the worktree step
+  }
+  const activity = createActivity({
+    send: (message, idleMs) =>
+      deps.send({ type: 'task.progress', taskId: task.id, message, ...(idleMs !== undefined ? { idleMs } : {}) }),
+    transcript: openTranscript(
+      deps.paths.transcripts,
+      task.id,
+      `--- task ${task.id} attempt ${String(task.attempt)}, ${adapter.executor}, ${now().toISOString()}`,
+    ),
+    strip: pathStripper(stripRoot, os.homedir()),
+  });
+  const engineItems = (items: ProgressItem[]): void => {
+    for (const it of items) activity.engine(it);
+  };
   const aborted = (): { kind: 'aborted'; reason: AbortReason } => ({
     kind: 'aborted',
     reason: signal.reason === 'revoked' ? 'revoked' : 'stopping',
@@ -247,9 +268,9 @@ export async function runTask(
       measure: (p) => adapter.promptLength?.(p) ?? p.length,
       noCommands: adapter.refusesCommands?.() === true,
     });
-    const throttle = createProgressThrottle((message) =>
-      deps.send({ type: 'task.progress', taskId: task.id, message }),
-    );
+    const reader = adapter.progress();
+    const model = task.route.model ?? adapter.defaultModel();
+    activity.phase(`engine: ${adapter.executor}${model === null ? '' : ` (${model})`}`);
     engineStarted = true;
     let grouped = false;
     try {
@@ -260,17 +281,15 @@ export async function runTask(
         effort: task.route.effort,
         signal,
         timeoutMs: deps.engineTimeoutMs,
-        onLine: (line) => {
-          const text = adapter.progressText(line);
-          if (text !== null) throttle.push(text);
-        },
+        onLine: (line) => engineItems(reader.line(line)),
+        onErrLine: (line) => engineItems(reader.errLine(line)),
         onGroup: (pgid) => {
           grouped = true;
           deps.onEngineGroup?.(pgid);
         },
       });
     } finally {
-      throttle.stop();
+      engineItems(reader.end());
       // the engine is done; runCli reaps its group before it returns
       if (grouped) deps.onEngineGroup?.(null);
     }
@@ -299,10 +318,12 @@ export async function runTask(
     const project = projectCommands(worktree, deps.env);
     const setupCommand = nonEmpty(task.context['setupCommand']) ?? project.setup;
     if (setupCommand !== null) {
+      activity.phase(`setup: ${setupCommand}`);
       const setup = await runShell(setupCommand, worktree, shellOpts);
       if (signal.aborted) return aborted();
       if (setup.exitCode !== 0) {
         const tail = scrubCredentials(lastLines(setup.output.trimEnd(), SETUP_TAIL_LINES));
+        activity.engine({ kind: 'error', text: `setup failed (exit ${setup.exitCode})\n${tail}` });
         return fail([`setup command failed (exit ${setup.exitCode})${tail === '' ? '' : `\n${tail}`}`]);
       }
     }
@@ -312,6 +333,7 @@ export async function runTask(
     const run = await runEngine(worktree, testCommand);
     engineSummary = adapter.summary(run.stdout);
     log('info', `engine exited with ${String(run.exitCode)}${run.timedOut ? ' (timed out)' : ''}`);
+    activity.phase(run.timedOut ? 'engine timed out' : `engine exited (${String(run.exitCode)})`);
 
     // 4. classify
     if (signal.aborted) return abortWithWip(worktree);
@@ -337,10 +359,13 @@ export async function runTask(
     let testOutput: string | undefined;
     let testError: string | null = null;
     if (testCommand !== null) {
+      activity.phase(`tests: ${testCommand}`);
       const tests = await runShell(testCommand, worktree, shellOpts);
       if (signal.aborted) return abortWithWip(worktree);
       testOutput = scrubCredentials(lastLines(tests.output, TEST_TAIL_LINES));
       if (tests.exitCode !== 0) testError = `tests failed (exit ${tests.exitCode})`;
+      activity.engine({ kind: 'result', text: lastLines(testOutput.trimEnd(), SETUP_TAIL_LINES) });
+      activity.engine(testError === null ? { kind: 'info', text: 'tests passed' } : { kind: 'error', text: testError });
     }
     const withTests = testOutput !== undefined ? { testOutput } : {};
 
@@ -357,6 +382,7 @@ export async function runTask(
     //    reports the outcome as usual (a revoke still reports nothing)
     let commit: string | null = null;
     if (changes.dirty) {
+      activity.phase('commit');
       try {
         // the repository's hooks are its own code, like the tests: they get the engine's limit
         commit = await commitAll(worktree, commitTitle(task), deps.identity, deps.engineTimeoutMs);
@@ -370,6 +396,7 @@ export async function runTask(
     committed = true;
 
     // 7. push and pull request; a pre-push hook may run the whole verify again
+    activity.phase(`push ${task.branch}`);
     try {
       await pushBranch(worktree, task.branch, deps.engineTimeoutMs);
     } catch (err) {
@@ -396,6 +423,7 @@ export async function runTask(
     } catch (err) {
       log('warn', `opening a pull request failed: ${messageOf(err)}`);
     }
+    if (pr.prUrl !== undefined) activity.phase(`pull request opened: ${pr.prUrl}`);
 
     // 8. result
     const summary =
@@ -435,6 +463,10 @@ export async function runTask(
     const keep = committed && signal.reason !== 'revoked';
     const result = signal.aborted && !keep ? aborted() : outcome;
     log('info', result.kind === 'aborted' ? `aborted (${result.reason})` : result.kind);
+    // a declined task goes back to pending: progress now would mark it in progress
+    if (result.kind === 'failed') activity.engine({ kind: 'error', text: `failed: ${result.msg.result.error ?? ''}` });
+    else if (result.kind !== 'declined') activity.phase(result.kind === 'aborted' ? `stopped (${result.reason})` : result.kind);
+    activity.stop();
     return result;
   };
 

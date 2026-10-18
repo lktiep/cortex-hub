@@ -62,17 +62,53 @@ describe('claude classify', () => {
   });
 });
 
-describe('claude progressText and summary', () => {
+describe('claude progress and summary', () => {
   const lines = fx('synthetic-success.stream.jsonl').trimEnd().split('\n');
-  it('progressText reads assistant text and tool_use names from stream-json', () => {
-    expect(claude.progressText(lines[1]!)).toBe('Reading the file. [Read]');
-    expect(claude.progressText(lines[0]!)).toBeNull();
-    expect(claude.progressText(lines[2]!)).toBeNull();
-    expect(claude.progressText('not json')).toBeNull();
-    expect(claude.progressText('{"type":"assistant","message":{"content":"str"}}')).toBeNull();
-    for (const l of ['null', '[]', '5', '{"type":"assistant","message":null}']) {
-      expect(claude.progressText(l)).toBeNull();
+  const read = (raw: string) => claude.progress().line(raw);
+  const assistant = (...content: unknown[]): string => JSON.stringify({ type: 'assistant', message: { content } });
+  const toolUse = (name: string, input: unknown): string => assistant({ type: 'tool_use', name, input });
+
+  it('reads the start, text, tool calls and results from stream-json', () => {
+    expect(read(lines[0]!)).toEqual([{ kind: 'info', text: 'claude started (synthetic-model)' }]);
+    expect(read(lines[1]!)).toEqual([{ kind: 'text', text: 'Reading the file.' }, { kind: 'tool', text: 'Read' }]);
+    expect(read(lines[2]!)).toEqual([{ kind: 'result', text: 'ok' }]);
+    expect(read(lines[3]!)).toEqual([]);
+  });
+  it('names what each tool works on', () => {
+    expect(read(toolUse('Bash', { command: 'pnpm test', description: 'run tests' }))).toEqual([{ kind: 'tool', text: 'Bash: pnpm test' }]);
+    expect(read(toolUse('Edit', { file_path: '/w/src/a.ts', old_string: 'x' }))).toEqual([{ kind: 'tool', text: 'Edit: /w/src/a.ts' }]);
+    expect(read(toolUse('Grep', { pattern: 'TODO', path: 'src' }))).toEqual([{ kind: 'tool', text: 'Grep: TODO in src' }]);
+    expect(read(toolUse('Glob', { pattern: '**/*.ts' }))).toEqual([{ kind: 'tool', text: 'Glob: **/*.ts' }]);
+    expect(read(toolUse('Task', { description: 'look around', prompt: 'long' }))).toEqual([{ kind: 'tool', text: 'Task: look around' }]);
+    const todos = [{ content: 'write it', status: 'completed' }, { content: 'test it', status: 'in_progress' }];
+    expect(read(toolUse('TodoWrite', { todos }))).toEqual([{ kind: 'tool', text: 'TodoWrite: test it' }]);
+    expect(read(toolUse('TodoWrite', { todos: [{ content: 'a', status: 'pending' }] }))).toEqual([{ kind: 'tool', text: 'TodoWrite: 1 todos' }]);
+    expect(read(toolUse('mcp__x__lookup', { n: 1, q: 'login' }))).toEqual([{ kind: 'tool', text: 'mcp__x__lookup: login' }]);
+  });
+  it('reads thinking, failed tools and an error result', () => {
+    expect(read(assistant({ type: 'thinking', thinking: 'the test fails because' }))).toEqual([
+      { kind: 'thinking', text: 'the test fails because' },
+    ]);
+    const failed = (content: unknown): string =>
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', is_error: true, content }] } });
+    expect(read(failed('exit 1'))).toEqual([{ kind: 'error', text: 'exit 1' }]);
+    expect(read(failed([{ type: 'text', text: 'denied' }]))).toEqual([{ kind: 'error', text: 'denied' }]);
+    expect(read(failed(''))).toEqual([{ kind: 'error', text: 'the tool failed' }]);
+    expect(read(JSON.stringify({ type: 'result', is_error: true, result: 'API error' }))).toEqual([{ kind: 'error', text: 'API error' }]);
+  });
+  it('keeps the head of a long tool result', () => {
+    const out = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n');
+    const [r] = read(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: out }] } }));
+    expect(r?.text.split('\n')).toHaveLength(21);
+    expect(r?.text.endsWith('(10 more lines)')).toBe(true);
+  });
+  it('reads nothing from what is not stream-json', () => {
+    for (const l of ['not json', 'null', '[]', '5', '{"type":"assistant","message":null}', '{"type":"assistant","message":{"content":"str"}}']) {
+      expect(read(l)).toEqual([]);
     }
+  });
+  it('stderr lines are kept as log', () => {
+    expect(claude.progress().errLine('warning: x')).toEqual([{ kind: 'log', text: 'warning: x' }]);
   });
   it('summary reads the last result event, capped at 4000', () => {
     expect(claude.summary(fx('synthetic-success.stream.jsonl'))).toBe('All done.');

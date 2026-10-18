@@ -1,5 +1,5 @@
 import { parseResetsIn } from './quota.js';
-import { RAW_MAX, cliPlumbing, errorMessage, plainProgress, stderrTail, tailSummary } from './common.js';
+import { RAW_MAX, cliPlumbing, errorMessage, plainReader, stderrTail, tailSummary } from './common.js';
 import type { CliAdapterOpts } from './common.js';
 import type { Classification, EngineAdapter } from './types.js';
 
@@ -30,7 +30,7 @@ export function createGeminiAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
       return { kind: 'error', message: errorMessage(exitCode, stderr, stdout, 'gemini') };
     },
 
-    progressText: plainProgress,
+    progress: plainReader,
     summary: tailSummary,
   };
 }

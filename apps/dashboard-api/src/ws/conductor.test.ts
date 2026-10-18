@@ -259,6 +259,20 @@ describe('worker.register', () => {
     expect(row('t1')).toEqual(before)
   })
 
+  it('a progress message with idleMs is a heartbeat: one quiet row, not progress', async () => {
+    const lease = isoSeconds(Date.now() + 3600_000)
+    insertTask(testDb, { id: 't1', status: 'in_progress', assigned_to_agent: 'w1', attempt: 1, lease_expires_at: lease, project_id: 'p1' })
+    const w = await connect('w1')
+    register(w, { activeTaskId: 't1' })
+    await next(w, 'task.resumed')
+    send(w, { type: 'task.progress', taskId: 't1', message: '→ Bash: pnpm test' })
+    send(w, { type: 'task.progress', taskId: 't1', message: 'still running, no output for 1 min', idleMs: 61_000 })
+    send(w, { type: 'task.progress', taskId: 't1', message: 'still running, no output for 2 min', idleMs: 122_000 })
+    await sync(w)
+    expect(logs('t1', 'progress').map((l) => l.message)).toEqual(['→ Bash: pnpm test'])
+    expect(logs('t1', 'quiet')).toEqual([{ agent_id: 'w1', message: 'still running, no output for 2 min' }])
+  })
+
   it('reconciles the other active tasks it no longer has', async () => {
     // pinned elsewhere so that the dispatch after the register does not hand them straight back
     const held = { assigned_to_agent: 'w1', attempt: 1, project_id: 'p1', pinned_agent: 'elsewhere' }

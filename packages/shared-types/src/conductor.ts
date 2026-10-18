@@ -25,7 +25,9 @@ export interface WorkerRegisterMsg {
   activeTaskId?: string
 }
 export interface TaskAcceptMsg { type: 'task.accept'; taskId: string }
-export interface TaskProgressMsg { type: 'task.progress'; taskId: string; message: string; percent?: number }
+// `idleMs` is present on a heartbeat: how long the run has printed nothing. The hub keeps
+// only the latest heartbeat of a task.
+export interface TaskProgressMsg { type: 'task.progress'; taskId: string; message: string; percent?: number; idleMs?: number }
 // `attempt` on an outcome: the attempt it reports on (AssignedTask.attempt). The hub
 // ignores an outcome for an attempt other than the current one; absent → not checked.
 export interface TaskCompleteMsg {

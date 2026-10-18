@@ -1,11 +1,14 @@
 import os from 'node:os';
 import { resolveCommand } from '../process.js';
 import { runCli } from './run.js';
-import type { EngineAdapter, RunInput, RunOutput } from './types.js';
+import type { EngineAdapter, ProgressItem, ProgressReader, RunInput, RunOutput } from './types.js';
 
 const VERSION_TIMEOUT_MS = 15_000;
 export const SUMMARY_MAX = 4000;
-export const PROGRESS_MAX = 500;
+/** The most of one progress item kept, for the transcript; the hub gets a shorter line. */
+export const ITEM_MAX = 8000;
+/** The lines of a tool's output the transcript keeps. */
+const RESULT_LINES = 20;
 export const RAW_MAX = 2000;
 const ERROR_MAX = 300;
 const STDERR_TAIL_LINES = 40;
@@ -35,9 +38,26 @@ export function tailSummary(stdout: string): string {
   return tail(stdout, SUMMARY_MAX);
 }
 
-export function plainProgress(line: string): string | null {
-  const t = line.trim();
-  return t === '' ? null : t.slice(0, PROGRESS_MAX);
+/** `text` trimmed and cut to ITEM_MAX, as a one-item list; none when it is blank. */
+export function item(kind: ProgressItem['kind'], text: string): ProgressItem[] {
+  const t = text.trim();
+  return t === '' ? [] : [{ kind, text: t.length > ITEM_MAX ? `${t.slice(0, ITEM_MAX)}…` : t }];
+}
+
+/** The first RESULT_LINES lines of a tool's output, with a count of the rest. */
+export function resultHead(text: string): string {
+  const lines = text.trim().split('\n');
+  if (lines.length <= RESULT_LINES) return lines.join('\n');
+  return `${lines.slice(0, RESULT_LINES).join('\n')}\n(${lines.length - RESULT_LINES} more lines)`;
+}
+
+/** For an engine that prints plain text: each line, from either stream, is text. */
+export function plainReader(): ProgressReader {
+  return {
+    line: (raw) => item('text', raw),
+    errLine: (raw) => item('text', raw),
+    end: () => [],
+  };
 }
 
 export function errorMessage(exitCode: number | null, stderr: string, stdout: string, name: string): string {

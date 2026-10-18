@@ -105,7 +105,11 @@ function fakeEngine(
       classified.push({ model: ctx?.model ?? null, now: ctx?.now });
       return o.classify ?? { kind: 'ok' };
     },
-    progressText: (line) => (line.startsWith('#') ? null : `p:${line}`),
+    progress: () => ({
+      line: (line) => (line.startsWith('#') ? [] : [{ kind: 'text', text: `p:${line}` }]),
+      errLine: (line) => [{ kind: 'log', text: line }],
+      end: () => [],
+    }),
     summary: () => o.summary ?? 'Wrote engine.txt.',
     ...(o.promptLength !== undefined ? { promptLength: o.promptLength } : {}),
     ...(o.refusesCommands !== undefined ? { refusesCommands: () => o.refusesCommands === true } : {}),
@@ -716,6 +720,8 @@ describe('runTask', () => {
     expect(reason.startsWith('branch-in-use: ')).toBe(true);
     expect(real(reason.slice('branch-in-use: '.length))).toBe(real(fx.repo));
     expect(engine.inputs).toEqual([]);
+    // progress would move the task to in progress, and it goes back to pending
+    expect(h.progress).toEqual([]);
   });
 
   it('fails with worktree: <message> when the worktree cannot be prepared', async () => {
@@ -818,7 +824,7 @@ describe('runTask', () => {
     }
   });
 
-  it('progress is throttled', async () => {
+  it('sends progress in batches, every line kept, with the steps around the engine', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const engine = fakeEngine({
       run: (input) => {
@@ -828,6 +834,7 @@ describe('runTask', () => {
           input.onLine(`line ${i}`);
           vi.advanceTimersByTime(20);
         }
+        input.onErrLine?.('a warning on stderr');
         return { exitCode: 0, stdout: 'done' };
       },
     });
@@ -836,7 +843,78 @@ describe('runTask', () => {
     vi.advanceTimersByTime(10_000);
 
     expect(out.kind).toBe('completed');
-    expect(h.progress).toEqual([{ type: 'task.progress', taskId: TASK_ID, message: 'p:line 0' }]);
+    const lines = Array.from({ length: 50 }, (_, i) => `p:line ${i}`);
+    expect(h.progress.map((m) => m.message)).toEqual([
+      '• engine: claude (fake-default)',
+      [
+        ...lines,
+        '• engine exited (0)',
+        '• commit',
+        `• push ${BRANCH}`,
+        `• pull request opened: ${PR_URL}`,
+        '• completed',
+      ].join('\n'),
+    ]);
+    expect(h.progress.every((m) => m.taskId === TASK_ID && m.idleMs === undefined)).toBe(true);
+  });
+
+  it('keeps everything the engine printed in a transcript on this machine, credentials scrubbed', async () => {
+    const engine = fakeEngine({
+      run: (input) => {
+        writeChange(input.cwd);
+        input.onLine(`reading ${input.cwd}/src/a.ts`);
+        input.onErrLine?.('Authorization: Bearer k-sekrit-bearer');
+        return { exitCode: 0, stdout: 'done' };
+      },
+    });
+    const h = harness(engine.adapter);
+    expect((await run(makeTask(), h)).kind).toBe('completed');
+
+    const text = readFileSync(path.join(paths.transcripts, `${TASK_ID}.log`), 'utf8');
+    expect(text.split('\n')[0]).toBe(`--- task ${TASK_ID} attempt 3, claude, ${NOW.toISOString()}`);
+    expect(text).toContain(`p:reading ${dirOf()}/src/a.ts`);
+    expect(text).toContain('stderr: Authorization: Bearer ***');
+    expect(text).not.toContain('k-sekrit');
+    expect(text.trimEnd().endsWith('• completed')).toBe(true);
+    // the hub gets the path inside the worktree, and none of stderr
+    const sent = h.progress.map((m) => m.message).join('\n');
+    expect(sent).toContain('p:reading src/a.ts');
+    expect(sent).not.toContain('Bearer');
+  });
+
+  it('says the engine is still on its step after a minute without output', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+    const engine = fakeEngine({
+      run: (input) => {
+        writeChange(input.cwd);
+        input.onLine('thinking it over');
+        vi.advanceTimersByTime(61_000);
+        return { exitCode: 0, stdout: 'done' };
+      },
+    });
+    const h = harness(engine.adapter);
+    expect((await run(makeTask(), h)).kind).toBe('completed');
+
+    expect(h.progress.filter((m) => m.idleMs !== undefined)).toEqual([
+      {
+        type: 'task.progress',
+        taskId: TASK_ID,
+        message: 'still running: engine: claude (fake-default), no output for 1 min',
+        idleMs: 60_000,
+      },
+    ]);
+  });
+
+  it('names the failure last, for the hub and the transcript', async () => {
+    const engine = fakeEngine({ classify: { kind: 'error', message: 'model overloaded' } });
+    const h = harness(engine.adapter);
+    const out = await run(makeTask(), h);
+
+    expect(out.kind).toBe('failed');
+    const sent = h.progress.map((m) => m.message).join('\n');
+    expect(sent.split('\n').at(-1)).toMatch(/^✗ failed: .*model overloaded/);
+    const text = readFileSync(path.join(paths.transcripts, `${TASK_ID}.log`), 'utf8');
+    expect(text.trimEnd().split('\n').at(-1)).toMatch(/✗ failed: .*model overloaded/);
   });
 
   it('counts commits already on the branch as changes', async () => {

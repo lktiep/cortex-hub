@@ -27,7 +27,7 @@ const KILL_GRACE_MS = 5_000;
 const DEFAULT_TAIL_LINES = 200;
 const DEFAULT_FOLLOW_POLL_MS = 500;
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) {
       resolve();
@@ -286,7 +286,7 @@ export function statusText(paths: WorkerPaths, state: WorkerState): string {
 }
 
 /** The last `n` lines of `text`, keeping its final newline. */
-function tailLines(text: string, n: number): string {
+export function tailLines(text: string, n: number): string {
   if (n <= 0) return '';
   let i = text.endsWith('\n') ? text.length - 1 : text.length;
   for (let count = 0; i > 0; ) {
@@ -299,7 +299,7 @@ function tailLines(text: string, n: number): string {
 }
 
 /** Bytes `[from, to)` of `file`; empty when it cannot be read. */
-function readRange(file: string, from: number, to: number): Buffer {
+export function readRange(file: string, from: number, to: number): Buffer {
   if (to <= from) return Buffer.alloc(0);
   let fd: number | null = null;
   try {
@@ -314,7 +314,7 @@ function readRange(file: string, from: number, to: number): Buffer {
   }
 }
 
-function statOrNull(file: string): { ino: number; size: number } | null {
+export function statOrNull(file: string): { ino: number; size: number } | null {
   try {
     const st = statSync(file);
     return { ino: st.ino, size: st.size };

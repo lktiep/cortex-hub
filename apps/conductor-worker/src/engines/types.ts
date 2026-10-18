@@ -13,6 +13,8 @@ export interface RunInput {
   signal: AbortSignal;
   timeoutMs: number;
   onLine: (line: string) => void;
+  /** Each stderr line as it comes, when given. */
+  onErrLine?: (line: string) => void;
   /**
    * Called once the engine has started, with the process group it leads. POSIX only: on
    * Windows the engine leads no group, and a failed spawn has none.
@@ -26,6 +28,23 @@ export interface RunOutput {
   stderr: string;
   timedOut: boolean;
   aborted: boolean;
+}
+
+/**
+ * One readable piece of an engine's output. `result` (a tool's output) and `log` (a stderr
+ * line) only go to the transcript on the worker's machine; the rest also goes to the hub.
+ */
+export interface ProgressItem {
+  kind: 'text' | 'thinking' | 'tool' | 'error' | 'info' | 'result' | 'log';
+  text: string;
+}
+
+/** Reads one run's output into progress items. One per run: it may hold a partial line. */
+export interface ProgressReader {
+  line(raw: string): ProgressItem[];
+  errLine(raw: string): ProgressItem[];
+  /** What it still holds once the engine has exited. */
+  end(): ProgressItem[];
 }
 
 export interface EngineAdapter {
@@ -45,8 +64,8 @@ export interface EngineAdapter {
     stderr: string,
     ctx?: { model: string | null; now?: Date },
   ): Classification;
-  /** Human text from one stdout line, or null. */
-  progressText(line: string): string | null;
+  /** A reader for one run's output. */
+  progress(): ProgressReader;
   /** Final answer, at most 4 000 chars. */
   summary(stdout: string): string;
   /**

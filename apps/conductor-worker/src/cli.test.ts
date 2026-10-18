@@ -114,6 +114,8 @@ describe('parseCli', () => {
     expect(parseCli(['start', 'acme', '-d'])).toMatchObject({ command: 'start', agentId: 'acme', daemon: true });
     expect(parseCli(['logs', '2', '-f'])).toMatchObject({ command: 'logs', agent: '2', follow: true });
     expect(parseCli(['logs', '2'])).not.toHaveProperty('agentId');
+    expect(parseCli(['tail', '2', '-f'])).toMatchObject({ command: 'tail', agent: '2', follow: true });
+    expect(parseCli(['tail', 'acme'])).toMatchObject({ command: 'tail', agent: 'acme', follow: false });
     for (const c of ['stop', 'restart', 'status', 'doctor'] as const) {
       expect(parseCli([c, 'acme'])).toMatchObject({ command: c, agent: 'acme' });
     }
@@ -358,6 +360,7 @@ describe('main', () => {
     expect(await main(['help'], { homeDir: home, env: {} })).toBe(0);
     expect(String(log.mock.calls[0]?.[0])).toContain(`waits up to ${DEFAULT_STOP_GRACE_MS / 1000} s`);
     expect(String(log.mock.calls[0]?.[0])).toContain('cw logs 2 -f');
+    expect(String(log.mock.calls[0]?.[0])).toContain('cw tail 2 -f');
   });
 
   it('start -d re-runs process.argv[1] detached, without the daemon flag or the key in its argv', async () => {
@@ -512,6 +515,7 @@ describe('main', () => {
         expect(lines[1]).toMatch(/^1\s+acme\s+stopped\s+-\s+claude\s+\/src\/acme$/);
         expect(lines[2]).toMatch(/^2\s+mini\s+stopped/);
         expect(lines).toContain('cw logs <#|name> -f    follow its log (Ctrl+C to quit)');
+        expect(lines).toContain('cw tail <#|name> -f    follow what its engine prints on the current task');
       }
       expect(await main(['status', '2'], { homeDir: h, env: {} })).toBe(0);
       expect(String(log.mock.calls.at(-1)?.[0])).toMatch(/^agent id:\s+mini$/m);
@@ -534,6 +538,21 @@ describe('main', () => {
 
       expect(await main(['logs', '3'], { homeDir: h, env: {} })).toBe(1);
       expect(String(err.mock.calls.at(-1)?.[0])).toMatch(/no agent number 3/);
+    });
+
+    it('tail prints the latest task transcript of the agent picked by number', async () => {
+      quiet();
+      const h = freshHome();
+      logOnly(h, 'acme', 'acme line\n');
+      logOnly(h, 'mini', 'mini line\n');
+      const tasks = workerPaths('mini', h).transcripts;
+      mkdirSync(tasks, { recursive: true });
+      writeFileSync(join(tasks, 't1.log'), '09:00:00 → Bash: pnpm test\n');
+      const out = stdout();
+      expect(await main(['tail', '2'], { homeDir: h, env: {} })).toBe(0);
+      expect(out.join('')).toBe(`==> ${join(tasks, 't1.log')} <==\n09:00:00 → Bash: pnpm test\n`);
+      expect(await main(['tail', '1'], { homeDir: h, env: {} })).toBe(0);
+      expect(out.join('')).toContain(`no task transcript yet in ${workerPaths('acme', h).transcripts}`);
     });
 
     it('logs without an agent takes the only one', async () => {

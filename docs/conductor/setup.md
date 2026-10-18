@@ -450,6 +450,7 @@ cw start acme -d     # start agent "acme" in the background (inside its clone); 
 cw ls                # every agent on this machine, numbered
 cw status 2          # agent 2 of that list: running? task? last registration
 cw logs 2 -f         # its last 200 lines, then follow (Ctrl+C to quit)
+cw tail 2 -f         # what its engine prints on the current task, then follow
 cw restart 2         # stop it, then start it again with the settings it last started with
 cw stop 2            # waits for a running task to wrap up
 cw stop --all        # every running agent
@@ -471,6 +472,23 @@ only, so they differ from the worker numbers on the dashboard, which count the o
 every machine. A number that is also an agent's name (an agent called `2`) means that agent.
 `cw status` without an agent prints the list. `logs`, `stop` and `restart` without one take the
 agent of the current folder, or the only agent there is, and otherwise ask which one.
+
+**Following a task.** While a task runs, its page on the dashboard shows the step it is on (the
+newest tool call, such as `Bash: pnpm test`, or worker step, such as `push`), when the engine last
+printed something, and when the worker last checked in. Every few seconds the worker sends the
+hub what the engine said: its text, thinking, tool calls and errors, each cut to one short line,
+with keys and tokens replaced by `***` and the worktree path left out. With claude and agy, tool
+output and stderr stay on the machine; codex and gemini print plain text on both, and each line
+goes as text. When the engine prints a lot at once, the hub gets the newest lines and a count of
+the rest. When it prints nothing for a minute, the worker sends
+`still running: <step>, no output for N min`, once a minute. The hub keeps a task's newest 200
+batches. When nothing at all comes for 3 minutes, the page says so: run `cw status` on that machine.
+
+Everything the engine prints, tool output included, goes to
+`~/.cortex/worker/<agentId>/tasks/<taskId>.log` on the worker's machine, keys replaced by `***`.
+`cw tail <agent>` prints the last 40 lines of the newest one, and `-f` follows it, moving on to
+the next task when one starts. Only you can read these files (mode 600; on Windows, your profile
+folder's permissions). The worker keeps the newest 10 and stops writing one at 10 MB.
 
 **When the machine is not ready.** Before each task, the worker looks for what `cw check` would
 mark `✗` (not the trial run, which is too slow). When something is missing, it turns the task
@@ -535,6 +553,8 @@ Why a task waits (shown on the dashboard):
 Other problems:
 
 - The extension shows a URL with `/ws/conductor/ws/conductor`: update the extension.
+- A task runs long and you cannot tell why: open it on the dashboard for its current step, or run
+  `cw tail <agent> -f` on its machine (section 8).
 - `agy` is slow to start: see the notes in section 4.
 - A task ran against the wrong hub: run `doctor` and read the `engine MCP configs` row.
 - A worker takes no tasks and `cw ls` says `not ready`: run `cw check <agent>`, fix the `✗` items,
@@ -551,6 +571,9 @@ Other problems:
 
 - MCP configs hold API keys in plain text. Keep them private and do not paste them into chats,
   tickets or logs.
+- A task's full transcript stays on the worker's machine. The hub gets short lines with keys
+  replaced by `***`. That catches the usual key shapes, not every secret, so keep secrets out of
+  task descriptions and out of what the engine prints.
 - The dashboard API has no user login. Keep the dashboard behind access control. Gate approval
   (the user-only gates) guards against agents, not against people.
 

@@ -86,3 +86,21 @@ describe('cortex_task_list', () => {
     expect(lines[3]).toBe('| t2 | two | pending')
   })
 })
+
+describe('cortex_task_status', () => {
+  it('puts each log row on one line, a progress row as its last three lines', async () => {
+    const res = await tool('cortex_task_status', {
+      task: { id: 't1', title: 'one', status: 'in_progress' },
+      logs: [
+        { action: 'picked_up', agent_id: 'w1', message: null, created_at: '2026-10-18T09:00:00Z' },
+        { action: 'progress', agent_id: 'w1', message: '• engine: claude (opus)\n→ Read: a.ts\n→ Edit: a.ts\n→ Bash: pnpm test\n✗ exit 1', created_at: '2026-10-18T09:01:00Z' },
+        { action: 'progress', agent_id: 'w1', message: 'x'.repeat(500), created_at: '2026-10-18T09:02:00Z' },
+      ],
+    })({ taskId: 't1' })
+    const log = res.content[0]!.text.split('### Activity Log\n')[1]!.split('\n')
+    expect(log[0]).toBe('- **2026-10-18T09:00:00Z** [picked_up] ')
+    expect(log[1]).toBe('- **2026-10-18T09:01:00Z** [progress] (+2 lines) → Edit: a.ts | → Bash: pnpm test | ✗ exit 1')
+    expect(log[2]).toBe(`- **2026-10-18T09:02:00Z** [progress] ${'x'.repeat(399)}…`)
+    expect(log).toHaveLength(3)
+  })
+})

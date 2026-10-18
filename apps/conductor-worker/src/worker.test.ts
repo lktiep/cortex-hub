@@ -107,7 +107,7 @@ function fakeAdapter(executor: Executor): EngineAdapter {
     buildArgs: () => ({ args: [] }),
     run: () => Promise.reject(new Error('the fake run never starts an engine')),
     classify: () => ({ kind: 'ok' }),
-    progressText: () => null,
+    progress: () => ({ line: () => [], errLine: () => [], end: () => [] }),
     summary: () => '',
   };
 }

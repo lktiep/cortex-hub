@@ -2,8 +2,9 @@ import os from 'node:os';
 import { resolveCommand } from '../process.js';
 import { win32QuotedLength } from '../prompt.js';
 import { agyModelScope, parseResetsIn } from './quota.js';
+import { ITEM_MAX, item } from './common.js';
 import { runCli } from './run.js';
-import type { Classification, EngineAdapter, RunInput, RunOutput } from './types.js';
+import type { Classification, EngineAdapter, ProgressItem, ProgressReader, RunInput, RunOutput } from './types.js';
 
 const MODEL_ID = /^[a-z0-9][a-z0-9.-]*-(low|medium|high)$|^[a-z0-9][a-z0-9.-]*$/;
 const MODELS_TIMEOUT_MS = 60_000;
@@ -49,6 +50,73 @@ function findResult(stdout: string): AgyResult | undefined {
   if (found) return found;
   const whole = parseJson(stdout.trim());
   return isRecord(whole) && typeof whole.status === 'string' ? whole : undefined;
+}
+
+/** A tool step's name and what it works on: the command line, the file, or its first string. */
+function toolLabel(step: Record<string, unknown>): string {
+  const name = typeof step.tool_name === 'string' ? step.tool_name : 'tool';
+  const params = isRecord(step.tool_info) && isRecord(step.tool_info.parameters) ? step.tool_info.parameters : {};
+  const pick = [params.CommandLine, params.AbsolutePath, ...Object.values(params)].find(
+    (v): v is string => typeof v === 'string' && v.trim() !== '',
+  );
+  return pick === undefined ? name : `${name}: ${pick}`;
+}
+
+/**
+ * A reader for one run. agy streams a response as fragments (`text_delta`) of numbered steps,
+ * so it joins each step's fragments and hands on whole lines, the rest when the step is done.
+ * A tool step is named once, when it starts, and again if it fails.
+ */
+function agyReader(): ProgressReader {
+  const pending = new Map<number, string>();
+  const named = new Set<number>();
+  const flush = (index: number): ProgressItem[] => {
+    const rest = pending.get(index) ?? '';
+    pending.delete(index);
+    return item('text', rest);
+  };
+  return {
+    line(raw) {
+      const obj = parseJson(raw.trim());
+      if (!isRecord(obj)) return [];
+      if (obj.event === 'init') {
+        const model = isRecord(obj.init) ? obj.init.model : undefined;
+        return item('info', typeof model === 'string' ? `agy started (${model})` : 'agy started');
+      }
+      if (obj.event === 'result') {
+        const result = isRecord(obj.result) ? obj.result : {};
+        return result.status === 'ERROR' && typeof result.error === 'string' ? item('error', result.error) : [];
+      }
+      if (obj.event !== 'step_update' || !isRecord(obj.step_update)) return [];
+      const step = obj.step_update;
+      const index = typeof step.step_index === 'number' ? step.step_index : -1;
+      if (step.step_type === 'tool') {
+        const label = toolLabel(step);
+        if (step.state === 'ERROR') {
+          named.add(index);
+          const error = isRecord(step.tool_info) && isRecord(step.tool_info.error) ? step.tool_info.error : {};
+          return item('error', typeof error.message === 'string' ? `${label} failed: ${error.message}` : `${label} failed`);
+        }
+        if (named.has(index)) return [];
+        named.add(index);
+        return item('tool', label);
+      }
+      const out: ProgressItem[] = [];
+      if (typeof step.text_delta === 'string') {
+        const lines = ((pending.get(index) ?? '') + step.text_delta).split('\n');
+        const rest = lines.pop() ?? '';
+        for (const line of lines) out.push(...item('text', line));
+        pending.set(index, rest);
+        if (rest.length >= ITEM_MAX) out.push(...flush(index));
+      }
+      if (step.state === 'DONE' || step.state === 'ERROR') out.push(...flush(index));
+      return out;
+    },
+    errLine: (raw) => item('log', raw),
+    end() {
+      return [...pending.keys()].flatMap(flush);
+    },
+  };
 }
 
 function findAgyError(stderr: string): Record<string, unknown> | undefined {
@@ -197,19 +265,7 @@ export function createAgyAdapter(
       return { kind: 'error', message };
     },
 
-    progressText(line) {
-      const obj = parseJson(line.trim());
-      if (!isRecord(obj)) return null;
-      if (obj.event === 'init') {
-        const model = isRecord(obj.init) ? obj.init.model : undefined;
-        return typeof model === 'string' ? `agy started (${model})` : 'agy started';
-      }
-      if (obj.event === 'step_update' && isRecord(obj.step_update)) {
-        const delta = obj.step_update.text_delta;
-        if (typeof delta === 'string' && delta.trim() !== '') return delta.trim();
-      }
-      return null;
-    },
+    progress: agyReader,
 
     summary(stdout) {
       const response = findResult(stdout)?.response;

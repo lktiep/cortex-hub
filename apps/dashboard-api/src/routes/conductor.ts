@@ -362,6 +362,25 @@ conductorRouter.get('/:id/tree', (c) => {
   }
 })
 
+// ── A task's log, for a live view: the rows after `after` (by id), oldest first ──
+// Without `after`, the newest LOGS_PAGE rows. `now` is the hub's clock, for "N min ago".
+const LOGS_PAGE = 200
+conductorRouter.get('/:id/logs', (c) => {
+  try {
+    const id = c.req.param('id')
+    if (!getTask(id)) return c.json({ error: 'Task not found' }, 404)
+    const afterParam = c.req.query('after')
+    const after = afterParam !== undefined && /^\d{1,15}$/.test(afterParam) ? Number(afterParam) : null
+    type LogRow = { id: number; task_id: string; agent_id: string | null; action: string; message: string | null; created_at: string }
+    const logs = after === null
+      ? (db.prepare('SELECT * FROM conductor_task_logs WHERE task_id = ? ORDER BY id DESC LIMIT ?').all(id, LOGS_PAGE) as LogRow[]).reverse()
+      : db.prepare('SELECT * FROM conductor_task_logs WHERE task_id = ? AND id > ? ORDER BY id ASC LIMIT ?').all(id, after, LOGS_PAGE) as LogRow[]
+    return c.json({ logs, now: new Date().toISOString() })
+  } catch (error) {
+    return c.json({ error: String(error) }, 500)
+  }
+})
+
 // ── Get single task ──
 conductorRouter.get('/:id', (c) => {
   try {

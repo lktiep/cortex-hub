@@ -305,7 +305,7 @@ export function TaskDetail({
 
           {/* Live Output */}
           <Section title={isRunning ? '● Live Output' : 'Output Log'} defaultOpen={isRunning}>
-            <LiveOutput taskId={task.id} isActive={isRunning} />
+            <LiveOutput key={task.id} taskId={task.id} isActive={isRunning} />
           </Section>
         </div>
 

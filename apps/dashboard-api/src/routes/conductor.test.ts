@@ -421,3 +421,53 @@ describe('context.decisions JSON storage and retrieval', () => {
     expect(ctx.decisions['finding-no-reason'].status).toBe('approved')
   })
 })
+
+describe('GET /api/conductor/:id/logs', () => {
+  type LogsBody = { logs: Array<{ id: number; action: string; message: string | null }>; now: string }
+
+  function addLogs(taskId: string, count: number) {
+    const insert = testDb.prepare("INSERT INTO conductor_task_logs (task_id, agent_id, action, message) VALUES (?, 'w1', 'progress', ?)")
+    for (let i = 0; i < count; i++) insert.run(taskId, `line ${i}`)
+  }
+
+  it('returns the newest 200 rows, oldest first, and the hub clock', async () => {
+    const taskId = insertTask({ status: 'in_progress' })
+    addLogs(taskId, 205)
+
+    const res = await app.request(`/api/conductor/${taskId}/logs`)
+
+    expect(res.status).toBe(200)
+    const json = await res.json() as LogsBody
+    expect(json.logs).toHaveLength(200)
+    expect(json.logs[0]?.message).toBe('line 5')
+    expect(json.logs[199]?.message).toBe('line 204')
+    expect(Number.isNaN(Date.parse(json.now))).toBe(false)
+  })
+
+  it('with after, returns only the newer rows', async () => {
+    const taskId = insertTask({ status: 'in_progress' })
+    addLogs(taskId, 3)
+    const first = await (await app.request(`/api/conductor/${taskId}/logs`)).json() as LogsBody
+    const last = first.logs[2]?.id ?? 0
+    addLogs(taskId, 2)
+
+    const json = await (await app.request(`/api/conductor/${taskId}/logs?after=${last}`)).json() as LogsBody
+
+    expect(json.logs.map((l) => l.message)).toEqual(['line 0', 'line 1'])
+    expect(json.logs[0]?.id).toBeGreaterThan(last)
+  })
+
+  it('ignores a malformed after', async () => {
+    const taskId = insertTask({ status: 'in_progress' })
+    addLogs(taskId, 2)
+
+    const json = await (await app.request(`/api/conductor/${taskId}/logs?after=1%20OR%201`)).json() as LogsBody
+
+    expect(json.logs).toHaveLength(2)
+  })
+
+  it('returns 404 for a task that does not exist', async () => {
+    const res = await app.request('/api/conductor/task_nonexistent/logs')
+    expect(res.status).toBe(404)
+  })
+})
