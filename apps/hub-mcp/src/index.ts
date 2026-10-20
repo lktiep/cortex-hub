@@ -1,14 +1,18 @@
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 
-import { allowedToolNames, MCP_TOOL_PERMISSIONS, toolNameForPermission } from '@cortex/shared-types'
+import { allowedToolNames, MCP_TOOL_PERMISSIONS, publicOrigin, toolNameForPermission } from '@cortex/shared-types'
 import { registerAllTools } from './tools/index.js'
+import { createPlan, treePlan } from './tools/conductor-lead.js'
 import { validateApiKey, invalidateTokenCache } from './middleware/auth.js'
 import { telemetryStorage } from './api-call.js'
 import { appendHintBlocks, canAppendHints } from './hint-blocks.js'
+import { claimTreeUpload, MAX_TREE_UPLOAD_BYTES, releaseTreeUpload } from './tree-upload.js'
 import type { Env } from './types.js'
 
 
@@ -35,7 +39,8 @@ app.use('*', async (c, next) => {
 // MCP server requires open CORS — agents connect from any IDE/origin
 // Security is enforced via API key auth, not CORS
 app.use('*', cors())
-app.use('*', logger())
+// An upload link is a credential until it is used: keep it out of the access log
+app.use('*', logger((line, ...rest) => console.log(line.replace(/\/tree-upload\/[^\s/?]+/g, '/tree-upload/<token>'), ...rest)))
 
 // Global error handler — return JSON instead of text/plain
 app.onError((err, c) => {
@@ -245,6 +250,8 @@ app.all('/mcp', async (c) => {
     if (authResult.permissions) {
       permissions = authResult.permissions
     }
+    // Links a tool hands out point back at the address this agent reached us on
+    envWithOwner.PUBLIC_ORIGIN = publicOrigin((name) => c.req.header(name)) ?? new URL(c.req.url).origin
   } catch (err) {
     return c.json({
       jsonrpc: '2.0',
@@ -419,6 +426,43 @@ app.all('/mcp', async (c) => {
   }
 })
 
+// ─── Plan upload: the file behind cortex_task_tree_create(upload: true) ─────
+// No API key here: the one-time token from the tool call is the credential, and the tree is
+// created as the agent that asked for it (see tree-upload.ts). Answers are plain text, the
+// same lines the tool would have returned, so curl prints them as they are.
+const PLAN_TOO_BIG = `The file is over ${MAX_TREE_UPLOAD_BYTES / 1024 / 1024} MiB. Split the plan: create the first part, then upload the rest with parentId set to one of its tasks.`
 
+app.post('/tree-upload/:token', bodyLimit({ maxSize: MAX_TREE_UPLOAD_BYTES, onError: (c) => c.text(PLAN_TOO_BIG, 413) }), async (c) => {
+  const token = c.req.param('token')
+  const claim = claimTreeUpload(token)
+  if (!claim.ok) return c.text(claim.error, claim.status)
+
+  let created = false
+  try {
+    let raw: unknown
+    try {
+      raw = JSON.parse(await c.req.text())
+    } catch (err) {
+      if (err instanceof Error && err.name === 'BodyLimitError') return c.text(PLAN_TOO_BIG, 413)
+      return c.text(`The file is not valid JSON: ${err instanceof Error ? err.message : String(err)}`, 400)
+    }
+
+    const parsed = treePlan.safeParse(raw)
+    if (!parsed.success) {
+      const issues = parsed.error.issues.slice(0, 10).map((i) => `- ${i.path.join('.') || '(file)'}: ${i.message}`)
+      return c.text(['The file does not match the plan schema:', ...issues].join('\n'), 400)
+    }
+
+    const result = await createPlan({ ...c.env, API_KEY_OWNER: claim.owner }, parsed.data)
+    created = result.ok
+    // A 5xx is the hub failing, not this gateway: report it as a bad gateway
+    const status = (result.ok ? 201 : result.status >= 500 ? 502 : result.status) as ContentfulStatusCode
+    return c.text(result.text, status)
+  } catch (err) {
+    return c.text(`Plan creation failed: ${err instanceof Error ? err.message : String(err)}`, 502)
+  } finally {
+    releaseTreeUpload(token, created)
+  }
+})
 
 export default app

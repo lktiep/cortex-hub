@@ -20,5 +20,8 @@ export interface Env {
   // Resolved at runtime from API key during auth
   // This is the authoritative identity of the caller (api_keys.name)
   API_KEY_OWNER?: string
+
+  // Resolved per request: the origin the caller dialled, for links a tool hands out
+  PUBLIC_ORIGIN?: string
 }
 

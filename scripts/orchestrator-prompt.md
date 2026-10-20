@@ -27,6 +27,13 @@ that root's key as its `parentKey`. Without the root, the dashboard shows N one-
 | `reviewRequired`, `approver` | Review defaults to true. A gate's `approver` is `user` or `lead` and defaults to `user` when omitted, so set `approver: 'lead'` on gates you will close yourself |
 | `context.testCommand`, `context.allowEmpty`, `context.estimate` | Test command to run, allow a change-free result, estimate as a positive number of days (default 1) |
 
+**Big plans.** More than about 15 tasks, or long descriptions, do not fit in one tool call. Do not
+split them into batches. Write the whole plan to a JSON file (`{"parentId"?, "projectId"?, "tasks": [...]}`,
+the same fields), call `cortex_task_tree_create({upload: true})`, and run the curl command it
+returns (`curl.exe` in Windows PowerShell). The command imports the file in one request and prints
+each key → id. The link works for one plan for 15 minutes. A rejected file does not use it up: fix
+the file and run the same command again.
+
 ## 4. Routing
 - Pick only executor and model pairs that `cortex_agents` lists.
 - Leave `executor` null when any engine will do.
