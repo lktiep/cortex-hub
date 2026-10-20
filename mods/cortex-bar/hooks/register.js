@@ -5,7 +5,10 @@
 // rows into elements.
 
 import {
+  ALWAYS_JUDGED,
+  CORTEX_TOOL,
   LOOKUP_TOOLS,
+  LOOKUP_WINDOW,
   MARKERS,
   addCall,
   applyUse,
@@ -18,6 +21,7 @@ import {
   fitRow,
   groupTag,
   hitPaths,
+  inProject,
   newLookup,
   paneModel,
   qualityOf,
@@ -27,6 +31,7 @@ import {
   textProps,
   withSizes,
 } from './model.js'
+import { countTool, emptyLookupCounts, lookupKindOf } from './lookups.js'
 
 const STATE_DIR = '.cortex/.session-state'
 const PANE_ID = 'cortex-calls'
@@ -34,13 +39,8 @@ const RECENT_LIMIT = 50
 const REFRESH_DELAY_MS = 400
 /** How many finished calls keep their time for their tags. */
 const TIMED_LIMIT = 200
-const CORTEX_TOOL = /^mcp__.+__cortex_/
-/** How many of the newest lookups a file the agent opens can still count for. */
-const LOOKUP_WINDOW = 3
 /** How many lookups are kept for their tags. */
 const LOOKUP_LIMIT = 500
-/** Lookups judged even when their result names no file: an empty one is a miss too. */
-const ALWAYS_JUDGED = ['code_search', 'code_context']
 /**
  * The surfaces that raise no AbovePrompt (Claude Code for VS Code, which Antigravity and
  * Cursor run too, and the mobile app): there the newest cortex row carries the band.
@@ -57,6 +57,7 @@ const TRANSCRIPT_INDENT = 6
  * @typedef {import('./model.js').Verdict} Verdict
  * @typedef {import('./model.js').Lookup} Lookup
  * @typedef {import('./model.js').Use} Use
+ * @typedef {import('./lookups.js').LookupCounts} LookupCounts
  */
 
 // Module state lives as long as this load: a hot reload or a new session starts it over.
@@ -86,10 +87,13 @@ let root = ''
  */
 const lookups = new Map()
 let epoch = 0
+/** Cortex code lookups against the native searches, by kind. */
+let counts = emptyLookupCounts()
 
 function resetCalls() {
   stats = emptyStats()
   recent = []
+  counts = emptyLookupCounts()
   for (const [id, lookup] of lookups) lookups.set(id, closeLookup(lookup))
   epoch += 1
 }
@@ -233,15 +237,6 @@ function noteUse($, use) {
 }
 
 /**
- * A path the way the hits name it: relative to the project root, or undefined outside it.
- * @param {string} path
- */
-function inProject(path) {
-  if (!path.startsWith('/')) return path.replace(/^\.\//, '')
-  return root !== '' && path.startsWith(root + '/') ? path.slice(root.length + 1) : undefined
-}
-
-/**
  * @param {Engine} $
  * @param {Running} started
  * @param {Verdict} verdict
@@ -295,7 +290,7 @@ async function openCalls($) {
     closeOnEscape: true,
   })
   if (opened.isPlaced) return {}
-  const rows = paneModel({ stats, recent, inFlight, lookups: currentLookups() })
+  const rows = paneModel({ stats, recent, inFlight, lookups: currentLookups(), counts })
   return { text: rows.map((row) => row.map((span) => span.text).join('')).join('\n') }
 }
 
@@ -317,6 +312,7 @@ function bandBelow(e, toolUseIds) {
     inFlight,
     markers,
     lookups: currentLookups(),
+    counts,
     columns,
     maxRows: 4,
   })
@@ -441,12 +437,31 @@ export function register(on) {
       } else {
         const path = e.tool === 'NotebookEdit' ? e.notebook_path : e.file_path
         // Only a file read or edited counts against a lookup; a new file is not a miss.
-        const stray = e.tool === 'Read' || e.tool === 'Edit' ? inProject(path) : undefined
+        const stray = e.tool === 'Read' || e.tool === 'Edit' ? inProject(path, root) : undefined
         noteUse($, stray === undefined ? { path } : { path, stray })
       }
       return result
     },
   )
+
+  // Every tool, to weigh the cortex code lookups against the searches that ran instead: a
+  // grep, a find, a Grep or a Glob gets its kind, any other call moves the fallback window
+  // of its loop. A denied call ran nothing and is left out.
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    if (result.deny !== undefined) return result
+    try {
+      const cortex = CORTEX_TOOL.test(e.tool) && LOOKUP_TOOLS.includes(shortName(e.tool))
+      /** @type {Record<string, unknown>} */
+      const input = { ...e }
+      const kind = cortex ? null : lookupKindOf(e.tool, input, root)
+      counts = countTool(counts, { agent: e.agentId ?? '', cortex, kind })
+      if (kind !== null) $.ui.invalidate('ui.render')
+    } catch {
+      // A command the classifier cannot read is not counted.
+    }
+    return result
+  })
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
@@ -465,6 +480,7 @@ export function register(on) {
       columns: e.props.bodyColumns,
       maxRows: e.props.maxRows,
       lookups: currentLookups(),
+      counts,
     })
     if (rows.length === 0) return below
     const { Box, Text } = $.ui.resolve(e)
@@ -524,12 +540,12 @@ export function register(on) {
     const columns = Math.max(20, e.props.bodyColumns - 2)
     const current = currentLookups()
     const summary = NO_BAND.includes(e.surface)
-      ? bandModel({ stats, recent, inFlight, markers, columns, maxRows: 2 })
+      ? bandModel({ stats, recent, inFlight, markers, counts, columns, maxRows: 2 })
       : []
     /** @type {Row[]} */
     const rows = [
       ...(summary.length > 1 ? [...summary, [{ text: ' ' }]] : []),
-      ...paneModel({ stats, recent, inFlight, lookups: current, columns }),
+      ...paneModel({ stats, recent, inFlight, lookups: current, counts, columns }),
     ]
     return Box({
       flexDirection: 'column',

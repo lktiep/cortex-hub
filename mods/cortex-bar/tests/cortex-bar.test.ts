@@ -19,6 +19,17 @@ import {
   summarizeArgs,
   withSizes,
 } from '../hooks/model.js'
+import {
+  bashLookupKind,
+  countTool,
+  emptyLookupCounts,
+  formatShare,
+  lookupKindOf,
+  lookupShare,
+  patternKind,
+  shellCommands,
+} from '../hooks/lookups.js'
+import { addCounts, addRecord, emptyTranscript, replay } from '../scripts/replay.js'
 
 const ROOT = '/work'
 const STATE = ROOT + '/.cortex/.session-state'
@@ -81,6 +92,8 @@ type World = {
   outputs?: Record<string, string>
   /** Sizes in bytes of the files in the project, by absolute path. */
   files?: Record<string, number>
+  /** Tools a hook refuses, by full name. */
+  deny?: string[]
 }
 
 /** A code_search answer in the hub's own shape. */
@@ -114,7 +127,10 @@ const KNOWLEDGE = [
  * What lies beneath the plugin: a session at /work, the hooks' markers, the hub. `ids`
  * collects the tool_use_id of each cortex call, in the order they reached the hub.
  */
-function world(on: On, { markers = null, slow = {}, outputs = {}, files = {} }: World = {}) {
+function world(
+  on: On,
+  { markers = null, slow = {}, outputs = {}, files = {}, deny = [] }: World = {},
+) {
   const clock = mock.clock(on, { now: 1_000 })
   const ids: string[] = []
   mock.store(on)
@@ -141,6 +157,7 @@ function world(on: On, { markers = null, slow = {}, outputs = {}, files = {} }: 
   })
   on('tool.call', async (_$, e) => {
     ids.push(e.tool_use_id)
+    if (deny.includes(e.tool)) return { deny: 'blocked' }
     const name = shortName(e.tool)
     const delay = slow[name]
     if (delay) await clock.sleep(delay)
@@ -150,6 +167,11 @@ function world(on: On, { markers = null, slow = {}, outputs = {}, files = {} }: 
     return { result: 'ok' }
   })
   return { clock, ids }
+}
+
+/** A Grep or a Glob: this build's tool types leave both out, other builds and transcripts have them. */
+function nativeSearch(tool: 'Grep' | 'Glob', pattern: string) {
+  return { tool, pattern } as unknown as { tool: 'Bash'; command: string }
 }
 
 async function texts(ui: { findAll: (q: { type: string }) => Promise<{ text: string }[]> }) {
@@ -798,5 +820,206 @@ describe('narrow', () => {
     expect(shown.some((text) => text.startsWith(' session'))).toBe(false)
     expect(shown).toContain(' recall  ')
     await ui.unmount()
+  })
+})
+
+describe('lookups', () => {
+  test('a shell line splits into commands the way the shell reads it', async () => {
+    const argv = (line: string) => shellCommands(line).map((c) => c.argv)
+    expect(argv(`rg 'a b' "c\\"d" e\\ f`)).toEqual([['rg', 'a b', 'c"d', 'e f']])
+    expect(argv('a 2>&1 | b >out c; d && e || f & g')).toEqual([
+      ['a'],
+      ['b', 'c'],
+      ['d'],
+      ['e'],
+      ['f'],
+      ['g'],
+    ])
+    expect(shellCommands('a | b |& c; d').map((c) => c.piped)).toEqual([false, true, true, false])
+    expect(argv('echo $(rg x) <(find .)')).toEqual([['echo'], ['rg', 'x'], ['find', '.']])
+    expect(argv('cat <<EOF\nrg fooBar\nEOF\nls # rg x')).toEqual([['cat'], ['ls']])
+    expect(argv('cat <<-EOF\n\tbody\n\tEOF\nls')).toEqual([['cat'], ['ls']])
+    expect(argv('rg "unterminated')).toEqual([])
+  })
+
+  test('a pattern reads as a symbol, a word or a literal', async () => {
+    expect(patternKind('buildHybridQuery')).toBe('symbol')
+    expect(patternKind('HybridSearch')).toBe('symbol')
+    expect(patternKind('session_start')).toBe('symbol')
+    expect(patternKind('\\bverifyKey\\b')).toBe('symbol')
+    expect(patternKind('verify\\|hashKey')).toBe('symbol')
+    expect(patternKind('(fooBar|baz)')).toBe('symbol')
+    expect(patternKind('verify')).toBe('word')
+    expect(patternKind('verify.*key')).toBe('word')
+    expect(patternKind('CORTEX_API_KEY')).toBe('literal')
+    expect(patternKind('not found')).toBe('literal')
+    expect(patternKind('key=')).toBe('literal')
+    expect(patternKind('')).toBe('literal')
+  })
+
+  test('each native search gets its kind, a piped grep none', async () => {
+    const kind = (line: string) => bashLookupKind(line, ROOT)
+    expect(kind('rg -n buildHybridQuery apps/')).toBe('symbol')
+    expect(kind('cd /work && rg -e fooBar -e baz -g "*.ts" .')).toBe('symbol')
+    expect(kind('git -C /work grep -n verifyKey')).toBe('symbol')
+    expect(kind('FOO=1 command rg -i verify 2>/dev/null')).toBe('word')
+    expect(kind('if rg -q CORTEX_API_KEY; then echo; fi')).toBe('literal')
+    expect(kind('rg fooBar apps/api/src/auth.ts')).toBe('in-file')
+    expect(kind('rg fooBar /work/apps/a.ts /work/apps/b.ts')).toBe('in-file')
+    expect(kind('rg fooBar /tmp/run.log')).toBe('non-code')
+    expect(kind('rg fooBar /etc ../other')).toBe('non-code')
+    expect(kind('rg fooBar node_modules/x')).toBe('non-code')
+    expect(kind('find . -name "*.ts"')).toBe('find-file')
+    expect(kind('git ls-files apps')).toBe('find-file')
+    expect(kind('rg --files | grep auth')).toBe('find-file')
+    expect(kind('git diff | grep fooBar')).toBe(null)
+    expect(kind('ls && cat x.ts')).toBe(null)
+  })
+
+  test('Grep and Glob calls get their kind too', async () => {
+    expect(lookupKindOf('Grep', { pattern: 'verifyKey' }, ROOT)).toBe('symbol')
+    expect(lookupKindOf('Grep', { pattern: 'verifyKey', path: '/work/apps' }, ROOT)).toBe('symbol')
+    expect(lookupKindOf('Grep', { pattern: 'verifyKey', path: 'apps/a.ts' }, ROOT)).toBe('in-file')
+    expect(lookupKindOf('Grep', { pattern: 'x', path: '/private/tmp/y' }, ROOT)).toBe('non-code')
+    expect(lookupKindOf('Glob', { pattern: '**/*.ts' }, ROOT)).toBe('find-file')
+    expect(lookupKindOf('Bash', { command: 'rg verify' }, ROOT)).toBe('word')
+    expect(lookupKindOf('Read', { file_path: '/work/a.ts' }, ROOT)).toBe(null)
+  })
+
+  test('the share counts what cortex could answer, a grep right after it is a fallback', async () => {
+    let counts = emptyLookupCounts()
+    expect(lookupShare(counts).share).toBe(null)
+    counts = countTool(counts, { kind: 'symbol' })
+    counts = countTool(counts, { kind: 'literal' })
+    counts = countTool(counts, { cortex: true })
+    counts = countTool(counts, { kind: null })
+    counts = countTool(counts, { kind: 'word' })
+    counts = countTool(counts, { kind: 'find-file' })
+    counts = countTool(counts, { kind: 'symbol' })
+    expect(counts.native).toEqual({ symbol: 2, literal: 1, word: 1, 'find-file': 1 })
+    expect(counts.fallback).toBe(1)
+    expect(lookupShare(counts)).toEqual({ cortex: 1, addressable: 3, share: 0.25 })
+    expect(formatShare(0.25)).toBe('25%')
+    expect(formatShare(0.004)).toBe('<1%')
+    expect(formatShare(0)).toBe('0%')
+  })
+
+  test('each loop keeps its own fallback window', async () => {
+    let counts = emptyLookupCounts()
+    counts = countTool(counts, { agent: 'a1', cortex: true })
+    counts = countTool(counts, { kind: 'symbol' })
+    counts = countTool(counts, { agent: 'a2', kind: 'word' })
+    counts = countTool(counts, { agent: 'a1', kind: 'word' })
+    expect(counts.fallback).toBe(1)
+    const same = countTool(counts, { agent: 'a2', kind: null })
+    expect(same).toBe(counts)
+  })
+
+  test('the band weighs cortex lookups against the greps it could have answered', async ($, on) => {
+    world(on, { outputs: { code_search: SEARCH }, deny: ['Grep'] })
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT })
+    await $.tool.call({ tool: CORTEX('session_start'), repo: 'cortex-hub' })
+    await $.tool.call({ tool: 'Bash', command: 'rg -n verifyKey apps/' })
+    await $.tool.call({ tool: 'Bash', command: 'rg CORTEX_API_KEY' })
+    await $.tool.call({ tool: CORTEX('code_search'), query: 'api keys' })
+    await $.tool.call({ tool: 'Bash', command: 'git diff | grep hashKey' })
+    await $.tool.call({ tool: 'Bash', command: 'rg hashKey apps/' })
+    await $.tool.call(nativeSearch('Grep', 'verifyKey'))
+
+    const ui = await $.ui.mount({ plugin: 'cortex-bar', surface: 'terminal', ...BAND })
+    const shown = await texts(ui)
+    expect(shown).toContain('lookups ')
+    expect(shown).toContain('cortex 1 · grep 2 · ')
+    expect(shown).toContain('33%')
+    expect(shown).toContain(' · 1 fallback')
+    await ui.unmount()
+  })
+
+  test('the pane lists the searches by kind until a new session starts them over', async ($, on) => {
+    world(on)
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: ROOT })
+    await $.tool.call({ tool: 'Bash', command: 'rg -n verifyKey apps/' })
+    await $.tool.call({ tool: 'Bash', command: 'find . -name "*.ts"' })
+    await $.tool.call(nativeSearch('Glob', '**/*.md'))
+
+    const before = await $.ui.mount({ plugin: 'cortex-bar', surface: 'terminal', ...PANE })
+    const shown = await texts(before)
+    expect(shown).toContain('Nothing yet. Run /cs to start a cortex session.')
+    expect(shown).toContain('Lookups')
+    expect(shown).toContain(' estimate · cortex 0% of what it could answer')
+    expect(shown).toContain('  symbol            ')
+    expect(shown).toContain('  code_context could answer')
+    expect(shown).toContain('  file by name      ')
+    expect(shown).toContain('     2')
+    await before.unmount()
+
+    await $.tool.call({ tool: CORTEX('session_start'), repo: 'cortex-hub' })
+    const after = await $.ui.mount({ plugin: 'cortex-bar', surface: 'terminal', ...PANE })
+    expect(await texts(after)).not.toContain('Lookups')
+    await after.unmount()
+  })
+})
+
+describe('audit', () => {
+  type Step = [tool: string, input: Record<string, unknown>, result: string, isError?: boolean]
+
+  /** A transcript the way Claude Code writes one: each tool_use, then its result. */
+  function transcript(steps: Step[], before: object[] = []) {
+    const read = emptyTranscript()
+    addRecord(read, { type: 'user', cwd: ROOT, timestamp: '2026-10-21T01:02:03Z', message: { content: 'go' } })
+    for (const record of before) addRecord(read, record)
+    steps.forEach(([tool, input, text, isError], i) => {
+      const id = 'toolu_' + i
+      addRecord(read, { type: 'assistant', message: { content: [{ type: 'tool_use', id, name: tool, input }] } })
+      addRecord(read, {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text }], is_error: isError === true }],
+        },
+      })
+    })
+    return read
+  }
+
+  test('a past session counts the way the hooks would have', async () => {
+    const offered = {
+      type: 'attachment',
+      attachment: { type: 'deferred_tools_delta', addedNames: [CORTEX('code_search'), CORTEX('memory_delete'), 'WebFetch'] },
+    }
+    const read = transcript(
+      [
+        [CORTEX('session_start'), { repo: 'cortex-hub' }, 'ok'],
+        [CORTEX('code_search'), { query: 'api keys' }, SEARCH],
+        ['Bash', { command: 'rg hashKey apps/' }, 'apps/api/src/hash.ts:40'],
+        ['Read', { file_path: '/work/apps/api/src/hash.ts' }, 'export function hashKey'],
+        ['Grep', { pattern: 'verifyKey' }, 'PreToolUse:Grep hook error: blocked', true],
+        [CORTEX('knowledge_search'), { query: 'api keys' }, 'No results'],
+        ['Bash', { command: 'rg -n verifyKey apps/' }, 'Exit code 1', true],
+      ],
+      [offered],
+    )
+    // A call the turn was interrupted in has no result.
+    addRecord(read, {
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 'cut', name: 'Bash', input: { command: 'rg cut' } }] },
+    })
+    const tools: Parameters<typeof replay>[1] = new Map()
+    const replayed = replay(read, tools)
+
+    expect(read.root).toBe(ROOT)
+    expect(read.started).toBe('2026-10-21T01:02:03Z')
+    expect([...read.offered]).toEqual(['code_search', 'memory_delete'])
+    expect(replayed).toMatchObject({ calls: 6, cortex: 3, denied: 1 })
+    expect(replayed.counts).toMatchObject({ cortex: 1, native: { symbol: 2 }, fallback: 1 })
+    expect(tools.get('code_search')).toMatchObject({ calls: 1, errors: 0, named: 1 })
+    expect(lookupMetrics(tools.get('code_search')?.lookups ?? [])).toMatchObject({ count: 1, used: 1, at1: 0, at3: 1 })
+    expect(tools.get('knowledge_search')).toMatchObject({ calls: 1, good: 0, judged: 1 })
+    expect(tools.has('memory_delete')).toBe(false)
+  })
+
+  test('transcripts add up, each loop with its own window', async () => {
+    const one = { cortex: 1, native: { symbol: 2 }, fallback: 1, since: { '': 1 } }
+    const two = { cortex: 0, native: { symbol: 1, literal: 3 }, fallback: 0, since: {} }
+    expect(addCounts(one, two)).toEqual({ cortex: 1, native: { symbol: 3, literal: 3 }, fallback: 1, since: {} })
   })
 })

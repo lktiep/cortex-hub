@@ -2,13 +2,14 @@
 
 A Claude Code mod that draws this session's Cortex Hub tool calls above the prompt: a stacked
 bar with one color per category, the latest call, what the results cost and saved in tokens,
-how often the agent opened what a code lookup ranked, and where `/cs` stands. Each cortex
-tool row in the transcript gets a tag in its category's color.
+how often the agent opened what a code lookup ranked, how many of its code searches went to
+cortex rather than grep, and where `/cs` stands. Each cortex tool row in the transcript gets
+a tag in its category's color.
 
 ```
 ◆ cortex ████████████████████████████████████████ 9 calls · last plan_quality 1.3s ✓
 ■ session 2  ■ knowledge 1  ■ memory 1  ■ code 3  ■ quality 1  ■ tasks 1
-tokens ~3.3k in · ~9.8k saved est.  │ hit@1 1/3 · hit@3 2/3 · hit@10 2/3
+tokens ~3.3k in · ~9.8k saved est.  │ lookups cortex 3 · grep 9 · 25% · 1 fallback  │ hit@1 1/3 · …
 /cs ● session  ● recall  ● changes  ● tasks  │ ● build  ● typecheck  ○ lint  ○ report
 ```
 
@@ -71,13 +72,23 @@ Then start a new conversation in the extension (or the terminal).
 
 ```
 ◆ 10 cortex calls · 1 failed
-tokens ~3.3k in · ~9.8k saved est.  │ hit@1 1/3 · hit@3 2/3 · hit@10 2/3
+tokens ~3.3k in · ~9.8k saved est.  │ lookups cortex 3 · grep 9 · 25% · 1 fallback  │ hit@1 1/3 · …
 
 Per tool ──────────────────────────────────────────────────────────────────────────
   tool               calls   ok     avg    ~tok   saved  quality
 ■ knowledge_search       1    1   612ms    ~600       ·  1/1 found · last 2 found
 ■ code_search            2    2    1.3s   ~1.4k   ~9.8k  hit@1 0/2 · hit@3 1/2 · …
 ■ plan_quality           1    1    1.5s    ~225       ·  0/1 passed · last 7.5/10
+
+Lookups estimate · cortex 25% of what it could answer ──────────────────────────────
+  cortex                 3  code_search, code_context, code_impact, cypher
+  symbol                 5  code_context could answer
+  word or regex          4  code_search could answer
+  literal                2  rg is right
+  in known files         1  rg is right
+  file by name           1  find or Glob is right
+  not repo code          1  logs, tmp, other dirs
+  fallback               1  grep within 3 calls of a cortex lookup
 
 Calls newest first ────────────────────────────────────────────────────────────────
 17:55:33 ✗ ■ code_reindex          30s      ~0                              MCP error…
@@ -112,6 +123,27 @@ own `cortex_tool_stats` counts on the server, with its own baseline.
   the files the agent opened anyway. A missed lookup saved nothing. It is an **upper
   bound**: it assumes that without the lookup the agent would have read every one of those
   files. `cortex_tool_stats` uses a fixed per-tool baseline instead, so the two differ.
+- **Searches** (`lookups cortex 3 · grep 9 · 25%`) weigh the cortex code lookups against
+  the searches the agent ran itself: `rg`, `grep`, `git grep`, `find`, `fd` and the like in a
+  Bash command (not one fed by a pipe, which filters another command's output), and the Grep
+  and Glob tools. Each gets a kind from its pattern and where it looks:
+
+  | Kind           | What it is                                             | Counted as                |
+  | -------------- | ------------------------------------------------------ | ------------------------- |
+  | symbol         | an identifier like `verifyKey` or `HybridSearch`       | code_context could answer |
+  | word or regex  | any other pattern over the repo                        | code_search could answer  |
+  | literal        | an env var, a config key, a quoted string, a path      | rg is right               |
+  | in known files | any pattern in files named outright                    | rg is right               |
+  | file by name   | `find`, `fd`, `git ls-files`, `rg --files`, Glob       | find or Glob is right     |
+  | not repo code  | logs, temp folders, transcripts, `node_modules`, stdin | not counted against       |
+
+  `grep` in the band is the symbol and word searches, and the share is the cortex lookups
+  over those plus themselves: how much of what cortex could have answered went to it. A
+  **fallback** is one of those searches within three calls of a cortex lookup in the same
+  agent loop, which usually means the lookup did not answer. The kinds are an **estimate**:
+  they read the command, not what the agent meant, so a word search may well have been
+  better as a grep. A denied call ran nothing and is not counted.
+
 - **Quality** of other tools comes from their own output: the number of results and the top
   score of `knowledge_search`, the number of `memory_search` results, the `risk_level` of
   `detect_changes` (`unknown` is a failed lookup, not a pass), the score and verdict of
@@ -139,6 +171,8 @@ output in a shape the parsers do not know is left unjudged.
   the MCP server is called. A new `cortex_session_start` starts the counts over.
 - **Opened files** come from a `tool.call` hook on Read, Edit, Write, NotebookEdit and Bash,
   after the tool ran; a denied or failed call does not count.
+- **Searches** come from a `tool.call` hook on every tool: a search gets its kind, any other
+  call moves the fallback window of its agent loop. Subagents count in the same totals.
 - **The `/cs` checklist and the gates** come from the markers `.claude/hooks/` writes to
   `.cortex/.session-state/`, the same evidence the hooks gate on. A marker counts only when it
   holds the `tool=` line the tracker writes, so an empty or hand-made file stays `○`. The mod
@@ -150,6 +184,36 @@ The argument shown for a call is its first non-empty `query`, `name`, `target`, 
 `repo`, `taskId`, `plan` or `content`, cut to 48 characters. Fields whose name looks like a
 credential (`key`, `token`, `secret`, `password`, `authorization`) are never shown. Nothing is
 sent anywhere: the mod only reads what passes through this Claude Code session.
+
+## Past sessions
+
+The same measures, read back from Claude Code's transcripts of earlier sessions:
+
+```bash
+node mods/cortex-bar/scripts/lookup-audit.mjs                 # this directory's newest 5 sessions
+node mods/cortex-bar/scripts/lookup-audit.mjs --last 0        # all of them
+node mods/cortex-bar/scripts/lookup-audit.mjs ~/.claude/projects/<project-folder> session.jsonl
+```
+
+```
+started           agents  calls  cortex  code lookups  symbol  word  other  share  fallback
+2026-10-01 09:12       4   2442      69            12      49    45    454    11%         1
+2026-10-02 21:01       2   1375     119            21      24    22    294    31%         4
+all                    6   3817     188            33      73    67    748    19%         5
+
+cortex tool       calls  err  result ok  used  missed  unused  hit@1  hit@3  hit@10
+detect_changes       30    2      26/28     -       -       -      -      -       -
+code_search          20    1      18/19     9       5       5   6/14   9/14   10/14
+…
+
+Offered but never called (2 of 26): memory_delete, task_submit_strategy
+```
+
+Each session is the main transcript and its subagents', and each agent loop is replayed on
+its own, as the hooks see it live. Per cortex tool it adds the errors, how many results said
+something (`result ok`), and for the code lookups whether the agent opened what they named.
+`Offered but never called` lists the cortex tools the session had but never used. It prints
+counts only: no command, path, result or session id leaves the transcripts.
 
 ## Developing
 
@@ -167,7 +231,9 @@ hooks, plain JS with JSDoc types, typecheck strictly:
 node_modules/.bin/tsc -p mods/cortex-bar/tsconfig.json --allowJs --checkJs --noEmit
 ```
 
-`hooks/model.js` holds everything that decides what is drawn, as pure functions;
-`hooks/register.js` times calls, reads the markers and turns rows into elements. The tests
+`hooks/model.js` holds everything that decides what is drawn, as pure functions, and
+`hooks/lookups.js` how a search command reads; `hooks/register.js` times calls, reads the
+markers and turns rows into elements. `scripts/replay.js` runs a transcript through the same
+functions, and `scripts/lookup-audit.mjs` only reads files and prints. The tests
 mount every drawing on the surfaces that raise it: the band on `terminal` and `desktop`, the
 tool rows, folded groups and the pane on `vscode` as well.

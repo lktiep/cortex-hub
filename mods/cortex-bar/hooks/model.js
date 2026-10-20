@@ -2,6 +2,8 @@
 // can check the bar and the pane without mounting anything, and register.js stays a thin
 // layer that turns rows of spans into Box and Text elements.
 
+import { LOOKUP_KINDS, emptyLookupCounts, formatShare, lookupShare } from './lookups.js'
+
 /**
  * @typedef {{ text: string, color?: string, bold?: boolean, dim?: boolean, truncate?: boolean }} Span
  * @typedef {Span[]} Row
@@ -20,7 +22,8 @@
  * @typedef {'done' | 'partial' | 'todo'} StepState
  * @typedef {{ label: string, state: StepState }} Step
  * @typedef {{ steps: Step[], gates: Step[] | null, gateOff: boolean }} Progress
- * @typedef {{ stats: Stats, recent: Call[], inFlight: Running[], lookups?: Lookup[] }} Calls
+ * @typedef {import('./lookups.js').LookupCounts} LookupCounts
+ * @typedef {{ stats: Stats, recent: Call[], inFlight: Running[], lookups?: Lookup[], counts?: LookupCounts }} Calls
  */
 
 /**
@@ -233,6 +236,12 @@ export function qualityOf(name, text) {
 
 /** The tools that answer "where is it": what they return is judged by what gets opened. */
 export const LOOKUP_TOOLS = ['code_search', 'code_context', 'code_impact', 'cypher']
+/** Every cortex tool, whatever the MCP server is named: mcp__<server>__cortex_<name>. */
+export const CORTEX_TOOL = /^mcp__.+__cortex_/
+/** How many of the newest lookups a file the agent opens can still count for. */
+export const LOOKUP_WINDOW = 3
+/** Lookups judged even when their result names no file: an empty one is a miss too. */
+export const ALWAYS_JUDGED = ['code_search', 'code_context']
 /** How many results of a lookup count, as the retrieval benchmark counts them. */
 const HIT_LIMIT = 10
 /** One Read returns at most about this many tokens of a file, so a bigger file counts this. */
@@ -258,6 +267,16 @@ export function hitPaths(text, limit = HIT_LIMIT) {
     if (paths.length === limit) break
   }
   return paths
+}
+
+/**
+ * A path the way the hits name it: relative to the project root, or undefined outside it.
+ * @param {string} path
+ * @param {string} root
+ */
+export function inProject(path, root) {
+  if (!path.startsWith('/')) return path.replace(/^\.\//, '')
+  return root !== '' && path.startsWith(root + '/') ? path.slice(root.length + 1) : undefined
 }
 
 /**
@@ -602,17 +621,22 @@ function hitText({ used, missed, at1, at3, at10 }, gap = ' · ') {
 }
 
 /**
- * `tokens ~6.2k in · ~88k saved est.  │ hit@1 2/4 · …`: what the cortex results cost, what
- * the lookups saved, and how often the agent opened what they ranked first.
+ * `tokens ~6.2k in · ~88k saved est.  │ lookups cortex 4 · grep 117 · 3%  │ hit@1 2/4 · …`:
+ * what the cortex results cost, what the lookups saved, how much of the searching cortex
+ * could answer went to it, and how often the agent opened what the lookups ranked first.
  * @param {Stats} stats
  * @param {Lookup[]} lookups
+ * @param {LookupCounts} counts
  * @returns {Row}
  */
-function metricsSpans(stats, lookups) {
-  if (stats.tokens === 0 && lookups.length === 0) return []
+function metricsSpans(stats, lookups, counts) {
   const metrics = lookupMetrics(lookups)
+  const { cortex, addressable, share } = lookupShare(counts)
   /** @type {Row} */
-  const row = [{ text: 'tokens ', dim: true }, { text: '~' + formatTokens(stats.tokens) + ' in' }]
+  const row = []
+  if (stats.tokens > 0 || lookups.length > 0) {
+    row.push({ text: 'tokens ', dim: true }, { text: '~' + formatTokens(stats.tokens) + ' in' })
+  }
   if (metrics.measured > 0) {
     row.push(
       { text: ' · ' },
@@ -620,8 +644,20 @@ function metricsSpans(stats, lookups) {
       { text: ' est.', dim: true },
     )
   }
+  if (share !== null) {
+    if (row.length > 0) row.push({ text: '  │ ', dim: true })
+    row.push(
+      { text: 'lookups ', dim: true },
+      { text: 'cortex ' + cortex + ' · grep ' + addressable + ' · ' },
+      { text: formatShare(share), bold: true },
+    )
+    if (counts.fallback > 0) {
+      row.push({ text: ' · ' + counts.fallback + ' fallback', color: WAITING })
+    }
+  }
   if (metrics.used + metrics.missed > 0) {
-    row.push({ text: '  │ ', dim: true }, { text: hitText(metrics), truncate: true })
+    if (row.length > 0) row.push({ text: '  │ ', dim: true })
+    row.push({ text: hitText(metrics), truncate: true })
   }
   return row
 }
@@ -635,7 +671,16 @@ function metricsSpans(stats, lookups) {
  * @param {Calls & { markers: string[] | null, columns?: number, maxRows?: number }} input
  * @returns {Row[]}
  */
-export function bandModel({ stats, recent, inFlight, markers, lookups = [], columns, maxRows }) {
+export function bandModel({
+  stats,
+  recent,
+  inFlight,
+  markers,
+  lookups = [],
+  counts = emptyLookupCounts(),
+  columns,
+  maxRows,
+}) {
   /** @type {Span} */
   const title = { text: '◆ cortex ', color: TITLE_COLOR, bold: true }
   const progress = stepsFrom(stats.okNames, markers)
@@ -678,7 +723,7 @@ export function bandModel({ stats, recent, inFlight, markers, lookups = [], colu
     [checklistOf(stepSpans), checklistOf((items) => stepSpans(items, ' '))].find(fits) ??
     checklistOf(compactSteps)
 
-  const metrics = metricsSpans(stats, lookups)
+  const metrics = metricsSpans(stats, lookups, counts)
   const limit = maxRows ?? 3
   const showMetrics = metrics.length > 0 && limit >= 3
   if (legend.length > 0 && limit >= (showMetrics ? 4 : 3)) rows.push(legend)
@@ -879,6 +924,45 @@ function toolTable(stats, lookups, columns) {
 }
 
 /**
+ * The native searches by kind, under the cortex lookups they compete with: which kinds a
+ * cortex lookup could have answered and which are rg's or find's job. A kind is read off
+ * the command alone, so the section says it is an estimate.
+ * @param {LookupCounts} counts
+ * @param {number} columns
+ * @returns {Row[]}
+ */
+function lookupTable(counts, columns) {
+  const { share } = lookupShare(counts)
+  if (share === null && Object.keys(counts.native).length === 0) return []
+  const note = share === null ? 'estimate' : 'estimate · cortex ' + formatShare(share) + ' of what it could answer'
+  /**
+   * @param {string} label
+   * @param {number} count
+   * @param {Span} hint
+   * @returns {Row}
+   */
+  const line = (label, count, hint) => [
+    { text: '  ' + cell(label, NAME_WIDTH) },
+    { text: String(count).padStart(TABLE[0]?.width ?? 6) },
+    { ...hint, text: '  ' + hint.text, truncate: true },
+  ]
+  /** @type {Row[]} */
+  const rows = [section('Lookups', columns, note)]
+  rows.push(line('cortex', counts.cortex, { text: LOOKUP_TOOLS.join(', '), dim: true }))
+  for (const kind of LOOKUP_KINDS) {
+    const count = counts.native[kind.id] ?? 0
+    if (count === 0) continue
+    const hint = kind.addressable ? { text: kind.answer, color: WAITING } : { text: kind.answer, dim: true }
+    rows.push(line(kind.label, count, hint))
+  }
+  if (counts.fallback > 0) {
+    const hint = { text: 'grep within 3 calls of a cortex lookup', color: WAITING }
+    rows.push(line('fallback', counts.fallback, hint))
+  }
+  return rows
+}
+
+/**
  * Spans padded with spaces to `width` cells, so the column after them lines up.
  * @param {Span[]} spans
  * @param {number} width
@@ -890,13 +974,21 @@ function padded(spans, width) {
 }
 
 /**
- * The /cortex-calls pane: the totals and measures, a row per tool, then the calls:
- * running ones first, then the recent ones, newest first. Every column has a fixed width
- * and only the last one in a row is cut to fit.
+ * The /cortex-calls pane: the totals and measures, a row per tool, the searches by kind,
+ * then the calls: running ones first, then the recent ones, newest first. Every column
+ * has a fixed width and only the last one in a row is cut to fit.
  * @param {Calls & { limit?: number, columns?: number }} input
  * @returns {Row[]}
  */
-export function paneModel({ stats, recent, inFlight, lookups = [], limit = 40, columns = 80 }) {
+export function paneModel({
+  stats,
+  recent,
+  inFlight,
+  lookups = [],
+  counts = emptyLookupCounts(),
+  limit = 40,
+  columns = 80,
+}) {
   /** @type {Row} */
   const header = [
     { text: '◆ ', color: TITLE_COLOR, bold: true },
@@ -905,15 +997,18 @@ export function paneModel({ stats, recent, inFlight, lookups = [], limit = 40, c
   if (stats.errors > 0) header.push({ text: ' · ' + stats.errors + ' failed', color: FAILED })
   const rows = [header]
 
+  const searches = lookupTable(counts, columns)
   if (stats.total === 0 && inFlight.length === 0) {
     rows.push([{ text: 'Nothing yet. Run /cs to start a cortex session.', dim: true }])
+    if (searches.length > 0) rows.push([{ text: ' ' }], ...searches)
     return rows
   }
 
-  const metrics = metricsSpans(stats, lookups)
+  const metrics = metricsSpans(stats, lookups, counts)
   if (metrics.length > 0) rows.push(metrics)
   const table = toolTable(stats, lookups, columns)
   if (table.length > 0) rows.push([{ text: ' ' }], ...table)
+  if (searches.length > 0) rows.push([{ text: ' ' }], ...searches)
   rows.push([{ text: ' ' }], section('Calls', columns, 'newest first'))
 
   const byId = new Map(lookups.map((lookup) => [lookup.toolUseId, lookup]))
