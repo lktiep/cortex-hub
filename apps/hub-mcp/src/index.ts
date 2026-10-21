@@ -234,6 +234,15 @@ app.all('/mcp', async (c) => {
 
   try {
     const authResult = await validateApiKey(c.req.raw, c.env)
+    if (authResult.unavailable) {
+      // Not a verdict on the key: a client that hears 401 here drops a good key.
+      c.header('Retry-After', '5')
+      return c.json({
+        jsonrpc: '2.0',
+        error: { code: -32001, message: `Auth service unavailable: ${authResult.error}` },
+        id: null,
+      }, 503)
+    }
     if (!authResult.valid) {
       return c.json({
         jsonrpc: '2.0',
