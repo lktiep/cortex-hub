@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { db } from '../db/client.js'
 import { randomBytes, createHash } from 'crypto'
 import { recordMcpOrigin } from '../lib/mcp-origin.js'
+import { lookupApiKey } from '../lib/api-auth.js'
 
 export const keysRouter = new Hono()
 
@@ -136,20 +137,12 @@ keysRouter.post('/verify', async (c) => {
       return c.json({ valid: false, error: 'Token is required' }, 400)
     }
  
-    const hash = createHash('sha256').update(token).digest('hex')
-    const stmt = db.prepare('SELECT id, name, scope, permissions, key_hash, expires_at FROM api_keys WHERE key_hash = ?')
-    const keyRecord = stmt.get(hash) as { id: string; name: string; scope: string; permissions: string; key_hash: string; expires_at: string | null } | undefined
- 
-    if (!keyRecord) {
-      return c.json({ valid: false, error: 'Invalid API key' }, 401)
+    const found = lookupApiKey(token)
+    if ('error' in found) {
+      return c.json({ valid: false, error: found.error }, 401)
     }
+    const keyRecord = found.key
 
-    // An expiry date that nothing checks is not an expiry date: keys created
-    // with expiresInDays kept working forever.
-    if (keyRecord.expires_at && Date.parse(keyRecord.expires_at) <= Date.now()) {
-      return c.json({ valid: false, error: 'API key expired' }, 401)
-    }
- 
     // Update last_used_at
     const updateStmt = db.prepare('UPDATE api_keys SET last_used_at = strftime(\'%Y-%m-%dT%H:%M:%SZ\', \'now\') WHERE id = ?')
     updateStmt.run(keyRecord.id)

@@ -29,6 +29,7 @@ import { recoverInterruptedJobs } from './services/indexer.js'
 import { scheduleBranchSweep } from './services/branch-retention.js'
 import { scheduleSessionExpiry } from './services/session-expiry.js'
 import { scheduleConductor } from './conductor/scheduler.js'
+import { apiAuth, apiAuthFromEnv, describeApiAuth } from './lib/api-auth.js'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
@@ -47,6 +48,10 @@ app.use('*', cors({
   },
 }))
 app.use('*', honoLogger())
+
+// ── Who may call /api (API_AUTH=required) ──
+const apiAuthOptions = apiAuthFromEnv()
+app.use('/api/*', apiAuth(apiAuthOptions))
 
 // ── Project Enabled Guard Middleware ──
 app.use('/api/*', projectGuard)
@@ -269,6 +274,10 @@ scheduleConductor()
 
 const server = serve({ fetch: app.fetch, port }, () => {
   logger.info(`Dashboard API listening on http://localhost:${port}`)
+  logger.info(describeApiAuth(apiAuthOptions))
+  if (apiAuthOptions.required && !apiAuthOptions.internalSecret) {
+    logger.error('API_AUTH=required without INTERNAL_API_SECRET: the MCP gateway cannot reach /api, so every MCP tool will fail')
+  }
 })
 
 // WebSocket for Conductor real-time agent communication

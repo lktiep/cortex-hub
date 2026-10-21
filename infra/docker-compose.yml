@@ -221,14 +221,16 @@ services:
       # label this used to carry was inert, so with WATCHTOWER_LABEL_ENABLE the
       # monitored set was empty and nothing on this host has ever auto-updated.
       - "com.centurylinklabs.watchtower.enable=true"
+    # API_BIND=127.0.0.1 keeps these off the network when only a tunnel on this host
+    # (cloudflared) needs them; the default publishes them on every interface.
     ports:
-      - "4000:4000"
-      - "3000:4000" # Backward compatibility for dashboard port
+      - "${API_BIND:-0.0.0.0}:4000:4000"
+      - "${API_BIND:-0.0.0.0}:3000:4000" # Backward compatibility for dashboard port
       # Cloudflare Tunnel origin. The remotely-managed "cortex-hub" tunnel
       # routes hub.jackle.dev -> http://localhost:3080, a port left over from
       # the separate dashboard-web container that 91c99f1 folded into this
       # service. Without this mapping the hostname answers 502.
-      - "3080:4000"
+      - "${API_BIND:-0.0.0.0}:3080:4000"
     volumes:
       - api-data:/app/data
       - gitnexus-data:/root/.gitnexus
@@ -255,6 +257,13 @@ services:
       EXTERNAL_MCP_URL: ${EXTERNAL_MCP_URL:-}
       EXTERNAL_API_URL: ${EXTERNAL_API_URL:-}
       EXTERNAL_LLM_PROXY_URL: ${EXTERNAL_LLM_PROXY_URL:-}
+      # Who may call /api (apps/dashboard-api/src/lib/api-auth.ts). "required" accepts only
+      # loopback, the MCP gateway (INTERNAL_API_SECRET), API keys and, when both CF_ACCESS_*
+      # are set, browsers that came through Cloudflare Access. Off answers anyone.
+      API_AUTH: ${API_AUTH:-off}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-}
+      CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN:-}
+      CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
       # mem9 Configuration
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-}
@@ -332,6 +341,9 @@ services:
       MCP_SERVER_NAME: "cortex-hub"
       # MCP_SERVER_VERSION comes from the image (the release it was built as).
       API_KEYS: ${MCP_API_KEYS:-}
+      # Sent to the API on every call (needed with API_AUTH=required), and checked when the
+      # API asks this gateway to drop a revoked key from its cache.
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-}
     depends_on:
       cortex-api:
         condition: service_healthy

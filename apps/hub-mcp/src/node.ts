@@ -4,9 +4,11 @@ import { publicOrigin } from '@cortex/shared-types'
 import app from './index.js'
 import { defaultBundlePath, serveWorkerAsset } from './worker-asset.js'
 import { forwardCloseCode } from './ws-close.js'
+import { withInternalSecret } from './internal-secret.js'
 
 const port = Number(process.env.PORT) || 8317
 const DASHBOARD_API_URL = (process.env.DASHBOARD_API_URL || 'http://localhost:4000').replace(/\/$/, '')
+globalThis.fetch = withInternalSecret(globalThis.fetch, DASHBOARD_API_URL, process.env.INTERNAL_API_SECRET)
 
 console.log(`Cortex Hub MCP Server starting on port ${port}...`)
 

@@ -98,6 +98,35 @@ sudo systemctl enable --now cloudflared
 - [ ] DNS CNAME records created in Cloudflare dashboard
 - [ ] `curl https://cortex-api.yourdomain.com/health` returns OK (after API is running)
 
+
+### 1.4 — Lock down the Dashboard API
+
+By default `/api` answers anyone who can reach the API port. Once the dashboard is reachable
+from outside (Cloudflare Access in front of it, or a shared network), require authentication:
+
+```bash
+# infra/.env on the server
+API_AUTH=required
+INTERNAL_API_SECRET=<output of: openssl rand -hex 32>   # used by cortex-api and cortex-mcp
+CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com       # Zero Trust → Settings → Custom pages
+CF_ACCESS_AUD=<application-audience-tag>                # Access → Applications → <dashboard> → Overview
+API_BIND=127.0.0.1   # optional: publish the API ports to this host only (cloudflared on the same host)
+
+docker compose up -d cortex-api cortex-mcp
+```
+
+With `API_AUTH=required`, `/api` accepts only:
+- loopback inside the container (the API calling itself; host scripts arrive through docker's gateway, so they need an API key),
+- the MCP gateway, which sends `INTERNAL_API_SECRET`,
+- a browser that passed Cloudflare Access (its `Cf-Access-Jwt-Assertion` is verified against the team's signing keys and the AUD tag),
+- an API key as `Authorization: Bearer <api-key>` (editor extension, scripts, webhooks).
+
+`INTERNAL_API_SECRET` also lets a revoked key be dropped from the MCP gateway's cache at once.
+
+**Verification:**
+- [ ] The `cortex-api` log shows `API_AUTH=required: /api accepts …` listing Cloudflare Access and the internal secret
+- [ ] `curl -s -o /dev/null -w '%{http_code}' http://<server>:4000/api/keys` returns `401` from another machine
+- [ ] The dashboard still loads through Cloudflare Access, and agents still call MCP tools
 ---
 
 ## Phase 2: Repository Setup
