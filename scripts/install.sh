@@ -3276,9 +3276,10 @@ inject_claude_md() {
 <!-- cortex-hub:auto-mcp -->
 ## Cortex Hub — MANDATORY (enforced by hooks — violations are BLOCKED)
 
-**YOUR FIRST ACTION in every conversation MUST be calling `cortex_session_start`.
-If you skip this, all Edit/Write/file-modifying Bash commands will return exit code 2 (BLOCKED).
-This is not optional — it is enforced by pre-tool hooks.**
+**Call `cortex_session_start` in the first turn of every conversation.** Without it, every
+Edit, Write and file-modifying Bash command is refused by a hook (exit code 2). It does not
+depend on anything else, so send it in the same message as your first lookup, not a turn of
+its own.
 
 ```
 cortex_session_start(repo: "__GIT_REPO__", mode: "development", agentId: "claude-code")
