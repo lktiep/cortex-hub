@@ -100,6 +100,9 @@ function getEmbedder(): Embedder {
   return embedderInstance
 }
 
+/** How long a store waits for the memory to be written before it answers. */
+export const STORE_WAIT_MS = 3000
+
 /**
  * POST /store — Store a memory
  * Body: { messages, userId, agentId?, metadata? }
@@ -120,12 +123,23 @@ mem9ProxyRouter.post('/store', async (c) => {
     }
 
     const mem9 = getMem9()
-    const result = await mem9.add({
+    const adding = mem9.add({
       messages,
       userId: normalizedUserId,
       agentId: agentId ?? 'default',
       metadata: normalizedMetadata,
     })
+    // With an LLM, a store is two chat calls in a row, 16 s on average, and the agent waits
+    // on it with nothing to do: what it stored does not change what it does next. So the
+    // answer goes after STORE_WAIT_MS and the write finishes on its own. A failure that
+    // early is still the caller's to see.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const waited = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), STORE_WAIT_MS) })
+    const result = await Promise.race([adding, waited]).finally(() => clearTimeout(timer))
+    if (!result) {
+      adding.catch((error: unknown) => console.error('[mem9-proxy] background store error:', error))
+      return c.json({ success: true, pending: true, events: [] }, 202)
+    }
 
     c.header('X-Cortex-Compute-Tokens', String(result.tokensUsed || 0))
     if (result.tokensUsed) c.header('X-Cortex-Compute-Model', resolveLlmModel())

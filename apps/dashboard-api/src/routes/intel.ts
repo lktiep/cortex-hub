@@ -411,6 +411,33 @@ export function rewriteGitNexusHints(text: string): string {
     .replace(/Read the source with cat /g, 'Examine the source at ')
 }
 
+const CYPHER_SCHEMA_HINT =
+  '💡 Node labels: Function, Method, Class, Interface, TypeAlias, Const, Property, File, Folder, Route. ' +
+  'Every edge is one table, CodeRelation, with its kind in r.type (CALLS, IMPORTS, DEFINES, HAS_METHOD, ' +
+  'EXTENDS, IMPLEMENTS, ACCESSES, HANDLES_ROUTE). Properties: id, name, filePath, startLine, endLine.\n' +
+  'Example: MATCH (a)-[r:CodeRelation {type: \'CALLS\'}]->(b:Function {name: \'X\'}) RETURN a.name, labels(a) AS type, a.filePath LIMIT 20'
+
+/**
+ * A cypher answer as an agent reads it. The graph returns a table as JSON — {"markdown": "| a |
+ * …", "row_count": 2} — which reached agents escaped twice, every row break a literal \n. And it
+ * answers a failed query with HTTP 200 and an "Error:" body, so the schema is named right there:
+ * the usual failure is guessing an edge table such as [:CALLS], which does not exist.
+ */
+export function formatCypherRaw(raw: string): string {
+  let text = rewriteGitNexusHints(raw).replace(/^\{\n[\s\S]*?\n\}$/gm, (block) => {
+    try {
+      const { markdown, row_count: rows } = JSON.parse(block) as { markdown?: unknown; row_count?: unknown }
+      return typeof markdown === 'string' ? `${markdown}\n(${String(rows)} row${rows === 1 ? '' : 's'})` : block
+    } catch {
+      return block
+    }
+  })
+  if (/^Error:/m.test(text) && /does not exist|Cannot find property|Binder exception/.test(text)) {
+    text += `\n${CYPHER_SCHEMA_HINT}`
+  }
+  return text
+}
+
 const MAX_CALL_SITES = 6
 
 /**
@@ -423,7 +450,7 @@ export function addCallSites(raw: string, name: string, readSource: (path: strin
   // A method asked for as `Class.method` is called as `.method`.
   const word = name.split(/[.:#]/).pop() ?? name
   const named = new RegExp(`(^|[^\\w$])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`)
-  return raw.replace(/^(\s*← \[\w+\] .*→ )(\S+)[ \t]*$/gm, (line, head: string, path: string) => {
+  const withSites = (line: string, head: string, path: string, tail = ''): string => {
     if (/:\d/.test(path)) return line
     const lines = readSource(path)?.split('\n')
     if (!lines) return line
@@ -433,21 +460,28 @@ export function addCallSites(raw: string, name: string, readSource: (path: strin
     })
     if (sites.length === 0) return line
     const more = sites.length > MAX_CALL_SITES ? ` (+${sites.length - MAX_CALL_SITES} more)` : ''
-    return `${head}${path}:${sites.slice(0, MAX_CALL_SITES).join(',')}${more}`
-  })
+    return `${head}${path}:${sites.slice(0, MAX_CALL_SITES).join(',')}${more}${tail}`
+  }
+  return raw
+    // code_context: "  ← [calls] intel.ts → apps/api/src/routes/intel.ts"
+    .replace(/^(\s*← \[\w+\] .*→ )(\S+)[ \t]*$/gm, (line, head: string, path: string) => withSites(line, head, path))
+    // code_impact upstream: "  intel.ts → apps/api/src/routes/intel.ts [CALLS] (conf: 0.85)"
+    .replace(/^(\s+\S+ → )(\S+)( \[CALLS\].*)$/gm, (line, head: string, path: string, tail: string) =>
+      withSites(line, head, path, tail))
 }
 
 /**
- * The checkout a context result reads from. Without a project the graph answers across the
- * organization, so the checkout is the project's that holds the file the symbol is defined in.
+ * The checkout a graph result reads from. Without a project the graph answers across the
+ * organization, so the checkout is the project's that holds a file the result names: where the
+ * symbol is defined for code_context, the first caller for code_impact.
  */
-function contextCheckout(raw: string, projectId: string | undefined, orgId: string | undefined): string | undefined {
+function graphCheckout(raw: string, projectId: string | undefined, orgId: string | undefined): string | undefined {
   try {
     if (projectId) {
       const dir = join(REPOS_DIR, findProject(projectId, orgId)?.id ?? projectId)
       return existsSync(dir) ? dir : undefined
     }
-    const definedIn = raw.match(/^\S+ \S+ → (\S+?):\d/m)?.[1]
+    const definedIn = raw.match(/^\S+ \S+ → (\S+?):\d/m)?.[1] ?? raw.match(/→ (\S+) \[CALLS\]/)?.[1]
     if (!definedIn) return undefined
     const projects = db.prepare('SELECT id FROM projects WHERE (? IS NULL OR org_id = ?)')
       .all(orgId ?? null, orgId ?? null) as Array<{ id: string }>
@@ -921,7 +955,15 @@ intelRouter.post('/impact', async (c) => {
       direction: direction ?? 'downstream',
     }
 
-    const results = await callGitNexusWithFallback('impact', params, projectId, scope.orgId)
+    const results = await callGitNexusWithFallback('impact', params, projectId, scope.orgId) as { raw?: string }
+    if (typeof results?.raw === 'string') {
+      results.raw = rewriteGitNexusHints(results.raw)
+      // Upstream, the callers are what breaks: name the lines that call, as code_context does.
+      if (params.direction === 'upstream' && results.raw.includes('[CALLS]')) {
+        const repoDir = graphCheckout(results.raw, projectId, scope.orgId)
+        if (repoDir) results.raw = addCallSites(results.raw, target, (path) => readCheckoutFile(repoDir, path))
+      }
+    }
 
     return c.json({
       success: true,
@@ -1008,7 +1050,7 @@ intelRouter.post('/context', async (c) => {
     }
 
     if (results?.raw?.includes('←')) {
-      const repoDir = contextCheckout(results.raw, projectId, scope.orgId)
+      const repoDir = graphCheckout(results.raw, projectId, scope.orgId)
       if (repoDir) results.raw = addCallSites(results.raw, name, (path) => readCheckoutFile(repoDir, path))
     }
 
@@ -1320,7 +1362,8 @@ intelRouter.post('/cypher', async (c) => {
 
     const params: Record<string, unknown> = { query: cypherQuery }
 
-    const results = await callGitNexusWithFallback('cypher', params, projectId, scope.orgId)
+    const results = await callGitNexusWithFallback('cypher', params, projectId, scope.orgId) as { raw?: string }
+    if (typeof results?.raw === 'string') results.raw = formatCypherRaw(results.raw)
     return c.json({ success: true, data: results })
   } catch (error) {
     logger.error(`Cypher query failed: ${String(error)}`)

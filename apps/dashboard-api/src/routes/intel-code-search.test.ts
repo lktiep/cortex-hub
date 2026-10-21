@@ -38,7 +38,7 @@ vi.mock('../lib/embedder-factory.js', () => ({
 vi.mock('../lib/reranker.js', () => ({ getReranker: () => null, RERANK_OVERFETCH: 4 }))
 
 import { Hono } from 'hono'
-import { addCallSites, intelRouter, locateChunk, rewriteGitNexusHints } from './intel.js'
+import { addCallSites, formatCypherRaw, intelRouter, locateChunk, rewriteGitNexusHints } from './intel.js'
 
 const app = new Hono()
 app.route('/api/intel', intelRouter)
@@ -241,6 +241,48 @@ describe('graph callers come with the lines that call', () => {
 
       expect(json.data.results.raw).toContain('  ← [calls] index.ts → src/index.ts:4\n')
     }
+  })
+
+  it('adds them to the direct callers of an upstream impact', async () => {
+    mkdirSync(join(reposDir, 'proj-hub', 'src'), { recursive: true })
+    writeFileSync(join(reposDir, 'proj-hub', 'src', 'index.ts'), index)
+    const impact = [
+      'Blast radius for  validateApiKey (upstream): 2 symbol(s) depends on this (will break if changed)',
+      '',
+      'd=1: WILL BREAK (direct) (1)',
+      '  undefined index.ts → src/index.ts [CALLS] (conf: 0.85)',
+      '  undefined index.ts → src/index.ts [IMPORTS]',
+      '---',
+      'Next: Review d=1 items first (WILL BREAK). Read the source with cat to understand the code, then make your fix.',
+    ].join('\n')
+    vi.stubGlobal('fetch', vi.fn(async (url: string) =>
+      url.endsWith('/tool/impact') ? new Response(impact, { status: 200 }) : new Response('Not found', { status: 404 })))
+
+    const res = await app.request('/api/intel/impact', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target: 'validateApiKey', projectId: 'cortex-hub', direction: 'upstream' }),
+    })
+    const raw = (await res.json() as { data: { results: { raw: string } } }).data.results.raw
+
+    expect(raw).toContain('\n  index.ts → src/index.ts:4 [CALLS] (conf: 0.85)\n  index.ts → src/index.ts [IMPORTS]\n')
+    expect(raw).not.toContain('undefined')
+    expect(raw).not.toContain('with cat')
+  })
+})
+
+describe('a cypher answer reads as a table', () => {
+  it('unwraps the JSON the graph wraps a table in', () => {
+    const raw = `${JSON.stringify({ markdown: '| a.name |\n| --- |\n| boot |', row_count: 1 }, null, 2)}\n---\nNext: To explore a result symbol in depth, run gitnexus-context "<name>"`
+
+    expect(formatCypherRaw(raw)).toBe('| a.name |\n| --- |\n| boot |\n(1 row)\n---\nNext: To explore a result symbol in depth, run cortex_code_context "<name>"')
+  })
+
+  it('names the schema when a guessed edge table does not exist', () => {
+    const out = formatCypherRaw('Error: Prepare failed: Binder exception: Table CALLS does not exist.')
+
+    expect(out).toContain("[r:CodeRelation {type: 'CALLS'}]")
+    expect(formatCypherRaw('Query returned 0 rows.')).toBe('Query returned 0 rows.')
   })
 })
 

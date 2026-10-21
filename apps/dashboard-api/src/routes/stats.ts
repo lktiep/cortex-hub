@@ -864,8 +864,9 @@ statsRouter.get('/hints/:agentId', (c) => {
       }
     }
 
-    if (currentTool.includes('cypher')) {
-      hints.push('💡 Cypher: labels(n) AS type for the type; n.id, n.name, n.filePath, n.startLine and n.endLine as properties. MATCH (n) WHERE n.name CONTAINS "X" RETURN n.name, labels(n) AS type LIMIT 20')
+    // Once: a failed query carries the schema in its own answer, so repeating it costs every call.
+    if (currentTool.includes('cypher') && calls.filter(c2 => c2.tool.includes('cypher')).length <= 1) {
+      hints.push("💡 Cypher: every edge is one table, CodeRelation, with its kind in r.type — (a)-[r:CodeRelation {type: 'CALLS'}]->(b). labels(n) AS type for the node type; n.name, n.filePath, n.startLine as properties.")
     }
 
     if (currentTool.includes('list_repos')) {
