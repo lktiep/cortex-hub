@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HOOKS_VERSION=7
-HOOKS_MINOR=13
+HOOKS_MINOR=14
 MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
@@ -640,7 +640,7 @@ if [ "$NEEDS_UPDATE" = "true" ]; then
   # ── session-init.sh ──
   cat > .claude/hooks/session-init.sh << 'HOOKEOF'
 #!/bin/bash
-# Cortex Session Init (v7.3) — arms the gates; keeps discovery state across compaction.
+# Cortex Session Init (v7.4) — arms the gates; keeps discovery state across compaction.
 #
 # SessionStart fires on four different things: startup, resume, clear and compact.
 # Wiping the discovery markers on all four is why a long task suddenly finds Grep and
@@ -655,32 +655,27 @@ if [ "$NEEDS_UPDATE" = "true" ]; then
 # v7.2 prints this conversation's id for /cs to pass as clientSessionId. Everything else the
 # hub matches a session on is the same for two conversations in one checkout, so without it
 # they shared one session, and the first to finish closed it under the other.
+#
+# v7.4 stops printing it. A line that differs in every conversation, this early in the
+# context, kept the prompt cache from reusing anything after it. session-id.sh now puts the
+# id straight into the cortex_session_start call.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 mkdir -p "$STATE_DIR"
 
 INPUT=$(cat 2>/dev/null || true)
 SOURCE=""
-CLIENT_ID=""
 if [ -n "$INPUT" ]; then
   if command -v jq >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null || true)
-    CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
   elif command -v python3 >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("source",""))' 2>/dev/null || true)
-    CLIENT_ID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || true)
   fi
 fi
-# The same id the tracker and the exit hook file this conversation's session under.
-CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
-conversation_line() {
-  [ -n "$CLIENT_ID" ] && echo "Cortex: this conversation's clientSessionId is ${CLIENT_ID} — pass it to cortex_session_start."
-}
 
 case "$SOURCE" in
   compact|resume)
     echo "Cortex: same session (${SOURCE}) — discovery state kept, gates stay as they were."
-    conversation_line
     exit 0 ;;
 esac
 
@@ -703,7 +698,6 @@ rm -rf "$STATE_DIR/agents" 2>/dev/null
 # File notes are shown once per conversation and agent; the record of which were is a day's.
 [ -d "$STATE_DIR/notes" ] && find "$STATE_DIR/notes" -type f -name 'shown-*' -mtime +1 -exec rm -f {} + 2>/dev/null
 echo "Run /cs first: cortex_session_start, then knowledge+memory recall. Until then edits are BLOCKED, and Grep/Glob stay blocked until a cortex discovery tool has run."
-conversation_line
 exit 0
 HOOKEOF
 
@@ -1873,8 +1867,42 @@ printf '{"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContex
 exit 0
 HOOKEOF
 
+  cat > .claude/hooks/session-id.sh << 'HOOKEOF'
+#!/bin/bash
+# Cortex Session Id (v1.0) — fills in clientSessionId on cortex_session_start.
+#
+# The hub keeps two conversations in one checkout on separate sessions by this id. Until
+# session-init v7.4 the agent copied it from a line that hook printed, but that line differs
+# in every conversation and sits ahead of CLAUDE.md and the rest of the opening context, so
+# the prompt cache could never reuse anything after it: ~6k tokens written anew per
+# conversation, most of what made a hub lookup cost more than a plain grep. The hook payload
+# already carries the id, so it goes straight into the call and the context stays the same.
+INPUT=$(cat 2>/dev/null || true)
+[ -z "$INPUT" ] && exit 0
+
+# The same id, with the same characters kept, that the tracker and the exit hook file this
+# conversation's session under. Whatever the agent passed is replaced: this one is current.
+if command -v jq >/dev/null 2>&1; then
+  printf '%s' "$INPUT" | jq -c '
+    (.session_id // "" | gsub("[^A-Za-z0-9_-]"; "") | .[0:128]) as $id
+    | select($id != "")
+    | {hookSpecificOutput: {hookEventName: "PreToolUse",
+        updatedInput: ((.tool_input // {}) + {clientSessionId: $id})}}' 2>/dev/null
+elif command -v python3 >/dev/null 2>&1; then
+  printf '%s' "$INPUT" | python3 -c '
+import json, re, sys
+d = json.load(sys.stdin)
+cid = re.sub(r"[^A-Za-z0-9_-]", "", str(d.get("session_id") or ""))[:128]
+if cid:
+    args = dict(d.get("tool_input") or {}, clientSessionId=cid)
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": args}}))
+' 2>/dev/null
+fi
+exit 0
+HOOKEOF
+
   chmod +x .claude/hooks/*.sh
-  ok "Hooks: all 8 hooks installed (v${HOOKS_VERSION}.${HOOKS_MINOR})"
+  ok "Hooks: all 9 hooks installed (v${HOOKS_VERSION}.${HOOKS_MINOR})"
 
   # ── settings.json ──
   # Call bash directly — works on macOS (native) and Windows (Git Bash).
@@ -1936,6 +1964,15 @@ HOOKEOF
         ]
       },
       {
+        "matcher": "mcp__.*cortex_session_start",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-id.sh\""
+          }
+        ]
+      },
+      {
         "matcher": "Read|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
@@ -1989,9 +2026,10 @@ with open('$USER_SETTINGS','w') as f: json.dump(d, f, indent=2)
   # ── Slash commands (/cs, /ce) ──
   mkdir -p .claude/commands
   cat > .claude/commands/cs.md << 'CMDEOF'
-# /cs — Cortex Start v0.9.1
+# /cs — Cortex Start v0.9.2
 
-> Version: 0.9.1 | Updated: 2026-10-09
+> Version: 0.9.2 | Updated: 2026-10-21
+> Changelog: v0.9.2 — clientSessionId is filled in by a hook, so the opening context is the same every time and stays cached
 > Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
 > Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
 > Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
@@ -2009,10 +2047,9 @@ mode: "development"
 agentId: "claude-code"
 ide: "<your IDE>"
 branch: "<current git branch>"
-clientSessionId: "<the id from the SessionStart hook's 'clientSessionId is …' line>"
 ```
-Leave `clientSessionId` out only if no hook printed one. Without it, two conversations in this
-checkout share one hub session, and the first to end closes it under the other.
+Leave `clientSessionId` out: the `session-id.sh` hook adds this conversation's id to the call, so
+two conversations in one checkout get a session each.
 Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
 If `recentChanges.count > 0` → warn user and `git pull` before any edits.
 

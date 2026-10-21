@@ -29,6 +29,7 @@ TARGETS = [
     '.claude/hooks/nudge-lookup.sh',
     '.claude/hooks/recall-notes.sh',
     '.claude/hooks/subagent-start.sh',
+    '.claude/hooks/session-id.sh',
     '.claude/settings.json',
     '.claude/commands/cs.md',
     '.claude/commands/ce.md',

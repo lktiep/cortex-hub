@@ -25,7 +25,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
       capabilities: z.array(z.string()).optional().describe('Agent capabilities'),
       role: z.string().optional().describe('Agent role from agent-identity.json'),
       clientSessionId: z.string().max(128).optional().describe(
-        'This conversation\'s id as the IDE\'s SessionStart hook printed it (clientSessionId: …). Keeps two conversations in one checkout on separate sessions.'
+        'This conversation\'s id. Claude Code\'s session-id hook fills it in; elsewhere, pass the id the IDE\'s SessionStart hook printed (clientSessionId: …). Keeps two conversations in one checkout on separate sessions.'
       ),
     },
     async ({ repo, mode, agentId, hostname, os, ide, branch, capabilities, role, clientSessionId }) => {

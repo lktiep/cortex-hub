@@ -1,6 +1,7 @@
-# /cs — Cortex Start v0.9.1
+# /cs — Cortex Start v0.9.2
 
-> Version: 0.9.1 | Updated: 2026-10-09
+> Version: 0.9.2 | Updated: 2026-10-21
+> Changelog: v0.9.2 — clientSessionId is filled in by a hook, so the opening context is the same every time and stays cached
 > Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
 > Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
 > Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
@@ -18,10 +19,9 @@ mode: "development"
 agentId: "claude-code"
 ide: "<your IDE>"
 branch: "<current git branch>"
-clientSessionId: "<the id from the SessionStart hook's 'clientSessionId is …' line>"
 ```
-Leave `clientSessionId` out only if no hook printed one. Without it, two conversations in this
-checkout share one hub session, and the first to end closes it under the other.
+Leave `clientSessionId` out: the `session-id.sh` hook adds this conversation's id to the call, so
+two conversations in one checkout get a session each.
 Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
 If `recentChanges.count > 0` → warn user and `git pull` before any edits.
 

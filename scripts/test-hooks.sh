@@ -202,22 +202,31 @@ printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/s
 check "startup clears discovery"           0 "$([ ! -f "$STATE/discovery-used" ] && echo 0 || echo 1)"
 teardown
 
-echo "session-init.sh — names the conversation for /cs"
+echo "session-id.sh — names the conversation in cortex_session_start"
 # Two conversations in one checkout send the hub the same key, machine, IDE and branch; the
-# conversation id is the only thing that tells their sessions apart, and only this hook has it.
+# conversation id is the only thing that tells their sessions apart, and only a hook has it.
+# It goes into the call, not the context: a line that differs per conversation that early kept
+# the prompt cache from reusing anything after it.
 setup
 mkdir -p "$STATE/conversations"
 printf 'sess_old\n' > "$STATE/conversations/gone"; touch -t 202001010000 "$STATE/conversations/gone"
 printf 'sess_b\n' > "$STATE/conversations/conv-b"
 OUT=$(printf '{"source":"startup","session_id":"conv-a"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" 2>&1)
-check "startup prints clientSessionId"      0 "$(printf '%s' "$OUT" | grep -q 'clientSessionId is conv-a' && echo 0 || echo 1)"
+check "startup output is the same for every conversation" 1 "$(printf '%s' "$OUT" | grep -q 'conv-a' && echo 0 || echo 1)"
 check "another conversation's record stays" sess_b "$(cat "$STATE/conversations/conv-b" 2>/dev/null)"
 check "a week-old record is dropped"        0 "$([ ! -f "$STATE/conversations/gone" ] && echo 0 || echo 1)"
 OUT=$(printf '{"source":"compact","session_id":"conv-a"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" 2>&1)
-check "and again after compaction"          0 "$(printf '%s' "$OUT" | grep -q 'clientSessionId is conv-a' && echo 0 || echo 1)"
-OUT=$(printf '{"source":"startup","session_id":"../../x y"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" 2>&1)
-check "only file-name-safe characters"      0 "$(printf '%s' "$OUT" | grep -q 'clientSessionId is xy ' && echo 0 || echo 1)"
-check "exits 0 with no id at all"           0 "$(printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" >/dev/null 2>&1; echo $?)"
+check "and so is the output after compaction" 1 "$(printf '%s' "$OUT" | grep -q 'conv-a' && echo 0 || echo 1)"
+sid() { printf '%s' "$1" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-id.sh" 2>/dev/null; }
+OUT=$(sid '{"session_id":"conv-a","tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{"repo":"r","mode":"development"}}')
+check "adds the id to the call"             conv-a "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
+check "keeps the agent's other arguments"   r "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.repo')"
+OUT=$(sid '{"session_id":"conv-a","tool_input":{"repo":"r","clientSessionId":"stale"}}')
+check "replaces an id the agent made up"    conv-a "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
+OUT=$(sid '{"session_id":"../../x y","tool_input":{}}')
+check "only file-name-safe characters"      xy "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
+check "leaves the call alone with no id"    "" "$(sid '{"tool_input":{"repo":"r"}}')"
+check "exits 0 on empty input"              0 "$(printf '' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-id.sh" >/dev/null 2>&1; echo $?)"
 teardown
 
 echo "session-init.sh — the session gate must not arm itself"
