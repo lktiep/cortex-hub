@@ -43,7 +43,8 @@ async function callGitNexus(
   const text = await res.text()
 
   if (!res.ok) {
-    throw new Error(text || `GitNexus ${tool} failed: ${res.status}`)
+    // "Multiple repositories indexed ... Available: <every repo>" names other organizations' repos.
+    throw new Error(text.replace(/\s*Available: [^\n]*/g, '') || `GitNexus ${tool} failed: ${res.status}`)
   }
 
   // GitNexus may return JSON or plain text
@@ -283,7 +284,7 @@ async function callGitNexusWithFallback(
   orgId?: string,
 ): Promise<unknown> {
   if (!projectId) {
-    return callGitNexus(tool, params)
+    return callGitNexusAcrossOrg(tool, params, orgId)
   }
 
   const candidates = resolveRepoNames(projectId, orgId)
@@ -309,6 +310,54 @@ async function callGitNexusWithFallback(
   } catch {
     throw lastError
   }
+}
+
+function indexedProjectsOf(orgId: string): Array<{ id: string; name: string }> {
+  return db.prepare('SELECT id, name FROM projects WHERE org_id = ? AND indexed_symbols > 0 ORDER BY name')
+    .all(orgId) as Array<{ id: string; name: string }>
+}
+
+/** A GitNexus answer that names nothing: the symbol is not in that repo, or the query failed. */
+function foundNothing(result: unknown): boolean {
+  const text = typeof (result as { raw?: unknown })?.raw === 'string' ? (result as { raw: string }).raw : JSON.stringify(result)
+  return /not found|^Error/i.test(text ?? '')
+}
+
+/**
+ * A graph lookup that names no project. GitNexus without a repo answers only while it holds a
+ * single one; with more it refused, and listed every repo it holds, every organization's. So each
+ * indexed project of the caller's organization is asked by its own name, and the answers that
+ * found something are kept, under the project's name when there are several.
+ */
+async function callGitNexusAcrossOrg(tool: string, params: Record<string, unknown>, orgId?: string): Promise<unknown> {
+  if (!orgId) {
+    if (orgsWithIndexedProjects().length > 1) {
+      throw new Error('Several organizations hold indexed code: name the repo, or pass org.')
+    }
+    return callGitNexus(tool, params)
+  }
+  const projects = indexedProjectsOf(orgId)
+  if (projects.length === 0) return callGitNexus(tool, params)
+  if (projects.length === 1) return callGitNexusWithFallback(tool, params, projects[0]?.id, orgId)
+
+  const answers = await Promise.all(projects.map(async (project) => {
+    try {
+      return { project, result: await callGitNexusWithFallback(tool, params, project.id, orgId) }
+    } catch (error) {
+      return { project, error }
+    }
+  }))
+  const found = answers.filter((a) => !a.error && !foundNothing(a.result))
+  if (found.length === 1) return found[0]?.result
+  if (found.length > 1) {
+    if (found.every((a) => typeof (a.result as { raw?: unknown }).raw === 'string')) {
+      return { raw: found.map((a) => `## ${a.project.name}\n${(a.result as { raw: string }).raw}`).join('\n\n') }
+    }
+    return found[0]?.result
+  }
+  const answered = answers.find((a) => !a.error)
+  if (answered) return answered.result
+  throw answers[0]?.error ?? new Error(`GitNexus ${tool} failed`)
 }
 
 /**

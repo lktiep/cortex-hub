@@ -243,3 +243,60 @@ describe('graph callers come with the lines that call', () => {
     }
   })
 })
+
+describe('a graph lookup without a repo stays in the organization', () => {
+  let asked: string[]
+
+  beforeEach(() => {
+    testDb.exec(`
+      UPDATE projects SET indexed_symbols = 10 WHERE id = 'proj-hub';
+      INSERT INTO projects (id, org_id, name, slug, indexed_symbols) VALUES ('proj-web', 'org-a', 'web', 'web', 10);
+      INSERT INTO organizations (id, name, slug) VALUES ('org-b', 'Org B', 'org-b');
+      INSERT INTO projects (id, org_id, name, slug, indexed_symbols) VALUES ('proj-hidden', 'org-b', 'hidden', 'hidden', 10);
+    `)
+    asked = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: { body?: string }) => {
+      const repo = (JSON.parse(init?.body ?? '{}') as { repo?: string }).repo ?? ''
+      asked.push(repo.split('/').pop() ?? '')
+      if (!repo) return new Response('Multiple repositories indexed. Available: cortex-hub, web, hidden', { status: 500 })
+      if (repo.endsWith('proj-hub')) return new Response('Function lookupApiKey → src/a.ts:3-5', { status: 200 })
+      return new Response("Symbol 'lookupApiKey' not found", { status: 200 })
+    }))
+  })
+
+  async function context(body: Record<string, unknown>) {
+    const res = await app.request('/api/intel/context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'lookupApiKey', ...body }),
+    })
+    return { status: res.status, text: await res.text() }
+  }
+
+  it('asks each project of the organization and keeps the one that found it', async () => {
+    const { status, text } = await context({ orgId: 'org-a' })
+
+    expect(status).toBe(200)
+    expect(text).toContain('src/a.ts:3-5')
+    expect(asked.sort()).toEqual(['proj-hub', 'proj-web'])
+  })
+
+  it('refuses to guess between organizations, and names no repo', async () => {
+    const { status, text } = await context({})
+
+    expect(status).toBe(500)
+    expect(text).toContain('name the repo, or pass org')
+    expect(text).not.toMatch(/hidden|Available/)
+    expect(asked).toEqual([])
+  })
+
+  it('passes on a refusal from the graph without its list of every repo', async () => {
+    testDb.exec('UPDATE projects SET indexed_symbols = 0')
+
+    const { status, text } = await context({ orgId: 'org-a' })
+
+    expect(status).toBe(500)
+    expect(text).toContain('Multiple repositories indexed')
+    expect(text).not.toMatch(/hidden|Available/)
+  })
+})

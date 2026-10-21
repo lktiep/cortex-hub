@@ -2634,8 +2634,9 @@ fields of `.cortex/agent-identity.json`, so the dashboard can tell your machines
 
 ### Finding code fast (MANDATORY — and a fixed ladder is the slow way)
 
-Start from what you already know. Grep and Glob are blocked by a hook until a cortex
-discovery tool has run in this session.
+Start from what you already know. Until one cortex discovery call has run in this session,
+a hook refuses Grep, Glob and a Bash command that starts with `grep`, `rg` or `find`, even
+for a literal: make the cortex call first, then grep freely.
 
 | You already know | Start with | Why |
 |---|---|---|
