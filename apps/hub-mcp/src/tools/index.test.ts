@@ -34,8 +34,10 @@ describe('MCP_TOOL_PERMISSIONS', () => {
 
 describe('tools loaded up front', () => {
   // Everything else waits for a ToolSearch call, a turn of its own; finding code should not.
-  it('are the two that find code, and only those', () => {
-    expect(register().upFront.sort()).toEqual(['cortex_code_context', 'cortex_code_search'])
+  it('are the ones every conversation calls first, and only those', () => {
+    expect(register().upFront.sort()).toEqual([
+      'cortex_code_context', 'cortex_code_search', 'cortex_knowledge_search', 'cortex_memory_search', 'cortex_session_start',
+    ])
   })
 })
 

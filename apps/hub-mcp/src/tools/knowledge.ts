@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
+import { LOAD_UP_FRONT } from './load-up-front.js'
 
 /**
  * Register knowledge tools.
@@ -183,7 +184,7 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
         }
       }
     }
-  )
+  ).update(LOAD_UP_FRONT)
 
   // ── Notes linked to files ──
   server.tool(

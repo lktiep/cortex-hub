@@ -4,6 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
 import { formatCodeMatches, type CodeMatch } from './code-matches.js'
+import { LOAD_UP_FRONT } from './load-up-front.js'
 
 /**
  * Register code intelligence tools.
@@ -20,10 +21,6 @@ const ORG_DESC =
   "Organization ID to scope this call to. Omit it and the hub infers the organization from " +
   "your active session; a cross-repo search never leaves it."
 
-// Claude Code defers an MCP tool until a ToolSearch call loads its schema: one more turn before
-// an agent's first lookup. These are the two tools an agent finds code with, so they load with
-// the session and the rest stay deferred.
-const LOAD_UP_FRONT = { _meta: { 'anthropic/alwaysLoad': true } }
 
 export function registerCodeTools(server: McpServer, env: Env) {
 

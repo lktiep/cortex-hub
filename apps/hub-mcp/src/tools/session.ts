@@ -2,6 +2,7 @@ import type { Env } from '../types.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { apiCall } from '../api-call.js'
+import { LOAD_UP_FRONT } from './load-up-front.js'
 
 // The docs indexer files each document as "[<path>] <title>". The IDE has already put these
 // instruction files in the agent's context, and the session-summary query ranks them first:
@@ -182,7 +183,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
         ]
       }
     }
-  )
+  ).update(LOAD_UP_FRONT)
 
   server.tool(
     'cortex_session_end',

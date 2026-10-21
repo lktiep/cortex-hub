@@ -27,7 +27,7 @@ function register(endStatus = 200, startReply?: Record<string, unknown>): Record
   }) as unknown as typeof fetch
 
   const tools: Record<string, Handler> = {}
-  const server = { tool: (name: string, _d: string, _s: unknown, handler: Handler) => { tools[name] = handler } }
+  const server = { tool: (name: string, _d: string, _s: unknown, handler: Handler) => { tools[name] = handler; return { update: () => {} } } }
   registerSessionTools(server as unknown as McpServer, { DASHBOARD_API_URL: 'http://api' } as Env)
   return tools
 }
