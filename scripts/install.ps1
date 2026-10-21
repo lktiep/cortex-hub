@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $HOOKS_VERSION = 7
-$HOOKS_MINOR = 14
+$HOOKS_MINOR = 15
 $LATEST_VERSION = "$HOOKS_VERSION.$HOOKS_MINOR"
 $MCP_URL_DEFAULT = "http://localhost:8318/mcp"
 
@@ -88,6 +88,31 @@ if ($Tools -ne "") {
 }
 
 function Test-IDESelected { param([string]$ide) return $SelectedIDEs -contains $ide }
+
+# Merge-HookSettings: $ours is the settings JSON this installer writes, $prevText the file it
+# replaces. Returns the old file with its hook entries that run a cortex hook script swapped
+# for ours, and everything else (permissions, plugins, the repo's own hooks) kept. With $ours
+# empty it only strips cortex entries - for the user-level file, where an older install put
+# them - and returns $null when there were none. Throws on invalid JSON.
+$CortexHookPattern = '\.(claude|gemini)/hooks/(session-init|subagent-start|enforce-session|enforce-commit|nudge-lookup|session-id|recall-notes|recall-prompt|track-quality|session-end-check)\.sh'
+function Merge-HookSettings([string]$prevText, [string]$ours) {
+    $prev = $prevText | ConvertFrom-Json
+    $mine = if ($ours) { ($ours | ConvertFrom-Json).hooks } else { $null }
+    $hooks = [ordered]@{}
+    if ($prev.hooks) { foreach ($p in $prev.hooks.PSObject.Properties) { $hooks[$p.Name] = @($p.Value) } }
+    $before = ConvertTo-Json -InputObject $hooks -Depth 20 -Compress
+    if ($mine) { foreach ($p in $mine.PSObject.Properties) { if (-not $hooks.Contains($p.Name)) { $hooks[$p.Name] = @() } } }
+    $merged = [ordered]@{}
+    foreach ($event in @($hooks.Keys)) {
+        $kept = @($hooks[$event] | Where-Object { -not (@($_.hooks) | Where-Object { "$($_.command)" -match $CortexHookPattern }) })
+        if ($mine -and $mine.$event) { $kept += @($mine.$event) }
+        if ($kept.Count) { $merged[$event] = $kept }
+    }
+    if (-not $ours -and (ConvertTo-Json -InputObject $merged -Depth 20 -Compress) -eq $before) { return $null }
+    if ($prev.hooks) { $prev.PSObject.Properties.Remove('hooks') }
+    if ($merged.Count) { $prev | Add-Member -NotePropertyName hooks -NotePropertyValue $merged }
+    return (ConvertTo-Json -InputObject $prev -Depth 20)
+}
 
 # ══════════════════════════════════════════════
 # Phase 0: Global Skill Install
@@ -1621,7 +1646,8 @@ exit 0
         # session-id.sh
         Write-ShHook "session-id" @'
 #!/bin/bash
-# Cortex Session Id (v1.1) — fills in clientSessionId and the agent identity on cortex_session_start.
+# Cortex Session Id (v1.2) — fills in clientSessionId and the agent identity on cortex_session_start,
+# and the checkout's repo on cortex_code_search.
 #
 # The hub keeps two conversations in one checkout on separate sessions by this id. Until
 # session-init v7.4 the agent copied it from a line that hook printed, but that line differs
@@ -1633,6 +1659,11 @@ exit 0
 # v1.1: the identity too. CLAUDE.md told the agent to read .cortex/agent-identity.json and the
 # git branch before its first call, two more turns in every conversation for values a script
 # can look up. What the agent passes itself still wins; only the id is always this hook's.
+#
+# v1.2: a cortex_code_search that names no repo, project or org gets `here`, this checkout's
+# remote. Agents left repo out in half their searches, and the hub then searched every repo of
+# the organization at once: graph flows only, no ranked files or lines, and nothing from the
+# repo being worked on. With `here` it searches this repo in full and lists the others below.
 INPUT=$(cat 2>/dev/null || true)
 [ -z "$INPUT" ] && exit 0
 
@@ -1644,12 +1675,20 @@ case "${CLAUDE_CODE_ENTRYPOINT:-}" in
   *) IDE=claude-code-cli ;;
 esac
 
+# Credentials in the remote stay here: only the host and path go to the hub.
+HERE=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null | sed -E 's#://[^/@]+@#://#' || true)
+
 # The same id, with the same characters kept, that the tracker and the exit hook file this
 # conversation's session under. Whatever the agent passed is replaced: this one is current.
 if command -v jq >/dev/null 2>&1; then
   IDENTITY=$(jq -c 'if type == "object" then . else {} end' "$IDENTITY_FILE" 2>/dev/null || true)
   [ -z "$IDENTITY" ] && IDENTITY='{}'
-  printf '%s' "$INPUT" | jq -c --argjson who "$IDENTITY" --arg branch "$BRANCH" --arg ide "$IDE" '
+  printf '%s' "$INPUT" | jq -c --argjson who "$IDENTITY" --arg branch "$BRANCH" --arg ide "$IDE" --arg here "$HERE" '
+    if (.tool_name // "" | test("cortex_code_search$")) then
+      (.tool_input // {}) as $in
+      | select($here != "" and ([$in.repo, $in.projectId, $in.org, $in.here] | all(. == null)))
+      | {hookSpecificOutput: {hookEventName: "PreToolUse", updatedInput: ($in + {here: $here})}}
+    else
     (.session_id // "" | gsub("[^A-Za-z0-9_-]"; "") | .[0:128]) as $id
     | select($id != "")
     | ($who.environment | if type == "object" then . else {} end) as $env
@@ -1660,13 +1699,19 @@ if command -v jq >/dev/null 2>&1; then
        + ($who.capabilities | if type == "array" and length > 0 and all(type == "string")
            then {capabilities: .} else {} end)) as $found
     | {hookSpecificOutput: {hookEventName: "PreToolUse",
-        updatedInput: ($found + (.tool_input // {}) + {clientSessionId: $id})}}' 2>/dev/null
+        updatedInput: ($found + (.tool_input // {}) + {clientSessionId: $id})}}
+    end' 2>/dev/null
 elif command -v python3 >/dev/null 2>&1; then
-  printf '%s' "$INPUT" | IDENTITY_FILE="$IDENTITY_FILE" BRANCH="$BRANCH" IDE="$IDE" python3 -c '
+  printf '%s' "$INPUT" | IDENTITY_FILE="$IDENTITY_FILE" BRANCH="$BRANCH" IDE="$IDE" HERE="$HERE" python3 -c '
 import json, os, re, sys
 d = json.load(sys.stdin)
 cid = re.sub(r"[^A-Za-z0-9_-]", "", str(d.get("session_id") or ""))[:128]
-if cid:
+if str(d.get("tool_name") or "").endswith("cortex_code_search"):
+    args = d.get("tool_input") or {}
+    if os.environ.get("HERE") and all(args.get(k) is None for k in ("repo", "projectId", "org", "here")):
+        args["here"] = os.environ["HERE"]
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": args}}))
+elif cid:
     try:
         who = json.load(open(os.environ["IDENTITY_FILE"], encoding="utf-8-sig"))
         who = who if isinstance(who, dict) else {}
@@ -1701,7 +1746,7 @@ exit 0
       {"matcher": "Edit|Write|NotebookEdit|Bash|Grep|Glob", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-session.sh\""}]},
       {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-commit.sh\""}]},
       {"matcher": "Bash|Grep|Glob|mcp__.*cortex_(code_search|code_context|code_impact|cypher)", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/nudge-lookup.sh\""}]},
-      {"matcher": "mcp__.*cortex_session_start", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/session-id.sh\""}]},
+      {"matcher": "mcp__.*cortex_(session_start|code_search)", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/session-id.sh\""}]},
       {"matcher": "Read|Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/recall-notes.sh\""}]}
     ],
     "PostToolUse": [
@@ -1713,7 +1758,20 @@ exit 0
   }
 }
 '@
-        [System.IO.File]::WriteAllText((Join-Path $ProjectDir ".claude/settings.json"), $settingsContent)
+        # A repo may already commit its own settings (permissions, hooks, plugins): merge into
+        # them, or onboarding wipes them.
+        $settingsPath = Join-Path $ProjectDir ".claude/settings.json"
+        if (Test-Path $settingsPath) {
+            $prevSettings = Get-Content $settingsPath -Raw
+            try {
+                $settingsContent = Merge-HookSettings $prevSettings $settingsContent
+                Write-Ok "Settings: cortex hooks merged into the existing .claude/settings.json"
+            } catch {
+                [System.IO.File]::WriteAllText("$settingsPath.bak", $prevSettings)
+                Write-Warn "Settings: could not merge into the existing .claude/settings.json (invalid JSON) - replaced it, the old one is .claude/settings.json.bak"
+            }
+        }
+        [System.IO.File]::WriteAllText($settingsPath, $settingsContent)
 
         Write-Ok ("Claude: bash hooks + settings.json installed (v" + $LATEST_VERSION + ")")
 
@@ -1721,11 +1779,11 @@ exit 0
         $userSettings = Join-Path $env:USERPROFILE ".claude\settings.json"
         if (Test-Path $userSettings) {
             try {
-                $userJson = Get-Content $userSettings -Raw | ConvertFrom-Json
-                if ($userJson.hooks) {
-                    $userJson.PSObject.Properties.Remove('hooks')
-                    $userJson | ConvertTo-Json -Depth 10 | Set-Content $userSettings -Encoding UTF8
-                    Write-Ok "Removed stale hooks from user-level settings (~/.claude/settings.json)"
+                # Only the entries an older install put there: the user's own hooks are not ours.
+                $cleaned = Merge-HookSettings (Get-Content $userSettings -Raw) ""
+                if ($cleaned) {
+                    [System.IO.File]::WriteAllText($userSettings, $cleaned)
+                    Write-Ok "Removed stale cortex hooks from user-level settings (~/.claude/settings.json)"
                 }
             } catch {
                 Write-Warn "Could not clean user-level settings: $_"
@@ -1828,7 +1886,8 @@ touching a file another agent may hold.
 ### Cross-project lookup:
 Projects are isolated per organization; related repos (client, server, tools) share one.
 ```
-cortex_code_search(query: "...")                      # every repo in this organization
+cortex_code_search(query: "...")                      # this repo, plus a line per other repo
+cortex_code_search(query: "...", repo: "*")           # every repo in this organization
 cortex_code_search(query: "...", repo: "my-backend")  # one repo
 cortex_code_context(name: "...", repo: "my-backend")
 cortex_list_repos()                                   # the repos "every repo" covers
@@ -2494,7 +2553,8 @@ fi
 exit 0
 '@ | Out-File -FilePath "$geminiHooksDir\session-end-check.sh" -Encoding utf8 -NoNewline
 
-        # Gemini settings.json
+        # Gemini settings.json - merged into one the repo already has, like .claude/settings.json.
+        $prevGemini = if (Test-Path ".gemini\settings.json") { Get-Content ".gemini\settings.json" -Raw } else { $null }
         @'
 {
   "hooks": {
@@ -2537,6 +2597,15 @@ exit 0
   }
 }
 '@ | Out-File -FilePath ".gemini\settings.json" -Encoding utf8
+        if ($prevGemini) {
+            $geminiSettings = (Resolve-Path ".gemini\settings.json").Path
+            try {
+                [System.IO.File]::WriteAllText($geminiSettings, (Merge-HookSettings $prevGemini (Get-Content $geminiSettings -Raw)))
+            } catch {
+                [System.IO.File]::WriteAllText("$geminiSettings.bak", $prevGemini)
+                Write-Warn "Gemini: could not merge into the existing .gemini/settings.json (invalid JSON) - replaced it, the old one is .gemini/settings.json.bak"
+            }
+        }
 
         Write-Ok ("Gemini: hooks + settings.json installed (v" + $LATEST_VERSION + ")")
     }

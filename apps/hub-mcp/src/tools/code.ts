@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
-import { formatCodeMatches, type CodeMatch } from './code-matches.js'
+import { formatCodeMatches, formatOtherRepos, OTHER_REPO_MATCHES, type CodeMatch } from './code-matches.js'
 import { formatDiffImpact } from './diff-impact.js'
 import { LOAD_UP_FRONT } from './load-up-front.js'
 
@@ -72,135 +72,166 @@ export function registerCodeTools(server: McpServer, env: Env) {
   }
 
   // ── code_search — query codebase concepts and workflows ──
+
+  /** The graph's flows for one repo, with a symbol lookup when it found no flow. */
+  async function searchRepo(query: string, project: string, org: string | undefined, branch: string | undefined, limit: number): Promise<string> {
+    const data = (await callIntel('search', { query, projectId: project, orgId: org, branch, limit })) as {
+      data?: { formatted?: string }
+    }
+    let formatted = data?.data?.formatted ?? ''
+
+    // ── Auto-fallback: when execution flows are empty, search symbols via cypher ──
+    const isEmpty = formatted && (
+      formatted.includes('No matching execution flows') ||
+      formatted.includes('No matching results found')
+    )
+
+    if (isEmpty) {
+      // Extract meaningful search terms from query (split on spaces, underscores, hyphens)
+      const searchTerms = query
+        .split(/[\s_\-]+/)
+        .filter(w => w.length > 2 && !/^(the|and|for|with|from|that|this|how|does|what|where|create|get|set|use)$/i.test(w))
+        .slice(0, 4)
+
+      // Search each symbol type separately (Kuzu doesn't support multi-label WHERE)
+      const allSymbols: Array<{ name: string; type: string }> = []
+      for (const symbolType of ['Function', 'Method', 'Class', 'Interface']) {
+        const conditions = searchTerms
+          .map(t => `lower(n.name) CONTAINS "${t.toLowerCase().replace(/"/g, '')}"`)
+          .join(' OR ')
+        if (!conditions) continue
+
+        try {
+          const cypherRes = await callIntel('cypher', {
+            query: `MATCH (n:${symbolType}) WHERE ${conditions} RETURN DISTINCT n.name AS name LIMIT 10`,
+            projectId: project,
+            orgId: org,
+          })
+          // Response shape: { success, data: { raw: "| name |\n| --- |\n| … |\n(N rows)\n---\n..." } },
+          // or from a hub before the table was unwrapped, raw opens with { "markdown", "row_count" }.
+          const wrapper = cypherRes as { data?: { raw?: string; formatted?: string; row_count?: number } }
+          let md = ''
+          let rows = 0
+
+          if (wrapper?.data?.raw) {
+            // Parse the JSON portion from raw (before "---" separator)
+            const jsonPart = wrapper.data.raw.split('\n---')[0] ?? ''
+            try {
+              const parsed = JSON.parse(jsonPart) as { markdown?: string; row_count?: number }
+              md = parsed.markdown ?? ''
+              rows = parsed.row_count ?? 0
+            } catch {
+              // raw might be plain text, try extracting table directly
+              md = wrapper.data.raw
+              rows = md.split('\n').filter(l => l.startsWith('|')).length - 2 // table lines minus header and rule
+            }
+          } else if (wrapper?.data?.formatted) {
+            md = wrapper.data.formatted
+            rows = wrapper.data.row_count ?? 0
+          }
+
+          if (rows > 0 && md) {
+            const lines = md.split('\n').filter(l => l.startsWith('| ') && !l.includes('---') && !l.includes('n.name') && !l.includes('name |'))
+            for (const line of lines) {
+              const name = line.replace(/\|/g, '').trim()
+              if (name && name !== 'name') allSymbols.push({ name, type: symbolType })
+            }
+          }
+        } catch { /* best-effort per type */ }
+      }
+
+      if (allSymbols.length > 0) {
+        formatted = `Search: "${query}"\n\n`
+        formatted += `Found ${allSymbols.length} symbol(s):\n\n`
+        formatted += '| Symbol | Type |\n| --- | --- |\n'
+        for (const s of allSymbols.slice(0, 20)) {
+          formatted += `| ${s.name} | ${s.type} |\n`
+        }
+        formatted += '\n---'
+        formatted += '\nNext: Run cortex_code_context "<name>" on any symbol to see callers, callees, and full context.'
+      } else {
+        formatted += '\n\n---'
+        formatted += '\nNo execution flows or symbols found for this query.'
+        formatted += `\nTry: cortex_cypher 'MATCH (n:Function) RETURN n.name LIMIT 30' to browse available symbols.`
+      }
+    }
+    return formatted
+  }
+
+  /** The semantic arm: one repo's collection, or with no project every repo of the organization. */
+  async function searchCode(params: Record<string, unknown>): Promise<CodeMatch[]> {
+    try {
+      const codeRes = await apiCall(env, '/api/intel/code-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(15000),
+      })
+      if (!codeRes.ok) return []
+      const codeData = (await codeRes.json()) as { data?: { results?: CodeMatch[] } }
+      return codeData?.data?.results ?? []
+    } catch {
+      // Qdrant search is best-effort
+      return []
+    }
+  }
+
   server.tool(
     'cortex_code_search',
-    'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. Accepts repo name (e.g. "cortex-hub"), git URL, or projectId. OMIT repo to search every indexed repo in your ORGANIZATION in parallel and get ranked hints — that is the way to answer a question that spans repos (client + server + tools of one product). Projects are isolated per organization, so a cross-repo search never reaches another organization\'s code.',
+    'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. ' +
+    'Without repo it searches the repo you are working in (the client names it) and lists what the other repos of your ' +
+    'ORGANIZATION hold for the same query. repo: "*" searches every repo of the organization — the way to answer a ' +
+    'question that spans repos (client + server + tools of one product). Projects are isolated per organization, so a ' +
+    'cross-repo search never reaches another organization\'s code.',
     {
       query: z.string().describe('Natural language or code query to search for'),
-      repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL. Preferred over projectId. Omit to search the whole organization.'),
+      repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL, or "*" for every repo of your organization. Omit it for the repo you are working in.'),
       projectId: z.string().optional().describe('Project ID (e.g. "proj-704127e3"). Use repo name instead if possible.'),
       org: z.string().optional().describe(ORG_DESC),
       branch: z.string().optional().describe('Git branch to search'),
       limit: z.number().optional().describe('Maximum flows to return (default: 5)'),
+      here: z.string().optional().describe('Filled in by the client: the git remote of the checkout you are in. Leave it out.'),
     },
-    async ({ query, repo, projectId, org, branch, limit }) => {
+    async ({ query, repo, projectId, org, branch, limit, here }) => {
       try {
-        const resolvedProject = await resolveRepo(repo, projectId)
-        const data = (await callIntel('search', {
-          query,
-          projectId: resolvedProject,
-          orgId: org,
-          branch,
-          limit: limit ?? 5,
-        })) as { data?: { formatted?: string }; success?: boolean }
+        // No repo means the repo the agent is in, when its client says which: half of all
+        // searches named none, and the organization-wide answer they got was graph flows only —
+        // no ranked files, no line numbers — from every repo but the one being worked on.
+        const wide = repo === '*'
+        const scopeRepo = here ? await resolveRepo(here) : undefined
+        const named = wide ? undefined : await resolveRepo(repo, projectId)
+        const current = named || wide || org ? undefined : scopeRepo
+        const flowLimit = limit ?? 5
 
-        let formatted = data?.data?.formatted ?? ''
-
-        // ── Auto-fallback: when execution flows are empty, search symbols via cypher ──
-        const isEmpty = formatted && (
-          formatted.includes('No matching execution flows') ||
-          formatted.includes('No matching results found')
-        )
-
-        if (isEmpty && resolvedProject) {
-          // Extract meaningful search terms from query (split on spaces, underscores, hyphens)
-          const searchTerms = query
-            .split(/[\s_\-]+/)
-            .filter(w => w.length > 2 && !/^(the|and|for|with|from|that|this|how|does|what|where|create|get|set|use)$/i.test(w))
-            .slice(0, 4)
-
-          // Search each symbol type separately (Kuzu doesn't support multi-label WHERE)
-          const allSymbols: Array<{ name: string; type: string }> = []
-          for (const symbolType of ['Function', 'Method', 'Class', 'Interface']) {
-            const conditions = searchTerms
-              .map(t => `lower(n.name) CONTAINS "${t.toLowerCase().replace(/"/g, '')}"`)
-              .join(' OR ')
-            if (!conditions) continue
-
-            try {
-              const cypherRes = await callIntel('cypher', {
-                query: `MATCH (n:${symbolType}) WHERE ${conditions} RETURN DISTINCT n.name AS name LIMIT 10`,
-                projectId: resolvedProject,
-                orgId: org,
-              })
-              // Response shape: { success, data: { raw: "| name |\n| --- |\n| … |\n(N rows)\n---\n..." } },
-              // or from a hub before the table was unwrapped, raw opens with { "markdown", "row_count" }.
-              const wrapper = cypherRes as { data?: { raw?: string; formatted?: string; row_count?: number } }
-              let md = ''
-              let rows = 0
-
-              if (wrapper?.data?.raw) {
-                // Parse the JSON portion from raw (before "---" separator)
-                const jsonPart = wrapper.data.raw.split('\n---')[0] ?? ''
-                try {
-                  const parsed = JSON.parse(jsonPart) as { markdown?: string; row_count?: number }
-                  md = parsed.markdown ?? ''
-                  rows = parsed.row_count ?? 0
-                } catch {
-                  // raw might be plain text, try extracting table directly
-                  md = wrapper.data.raw
-                  rows = md.split('\n').filter(l => l.startsWith('|')).length - 2 // table lines minus header and rule
-                }
-              } else if (wrapper?.data?.formatted) {
-                md = wrapper.data.formatted
-                rows = wrapper.data.row_count ?? 0
-              }
-
-              if (rows > 0 && md) {
-                const lines = md.split('\n').filter(l => l.startsWith('| ') && !l.includes('---') && !l.includes('n.name') && !l.includes('name |'))
-                for (const line of lines) {
-                  const name = line.replace(/\|/g, '').trim()
-                  if (name && name !== 'name') allSymbols.push({ name, type: symbolType })
-                }
-              }
-            } catch { /* best-effort per type */ }
-          }
-
-          if (allSymbols.length > 0) {
-            formatted = `Search: "${query}"\n\n`
-            formatted += `Found ${allSymbols.length} symbol(s):\n\n`
-            formatted += '| Symbol | Type |\n| --- | --- |\n'
-            for (const s of allSymbols.slice(0, 20)) {
-              formatted += `| ${s.name} | ${s.type} |\n`
-            }
-            formatted += '\n---'
-            formatted += '\nNext: Run cortex_code_context "<name>" on any symbol to see callers, callees, and full context.'
-          } else {
-            formatted += '\n\n---'
-            formatted += '\nNo execution flows or symbols found for this query.'
-            formatted += `\nTry: cortex_cypher 'MATCH (n:Function) RETURN n.name LIMIT 30' to browse available symbols.`
+        if (named ?? current) {
+          const project = (named ?? current)!
+          // The other repos of the organization are asked alongside, not after.
+          const others = current
+            ? searchCode({ query, orgId: org, scopeRepo, exclude: current, branch, limit: OTHER_REPO_MATCHES })
+            : Promise.resolve([])
+          const [flows, matches] = await Promise.all([
+            searchRepo(query, project, org, branch, flowLimit).catch((error: unknown) => {
+              // A checkout the hub does not hold: search the organization instead.
+              if (current) return undefined
+              throw error
+            }),
+            // Paths are cheap and snippets are capped, so ask for more than the flow limit.
+            searchCode({ query, projectId: project, orgId: org, branch, limit: Math.max(flowLimit, 8) }),
+          ])
+          if (flows !== undefined) {
+            const sections = [formatCodeMatches(matches), flows, formatOtherRepos(await others)].filter(Boolean)
+            return { content: [{ type: 'text' as const, text: sections.join('\n\n---\n') || 'No results.' }] }
           }
         }
 
-        // ── Qdrant semantic code search: the ranked files, ahead of the graph's flows ──
-        if (resolvedProject) {
-          try {
-            const codeRes = await apiCall(env, '/api/intel/code-search', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              // Paths are cheap and snippets are capped, so ask for more than the flow limit.
-              body: JSON.stringify({ query, projectId: resolvedProject, orgId: org, branch, limit: Math.max(limit ?? 5, 8) }),
-              signal: AbortSignal.timeout(15000),
-            })
-
-            if (codeRes.ok) {
-              const codeData = (await codeRes.json()) as { data?: { results?: CodeMatch[] } }
-              const matches = formatCodeMatches(codeData?.data?.results ?? [])
-              if (matches) formatted = formatted ? `${matches}\n\n---\n${formatted}` : matches
-            }
-          } catch {
-            // Qdrant search is best-effort
-          }
-        }
-
-        if (formatted) {
-          return {
-            content: [{ type: 'text' as const, text: formatted }],
-          }
-        }
-
+        // ── Every repo of the organization: ranked files across them, then the graph's flows ──
+        const [matches, fanOut] = await Promise.all([
+          searchCode({ query, orgId: org, scopeRepo, branch, limit: Math.max(flowLimit, 8) }),
+          callIntel('search', { query, orgId: org, scopeRepo, branch, limit: flowLimit }) as Promise<{ data?: { formatted?: string } }>,
+        ])
+        const sections = [formatCodeMatches(matches), fanOut?.data?.formatted ?? ''].filter(Boolean)
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text' as const, text: sections.join('\n\n---\n') || JSON.stringify(fanOut, null, 2) }],
         }
       } catch (error) {
         return {

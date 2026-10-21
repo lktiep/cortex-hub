@@ -245,6 +245,26 @@ OUT=$(sid '{"session_id":"conv-a","tool_input":{"repo":"r"}}')
 check "a malformed identity adds nothing"   'branch,clientSessionId,ide,repo' "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput | keys | join(",")')"
 printf 'not json' > "$SANDBOX/.cortex/agent-identity.json"
 check "nor does a broken file"              conv-a "$(sid '{"session_id":"conv-a","tool_input":{}}' | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
+# A search that names no repo is about this checkout: without it the hub searched every repo of
+# the organization, and the one being worked on only as one of many.
+git -C "$SANDBOX" remote add origin https://u:tok@example.com/acme/game-client.git
+CS='"tool_name":"mcp__cortex-hub__cortex_code_search"'
+OUT=$(sid "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"login\"}}")
+check "a search with no repo gets this checkout's" https://example.com/acme/game-client.git "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.here')"
+check "and keeps its query"                 login "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.query')"
+check "and gets no session fields"          'here,query' "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput | keys | join(",")')"
+check "a named repo is left alone"          "" "$(sid "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"q\",\"repo\":\"*\"}}")"
+check "so is a named organization"          "" "$(sid "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"q\",\"org\":\"o\"}}")"
+NOJQ=$(mktemp -d)
+for b in bash cat git sed printf python3 pwd; do
+  [ -x "$(command -v $b 2>/dev/null)" ] && ln -sf "$(command -v $b)" "$NOJQ/$b"
+done
+OUT=$(printf '%s' "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"login\"}}" \
+  | PATH="$NOJQ" CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-id.sh" 2>/dev/null)
+rm -rf "$NOJQ"
+check "without jq too"                      https://example.com/acme/game-client.git "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.here')"
+git -C "$SANDBOX" remote remove origin
+check "no remote, nothing to add"           "" "$(sid "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"q\"}}")"
 teardown
 
 echo "session-init.sh — the session gate must not arm itself"
@@ -947,6 +967,36 @@ check "installer exits clean"               0 "$RC"
 check "the shadowing hooksPath is cleared"  0 "$([ -z "$(git -C "$PROJ" config --get core.hooksPath)" ] && echo 0 || echo 1)"
 check "lefthook owns .git/hooks/pre-commit" 0 "$(grep -qi lefthook "$PROJ/.git/hooks/pre-commit" 2>/dev/null && echo 0 || echo 1)"
 check "and the gate is reported live"       0 "$(grep -q 'pre-commit gate live' "$OUT" && echo 0 || echo 1)"
+rm -rf "$PROJ"
+
+echo "  a repo's own .claude/settings.json is merged into, not replaced"
+# Onboarding a repo that commits its own settings (permissions, a plugin, a hook of its own)
+# replaced the file and everything in it; the user-level clean-up dropped every user hook.
+# HOME is apart from the repo here: install_in_sandbox's HOME=$PROJ makes the two one file.
+PROJ=$(mktemp -d); mkdir -p "$PROJ/repo/.claude" "$PROJ/home/.claude"
+printf '{\n\t"permissions": {"allow": ["Bash(ls:*)"]},\n\t"hooks": {"PostToolUse": [{"matcher": "Skill", "hooks": [{"type": "command", "command": "node track.mjs"}]}]},\n\t"enabledPlugins": {"x@x": true}\n}\n' > "$PROJ/repo/.claude/settings.json"
+printf '{"model": "m", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}], "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "bash .claude/hooks/track-quality.sh"}]}]}}\n' > "$PROJ/home/.claude/settings.json"
+install_claude() { (cd "$PROJ/repo" && git init -q . && HOME="$PROJ/home" bash "$INSTALL_SH" --skip-global --tools claude "$@") > "$PROJ/out" 2>&1; }
+in_json() { python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(eval(sys.argv[2]))' "$1" "$2" 2>/dev/null; }
+S="$PROJ/repo/.claude/settings.json"; U="$PROJ/home/.claude/settings.json"
+install_claude; RC=$?
+check "installer exits clean"               0 "$RC"
+check "and says it merged"                  0 "$(grep -q 'merged into the existing .claude/settings.json' "$PROJ/out" && echo 0 || echo 1)"
+check "permissions kept"                    "Bash(ls:*)" "$(in_json "$S" 'd["permissions"]["allow"][0]')"
+check "plugin kept"                         True "$(in_json "$S" 'd["enabledPlugins"]["x@x"]')"
+check "the repo's hook kept, first"         "node track.mjs" "$(in_json "$S" 'd["hooks"]["PostToolUse"][0]["hooks"][0]["command"]')"
+check "ours after it"                       True "$(in_json "$S" '"track-quality.sh" in d["hooks"]["PostToolUse"][1]["hooks"][0]["command"]')"
+check "our other events added"              True "$(in_json "$S" 'all(e in d["hooks"] for e in ("SessionStart", "PreToolUse", "SessionEnd"))')"
+check "its tab indent kept"                 0 "$(grep -q "$(printf '^\t"permissions"')" "$S" && echo 0 || echo 1)"
+install_claude --force
+check "a reinstall does not duplicate ours" 1 "$(in_json "$S" 'sum("track-quality.sh" in json.dumps(e) for e in d["hooks"]["PostToolUse"])')"
+check "nor drop the repo's"                 "node track.mjs" "$(in_json "$S" 'd["hooks"]["PostToolUse"][0]["hooks"][0]["command"]')"
+check "user level: own hook kept"           "say done" "$(in_json "$U" 'd["hooks"]["Stop"][0]["hooks"][0]["command"]')"
+check "user level: stale cortex hook gone"  False "$(in_json "$U" '"PostToolUse" in d["hooks"]')"
+check "user level: other settings kept"     m "$(in_json "$U" 'd["model"]')"
+printf '{ not json' > "$S"; install_claude --force
+check "unreadable settings: still installs" True "$(in_json "$S" '"PreToolUse" in d["hooks"]')"
+check "and keeps the old file aside"        "{ not json" "$(cat "$S.bak" 2>/dev/null)"
 rm -rf "$PROJ"
 
 echo "  this repo must not re-introduce a hooksPath that shadows lefthook"

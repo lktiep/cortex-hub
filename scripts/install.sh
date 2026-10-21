@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HOOKS_VERSION=7
-HOOKS_MINOR=14
+HOOKS_MINOR=15
 MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
@@ -39,6 +39,43 @@ sed_inplace() {
   if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi
 }
 err()   { echo -e "${RED}[cortex]${NC} $*" >&2; }
+
+# merge_settings PREV TARGET: TARGET holds the hooks this installer writes, PREV the settings
+# file it replaced. Writes PREV back into TARGET with its hook entries that run a cortex hook
+# script swapped for ours, and everything else (permissions, plugins, the repo's own hooks)
+# kept. With TARGET empty it only strips cortex entries from PREV — for the user-level file,
+# where an older install put them. Fails, changing nothing, without python3 or valid JSON.
+merge_settings() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$1" "${2:-}" << 'PYEOF'
+import json, re, sys
+prev_path, path = sys.argv[1], sys.argv[2]
+text = open(prev_path).read()
+prev = json.loads(text)
+ours = json.load(open(path))["hooks"] if path else {}
+mine = re.compile(r"\.(claude|gemini)/hooks/(session-init|subagent-start|enforce-session|enforce-commit|nudge-lookup|session-id|recall-notes|recall-prompt|track-quality|session-end-check)\.sh")
+def theirs(entry):
+    if not isinstance(entry, dict):
+        return True
+    return not any(mine.search(str(h.get("command", ""))) for h in entry.get("hooks", []) if isinstance(h, dict))
+hooks = prev.get("hooks") if isinstance(prev.get("hooks"), dict) else {}
+merged = {}
+for event in list(hooks) + [e for e in ours if e not in hooks]:
+    entries = hooks.get(event, [])
+    kept = [e for e in entries if theirs(e)] if isinstance(entries, list) else entries
+    kept = kept + ours.get(event, [])
+    if kept:
+        merged[event] = kept
+if not path and merged == hooks:
+    sys.exit(1)
+if merged:
+    prev["hooks"] = merged
+else:
+    prev.pop("hooks", None)
+indent = "\t" if "\n\t" in text else 2
+open(path or prev_path, "w").write(json.dumps(prev, indent=indent, ensure_ascii=False) + "\n")
+PYEOF
+}
 
 # ── Parse Args ──
 FORCE=false
@@ -1872,7 +1909,8 @@ HOOKEOF
 
   cat > .claude/hooks/session-id.sh << 'HOOKEOF'
 #!/bin/bash
-# Cortex Session Id (v1.1) — fills in clientSessionId and the agent identity on cortex_session_start.
+# Cortex Session Id (v1.2) — fills in clientSessionId and the agent identity on cortex_session_start,
+# and the checkout's repo on cortex_code_search.
 #
 # The hub keeps two conversations in one checkout on separate sessions by this id. Until
 # session-init v7.4 the agent copied it from a line that hook printed, but that line differs
@@ -1884,6 +1922,11 @@ HOOKEOF
 # v1.1: the identity too. CLAUDE.md told the agent to read .cortex/agent-identity.json and the
 # git branch before its first call, two more turns in every conversation for values a script
 # can look up. What the agent passes itself still wins; only the id is always this hook's.
+#
+# v1.2: a cortex_code_search that names no repo, project or org gets `here`, this checkout's
+# remote. Agents left repo out in half their searches, and the hub then searched every repo of
+# the organization at once: graph flows only, no ranked files or lines, and nothing from the
+# repo being worked on. With `here` it searches this repo in full and lists the others below.
 INPUT=$(cat 2>/dev/null || true)
 [ -z "$INPUT" ] && exit 0
 
@@ -1895,12 +1938,20 @@ case "${CLAUDE_CODE_ENTRYPOINT:-}" in
   *) IDE=claude-code-cli ;;
 esac
 
+# Credentials in the remote stay here: only the host and path go to the hub.
+HERE=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null | sed -E 's#://[^/@]+@#://#' || true)
+
 # The same id, with the same characters kept, that the tracker and the exit hook file this
 # conversation's session under. Whatever the agent passed is replaced: this one is current.
 if command -v jq >/dev/null 2>&1; then
   IDENTITY=$(jq -c 'if type == "object" then . else {} end' "$IDENTITY_FILE" 2>/dev/null || true)
   [ -z "$IDENTITY" ] && IDENTITY='{}'
-  printf '%s' "$INPUT" | jq -c --argjson who "$IDENTITY" --arg branch "$BRANCH" --arg ide "$IDE" '
+  printf '%s' "$INPUT" | jq -c --argjson who "$IDENTITY" --arg branch "$BRANCH" --arg ide "$IDE" --arg here "$HERE" '
+    if (.tool_name // "" | test("cortex_code_search$")) then
+      (.tool_input // {}) as $in
+      | select($here != "" and ([$in.repo, $in.projectId, $in.org, $in.here] | all(. == null)))
+      | {hookSpecificOutput: {hookEventName: "PreToolUse", updatedInput: ($in + {here: $here})}}
+    else
     (.session_id // "" | gsub("[^A-Za-z0-9_-]"; "") | .[0:128]) as $id
     | select($id != "")
     | ($who.environment | if type == "object" then . else {} end) as $env
@@ -1911,13 +1962,19 @@ if command -v jq >/dev/null 2>&1; then
        + ($who.capabilities | if type == "array" and length > 0 and all(type == "string")
            then {capabilities: .} else {} end)) as $found
     | {hookSpecificOutput: {hookEventName: "PreToolUse",
-        updatedInput: ($found + (.tool_input // {}) + {clientSessionId: $id})}}' 2>/dev/null
+        updatedInput: ($found + (.tool_input // {}) + {clientSessionId: $id})}}
+    end' 2>/dev/null
 elif command -v python3 >/dev/null 2>&1; then
-  printf '%s' "$INPUT" | IDENTITY_FILE="$IDENTITY_FILE" BRANCH="$BRANCH" IDE="$IDE" python3 -c '
+  printf '%s' "$INPUT" | IDENTITY_FILE="$IDENTITY_FILE" BRANCH="$BRANCH" IDE="$IDE" HERE="$HERE" python3 -c '
 import json, os, re, sys
 d = json.load(sys.stdin)
 cid = re.sub(r"[^A-Za-z0-9_-]", "", str(d.get("session_id") or ""))[:128]
-if cid:
+if str(d.get("tool_name") or "").endswith("cortex_code_search"):
+    args = d.get("tool_input") or {}
+    if os.environ.get("HERE") and all(args.get(k) is None for k in ("repo", "projectId", "org", "here")):
+        args["here"] = os.environ["HERE"]
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": args}}))
+elif cid:
     try:
         who = json.load(open(os.environ["IDENTITY_FILE"], encoding="utf-8-sig"))
         who = who if isinstance(who, dict) else {}
@@ -1946,6 +2003,13 @@ HOOKEOF
   # The path is anchored to CLAUDE_PROJECT_DIR because Claude Code runs a hook in the
   # shell cwd, which follows every cd: a relative path failed with No such file in a
   # subdirectory, and Claude Code treats that as non-blocking, so every gate opened.
+  # A repo may already commit its own settings (permissions, hooks, plugins): set it aside
+  # and merge it back below, or onboarding wipes them.
+  PREV_SETTINGS=""
+  if [ -f .claude/settings.json ]; then
+    PREV_SETTINGS="$(mktemp)"
+    cp .claude/settings.json "$PREV_SETTINGS"
+  fi
   cat > .claude/settings.json << 'EOF'
 {
   "hooks": {
@@ -2001,7 +2065,7 @@ HOOKEOF
         ]
       },
       {
-        "matcher": "mcp__.*cortex_session_start",
+        "matcher": "mcp__.*cortex_(session_start|code_search)",
         "hooks": [
           {
             "type": "command",
@@ -2045,19 +2109,23 @@ HOOKEOF
   }
 }
 EOF
-  ok "Settings: .claude/settings.json generated"
+  if [ -n "$PREV_SETTINGS" ]; then
+    if merge_settings "$PREV_SETTINGS" .claude/settings.json; then
+      ok "Settings: cortex hooks merged into the existing .claude/settings.json"
+    else
+      cp "$PREV_SETTINGS" .claude/settings.json.bak
+      warn "Settings: could not merge into the existing .claude/settings.json (needs python3 and valid JSON) — replaced it, the old one is .claude/settings.json.bak"
+    fi
+    rm -f "$PREV_SETTINGS"
+  else
+    ok "Settings: .claude/settings.json generated"
+  fi
 
   # ── Clean user-level hooks (prevent duplicate/stale hooks) ──
+  # Only the entries an older install put there: the user's own hooks are not ours to remove.
   USER_SETTINGS="$HOME/.claude/settings.json"
-  if [ -f "$USER_SETTINGS" ] && command -v python3 >/dev/null 2>&1; then
-    if python3 -c "import json; d=json.load(open('$USER_SETTINGS')); exit(0 if 'hooks' in d else 1)" 2>/dev/null; then
-      python3 -c "
-import json
-with open('$USER_SETTINGS') as f: d=json.load(f)
-d.pop('hooks', None)
-with open('$USER_SETTINGS','w') as f: json.dump(d, f, indent=2)
-" 2>/dev/null && ok "Removed stale hooks from user-level settings (~/.claude/settings.json)" || true
-    fi
+  if [ -f "$USER_SETTINGS" ] && merge_settings "$USER_SETTINGS" 2>/dev/null; then
+    ok "Removed stale cortex hooks from user-level settings (~/.claude/settings.json)"
   fi
 
   # ── Slash commands (/cs, /ce) ──
@@ -2154,7 +2222,8 @@ touching a file another agent may hold.
 ### Cross-project lookup:
 Projects are isolated per organization; related repos (client, server, tools) share one.
 ```
-cortex_code_search(query: "...")                      # every repo in this organization
+cortex_code_search(query: "...")                      # this repo, plus a line per other repo
+cortex_code_search(query: "...", repo: "*")           # every repo in this organization
 cortex_code_search(query: "...", repo: "my-backend")  # one repo
 cortex_code_context(name: "...", repo: "my-backend")
 cortex_list_repos()                                   # the repos "every repo" covers
@@ -2818,7 +2887,12 @@ GHOOKEOF
 
     chmod +x .gemini/hooks/*.sh
 
-    # Gemini settings.json
+    # Gemini settings.json — merged into one the repo already has, like .claude/settings.json.
+    PREV_SETTINGS=""
+    if [ -f .gemini/settings.json ]; then
+      PREV_SETTINGS="$(mktemp)"
+      cp .gemini/settings.json "$PREV_SETTINGS"
+    fi
     cat > .gemini/settings.json << 'GSETTINGS'
 {
   "hooks": {
@@ -2861,6 +2935,13 @@ GHOOKEOF
   }
 }
 GSETTINGS
+    if [ -n "$PREV_SETTINGS" ]; then
+      if ! merge_settings "$PREV_SETTINGS" .gemini/settings.json; then
+        cp "$PREV_SETTINGS" .gemini/settings.json.bak
+        warn "Gemini: could not merge into the existing .gemini/settings.json (needs python3 and valid JSON) — replaced it, the old one is .gemini/settings.json.bak"
+      fi
+      rm -f "$PREV_SETTINGS"
+    fi
     ok "Gemini: hooks + settings.json installed (v${HOOKS_VERSION}.${HOOKS_MINOR})"
   fi
 

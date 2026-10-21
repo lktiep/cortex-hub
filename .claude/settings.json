@@ -52,7 +52,7 @@
         ]
       },
       {
-        "matcher": "mcp__.*cortex_session_start",
+        "matcher": "mcp__.*cortex_(session_start|code_search)",
         "hooks": [
           {
             "type": "command",

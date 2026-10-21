@@ -86,7 +86,8 @@ means a lookup failed, not that the change is safe.
 Projects are isolated per **organization**. Related repos — a product's client, server and
 tools — belong in the same one, and that is the boundary of a cross-repo search:
 ```
-cortex_code_search(query: "login packet")                     # every repo in your organization
+cortex_code_search(query: "login packet")                     # this repo, plus a line per other repo
+cortex_code_search(query: "login packet", repo: "*")          # every repo in your organization
 cortex_code_search(query: "user auth", repo: "my-backend")     # one repo
 cortex_code_context(name: "validateToken", repo: "my-backend")
 cortex_list_repos()                                            # what "every repo" covers

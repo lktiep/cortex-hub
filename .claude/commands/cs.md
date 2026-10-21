@@ -89,7 +89,8 @@ touching a file another agent may hold.
 ### Cross-project lookup:
 Projects are isolated per organization; related repos (client, server, tools) share one.
 ```
-cortex_code_search(query: "...")                      # every repo in this organization
+cortex_code_search(query: "...")                      # this repo, plus a line per other repo
+cortex_code_search(query: "...", repo: "*")           # every repo in this organization
 cortex_code_search(query: "...", repo: "my-backend")  # one repo
 cortex_code_context(name: "...", repo: "my-backend")
 cortex_list_repos()                                   # the repos "every repo" covers
