@@ -1,12 +1,12 @@
 name: Pages
 
-# Publishes site/ (the Conductor showcase) to GitHub Pages. Only that folder is uploaded,
-# so the Markdown under docs/ never goes through a Jekyll build.
+# Builds the VitePress docs site in website/ and publishes it to GitHub Pages. The Conductor
+# showcase ships inside it, from website/public/conductor/.
 on:
   push:
     branches: [master]
     paths:
-      - 'site/**'
+      - 'website/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -22,9 +22,9 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy site/
+    name: Build and deploy website/
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -32,13 +32,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+
+      # website/ is outside the pnpm workspace and has its own lockfile.
+      - name: Install
+        working-directory: website
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: Build
+        working-directory: website
+        run: pnpm build
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload site/
+      - name: Upload website/.vitepress/dist
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: website/.vitepress/dist
 
       - name: Deploy
         id: deployment

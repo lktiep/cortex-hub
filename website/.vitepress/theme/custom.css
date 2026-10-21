@@ -1,0 +1,244 @@
+/*
+ * Cortex Hub docs theme: the Conductor showcase's tokens (public/conductor/index.html)
+ * mapped onto VitePress's variables, so the docs and the showcase read as one site.
+ */
+
+:root {
+  --cx-bg: #f3f4f6;
+  --cx-bg-2: #e8eaee;
+  --cx-surface: #ffffff;
+  --cx-surface-2: #f8f9fa;
+  --cx-line: #dadde3;
+  --cx-line-strong: #b8bfc9;
+  --cx-text: #0f1318;
+  --cx-muted: #56606c;
+  --cx-faint: #88909b;
+  --cx-signal: #dc440c;
+  /* The signal colour, darkened enough to pass 4.5:1 as link text on white. */
+  --cx-signal-text: #b5390a;
+  --cx-signal-soft: rgba(220, 68, 12, 0.09);
+  --cx-on-signal: #ffffff;
+  --cx-done: #0f8a5f;
+  --cx-review: #7c4fd8;
+  --cx-run: #1f6feb;
+  --cx-held: #b26a00;
+  --cx-crit: #d22f43;
+  --cx-code-bg: #12161c;
+
+  --vp-font-family-base: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --vp-font-family-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --cx-display: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+
+  --vp-c-bg: var(--cx-surface);
+  --vp-c-bg-alt: var(--cx-bg);
+  --vp-c-bg-elv: var(--cx-surface);
+  --vp-c-bg-soft: var(--cx-surface-2);
+  --vp-c-divider: var(--cx-line);
+  --vp-c-border: var(--cx-line-strong);
+  --vp-c-gutter: var(--cx-bg-2);
+  --vp-c-text-1: var(--cx-text);
+  --vp-c-text-2: var(--cx-muted);
+  --vp-c-text-3: var(--cx-faint);
+
+  --vp-c-brand-1: var(--cx-signal-text);
+  --vp-c-brand-2: var(--cx-signal);
+  --vp-c-brand-3: var(--cx-signal);
+  --vp-c-brand-soft: var(--cx-signal-soft);
+
+  --vp-c-tip-1: var(--cx-done);
+  --vp-c-tip-soft: rgba(15, 138, 95, 0.1);
+  --vp-c-warning-1: var(--cx-held);
+  --vp-c-warning-soft: rgba(178, 106, 0, 0.1);
+  --vp-c-danger-1: var(--cx-crit);
+  --vp-c-danger-soft: rgba(210, 47, 67, 0.09);
+  --vp-c-note-1: var(--cx-run);
+
+  --vp-button-brand-bg: var(--cx-signal);
+  --vp-button-brand-hover-bg: #c23b09;
+  --vp-button-brand-active-bg: #a93308;
+  --vp-button-brand-text: var(--cx-on-signal);
+  --vp-button-brand-hover-text: var(--cx-on-signal);
+
+  --vp-code-block-bg: var(--cx-code-bg);
+  --vp-code-bg: var(--cx-bg-2);
+  --vp-code-color: var(--cx-text);
+  --vp-code-copy-code-bg: #1b2028;
+
+  --vp-home-hero-name-color: var(--cx-text);
+  --vp-home-hero-image-background-image: radial-gradient(circle at 50% 50%, rgba(220, 68, 12, 0.28), transparent 62%);
+  --vp-home-hero-image-filter: blur(56px);
+
+  --vp-local-search-highlight-bg: var(--cx-signal);
+  --vp-local-search-highlight-text: var(--cx-on-signal);
+}
+
+.dark {
+  --cx-bg: #0a0c0f;
+  --cx-bg-2: #11141a;
+  --cx-surface: #14181d;
+  --cx-surface-2: #191e24;
+  --cx-line: #252b33;
+  --cx-line-strong: #38404b;
+  --cx-text: #e9ecf0;
+  --cx-muted: #9aa3ae;
+  --cx-faint: #6b7480;
+  --cx-signal: #ff6a2b;
+  --cx-signal-text: #ff7a42;
+  --cx-signal-soft: rgba(255, 106, 43, 0.13);
+  --cx-on-signal: #160700;
+  --cx-done: #3ccf91;
+  --cx-review: #b38dff;
+  --cx-run: #5aa2ff;
+  --cx-held: #eaa53c;
+  --cx-crit: #ff5c6c;
+  --cx-code-bg: #0d1014;
+
+  --vp-c-bg: var(--cx-bg);
+  --vp-c-bg-alt: var(--cx-bg-2);
+  --vp-c-bg-elv: var(--cx-surface);
+  --vp-c-bg-soft: var(--cx-surface);
+  --vp-c-tip-soft: rgba(60, 207, 145, 0.12);
+  --vp-c-warning-soft: rgba(234, 165, 60, 0.12);
+  --vp-c-danger-soft: rgba(255, 92, 108, 0.12);
+  --vp-button-brand-hover-bg: #ff7d45;
+  --vp-button-brand-active-bg: #e85a1d;
+  --vp-code-bg: var(--cx-surface-2);
+  --vp-code-copy-code-bg: #151a20;
+}
+
+/* Headings in the showcase's display face. */
+.vp-doc h1,
+.vp-doc h2,
+.VPHero .name,
+.VPHero .text,
+.VPFeature .title,
+.cx-section h2 {
+  font-family: var(--cx-display);
+  letter-spacing: -0.02em;
+}
+.vp-doc h1 {
+  font-weight: 800;
+}
+.vp-doc h2 {
+  font-weight: 700;
+  border-top-color: var(--cx-line);
+}
+
+/* The kicker: the showcase's mono, upper-case eyebrow with a signal dash. */
+.VPHero .tagline::before,
+.cx-kicker::before {
+  content: '';
+  display: inline-block;
+  width: 22px;
+  height: 2px;
+  margin-right: 10px;
+  vertical-align: middle;
+  background: var(--cx-signal);
+}
+.cx-kicker {
+  font: 600 12px/1 var(--vp-font-family-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vp-c-brand-1);
+  margin: 0 0 14px;
+}
+
+.VPHero .name .clip {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  color: var(--cx-signal);
+}
+.VPHero .text {
+  font-weight: 800;
+}
+.VPHero .tagline {
+  color: var(--cx-muted);
+}
+
+.VPFeature {
+  border: 1px solid var(--cx-line);
+  background: var(--cx-surface) !important;
+}
+.VPFeature:hover {
+  border-color: var(--cx-signal);
+}
+
+.vp-doc a {
+  text-underline-offset: 3px;
+}
+.vp-doc table {
+  font-size: 14px;
+}
+.vp-doc li code,
+.vp-doc p code {
+  overflow-wrap: anywhere;
+}
+/* Table code stays whole; the table scrolls instead (below). */
+.vp-doc td code {
+  white-space: nowrap;
+}
+
+/* Wide reference tables scroll inside themselves rather than widening a phone page. */
+.vp-doc table {
+  display: block;
+  overflow-x: auto;
+}
+
+/* Home-page sections written in markdown below the hero and the feature grid. */
+.cx-home {
+  max-width: 1152px;
+  margin: 0 auto;
+  padding: 0 24px 64px;
+}
+.cx-section {
+  border-top: 1px solid var(--cx-line);
+  padding-top: 48px;
+  margin-top: 48px;
+}
+.cx-section h2 {
+  font-size: clamp(26px, 4vw, 40px);
+  line-height: 1.08;
+  font-weight: 700;
+  margin: 0 0 12px;
+  border: 0;
+  padding: 0;
+}
+.cx-lede {
+  color: var(--cx-muted);
+  max-width: 64ch;
+  font-size: 17px;
+}
+.cx-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 24px 0 8px;
+}
+.cx-stat {
+  border: 1px solid var(--cx-line);
+  background: var(--cx-surface);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+.cx-stat b {
+  display: block;
+  font: 800 34px/1.05 var(--cx-display);
+  letter-spacing: -0.02em;
+  color: var(--cx-text);
+}
+.cx-stat span {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--cx-muted);
+}
+.cx-note {
+  font-size: 13px;
+  color: var(--cx-faint);
+}
+
+@media (min-width: 960px) {
+  .cx-home {
+    padding: 0 64px 96px;
+  }
+}

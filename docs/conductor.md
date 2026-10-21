@@ -2,7 +2,7 @@
 
 > **Production-ready for the rows marked ✅ below; 🔄 and 📋 rows are not.**
 >
-> One-page tour: [lktiep.github.io/cortex-hub](https://lktiep.github.io/cortex-hub/). Before relying
+> One-page tour: [lktiep.github.io/cortex-hub/conductor](https://lktiep.github.io/cortex-hub/conductor/). Before relying
 > on it on your machines, run the [manual test checklist](conductor/manual-test-checklist.md).
 
 ## What It Is

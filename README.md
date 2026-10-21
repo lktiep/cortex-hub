@@ -5,6 +5,8 @@
   </picture>
 </p>
 
+<p align="center"><strong>English</strong> · <a href="README.vi.md">Tiếng Việt</a></p>
+
 <h1 align="center">Cortex Hub</h1>
 
 <p align="center">
@@ -19,6 +21,11 @@
   <a href="#quick-start">Quick Start</a> ·
   <a href="#mcp-tools">MCP Tools</a> ·
   <a href="#docs">Docs</a>
+</p>
+
+<p align="center">
+  📖 <a href="https://lktiep.github.io/cortex-hub/"><strong>Documentation site</strong></a> (English · <a href="https://lktiep.github.io/cortex-hub/vi/">Tiếng Việt</a>) ·
+  🎼 <a href="https://lktiep.github.io/cortex-hub/conductor/">Conductor showcase</a>
 </p>
 
 <p align="center">
@@ -93,7 +100,7 @@ Session 3 (New hire, day 1):
   Productive from hour one, not week three.
 ```
 
-**Retrieval quality: 96.0% R@5** on [LongMemEval](benchmarks/README.md) (500 questions, 6 categories) — matching [MemPalace](https://github.com/milla-jovovich/mempalace) (96.6%) with **$0 cost, no API key, fully offline**. MemPalace requires paid OpenAI embeddings; Cortex runs the model in-process for free.
+**Retrieval quality: 96.0% R@5** on [LongMemEval](benchmarks/README.md) (500 questions, 6 categories) — matching [MemPalace](https://github.com/milla-jovovich/mempalace) (96.6%) with **$0 cost, no API key, fully offline**. MemPalace requires paid OpenAI embeddings; Cortex embeds through a local Ollama container for free.
 
 > **Zero data leaves your infrastructure.** Self-hosted on a $5/month VPS behind Cloudflare Tunnel. Handles 5+ concurrent agents. Local embedding by default — no API keys, no network, no rate limits.
 
@@ -182,7 +189,7 @@ Plus **plan quality** (`cortex_plan_quality`) — 8-criterion plan assessment be
 - **Hook-enforced workflow** — `/cs` blocks edits until knowledge + memory recall called
 - **Pre-commit gates** — git commits blocked until quality gates pass
 
-### 📊 Dashboard (13 pages)
+### 📊 Dashboard
 
 - **Overview** — hero stats + per-project cards + recipe health
 - **Sessions** — agent session list with API key tracking
@@ -204,8 +211,7 @@ Reproducible retrieval benchmarks against industry-standard datasets.
 |---|---|---|
 | **R@5** | **96.0%** | 96.6% |
 | **R@10** | **97.8%** | 98.2% |
-| **NDCG@10** | **1.44** | 0.889 |
-| **Embedding** | **Local (in-process, free)** | OpenAI API (paid) |
+| **Embedding** | **Local (free)** | OpenAI API (paid) |
 | **API key needed** | **No** | Yes |
 | **Embedding speed** | **~10ms/text** | ~600ms/text |
 | **Search (500 queries)** | **52.6s** | ~5 min |
@@ -290,7 +296,7 @@ graph TB
 
     subgraph Gateway["Hub MCP Server"]
         AUTH["API Key Auth"]
-        ROUTER["Tool Router (31 tools)"]
+        ROUTER["Tool Router (32 tools)"]
         TEL["Telemetry + Hints Engine"]
     end
 
@@ -303,7 +309,7 @@ graph TB
     end
 
     subgraph Frontend["Dashboard"]
-        DASH["Next.js 15<br/>(13 pages, static export)"]
+        DASH["Next.js 15<br/>(served by cortex-api)"]
     end
 
     Agents --> AUTH --> ROUTER --> TEL
@@ -314,30 +320,26 @@ graph TB
 ### Network Topology
 
 ```
-Internet
-  ├── localhost:8318 ─────────── Hub MCP Server
-  └── localhost:3000 ─────────── Dashboard UI
-                                    │
-                              Cloudflare Tunnel
-                                    │
-                          ┌─────────┼─────────┐
-                          │  Docker Compose    │
-                          │  ├─ dashboard-web  │  Nginx (UI + API proxy)
-                          │  ├─ cortex-api     │  Internal API + mem9
-                          │  ├─ cortex-mcp     │  18+ MCP tools
-                          │  ├─ qdrant         │  vectors + knowledge
-                          │  ├─ gitnexus       │  AST code graph
-                          │  ├─ llm-proxy      │  CLIProxy
-                          │  └─ watchtower     │  auto-update
-                          └────────────────────┘
-                          Zero open ports on host.
+Agents (MCP over HTTP)          Conductor workers (WebSocket)
+  └── :8318 ── cortex-mcp ──────────┘   MCP gateway, 32 tools, API-key check
+                    │
+              ┌─────┴──────────────────────────────────────┐
+              │  Docker Compose                             │
+              │  ├─ cortex-api   :4000  API + dashboard     │
+              │  ├─ qdrant       127.0.0.1:6333  vectors    │
+              │  ├─ gitnexus     127.0.0.1:4848  code graph │
+              │  ├─ ollama       local embeddings           │
+              │  ├─ llm-proxy    CLIProxyAPI                │
+              │  └─ watchtower   auto-update                │
+              └─────────────────────────────────────────────┘
+Put cortex-mcp (and the dashboard) behind your own reverse proxy or tunnel.
 ```
 
 ---
 
 ## MCP Tools
 
-Cortex exposes **31 tools** via a single MCP endpoint. The 19 below are the core set; the 12 Conductor tools (`cortex_task_*` and `cortex_agents`) are listed under [Multi-Agent Conductor](#multi-agent-conductor).
+Cortex exposes **32 tools** via a single MCP endpoint. The 20 below are the core set; the 12 Conductor tools (`cortex_task_*` and `cortex_agents`) are listed under [Multi-Agent Conductor](#multi-agent-conductor).
 
 | # | Tool | Purpose |
 |---|------|---------|
@@ -354,12 +356,13 @@ Cortex exposes **31 tools** via a single MCP endpoint. The 19 below are the core
 | 11 | `cortex_memory_search` | Recall agent memories |
 | 12 | `cortex_memory_store` | Store findings |
 | 13 | `cortex_memory_delete` | Delete a stored memory by id |
-| 14 | `cortex_knowledge_search` | Search knowledge base (with hall_type + asOf filters) |
-| 15 | `cortex_knowledge_store` | Store knowledge with hall type + validity |
-| 16 | `cortex_quality_report` | Report build/test/lint results |
-| 17 | `cortex_plan_quality` | 8-criterion plan assessment |
-| 18 | `cortex_tool_stats` | Token savings + tool usage analytics |
-| 19 | `cortex_health` | Backend service health check |
+| 14 | `cortex_file_notes` | Risks, lessons and fixes linked to files |
+| 15 | `cortex_knowledge_search` | Search knowledge base (with hall_type + asOf filters) |
+| 16 | `cortex_knowledge_store` | Store knowledge with hall type + validity |
+| 17 | `cortex_quality_report` | Report build/test/lint results |
+| 18 | `cortex_plan_quality` | 8-criterion plan assessment |
+| 19 | `cortex_tool_stats` | Token savings + tool usage analytics |
+| 20 | `cortex_health` | Backend service health check |
 
 **Cross-project search just works** — no repo lookup needed:
 ```typescript
@@ -426,7 +429,7 @@ The installer:
 git clone <your-cortex-hub-repo-url>
 cd cortex-hub
 corepack enable && pnpm install
-cp .env.example .env  # add API keys
+cp infra/.env.example infra/.env  # add API keys
 cd infra && docker compose up -d
 ```
 
@@ -436,7 +439,7 @@ cd infra && docker compose up -d
 
 Cortex includes a multi-agent orchestration layer for cross-IDE task delegation. It is production-ready for the rows marked ✅ in the status table; 🔄 and 📋 rows are not.
 
-🌐 **Showcase:** [lktiep.github.io/cortex-hub](https://lktiep.github.io/cortex-hub/) shows a plan becoming a task graph and running across machines.
+🌐 **Showcase:** [lktiep.github.io/cortex-hub/conductor](https://lktiep.github.io/cortex-hub/conductor/) shows a plan becoming a task graph and running across machines.
 
 📖 See [`docs/conductor.md`](docs/conductor.md) for current capabilities and limitations, and [`docs/conductor/setup.md`](docs/conductor/setup.md) to set up each machine. Before relying on it, run the [manual test checklist](docs/conductor/manual-test-checklist.md) on your own environments.
 
@@ -463,7 +466,7 @@ Parameters for each are in the [API reference](docs/api/hub-mcp-reference.md#con
 
 | Layer | Technology | Role |
 |---|---|---|
-| **MCP Server** | Hono on Node.js | Streamable HTTP + JSON-RPC, 31 tools |
+| **MCP Server** | Hono on Node.js | Streamable HTTP + JSON-RPC, 32 tools |
 | **Code Intel** | GitNexus | AST parsing, execution flow, Cypher graph |
 | **Embeddings** | mem9 + Qdrant | Vector search with semantic recall |
 | **LLM Proxy** | CLIProxy | Multi-provider with fallback chains |
@@ -482,9 +485,9 @@ Parameters for each are in the [API reference](docs/api/hub-mcp-reference.md#con
 ```
 cortex-hub/
 ├── apps/
-│   ├── hub-mcp/                 # MCP Server — 31 tools
+│   ├── hub-mcp/                 # MCP Server — 32 tools
 │   ├── dashboard-api/           # Hono API + mem9 + recipe pipeline
-│   └── dashboard-web/           # Next.js dashboard (13 pages)
+│   └── dashboard-web/           # Next.js dashboard
 ├── packages/
 │   ├── shared-types/            # TS type definitions
 │   ├── shared-utils/            # Logger, common utilities
@@ -521,7 +524,8 @@ cortex-hub/
 | [`docs/conductor/setup.md`](docs/conductor/setup.md) | Conductor setup, per machine |
 | [`docs/conductor/antigravity.md`](docs/conductor/antigravity.md) | Antigravity IDE, app and headless agy on macOS and Windows |
 | [`docs/conductor/manual-test-checklist.md`](docs/conductor/manual-test-checklist.md) | Manual checks per environment (Windows, Docker, VSIX, live hub) |
-| [Conductor showcase](https://lktiep.github.io/cortex-hub/) | One-page tour of the Conductor |
+| [Documentation site](https://lktiep.github.io/cortex-hub/) | Guides and reference for every command, hook and tool, in English and Vietnamese |
+| [Conductor showcase](https://lktiep.github.io/cortex-hub/conductor/) | One-page tour of the Conductor |
 | [`docs/api/hub-mcp-reference.md`](docs/api/hub-mcp-reference.md) | Full MCP tool API reference |
 | [`benchmarks/README.md`](benchmarks/README.md) | Benchmark methodology + results |
 | [`docs/guides/installation.md`](docs/guides/installation.md) | Full installation guide |
