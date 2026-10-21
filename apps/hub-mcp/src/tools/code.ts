@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
-import { formatCodeMatches, formatOtherRepos, OTHER_REPO_MATCHES, type CodeMatch } from './code-matches.js'
+import { formatCodeMatches, formatOtherRepos, OTHER_REPOS, FILES_PER_OTHER_REPO, type CodeMatch } from './code-matches.js'
 import { formatDiffImpact } from './diff-impact.js'
 import { LOAD_UP_FRONT } from './load-up-front.js'
 
@@ -180,7 +180,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
     'cortex_code_search',
     'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. ' +
     'Without repo it searches the repo you are working in (the client names it) and lists what the other repos of your ' +
-    'ORGANIZATION hold for the same query. repo: "*" searches every repo of the organization — the way to answer a ' +
+    'ORGANIZATION hold for the same query (not in the personal organization, where unrelated repos land). repo: "*" searches every repo of the organization — the way to answer a ' +
     'question that spans repos (client + server + tools of one product). Projects are isolated per organization, so a ' +
     'cross-repo search never reaches another organization\'s code.',
     {
@@ -205,9 +205,13 @@ export function registerCodeTools(server: McpServer, env: Env) {
 
         if (named ?? current) {
           const project = (named ?? current)!
-          // The other repos of the organization are asked alongside, not after.
+          // The other repos of the organization are asked alongside, not after, each on its own
+          // default branch: the branch named here is this repo's, and another repo rarely has it.
           const others = current
-            ? searchCode({ query, orgId: org, scopeRepo, exclude: current, branch, limit: OTHER_REPO_MATCHES })
+            ? searchCode({
+                query, orgId: org, scopeRepo, exclude: current,
+                perRepo: FILES_PER_OTHER_REPO, limit: OTHER_REPOS * FILES_PER_OTHER_REPO,
+              })
             : Promise.resolve([])
           const [flows, matches] = await Promise.all([
             searchRepo(query, project, org, branch, flowLimit).catch((error: unknown) => {

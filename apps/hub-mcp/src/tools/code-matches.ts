@@ -82,8 +82,9 @@ export function formatCodeMatches(matches: CodeMatch[]): string {
   return out.join('\n')
 }
 
-/** Other repos shown under a search of the current one: a few. */
-export const OTHER_REPO_MATCHES = 5
+/** Other repos shown under a search of the current one, and files from each: a few. */
+export const OTHER_REPOS = 5
+export const FILES_PER_OTHER_REPO = 2
 
 /**
  * What the organization's other repos hold for the query, one line per repo, under a search of
@@ -93,8 +94,9 @@ export const OTHER_REPO_MATCHES = 5
  */
 export function formatOtherRepos(matches: CodeMatch[]): string {
   const repos = new Map<string, string[]>()
-  for (const m of matches.filter((x) => x.repo && x.filePath).slice(0, OTHER_REPO_MATCHES)) {
+  for (const m of matches.filter((x) => x.repo && x.filePath)) {
     const files = repos.get(m.repo!) ?? []
+    if (files.length >= FILES_PER_OTHER_REPO || (files.length === 0 && repos.size >= OTHER_REPOS)) continue
     files.push([m.filePath, lines(m), pct(m.score)].filter(Boolean).join(' '))
     repos.set(m.repo!, files)
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatCodeMatches, trimChunk, SNIPPET_CHARS } from './code-matches.js'
+import { formatCodeMatches, formatOtherRepos, trimChunk, SNIPPET_CHARS } from './code-matches.js'
 
 describe('trimChunk', () => {
   it('drops the indexer header of a first chunk', () => {
@@ -44,5 +44,25 @@ describe('formatCodeMatches', () => {
   it('says nothing when there is nothing to show', () => {
     expect(formatCodeMatches([])).toBe('')
     expect(formatCodeMatches([{ score: 0.9 }])).toBe('')
+  })
+})
+
+describe('formatOtherRepos', () => {
+  const m = (repo: string, filePath: string, score: number) => ({ repo, filePath, score })
+
+  it('gives each repo one line of its best two files, and no repo more than that', () => {
+    const text = formatOtherRepos([
+      m('big', 'a.ts', 0.6), m('big', 'b.ts', 0.59), m('big', 'c.ts', 0.58), m('small', 'd.ts', 0.4),
+    ])
+
+    expect(text).toContain('- big — a.ts 60%, b.ts 59%\n- small — d.ts 40%')
+    expect(text).not.toContain('c.ts')
+  })
+
+  it('lists five repos at most', () => {
+    const text = formatOtherRepos(['r1', 'r2', 'r3', 'r4', 'r5', 'r6'].map((r, i) => m(r, 'x.ts', 0.6 - i / 100)))
+
+    expect(text).toContain('- r5 —')
+    expect(text).not.toContain('- r6 —')
   })
 })

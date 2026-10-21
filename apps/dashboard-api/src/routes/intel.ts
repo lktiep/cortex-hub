@@ -19,6 +19,8 @@ const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 
 /** Code search over-fetch, so the copies other branches hold of a chunk do not crowd out the limit. */
 const BRANCH_OVERFETCH = 3
+/** Where repos are registered when nobody chose an organization; see db/schema.sql. */
+const PERSONAL_ORG = 'org-default'
 
 /** Max file size for code_read (512KB) */
 const MAX_READ_SIZE = 512 * 1024
@@ -97,6 +99,13 @@ function findProject(ref: string, orgId?: string): ProjectRef | undefined {
                (name = ? COLLATE NOCASE) DESC
       LIMIT 1`
   ).get(ref, ref, ref, `%${ref}%`, orgId ?? null, orgId ?? null, ref, ref, ref) as ProjectRef | undefined
+}
+
+/** The branch a project's remote HEAD names, once the indexer has resolved it. */
+function defaultBranchOf(projectId: string): string | undefined {
+  const row = db.prepare('SELECT default_branch FROM projects WHERE id = ?').get(projectId) as
+    { default_branch: string | null } | undefined
+  return row?.default_branch ?? undefined
 }
 
 /** org_id of a project named by id, slug or name. undefined when the DB knows no such project. */
@@ -1621,7 +1630,7 @@ intelRouter.post('/sync-repos', async (c) => {
 intelRouter.post('/code-search', async (c) => {
   try {
     const body = await c.req.json()
-    const { query, projectId, branch, limit, file, orgId, scopeRepo, exclude } = body as {
+    const { query, projectId, branch, limit, file, orgId, scopeRepo, exclude, perRepo } = body as {
       query: string
       projectId?: string
       branch?: string
@@ -1632,6 +1641,8 @@ intelRouter.post('/code-search', async (c) => {
       scopeRepo?: string
       /** Without projectId: a repo to leave out, the one the caller already searched on its own. */
       exclude?: string
+      /** Without projectId: at most this many files from any one repo. */
+      perRepo?: number
     }
 
     if (!query) return c.json({ error: 'query is required' }, 400)
@@ -1640,7 +1651,13 @@ intelRouter.post('/code-search', async (c) => {
       if (!scope.orgId) {
         return c.json({ success: false, error: 'Several organizations hold indexed code: name the repo, or pass org.' }, 400)
       }
-      const results = await searchOrganization(query, scope.orgId, { branch, limit: limit ?? 10, exclude })
+      // The repos beside the caller's are worth showing only where someone grouped them. The
+      // personal organization is where every repo lands unasked, so its neighbours are unrelated:
+      // measured on one, they outscored the caller's own top hit for 15 of 15 gold queries.
+      if (exclude && scope.orgId === PERSONAL_ORG) {
+        return c.json({ success: true, data: { query, orgId: scope.orgId, retrieval: 'vector', results: [] } })
+      }
+      const results = await searchOrganization(query, scope.orgId, { branch, limit: limit ?? 10, exclude, perRepo })
       return c.json({ success: true, data: { query, orgId: scope.orgId, retrieval: 'vector', results } })
     }
 
@@ -1661,14 +1678,12 @@ intelRouter.post('/code-search', async (c) => {
     const embedder = createEmbedder()
     const vector = await embedder.embed(query)
 
-    // Build Qdrant filter
-    const must: Array<Record<string, unknown>> = []
-    if (branch) {
-      must.push({ key: 'branch', match: { value: branch } })
-    }
-    if (file) {
-      must.push({ key: 'file_path', match: { text: file } })
-    }
+    // A project indexed on several branches holds a copy of every chunk per branch, and an
+    // unfiltered search spends its depth on the copies: 30 hits on a repo with seven branches
+    // came back as 3–7 files, and the expected file was in the top 10 for 10 of 15 gold queries
+    // (13 of 15 on one branch). Unless the caller names a branch, search the project's default
+    // branch, and every branch only when that one holds nothing.
+    const defaultBranch = branch ? undefined : defaultBranchOf(project?.id ?? projectId)
 
     const searchLimit = limit ?? 10
 
@@ -1684,33 +1699,34 @@ intelRouter.post('/code-search', async (c) => {
     // chunk that both arms like outranks one that only looks similar. Collections
     // indexed before this existed have no sparse vector and search exactly as
     // before.
-    const hybrid = (await hasSparseVector(QDRANT_URL, collectionName))
-      ? buildHybridQuery({
-          vector,
-          query,
-          limit: Math.max(fetchLimit, HYBRID_FETCH_FLOOR),
-          filter: must.length > 0 ? { must } : undefined,
-        })
-      : null
+    const sparse = await hasSparseVector(QDRANT_URL, collectionName)
+    const ask = (onBranch: string | undefined) => {
+      const must: Array<Record<string, unknown>> = []
+      if (onBranch) must.push({ key: 'branch', match: { value: onBranch } })
+      if (file) must.push({ key: 'file_path', match: { text: file } })
+      const filter = must.length > 0 ? { must } : undefined
+      return sparse
+        ? fetch(`${QDRANT_URL}/collections/${collectionName}/points/query`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildHybridQuery({ vector, query, limit: Math.max(fetchLimit, HYBRID_FETCH_FLOOR), filter })),
+            signal: AbortSignal.timeout(10000),
+          })
+        : fetch(`${QDRANT_URL}/collections/${collectionName}/points/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ vector, limit: fetchLimit, with_payload: true, filter }),
+            signal: AbortSignal.timeout(10000),
+          })
+    }
+    // /points/search answers with an array, /points/query wraps it in `points`.
+    type Point = { id: string; score: number; payload?: Record<string, unknown> }
+    const pointsOf = async (r: Response) => {
+      const data = (await r.json()) as { result?: Point[] | { points?: Point[] } }
+      return Array.isArray(data.result) ? data.result : (data.result?.points ?? [])
+    }
 
-    const res = hybrid
-      ? await fetch(`${QDRANT_URL}/collections/${collectionName}/points/query`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(hybrid),
-          signal: AbortSignal.timeout(10000),
-        })
-      : await fetch(`${QDRANT_URL}/collections/${collectionName}/points/search`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            vector,
-            limit: fetchLimit,
-            with_payload: true,
-            filter: must.length > 0 ? { must } : undefined,
-          }),
-          signal: AbortSignal.timeout(10000),
-        })
+    const res = await ask(branch ?? defaultBranch)
 
     if (!res.ok) {
       const errText = await res.text()
@@ -1729,17 +1745,14 @@ intelRouter.post('/code-search', async (c) => {
       return c.json({ error: `Qdrant search failed: ${errText}` }, 500)
     }
 
-    // /points/search answers with an array, /points/query wraps it in `points`.
-    const data = (await res.json()) as {
-      result?:
-        | Array<{ id: string; score: number; payload?: Record<string, unknown> }>
-        | { points?: Array<{ id: string; score: number; payload?: Record<string, unknown> }> }
+    let points = await pointsOf(res)
+    if (points.length === 0 && defaultBranch) {
+      const everyBranch = await ask(undefined)
+      if (everyBranch.ok) points = await pointsOf(everyBranch)
     }
-    const points = Array.isArray(data.result) ? data.result : (data.result?.points ?? [])
 
-    // A project indexed on several branches holds a copy of each chunk per branch, and without
-    // a branch filter every copy matches: one chunk filled four of a top five. Keep the best
-    // ranked copy of each place in the code.
+    // Copies of one chunk still come back when no branch filter applied. Keep the best ranked
+    // copy of each place in the code.
     const seen = new Set<string>()
     const hits = points.map((hit) => ({
       score: hit.score,
@@ -1784,7 +1797,7 @@ intelRouter.post('/code-search', async (c) => {
       success: true,
       // `retrieval` says what `score` means: a cosine similarity from the vector
       // arm alone, or a reciprocal-rank-fusion score once both arms have voted.
-      data: { query, projectId, retrieval: hybrid ? 'hybrid' : 'vector', reranked, results },
+      data: { query, projectId, retrieval: sparse ? 'hybrid' : 'vector', reranked, results },
     })
   } catch (error) {
     logger.error(`Code search (Qdrant) failed: ${String(error)}`)
@@ -1802,16 +1815,15 @@ intelRouter.post('/code-search', async (c) => {
 async function searchOrganization(
   query: string,
   orgId: string,
-  opts: { branch?: string; limit: number; exclude?: string },
+  opts: { branch?: string; limit: number; exclude?: string; perRepo?: number },
 ) {
   const skip = opts.exclude ? findProject(opts.exclude, orgId)?.id : undefined
   const projects = (db.prepare(
-    'SELECT id, slug, name FROM projects WHERE org_id = ? AND indexed_symbols > 0 ORDER BY name'
-  ).all(orgId) as Array<{ id: string; slug: string | null; name: string }>).filter(p => p.id !== skip)
+    'SELECT id, slug, name, default_branch FROM projects WHERE org_id = ? AND indexed_symbols > 0 ORDER BY name'
+  ).all(orgId) as Array<{ id: string; slug: string | null; name: string; default_branch: string | null }>).filter(p => p.id !== skip)
   if (projects.length === 0) return []
 
   const vector = await createEmbedder().embed(query)
-  const filter = opts.branch ? { must: [{ key: 'branch', match: { value: opts.branch } }] } : undefined
   const perProject = Math.min(opts.limit, 5) * BRANCH_OVERFETCH
   const CONCURRENCY = 8
   type OrgHit = { repo: string; projectId: string; score: number; filePath?: string; chunkIndex?: number; content?: string; branch?: string }
@@ -1819,16 +1831,24 @@ async function searchOrganization(
 
   for (let i = 0; i < projects.length; i += CONCURRENCY) {
     const settled = await Promise.allSettled(projects.slice(i, i + CONCURRENCY).map(async (p) => {
-      const res = await fetch(`${QDRANT_URL}/collections/cortex-project-${p.id}/points/search`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vector, limit: perProject, with_payload: true, filter }),
-        signal: AbortSignal.timeout(10000),
-      })
-      // A project with no embeddings yet has no collection: it simply has nothing to add.
-      if (!res.ok) return []
-      const data = (await res.json()) as { result?: Array<{ score: number; payload?: Record<string, unknown> }> }
-      return (data.result ?? []).map((hit): OrgHit => ({
+      // Each repo on the branch asked for, else on its default branch: see the single-repo search.
+      const ask = async (branch: string | null | undefined) => {
+        const res = await fetch(`${QDRANT_URL}/collections/cortex-project-${p.id}/points/search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            vector, limit: perProject, with_payload: true,
+            filter: branch ? { must: [{ key: 'branch', match: { value: branch } }] } : undefined,
+          }),
+          signal: AbortSignal.timeout(10000),
+        })
+        // A project with no embeddings yet has no collection: it simply has nothing to add.
+        if (!res.ok) return []
+        return ((await res.json()) as { result?: Array<{ score: number; payload?: Record<string, unknown> }> }).result ?? []
+      }
+      let found = await ask(opts.branch ?? p.default_branch)
+      if (found.length === 0 && !opts.branch && p.default_branch) found = await ask(undefined)
+      return found.map((hit): OrgHit => ({
         repo: p.slug || p.name,
         projectId: p.id,
         score: hit.score,
@@ -1841,14 +1861,20 @@ async function searchOrganization(
     for (const r of settled) if (r.status === 'fulfilled') hits.push(...r.value)
   }
 
+  // A chunk indexed on several branches comes back once per branch. With perRepo a file is
+  // listed once, by its best chunk, and a large repo cannot fill every place.
   const seen = new Set<string>()
+  const files = new Map<string, number>()
   return hits
     .sort((a, b) => b.score - a.score)
     .filter((hit) => {
-      const place = `${hit.projectId}:${hit.filePath}#${hit.chunkIndex}`
+      const place = opts.perRepo ? `${hit.projectId}:${hit.filePath}` : `${hit.projectId}:${hit.filePath}#${hit.chunkIndex}`
       if (seen.has(place)) return false
       seen.add(place)
-      return true
+      if (!opts.perRepo) return true
+      const n = files.get(hit.projectId) ?? 0
+      files.set(hit.projectId, n + 1)
+      return n < opts.perRepo
     })
     .slice(0, opts.limit)
     .map((hit) => ({ ...hit, ...chunkLines(hit.projectId, hit) }))

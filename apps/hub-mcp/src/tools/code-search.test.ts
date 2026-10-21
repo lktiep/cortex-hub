@@ -65,6 +65,15 @@ describe('cortex_code_search without a repo', () => {
     expect(text).toContain('repo: "*"')
   })
 
+  it('asks the other repos for a few files each, on their own branches', async () => {
+    await codeSearch()({ query: 'login', branch: 'feat/login', here: 'https://example.com/acme/game-client.git' })
+
+    const others = asked('code-search').find((b) => b.exclude)!
+    expect(others).toMatchObject({ perRepo: 2, limit: 10 })
+    expect(others).not.toHaveProperty('branch')
+    expect(asked('code-search').find((b) => b.projectId)).toMatchObject({ branch: 'feat/login' })
+  })
+
   it('searches the organization when the hub does not hold the checkout', async () => {
     const res = await codeSearch({ unknownRepo: 'scratch' })({ query: 'login', here: 'git@example.com:me/scratch.git' })
 

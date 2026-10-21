@@ -222,12 +222,89 @@ describe('code search across the organization', () => {
     expect(searched).not.toContain('proj-else')
   })
 
+  it('lists a file once, by its best chunk, and no more than perRepo files of one repo', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const server = url.includes('proj-server')
+      const result = (server ? ['a', 'a', 'b', 'c'] : ['d']).map((f, i) => ({
+        score: (server ? 0.7 : 0.5) - i / 100,
+        payload: { file_path: `src/${f}.ts`, chunk_index: i, content: 'x' },
+      }))
+      return new Response(JSON.stringify({ result }), { status: 200 })
+    }))
+
+    const { json } = await post('/code-search', { query: 'login', orgId: 'org-g', perRepo: 2 })
+
+    expect(json.data.results.map((r: { repo: string; filePath: string }) => `${r.repo}:${r.filePath}`)).toEqual([
+      'game-server:src/a.ts',
+      'game-server:src/b.ts',
+      'game-client:src/d.ts',
+    ])
+  })
+
+  // Every repo nobody put in an organization lands in the personal one, unrelated to the rest.
+  it('lists no repos beside the caller\'s in the personal organization, but searches it when asked', async () => {
+    testDb.exec(`INSERT INTO projects (id, org_id, name, slug, indexed_symbols) VALUES
+      ('proj-mine', 'org-default', 'mine', 'mine', 10), ('proj-other', 'org-default', 'unrelated', 'unrelated', 10)`)
+
+    const beside = await post('/code-search', { query: 'login', scopeRepo: 'mine', exclude: 'mine' })
+    expect(beside.json.data.results).toEqual([])
+    expect(searched).toEqual([])
+
+    await post('/code-search', { query: 'login', scopeRepo: 'mine' })
+    expect(searched.sort()).toEqual(['proj-mine', 'proj-other'])
+  })
+
   it('refuses to guess between organizations', async () => {
     const { status, json } = await post('/code-search', { query: 'login' })
 
     expect(status).toBe(400)
     expect(json.error).toContain('name the repo, or pass org')
     expect(searched).toEqual([])
+  })
+})
+
+// Every chunk is stored once per indexed branch; unfiltered, the copies used up the search depth.
+describe('code search on a repo indexed on several branches', () => {
+  let filters: unknown[]
+
+  function qdrant(onlyOn?: string) {
+    filters = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (!url.endsWith('/points/search')) return new Response('{"result":{}}', { status: 200 })
+      const { filter } = JSON.parse(String(init?.body)) as { filter?: { must: Array<{ match: { value: string } }> } }
+      filters.push(filter)
+      const branch = filter?.must[0]?.match.value
+      const result = onlyOn && branch !== undefined && branch !== onlyOn ? [] : [
+        { score: 0.5, payload: { file_path: 'src/login.ts', chunk_index: 0, branch: branch ?? onlyOn, content: 'x' } },
+      ]
+      return new Response(JSON.stringify({ result }), { status: 200 })
+    }))
+  }
+
+  beforeEach(() => {
+    testDb.prepare("UPDATE projects SET default_branch = 'main' WHERE org_id = 'org-g'").run()
+  })
+
+  it('searches the default branch when the caller names none, and the branch it names', async () => {
+    qdrant()
+
+    await post('/code-search', { query: 'login', projectId: 'game-client', orgId: 'org-g' })
+    await post('/code-search', { query: 'login', projectId: 'game-client', orgId: 'org-g', branch: 'dev' })
+    await post('/code-search', { query: 'login', orgId: 'org-g' })
+
+    const branches = filters.map((f) => (f as { must: Array<{ match: { value: string } }> } | undefined)?.must[0]?.match.value)
+    expect(branches).toEqual(['main', 'dev', 'main', 'main'])
+  })
+
+  it('searches every branch when the default one holds nothing', async () => {
+    qdrant('feature')
+
+    const one = await post('/code-search', { query: 'login', projectId: 'game-client', orgId: 'org-g' })
+    const org = await post('/code-search', { query: 'login', orgId: 'org-g', exclude: 'game-server' })
+
+    expect(one.json.data.results).toHaveLength(1)
+    expect(org.json.data.results).toHaveLength(1)
+    expect(filters).toEqual([expect.anything(), undefined, expect.anything(), undefined])
   })
 })
 
