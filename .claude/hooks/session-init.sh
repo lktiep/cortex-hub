@@ -56,6 +56,8 @@ rm -f "$STATE_DIR/session-started" \
 # Other conversations' sessions stay theirs to close; only records a week old are dropped,
 # left by a conversation that ended without the exit hook getting through.
 [ -d "$STATE_DIR/conversations" ] && find "$STATE_DIR/conversations" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
+# The lookup nudge keeps a counter per conversation and agent; a day-old one is done with.
+[ -d "$STATE_DIR/nudge" ] && find "$STATE_DIR/nudge" -type f -mtime +1 -exec rm -f {} + 2>/dev/null
 echo "Run /cs first: cortex_session_start, then knowledge+memory recall. Until then edits are BLOCKED, and Grep/Glob stay blocked until a cortex discovery tool has run."
 conversation_line
 exit 0

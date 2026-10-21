@@ -4,6 +4,7 @@ import { PROMPT_LIMIT, buildPrompt, win32QuotedLength } from './prompt.js'
 
 const RULE_A = 'Do not commit, push, or switch branches; the worker does that.'
 const RULE_B = 'Stay inside this working tree.'
+const RULE_LOOKUP = '`cortex_code_context(name)` for a symbol'
 
 function makeTask(over: Partial<AssignedTask> = {}): AssignedTask {
   return {
@@ -29,6 +30,7 @@ function expectSafe(prompt: string): void {
   expect(prompt.length).toBeLessThanOrEqual(PROMPT_LIMIT)
   expect(prompt).toContain(RULE_A)
   expect(prompt).toContain(RULE_B)
+  expect(prompt).toContain(RULE_LOOKUP)
 }
 
 describe('buildPrompt', () => {

@@ -30,6 +30,16 @@
           }
         ]
       }
+    ,
+      {
+        "matcher": "Bash|Grep|Glob|mcp__.*cortex_(code_search|code_context|code_impact|cypher)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/nudge-lookup.sh\""
+          }
+        ]
+      }
     ],
     "PostToolUse": [
       {

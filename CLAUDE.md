@@ -123,3 +123,8 @@ Every session must pass before committing:
 - If the hub is genuinely unreachable, the gates have no path through them. Say so and
   declare it: `echo '<reason>' > .cortex/.session-state/gate-off`. It is recorded in the
   session summary.
+- After discovery, a repo-wide search for a symbol or a word is not refused, but
+  `nudge-lookup.sh` adds one line naming the cortex call that answers it
+  (`cortex_code_context` for a symbol, `cortex_code_search` for a word). It stays quiet for
+  literals, known files and file names, right after a cortex lookup, and between nudges
+  (one per agent every 5 such searches). `CORTEX_NUDGE=off` turns it off.

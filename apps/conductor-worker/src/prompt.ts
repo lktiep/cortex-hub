@@ -14,6 +14,10 @@ const RULES = [
   '## Rules',
   '- Do not commit, push, or switch branches; the worker does that.',
   '- Stay inside this working tree.',
+  // Measured over real sessions, workers and subagents almost never called cortex and found
+  // code by grep alone; nothing in their prompt said otherwise.
+  '- Find code with the cortex tools when you have them: `cortex_code_context(name)` for a symbol, ' +
+    '`cortex_code_search(query)` for behaviour. Grep is for exact literals.',
 ].join('\n')
 // for an engine that refuses commands (EngineAdapter.refusesCommands): a refused command ends its run
 const NO_COMMANDS =

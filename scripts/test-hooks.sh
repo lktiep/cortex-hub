@@ -882,6 +882,54 @@ rm -rf "$SB"
 INSTALLED=$(awk "/cat > .claude\/settings.json << 'EOF'/{f=1;next} f&&/^EOF\$/{exit} f" "$REPO/scripts/install.sh")
 check "install.sh writes the same settings.json" 0 "$([ "$INSTALLED" = "$(cat "$REPO/.claude/settings.json")" ] && echo 0 || echo 1)"
 
+echo "nudge-lookup.sh — a reminder for a grep cortex could answer, never a block"
+# Prints "nudge", "quiet" or "exit N": the hook must exit 0 whatever it reads.
+nudge() {  # $1 = payload, $2.. = env
+  local out rc
+  out=$(printf '%s' "$1" | env CLAUDE_PROJECT_DIR="$SANDBOX" "${@:2}" bash "$HOOKS_DIR/nudge-lookup.sh" 2>/dev/null); rc=$?
+  if [ "$rc" != 0 ]; then echo "exit $rc"
+  elif printf '%s' "$out" | grep -q '"additionalContext"'; then echo nudge
+  else echo quiet; fi
+}
+agent_bash() { printf '{"session_id":"s1","agent_id":"%s","tool_name":"Bash","tool_input":{"command":%s}}' "$1" "$(printf '%s' "$2" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"; }
+grep_tool() { printf '{"session_id":"s1","tool_name":"Grep","tool_input":{"pattern":"%s"}}' "$1"; }
+lookup() { printf '{"session_id":"s1","agent_id":"%s","tool_name":"mcp__cortex-hub__cortex_code_context","tool_input":{"name":"x"}}' "$1"; }
+if command -v node >/dev/null 2>&1; then
+  setup
+  check "a symbol grep is nudged"             nudge "$(nudge "$(agent_bash a 'rg -n verifyKey apps/')")"
+  check "the next one is not"                 quiet "$(nudge "$(agent_bash a 'rg -n hashKey apps/')")"
+  check "another agent gets its own"          nudge "$(nudge "$(agent_bash b 'git grep -n validateToken')")"
+  for q in parseArgs buildQuery runJob; do nudge "$(agent_bash a "rg $q")" >/dev/null; done
+  check "five searches later, again"          nudge "$(nudge "$(agent_bash a 'grep -rn loadConfig src')")"
+  teardown
+  setup
+  check "a word search names code_search"     nudge "$(nudge "$(agent_bash a 'rg -n retry')")"
+  printf '%s' "$(agent_bash c 'rg -n retry')" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/nudge-lookup.sh" | grep -q 'cortex_code_search(query: \\"retry\\"' \
+    && check "with the query in it" 0 0 || check "with the query in it" 0 1
+  check "an UPPER_SNAKE literal is not"       quiet "$(nudge "$(agent_bash d 'grep -rn MCP_URL_DEFAULT .')")"
+  check "text with a space is not"            quiet "$(nudge "$(agent_bash d 'rg "api key" apps')")"
+  check "a search in a known file is not"     quiet "$(nudge "$(agent_bash d 'rg verifyKey src/auth.ts')")"
+  check "a grep filtering output is not"      quiet "$(nudge "$(agent_bash d 'pnpm build | grep buildFailed')")"
+  check "a search outside the repo is not"    quiet "$(nudge "$(agent_bash d 'rg verifyKey /tmp/x')")"
+  check "find is not"                         quiet "$(nudge "$(agent_bash d 'find . -name "*.ts"')")"
+  check "the Grep tool is nudged too"         nudge "$(nudge "$(grep_tool verifyKey)")"
+  teardown
+  setup
+  nudge "$(lookup e)" >/dev/null
+  check "a grep right after a lookup is not"  quiet "$(nudge "$(agent_bash e 'rg verifyKey')")"
+  nudge "$(agent_bash e 'ls')" >/dev/null; nudge "$(agent_bash e 'ls')" >/dev/null
+  check "three calls later it is"             nudge "$(nudge "$(agent_bash e 'rg verifyKey')")"
+  check "CORTEX_NUDGE=off silences it"        quiet "$(nudge "$(agent_bash f 'rg verifyKey')" CORTEX_NUDGE=off)"
+  echo 'hub down' > "$STATE/gate-off"
+  check "gate-off silences it"                quiet "$(nudge "$(agent_bash g 'rg verifyKey')")"
+  rm -f "$STATE/gate-off"
+  check "unreadable input exits 0"            quiet "$(nudge 'not json')"
+  check "no session id still works"           nudge "$(nudge '{"tool_name":"Bash","tool_input":{"command":"rg verifyKey"}}')"
+  teardown
+else
+  echo "  skip (no node: the hook does nothing without it)"
+fi
+
 echo
 echo "passed: $PASS   failed: $FAIL"
 [ "$FAIL" -eq 0 ]
