@@ -38,7 +38,7 @@ vi.mock('../lib/embedder-factory.js', () => ({
 vi.mock('../lib/reranker.js', () => ({ getReranker: () => null, RERANK_OVERFETCH: 4 }))
 
 import { Hono } from 'hono'
-import { intelRouter, locateChunk, rewriteGitNexusHints } from './intel.js'
+import { addCallSites, intelRouter, locateChunk, rewriteGitNexusHints } from './intel.js'
 
 const app = new Hono()
 app.route('/api/intel', intelRouter)
@@ -179,5 +179,67 @@ describe('graph results do not print a missing kind', () => {
       '  ← [calls] index.ts → apps/hub-mcp/src/index.ts',
       '  → [accesses] Function CACHE_TTL_MS → apps/hub-mcp/src/middleware/auth.ts',
     ].join('\n'))
+  })
+})
+
+describe('graph callers come with the lines that call', () => {
+  const index = ['import { validateApiKey } from "./auth"', '', 'app.post("/mcp", async (c) => {', '  const ok = await validateApiKey(c)', '  return validateApiKeyCached(ok)', '})'].join('\n')
+  const raw = [
+    'Function validateApiKey → src/auth.ts:23-105',
+    '',
+    'Called/imported by (3):',
+    '  ← [calls] index.ts → src/index.ts',
+    '  ← [calls] Function boot → src/boot.ts:4-9',
+    '  ← [calls] gone.ts → src/gone.ts',
+    '',
+    'Calls/imports (1):',
+    '  → [calls] publicOrigin → src/origin.ts',
+  ].join('\n')
+
+  it('adds the call lines to a bare caller path, and nothing to an import or a whole word elsewhere', () => {
+    const out = addCallSites(raw, 'validateApiKey', (path) => (path === 'src/index.ts' ? index : undefined))
+
+    expect(out.split('\n')).toEqual([
+      'Function validateApiKey → src/auth.ts:23-105',
+      '',
+      'Called/imported by (3):',
+      '  ← [calls] index.ts → src/index.ts:4',
+      '  ← [calls] Function boot → src/boot.ts:4-9',
+      '  ← [calls] gone.ts → src/gone.ts',
+      '',
+      'Calls/imports (1):',
+      '  → [calls] publicOrigin → src/origin.ts',
+    ])
+  })
+
+  it('finds a method asked for as Class.method', () => {
+    const out = addCallSites('  ← [calls] a.ts → src/a.ts', 'Search.run', () => 'x\nawait search.run(q)\nrunAll()')
+
+    expect(out).toBe('  ← [calls] a.ts → src/a.ts:2')
+  })
+
+  it('names a few lines and counts the rest', () => {
+    const many = Array.from({ length: 9 }, () => 'f()').join('\n')
+
+    expect(addCallSites('  ← [calls] a.ts → src/a.ts', 'f', () => many)).toBe('  ← [calls] a.ts → src/a.ts:1,2,3,4,5,6 (+3 more)')
+  })
+
+  it('reads the callers from the project checkout in a context lookup', async () => {
+    mkdirSync(join(reposDir, 'proj-hub', 'src'), { recursive: true })
+    writeFileSync(join(reposDir, 'proj-hub', 'src', 'index.ts'), index)
+    vi.stubGlobal('fetch', vi.fn(async (url: string) =>
+      url.endsWith('/tool/context') ? new Response(raw, { status: 200 }) : new Response('Not found', { status: 404 })))
+
+    for (const projectId of ['cortex-hub', undefined]) {
+      if (!projectId) writeFileSync(join(reposDir, 'proj-hub', 'src', 'auth.ts'), 'export function validateApiKey() {}')
+      const res = await app.request('/api/intel/context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'validateApiKey', projectId }),
+      })
+      const json = await res.json() as { data: { results: { raw: string } } }
+
+      expect(json.data.results.raw).toContain('  ← [calls] index.ts → src/index.ts:4\n')
+    }
   })
 })

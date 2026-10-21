@@ -362,6 +362,63 @@ export function rewriteGitNexusHints(text: string): string {
     .replace(/Read the source with cat /g, 'Examine the source at ')
 }
 
+const MAX_CALL_SITES = 6
+
+/**
+ * The lines of each caller's file that name the symbol. The graph keeps one edge per file and
+ * prints the caller as a bare path, so every lookup of callers was followed by an `rg` of the
+ * repository for the line numbers. Import lines are left out: they name the symbol but call
+ * nothing. A file the checkout does not hold, or no longer names the symbol in, stays bare.
+ */
+export function addCallSites(raw: string, name: string, readSource: (path: string) => string | undefined): string {
+  // A method asked for as `Class.method` is called as `.method`.
+  const word = name.split(/[.:#]/).pop() ?? name
+  const named = new RegExp(`(^|[^\\w$])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`)
+  return raw.replace(/^(\s*← \[\w+\] .*→ )(\S+)[ \t]*$/gm, (line, head: string, path: string) => {
+    if (/:\d/.test(path)) return line
+    const lines = readSource(path)?.split('\n')
+    if (!lines) return line
+    const sites: number[] = []
+    lines.forEach((text, i) => {
+      if (named.test(text) && !/^\s*import\b/.test(text)) sites.push(i + 1)
+    })
+    if (sites.length === 0) return line
+    const more = sites.length > MAX_CALL_SITES ? ` (+${sites.length - MAX_CALL_SITES} more)` : ''
+    return `${head}${path}:${sites.slice(0, MAX_CALL_SITES).join(',')}${more}`
+  })
+}
+
+/**
+ * The checkout a context result reads from. Without a project the graph answers across the
+ * organization, so the checkout is the project's that holds the file the symbol is defined in.
+ */
+function contextCheckout(raw: string, projectId: string | undefined, orgId: string | undefined): string | undefined {
+  try {
+    if (projectId) {
+      const dir = join(REPOS_DIR, findProject(projectId, orgId)?.id ?? projectId)
+      return existsSync(dir) ? dir : undefined
+    }
+    const definedIn = raw.match(/^\S+ \S+ → (\S+?):\d/m)?.[1]
+    if (!definedIn) return undefined
+    const projects = db.prepare('SELECT id FROM projects WHERE (? IS NULL OR org_id = ?)')
+      .all(orgId ?? null, orgId ?? null) as Array<{ id: string }>
+    return projects.map((p) => join(REPOS_DIR, p.id)).find((dir) => existsSync(join(dir, definedIn)))
+  } catch {
+    return undefined
+  }
+}
+
+function readCheckoutFile(repoDir: string, path: string): string | undefined {
+  const fullPath = join(repoDir, path)
+  if (!fullPath.startsWith(`${repoDir}/`)) return undefined
+  try {
+    if (!existsSync(fullPath) || statSync(fullPath).size > MAX_READ_SIZE) return undefined
+    return readFileSync(fullPath, 'utf-8')
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Format GitNexus query results into a readable report for agents.
  * Handles the process-grouped search format that GitNexus returns.
@@ -899,6 +956,11 @@ intelRouter.post('/context', async (c) => {
           }
         }
       }
+    }
+
+    if (results?.raw?.includes('←')) {
+      const repoDir = contextCheckout(results.raw, projectId, scope.orgId)
+      if (repoDir) results.raw = addCallSites(results.raw, name, (path) => readCheckoutFile(repoDir, path))
     }
 
     return c.json({
@@ -1534,15 +1596,8 @@ export function locateChunk(fileText: string, chunk: string): { startLine: numbe
 
 function chunkLines(projectDir: string, hit: { filePath?: string; content?: string }) {
   if (!hit.filePath || !hit.content) return {}
-  const repoDir = join(REPOS_DIR, projectDir)
-  const fullPath = join(repoDir, hit.filePath)
-  if (!fullPath.startsWith(`${repoDir}/`)) return {}
-  try {
-    if (!existsSync(fullPath) || statSync(fullPath).size > MAX_READ_SIZE) return {}
-    return locateChunk(readFileSync(fullPath, 'utf-8'), hit.content) ?? {}
-  } catch {
-    return {}
-  }
+  const fileText = readCheckoutFile(join(REPOS_DIR, projectDir), hit.filePath)
+  return (fileText && locateChunk(fileText, hit.content)) || {}
 }
 
 // ── File Content: read raw source file from cloned repo ──
