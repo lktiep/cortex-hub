@@ -43,6 +43,9 @@ finding the spot in one call and spending five:
 - **Don't re-search the same question.** Recall@10 is 1.000, so a reworded query returns
   the same set for another round trip. If nothing fits, ask a *different* question or
   switch tool — don't paraphrase.
+- **Read the lines a hit names, not the file.** Each hit carries its line range (`L120-168`):
+  Read with that offset and limit, or `rg -n` inside the file. A whole file is often ten
+  times the chunk you came for.
 
 ### The rest of the toolbox
 

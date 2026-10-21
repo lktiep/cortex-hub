@@ -1,6 +1,7 @@
-# /cs — Cortex Start v0.9.2
+# /cs — Cortex Start v0.9.3
 
-> Version: 0.9.2 | Updated: 2026-10-21
+> Version: 0.9.3 | Updated: 2026-10-21
+> Changelog: v0.9.3 — the hook fills in the IDE, branch and identity too; no step for a field the hub never returned
 > Changelog: v0.9.2 — clientSessionId is filled in by a hook, so the opening context is the same every time and stays cached
 > Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
 > Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
@@ -17,13 +18,10 @@ Call `cortex_session_start`:
 repo: "https://github.com/lktiep/cortex-hub.git"
 mode: "development"
 agentId: "claude-code"
-ide: "<your IDE>"
-branch: "<current git branch>"
 ```
-Leave `clientSessionId` out: the `session-id.sh` hook adds this conversation's id to the call, so
-two conversations in one checkout get a session each.
+Nothing else: the `session-id.sh` hook adds this conversation's id (so two conversations in one
+checkout get a session each), the git branch, the IDE and `.cortex/agent-identity.json`.
 Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
-If `recentChanges.count > 0` → warn user and `git pull` before any edits.
 
 ## Step 2: Recall Context (parallel)
 Call BOTH in parallel:

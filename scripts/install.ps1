@@ -1621,7 +1621,7 @@ exit 0
         # session-id.sh
         Write-ShHook "session-id" @'
 #!/bin/bash
-# Cortex Session Id (v1.0) — fills in clientSessionId on cortex_session_start.
+# Cortex Session Id (v1.1) — fills in clientSessionId and the agent identity on cortex_session_start.
 #
 # The hub keeps two conversations in one checkout on separate sessions by this id. Until
 # session-init v7.4 the agent copied it from a line that hook printed, but that line differs
@@ -1629,24 +1629,58 @@ exit 0
 # the prompt cache could never reuse anything after it: ~6k tokens written anew per
 # conversation, most of what made a hub lookup cost more than a plain grep. The hook payload
 # already carries the id, so it goes straight into the call and the context stays the same.
+#
+# v1.1: the identity too. CLAUDE.md told the agent to read .cortex/agent-identity.json and the
+# git branch before its first call, two more turns in every conversation for values a script
+# can look up. What the agent passes itself still wins; only the id is always this hook's.
 INPUT=$(cat 2>/dev/null || true)
 [ -z "$INPUT" ] && exit 0
+
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+IDENTITY_FILE="$PROJECT_DIR/.cortex/agent-identity.json"
+BRANCH=$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null || true)
+case "${CLAUDE_CODE_ENTRYPOINT:-}" in
+  *vscode*) IDE=claude-code-vscode ;;
+  *) IDE=claude-code-cli ;;
+esac
 
 # The same id, with the same characters kept, that the tracker and the exit hook file this
 # conversation's session under. Whatever the agent passed is replaced: this one is current.
 if command -v jq >/dev/null 2>&1; then
-  printf '%s' "$INPUT" | jq -c '
+  IDENTITY=$(jq -c 'if type == "object" then . else {} end' "$IDENTITY_FILE" 2>/dev/null || true)
+  [ -z "$IDENTITY" ] && IDENTITY='{}'
+  printf '%s' "$INPUT" | jq -c --argjson who "$IDENTITY" --arg branch "$BRANCH" --arg ide "$IDE" '
     (.session_id // "" | gsub("[^A-Za-z0-9_-]"; "") | .[0:128]) as $id
     | select($id != "")
+    | ($who.environment | if type == "object" then . else {} end) as $env
+    # A value of the wrong type fails the schema of the tool, and with it the whole call, so a
+    # hand-edited file only contributes what it got right.
+    | (({hostname: $env.hostname, os: $env.os, role: $who.role, branch: $branch, ide: $ide}
+        | with_entries(select(.value | type == "string" and . != "")))
+       + ($who.capabilities | if type == "array" and length > 0 and all(type == "string")
+           then {capabilities: .} else {} end)) as $found
     | {hookSpecificOutput: {hookEventName: "PreToolUse",
-        updatedInput: ((.tool_input // {}) + {clientSessionId: $id})}}' 2>/dev/null
+        updatedInput: ($found + (.tool_input // {}) + {clientSessionId: $id})}}' 2>/dev/null
 elif command -v python3 >/dev/null 2>&1; then
-  printf '%s' "$INPUT" | python3 -c '
-import json, re, sys
+  printf '%s' "$INPUT" | IDENTITY_FILE="$IDENTITY_FILE" BRANCH="$BRANCH" IDE="$IDE" python3 -c '
+import json, os, re, sys
 d = json.load(sys.stdin)
 cid = re.sub(r"[^A-Za-z0-9_-]", "", str(d.get("session_id") or ""))[:128]
 if cid:
-    args = dict(d.get("tool_input") or {}, clientSessionId=cid)
+    try:
+        who = json.load(open(os.environ["IDENTITY_FILE"], encoding="utf-8-sig"))
+        who = who if isinstance(who, dict) else {}
+    except Exception:
+        who = {}
+    env = who.get("environment") if isinstance(who.get("environment"), dict) else {}
+    found = {"hostname": env.get("hostname"), "os": env.get("os"), "role": who.get("role"),
+             "branch": os.environ.get("BRANCH"), "ide": os.environ.get("IDE")}
+    args = {k: v for k, v in found.items() if isinstance(v, str) and v}
+    caps = who.get("capabilities")
+    if isinstance(caps, list) and caps and all(isinstance(c, str) for c in caps):
+        args["capabilities"] = caps
+    args.update(d.get("tool_input") or {})
+    args["clientSessionId"] = cid
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": args}}))
 ' 2>/dev/null
 fi
@@ -1664,7 +1698,7 @@ exit 0
       {"matcher": "", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/subagent-start.sh\""}]}
     ],
     "PreToolUse": [
-      {"matcher": "Edit|Write|NotebookEdit|Bash", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-session.sh\""}]},
+      {"matcher": "Edit|Write|NotebookEdit|Bash|Grep|Glob", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-session.sh\""}]},
       {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-commit.sh\""}]},
       {"matcher": "Bash|Grep|Glob|mcp__.*cortex_(code_search|code_context|code_impact|cypher)", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/nudge-lookup.sh\""}]},
       {"matcher": "mcp__.*cortex_session_start", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/session-id.sh\""}]},
@@ -1703,9 +1737,10 @@ exit 0
         if (-not (Test-Path $cmdDir)) { New-Item -ItemType Directory -Path $cmdDir -Force | Out-Null }
 
         @'
-# /cs — Cortex Start v0.9.2
+# /cs — Cortex Start v0.9.3
 
-> Version: 0.9.2 | Updated: 2026-10-21
+> Version: 0.9.3 | Updated: 2026-10-21
+> Changelog: v0.9.3 — the hook fills in the IDE, branch and identity too; no step for a field the hub never returned
 > Changelog: v0.9.2 — clientSessionId is filled in by a hook, so the opening context is the same every time and stays cached
 > Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
 > Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
@@ -1722,13 +1757,10 @@ Call `cortex_session_start`:
 repo: "__GIT_REPO__"
 mode: "development"
 agentId: "claude-code"
-ide: "<your IDE>"
-branch: "<current git branch>"
 ```
-Leave `clientSessionId` out: the `session-id.sh` hook adds this conversation's id to the call, so
-two conversations in one checkout get a session each.
+Nothing else: the `session-id.sh` hook adds this conversation's id (so two conversations in one
+checkout get a session each), the git branch, the IDE and `.cortex/agent-identity.json`.
 Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
-If `recentChanges.count > 0` → warn user and `git pull` before any edits.
 
 ## Step 2: Recall Context (parallel)
 Call BOTH in parallel:
@@ -2516,8 +2548,7 @@ exit 0
 
 At the START of every conversation:
 1. Call `cortex_session_start` with repo: "__GIT_REPO__", agentId: "__AGENT_ID__", mode: "development"
-2. If `recentChanges.count > 0`, warn user and run `git pull`
-3. `cortex_knowledge_search` + `cortex_memory_search` once — recall what the last session decided
+2. `cortex_knowledge_search` + `cortex_memory_search` once — recall what the last session decided
 
 ### Finding code — start from what you know, not from a fixed ladder
 | You already know | Start with |
@@ -2598,26 +2629,8 @@ This is not optional — it is enforced by pre-tool hooks.**
 cortex_session_start(repo: "__GIT_REPO__", mode: "development", agentId: "claude-code")
 ```
 
-Then:
-- If `recentChanges.count > 0` in the response, warn the user and run `git pull`
-
-### Agent Identity (send with session_start if available)
-
-Read `.cortex/agent-identity.json` and pass identity fields:
-```
-cortex_session_start(
-  repo: "__GIT_REPO__",
-  mode: "development",
-  agentId: "claude-code",
-  hostname: "<from agent-identity.json>",
-  os: "<from agent-identity.json>",
-  ide: "claude-code-cli",
-  branch: "<current git branch>",
-  role: "<from agent-identity.json>",
-  capabilities: ["<from agent-identity.json>"]
-)
-```
-This helps Dashboard identify which agent you are across multiple IDEs/machines.
+Pass nothing else: a hook adds the id of this conversation, the git branch, the IDE and the
+fields of `.cortex/agent-identity.json`, so the dashboard can tell your machines and IDEs apart.
 
 ### Finding code fast (MANDATORY — and a fixed ladder is the slow way)
 
@@ -2635,6 +2648,10 @@ discovery tool has run in this session.
 file is in the top 10 for 15/15 queries, top 3 for 11/15, rank 1 for only 8/15. So scan all ten
 hits before choosing, and do not re-run a reworded version of the same query — recall@10 is
 already 1.000, so it returns the same set. Ask a different question or switch tool instead.
+
+**Read the lines a hit names, not the file.** Each hit carries its line range (`L120-168`):
+Read with that offset and limit, or `rg -n` inside the file. A whole file is often ten times
+the chunk you came for.
 
 `cortex_code_impact` before editing something exported or shared — not as a ritual on every file.
 

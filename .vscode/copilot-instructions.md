@@ -3,8 +3,7 @@
 
 At the START of every conversation:
 1. Call `cortex_session_start` with repo: "https://github.com/lktiep/cortex-hub.git", agentId: "vscode-copilot", mode: "development"
-2. If `recentChanges.count > 0`, warn user and run `git pull`
-3. `cortex_knowledge_search` + `cortex_memory_search` once — recall what the last session decided
+2. `cortex_knowledge_search` + `cortex_memory_search` once — recall what the last session decided
 
 ### Finding code — start from what you know, not from a fixed ladder
 | You already know | Start with |

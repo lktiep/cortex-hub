@@ -231,6 +231,20 @@ OUT=$(sid '{"session_id":"../../x y","tool_input":{}}')
 check "only file-name-safe characters"      xy "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
 check "leaves the call alone with no id"    "" "$(sid '{"tool_input":{"repo":"r"}}')"
 check "exits 0 on empty input"              0 "$(printf '' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-id.sh" >/dev/null 2>&1; echo $?)"
+# The identity and the branch used to cost the agent two turns of reading before its first call
+git -C "$SANDBOX" init -q -b feat/x
+printf '{"environment":{"os":"macOS","hostname":"box1"},"role":"","capabilities":["node"]}' > "$SANDBOX/.cortex/agent-identity.json"
+OUT=$(sid '{"session_id":"conv-a","tool_input":{"repo":"r","os":"linux"}}')
+check "fills in the identity file's fields" box1/node "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput | "\(.hostname)/\(.capabilities[0])"')"
+check "and the branch"                      feat/x "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.branch')"
+check "what the agent passed wins"          linux "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.os')"
+check "an empty role is left out"           false "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput | has("role")')"
+# A value of the wrong type fails the tool's schema, and with it the session start
+printf '{"environment":"x","role":5,"capabilities":"node"}' > "$SANDBOX/.cortex/agent-identity.json"
+OUT=$(sid '{"session_id":"conv-a","tool_input":{"repo":"r"}}')
+check "a malformed identity adds nothing"   'branch,clientSessionId,ide,repo' "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput | keys | join(",")')"
+printf 'not json' > "$SANDBOX/.cortex/agent-identity.json"
+check "nor does a broken file"              conv-a "$(sid '{"session_id":"conv-a","tool_input":{}}' | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
 teardown
 
 echo "session-init.sh — the session gate must not arm itself"
@@ -984,6 +998,11 @@ rm -rf "$SB"
 # The installer writes settings.json from its own heredoc, so the two must not drift.
 INSTALLED=$(awk "/cat > .claude\/settings.json << 'EOF'/{f=1;next} f&&/^EOF\$/{exit} f" "$REPO/scripts/install.sh")
 check "install.sh writes the same settings.json" 0 "$([ "$INSTALLED" = "$(cat "$REPO/.claude/settings.json")" ] && echo 0 || echo 1)"
+# The gate's Grep and Glob branches never ran: the hook was not registered for those tools
+GATED=$(python3 -c 'import json,sys
+for m in json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]:
+    if any("enforce-session" in h["command"] for h in m["hooks"]): print(m["matcher"])' "$REPO/.claude/settings.json")
+check "the gate sees Grep and Glob"         0 "$(printf '%s' "$GATED" | grep -Eq '(^|\|)Grep(\||$)' && printf '%s' "$GATED" | grep -Eq '(^|\|)Glob(\||$)' && echo 0 || echo 1)"
 
 echo "nudge-lookup.sh — a reminder for a grep cortex could answer, never a block"
 # Prints "nudge", "quiet" or "exit N": the hook must exit 0 whatever it reads.

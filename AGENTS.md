@@ -10,7 +10,6 @@
 1. `cortex_session_start({ repo: "<repo URL>", mode: "development", agentId: "<your id>" })` — save the returned `sessionId`
 2. `cortex_knowledge_search` + `cortex_memory_search` — recall what happened last session
 3. `cortex_task_pickup()` — check for Conductor tasks assigned to you
-4. If `recentChanges.count > 0` → `git pull` before editing
 
 
 ### During Work

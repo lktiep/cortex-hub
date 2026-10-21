@@ -3,6 +3,15 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { apiCall } from '../api-call.js'
 
+// The docs indexer files each document as "[<path>] <title>". The IDE has already put these
+// instruction files in the agent's context, and the session-summary query ranks them first:
+// the brief and the knowledge list were the project's CLAUDE.md twice, ~2.4k of 3.4k characters.
+const IN_CONTEXT = /^\[(?:.*\/)?(?:CLAUDE|AGENTS|GEMINI)\.md\]/i
+
+export function alreadyInContext(title: string | undefined): boolean {
+  return IN_CONTEXT.test(title ?? '')
+}
+
 /**
  * Register Session Tools
  *
@@ -113,7 +122,14 @@ export function registerSessionTools(server: McpServer, env: Env) {
               deprecated?: boolean
             }>
           }
-          const results = (data.results ?? []).filter(r => r.documentId && !r.deprecated)
+          const seen = new Set<string>()
+          const results = (data.results ?? []).filter((r) => {
+            if (!r.documentId || r.deprecated || alreadyInContext(r.title)) return false
+            // A document indexed in several chunks comes back once per chunk.
+            if (seen.has(r.documentId)) return false
+            seen.add(r.documentId)
+            return true
+          })
 
           // Build mission from top knowledge hit (most relevant session summary)
           if (results.length > 0) {
@@ -161,7 +177,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
               hub_error: hubError,
               recent_sessions: recentSessions.length > 0 ? recentSessions : undefined,
               relevant_knowledge: relevantKnowledge.length > 0 ? relevantKnowledge : undefined,
-            }, null, 2)
+            })
           }
         ]
       }
