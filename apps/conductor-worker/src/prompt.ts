@@ -10,6 +10,10 @@ const HEAD_MAX = 200
 const BY_MAX = 100
 const TEST_COMMAND_MAX = 500
 
+// A worker starts cold: no /cs, no recall. What earlier sessions decided and fixed is on the hub.
+export const CORTEX_RULE =
+  '- Before editing, recall what earlier sessions learned: `cortex_knowledge_search` and ' +
+  '`cortex_memory_search` on the task.'
 const RULES = [
   '## Rules',
   '- Do not commit, push, or switch branches; the worker does that.',
@@ -18,6 +22,7 @@ const RULES = [
   // code by grep alone; nothing in their prompt said otherwise.
   '- Find code with the cortex tools when you have them: `cortex_code_context(name)` for a symbol, ' +
     '`cortex_code_search(query)` for behaviour. Grep is for exact literals.',
+  CORTEX_RULE,
 ].join('\n')
 // for an engine that refuses commands (EngineAdapter.refusesCommands): a refused command ends its run
 const NO_COMMANDS =

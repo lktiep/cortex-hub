@@ -72,6 +72,8 @@ bash scripts/onboard.sh --tool claude
 
 ```
 SessionStart  →  session-init.sh      Inject mandatory session_start reminder
+SubagentStart →  subagent-start.sh    Tell a subagent to recall for its own task
+PreToolUse    →  enforce-session.sh   Block edits until recall; a subagent recalls for itself
 PreToolUse    →  enforce-commit.sh     Block git commit without quality gates
 PostToolUse   →  track-quality.sh      Track build/typecheck/lint pass + MCP calls
 SessionEnd    →  session-end-check.sh  Close the session as abandoned if session_end never ran
@@ -86,6 +88,8 @@ Session Start
 ├─ [HOOK] track-quality.sh → marks session-started
 │
 ├─ ... work ...
+│   └─ subagent: [HOOK] subagent-start.sh → "the parent's recall is not in your context"
+│                [HOOK] enforce-session.sh → its edits wait for its own knowledge + memory recall
 │
 ├─ [AGENT] runs pnpm build/typecheck/lint
 ├─ [HOOK] track-quality.sh → marks gates passed

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Quality Tracker (v4.2) — records what actually happened, as evidence.
+# Cortex Quality Tracker (v4.3) — records what actually happened, as evidence.
 #
 # Two things changed from v3, both of them bugs found by reading a real hook payload:
 #   1. The field is `tool_response`, not `tool_output`. v3 read `tool_output`, so the
@@ -16,6 +16,9 @@
 # v4.2 also files the hub session under the conversation that opened it, in
 # conversations/<IDE session id>: the rest of this directory is shared by every conversation
 # in the checkout, so the exit hook had no way to tell whose session `session-id` was.
+#
+# v4.3 files a subagent's recall under agents/<agent_id> as well: the recall gate asks a
+# subagent for its own, since none of the parent's is in its context.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
@@ -26,12 +29,14 @@ COMMAND=""
 TOOL_NAME=""
 OUTPUT=""
 CLIENT_ID=""
+AGENT_ID=""
 
 if command -v jq >/dev/null 2>&1; then
   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
   TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
   OUTPUT=$(printf '%s' "$INPUT" | jq -r '[(.tool_response // .tool_output // empty)] | tostring' 2>/dev/null || true)
   CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+  AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null || true)
 elif command -v python3 >/dev/null 2>&1; then
   eval "$(printf '%s' "$INPUT" | python3 -c "
 import sys,json
@@ -41,16 +46,28 @@ print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
 print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
 print(f'OUTPUT={repr(json.dumps(r, ensure_ascii=False) if not isinstance(r,str) else r)}')
 print(f'CLIENT_ID={repr(str(d.get(\"session_id\",\"\")))}')
+print(f'AGENT_ID={repr(str(d.get(\"agent_id\",\"\")))}')
 " 2>/dev/null || true)"
 fi
 
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # The IDE's id for this conversation, made safe to use as a file name.
 CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+SAFE_ID=$(printf '%s' "$AGENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+# An id with nothing usable left in it is still a subagent's, never the parent's.
+[ -n "$AGENT_ID" ] && [ -z "$SAFE_ID" ] && SAFE_ID=unnamed
+AGENT_ID="$SAFE_ID"
 
 # Evidence, not existence: the enforcement hook only accepts a marker that says who wrote it.
 record() {
   printf 'tool=%s at=%s\n' "${2:-$TOOL_NAME}" "$NOW" > "$STATE_DIR/$1"
+}
+
+# The same evidence, filed under the subagent that made the call.
+record_agent() {
+  [ -n "$AGENT_ID" ] || return 0
+  mkdir -p "$STATE_DIR/agents/$AGENT_ID"
+  record "agents/$AGENT_ID/$1"
 }
 
 # A command that reports success while the build failed — `pnpm build || true`, or a pipe
@@ -121,8 +138,8 @@ case "$TOOL_NAME" in
     record discovery-used ;;
   # Recall is not discovery: knowledge and memory answer "why" and "has this broken before",
   # not "where is the code". Arming discovery-used here would let /cs alone open Grep and Glob.
-  *cortex_knowledge_search*) record knowledge-recalled ;;
-  *cortex_memory_search*)    record memory-recalled ;;
+  *cortex_knowledge_search*) record knowledge-recalled; record_agent knowledge-recalled ;;
+  *cortex_memory_search*)    record memory-recalled; record_agent memory-recalled ;;
   *cortex_task_pickup*)    record tasks-checked ;;
   *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
 esac

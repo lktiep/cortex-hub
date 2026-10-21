@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Session Init (v7.2) — arms the gates; keeps discovery state across compaction.
+# Cortex Session Init (v7.3) — arms the gates; keeps discovery state across compaction.
 #
 # SessionStart fires on four different things: startup, resume, clear and compact.
 # Wiping the discovery markers on all four is why a long task suddenly finds Grep and
@@ -53,6 +53,7 @@ rm -f "$STATE_DIR/session-started" \
       "$STATE_DIR/knowledge-recalled" "$STATE_DIR/memory-recalled" \
       "$STATE_DIR/changes-checked" "$STATE_DIR/tasks-checked" \
       "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
+rm -rf "$STATE_DIR/agents" 2>/dev/null
 # Other conversations' sessions stay theirs to close; only records a week old are dropped,
 # left by a conversation that ended without the exit hook getting through.
 [ -d "$STATE_DIR/conversations" ] && find "$STATE_DIR/conversations" -type f -mtime +7 -exec rm -f {} + 2>/dev/null

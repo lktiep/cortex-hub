@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Session Enforcement (v6.1) — hold tools back until the cortex workflow is followed.
+# Cortex Session Enforcement (v6.2) — hold tools back until the cortex workflow is followed.
 #
 # What this can and cannot do: the hook shares a filesystem with the agent it gates, so
 # it cannot stop an agent that decides to forge a marker. What it can do is make the
@@ -12,9 +12,11 @@ STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 INPUT=$(cat)
 TOOL_NAME=""
 COMMAND=""
+AGENT_ID=""
 if command -v jq >/dev/null 2>&1; then
   TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+  AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null || true)
 elif command -v python3 >/dev/null 2>&1; then
   # Without this fallback the whole gate silently became a no-op on any machine without jq.
   eval "$(printf '%s' "$INPUT" | python3 -c "
@@ -22,8 +24,14 @@ import sys,json
 d=json.load(sys.stdin)
 print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
 print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
+print(f'AGENT_ID={repr(str(d.get(\"agent_id\",\"\")))}')
 " 2>/dev/null || true)"
 fi
+# A subagent's calls carry its agent_id; the tracker files its recall under the same name.
+SAFE_ID=$(printf '%s' "$AGENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+# An id with nothing usable left in it is still a subagent's, never the parent's.
+[ -n "$AGENT_ID" ] && [ -z "$SAFE_ID" ] && SAFE_ID=unnamed
+AGENT_ID="$SAFE_ID"
 
 [ -z "$TOOL_NAME" ] && { echo "BLOCKED: Cannot parse hook input (install jq or python3)." >&2; exit 2; }
 
@@ -96,6 +104,15 @@ if [ -f "$STATE_DIR/session-started" ]; then
     Bash) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
   esac
   if [ "$WRITES_A_FILE" = "1" ]; then
+    # A subagent starts with none of the parent's recall in its context, so the parent's
+    # markers do not open the gate for it: it recalls for its own task, under its own id.
+    if [ -n "$AGENT_ID" ]; then
+      if ! marker_ok "agents/$AGENT_ID/knowledge-recalled" || ! marker_ok "agents/$AGENT_ID/memory-recalled"; then
+        echo "BLOCKED: you are a subagent, and the parent's recall is not in your context. Run cortex_knowledge_search and cortex_memory_search on your own task before editing. $HOW_OUT" >&2
+        exit 2
+      fi
+      exit 0
+    fi
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
       echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
       exit 2

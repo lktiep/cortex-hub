@@ -28,6 +28,7 @@ TARGETS = [
     '.claude/hooks/session-end-check.sh',
     '.claude/hooks/nudge-lookup.sh',
     '.claude/hooks/recall-notes.sh',
+    '.claude/hooks/subagent-start.sh',
     '.claude/settings.json',
     '.claude/commands/cs.md',
     '.claude/commands/ce.md',

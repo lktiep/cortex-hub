@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AssignedTask } from '@cortex/shared-types'
-import { PROMPT_LIMIT, buildPrompt, win32QuotedLength } from './prompt.js'
+import { CORTEX_RULE, PROMPT_LIMIT, buildPrompt, win32QuotedLength } from './prompt.js'
 
 const RULE_A = 'Do not commit, push, or switch branches; the worker does that.'
 const RULE_B = 'Stay inside this working tree.'
@@ -31,6 +31,7 @@ function expectSafe(prompt: string): void {
   expect(prompt).toContain(RULE_A)
   expect(prompt).toContain(RULE_B)
   expect(prompt).toContain(RULE_LOOKUP)
+  expect(prompt).toContain(CORTEX_RULE)
 }
 
 describe('buildPrompt', () => {

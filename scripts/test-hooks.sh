@@ -112,6 +112,71 @@ GOT=$(printf '%s' "$(tool_payload Grep)" | CLAUDE_PROJECT_DIR="$SANDBOX" PATH="$
 check "still blocks with python3 only"     2 "$GOT"
 rm -rf "$NOJQ"; teardown
 
+echo "enforce-session.sh — a subagent recalls for itself"
+# A subagent starts with the prompt its parent wrote and none of the recall. It used to edit
+# on the parent's markers, so the gate meant to put past decisions in front of the agent
+# doing the work never reached the agent doing the work.
+agent_payload() { printf '{"tool_name":"%s","tool_input":{},"agent_id":"%s","agent_type":"general-purpose"}' "$1" "$2"; }
+recall_post() { printf '{"tool_name":"mcp__cortex-hub__%s","tool_input":{},"tool_response":{}%s}' "$1" "${2:+,\"agent_id\":\"$2\"}"; }
+setup; touch "$STATE/session-started"; discovered
+printf 'tool=cortex_knowledge_search at=now\n' > "$STATE/knowledge-recalled"
+printf 'tool=cortex_memory_search at=now\n' > "$STATE/memory-recalled"
+check "the parent edits on its own recall"  0 "$(run enforce-session.sh "$(tool_payload Edit)")"
+check "a subagent does not"                 2 "$(run enforce-session.sh "$(agent_payload Edit sub-1)")"
+check "nor through Bash"                    2 "$(run enforce-session.sh "$(printf '{"tool_name":"Bash","tool_input":{"command":"echo x > f.ts"},"agent_id":"sub-1"}')")"
+check "reading is still fine"               0 "$(run enforce-session.sh "$(agent_payload Read sub-1)")"
+printf '%s' "$(recall_post cortex_knowledge_search sub-1)" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "knowledge alone is not enough"       2 "$(run enforce-session.sh "$(agent_payload Edit sub-1)")"
+printf '%s' "$(recall_post cortex_memory_search sub-1)" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "its own recall unlocks it"           0 "$(run enforce-session.sh "$(agent_payload Edit sub-1)")"
+check "and only it"                         2 "$(run enforce-session.sh "$(agent_payload Edit sub-2)")"
+check "an id cannot climb out of agents/"   2 "$(run enforce-session.sh "$(agent_payload Edit '../..')")"
+teardown
+
+setup; touch "$STATE/session-started"
+printf '%s' "$(recall_post cortex_knowledge_search sub-1)" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+printf '%s' "$(recall_post cortex_memory_search sub-1)" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+# The session's markers are the union: the parent may still lean on recall a subagent ran.
+check "a subagent's recall is the session's too" 0 "$(run enforce-session.sh "$(tool_payload Edit)")"
+check "markers carry evidence"              0 "$(grep -q '^tool=' "$STATE/agents/sub-1/memory-recalled" 2>/dev/null && echo 0 || echo 1)"
+teardown
+
+setup; touch "$STATE/session-started"
+NOJQ=$(mktemp -d)
+for b in bash cat grep sed printf python3 mktemp rm dirname pwd tr cut mkdir date; do
+  [ -x "$(command -v $b 2>/dev/null)" ] && ln -sf "$(command -v $b)" "$NOJQ/$b"
+done
+for t in cortex_knowledge_search cortex_memory_search; do
+  printf '%s' "$(recall_post $t sub-9)" | CLAUDE_PROJECT_DIR="$SANDBOX" PATH="$NOJQ" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+done
+check "recorded with python3 only"          0 "$([ -s "$STATE/agents/sub-9/knowledge-recalled" ] && [ -s "$STATE/agents/sub-9/memory-recalled" ] && echo 0 || echo 1)"
+GOT=$(printf '%s' "$(agent_payload Edit sub-8)" | CLAUDE_PROJECT_DIR="$SANDBOX" PATH="$NOJQ" bash "$HOOKS_DIR/enforce-session.sh" >/dev/null 2>&1; echo $?)
+check "and the gate holds with python3 only" 2 "$GOT"
+rm -rf "$NOJQ"; teardown
+
+echo "subagent-start.sh — tells a subagent what the session expects"
+sub_start() { printf '{"hook_event_name":"SubagentStart","agent_id":"sub-1","agent_type":"Explore"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/subagent-start.sh" 2>/dev/null; }
+setup
+check "silent with no cortex session"       "" "$(sub_start)"
+touch "$STATE/session-started"
+OUT=$(sub_start)
+check "valid SubagentStart output"          0 "$(printf '%s' "$OUT" | python3 -c 'import json,sys
+d=json.load(sys.stdin)["hookSpecificOutput"]
+assert d["hookEventName"]=="SubagentStart"
+assert "cortex_knowledge_search" in d["additionalContext"] and "cortex_memory_search" in d["additionalContext"]' 2>/dev/null && echo 0 || echo 1)"
+check "exits 0"                             0 "$(sub_start >/dev/null; echo $?)"
+printf 'hub unreachable\n' > "$STATE/gate-off"
+check "silent once the gates are off"       "" "$(sub_start)"
+teardown
+
+echo "session-init.sh — a subagent's recall belongs to its session"
+setup; mkdir -p "$STATE/agents/sub-1"; printf 'tool=cortex_memory_search at=now\n' > "$STATE/agents/sub-1/memory-recalled"
+printf '{"source":"compact"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" >/dev/null 2>&1
+check "kept across compaction"              0 "$([ -s "$STATE/agents/sub-1/memory-recalled" ] && echo 0 || echo 1)"
+printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" >/dev/null 2>&1
+check "dropped with a new session"          0 "$([ ! -d "$STATE/agents" ] && echo 0 || echo 1)"
+teardown
+
 echo "session-init.sh — compaction must not re-arm the gate"
 setup; discovered
 printf '{"source":"compact"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" >/dev/null 2>&1

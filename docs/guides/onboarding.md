@@ -94,7 +94,7 @@ bash scripts/install.sh --force
 
 | IDE | Runtime Hooks | Instruction File | MCP Config |
 |-----|:---:|:---:|:---:|
-| Claude Code | 5 hooks (.claude/hooks/) | CLAUDE.md | ~/.claude.json |
+| Claude Code | 8 hooks (.claude/hooks/) | CLAUDE.md | ~/.claude.json |
 | Gemini CLI | 5 hooks (.gemini/hooks/) | AGENTS.md | ~/.gemini/antigravity/mcp_config.json |
 | Cursor | instruction-only | .cursorrules | ~/.cursor/mcp.json |
 | Windsurf | instruction-only | .windsurfrules | ~/.codeium/windsurf/mcp_config.json |

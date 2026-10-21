@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $HOOKS_VERSION = 7
-$HOOKS_MINOR = 12
+$HOOKS_MINOR = 13
 $LATEST_VERSION = "$HOOKS_VERSION.$HOOKS_MINOR"
 $MCP_URL_DEFAULT = "http://localhost:8318/mcp"
 
@@ -387,7 +387,7 @@ if ($NeedsUpdate) {
         # session-init.sh
         Write-ShHook "session-init" @'
 #!/bin/bash
-# Cortex Session Init (v7.2) — arms the gates; keeps discovery state across compaction.
+# Cortex Session Init (v7.3) — arms the gates; keeps discovery state across compaction.
 #
 # SessionStart fires on four different things: startup, resume, clear and compact.
 # Wiping the discovery markers on all four is why a long task suddenly finds Grep and
@@ -441,6 +441,7 @@ rm -f "$STATE_DIR/session-started" \
       "$STATE_DIR/knowledge-recalled" "$STATE_DIR/memory-recalled" \
       "$STATE_DIR/changes-checked" "$STATE_DIR/tasks-checked" \
       "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
+rm -rf "$STATE_DIR/agents" 2>/dev/null
 # Other conversations' sessions stay theirs to close; only records a week old are dropped,
 # left by a conversation that ended without the exit hook getting through.
 [ -d "$STATE_DIR/conversations" ] && find "$STATE_DIR/conversations" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
@@ -456,7 +457,7 @@ exit 0
         # enforce-session.sh
         Write-ShHook "enforce-session" @'
 #!/bin/bash
-# Cortex Session Enforcement (v6.1) — hold tools back until the cortex workflow is followed.
+# Cortex Session Enforcement (v6.2) — hold tools back until the cortex workflow is followed.
 #
 # What this can and cannot do: the hook shares a filesystem with the agent it gates, so
 # it cannot stop an agent that decides to forge a marker. What it can do is make the
@@ -469,9 +470,11 @@ STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 INPUT=$(cat)
 TOOL_NAME=""
 COMMAND=""
+AGENT_ID=""
 if command -v jq >/dev/null 2>&1; then
   TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+  AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null || true)
 elif command -v python3 >/dev/null 2>&1; then
   # Without this fallback the whole gate silently became a no-op on any machine without jq.
   eval "$(printf '%s' "$INPUT" | python3 -c "
@@ -479,8 +482,14 @@ import sys,json
 d=json.load(sys.stdin)
 print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
 print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
+print(f'AGENT_ID={repr(str(d.get(\"agent_id\",\"\")))}')
 " 2>/dev/null || true)"
 fi
+# A subagent's calls carry its agent_id; the tracker files its recall under the same name.
+SAFE_ID=$(printf '%s' "$AGENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+# An id with nothing usable left in it is still a subagent's, never the parent's.
+[ -n "$AGENT_ID" ] && [ -z "$SAFE_ID" ] && SAFE_ID=unnamed
+AGENT_ID="$SAFE_ID"
 
 [ -z "$TOOL_NAME" ] && { echo "BLOCKED: Cannot parse hook input (install jq or python3)." >&2; exit 2; }
 
@@ -553,6 +562,15 @@ if [ -f "$STATE_DIR/session-started" ]; then
     Bash) is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" && WRITES_A_FILE=1 ;;
   esac
   if [ "$WRITES_A_FILE" = "1" ]; then
+    # A subagent starts with none of the parent's recall in its context, so the parent's
+    # markers do not open the gate for it: it recalls for its own task, under its own id.
+    if [ -n "$AGENT_ID" ]; then
+      if ! marker_ok "agents/$AGENT_ID/knowledge-recalled" || ! marker_ok "agents/$AGENT_ID/memory-recalled"; then
+        echo "BLOCKED: you are a subagent, and the parent's recall is not in your context. Run cortex_knowledge_search and cortex_memory_search on your own task before editing. $HOW_OUT" >&2
+        exit 2
+      fi
+      exit 0
+    fi
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
       echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
       exit 2
@@ -674,7 +692,7 @@ exit 0
         # track-quality.sh
         Write-ShHook "track-quality" @'
 #!/bin/bash
-# Cortex Quality Tracker (v4.2) — records what actually happened, as evidence.
+# Cortex Quality Tracker (v4.3) — records what actually happened, as evidence.
 #
 # Two things changed from v3, both of them bugs found by reading a real hook payload:
 #   1. The field is `tool_response`, not `tool_output`. v3 read `tool_output`, so the
@@ -691,6 +709,9 @@ exit 0
 # v4.2 also files the hub session under the conversation that opened it, in
 # conversations/<IDE session id>: the rest of this directory is shared by every conversation
 # in the checkout, so the exit hook had no way to tell whose session `session-id` was.
+#
+# v4.3 files a subagent's recall under agents/<agent_id> as well: the recall gate asks a
+# subagent for its own, since none of the parent's is in its context.
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
@@ -701,12 +722,14 @@ COMMAND=""
 TOOL_NAME=""
 OUTPUT=""
 CLIENT_ID=""
+AGENT_ID=""
 
 if command -v jq >/dev/null 2>&1; then
   COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
   TOOL_NAME=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
   OUTPUT=$(printf '%s' "$INPUT" | jq -r '[(.tool_response // .tool_output // empty)] | tostring' 2>/dev/null || true)
   CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+  AGENT_ID=$(printf '%s' "$INPUT" | jq -r '.agent_id // empty' 2>/dev/null || true)
 elif command -v python3 >/dev/null 2>&1; then
   eval "$(printf '%s' "$INPUT" | python3 -c "
 import sys,json
@@ -716,16 +739,28 @@ print(f'COMMAND={repr(d.get(\"tool_input\",{}).get(\"command\",\"\"))}')
 print(f'TOOL_NAME={repr(d.get(\"tool_name\",\"\"))}')
 print(f'OUTPUT={repr(json.dumps(r, ensure_ascii=False) if not isinstance(r,str) else r)}')
 print(f'CLIENT_ID={repr(str(d.get(\"session_id\",\"\")))}')
+print(f'AGENT_ID={repr(str(d.get(\"agent_id\",\"\")))}')
 " 2>/dev/null || true)"
 fi
 
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # The IDE's id for this conversation, made safe to use as a file name.
 CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+SAFE_ID=$(printf '%s' "$AGENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
+# An id with nothing usable left in it is still a subagent's, never the parent's.
+[ -n "$AGENT_ID" ] && [ -z "$SAFE_ID" ] && SAFE_ID=unnamed
+AGENT_ID="$SAFE_ID"
 
 # Evidence, not existence: the enforcement hook only accepts a marker that says who wrote it.
 record() {
   printf 'tool=%s at=%s\n' "${2:-$TOOL_NAME}" "$NOW" > "$STATE_DIR/$1"
+}
+
+# The same evidence, filed under the subagent that made the call.
+record_agent() {
+  [ -n "$AGENT_ID" ] || return 0
+  mkdir -p "$STATE_DIR/agents/$AGENT_ID"
+  record "agents/$AGENT_ID/$1"
 }
 
 # A command that reports success while the build failed — `pnpm build || true`, or a pipe
@@ -796,8 +831,8 @@ case "$TOOL_NAME" in
     record discovery-used ;;
   # Recall is not discovery: knowledge and memory answer "why" and "has this broken before",
   # not "where is the code". Arming discovery-used here would let /cs alone open Grep and Glob.
-  *cortex_knowledge_search*) record knowledge-recalled ;;
-  *cortex_memory_search*)    record memory-recalled ;;
+  *cortex_knowledge_search*) record knowledge-recalled; record_agent knowledge-recalled ;;
+  *cortex_memory_search*)    record memory-recalled; record_agent memory-recalled ;;
   *cortex_task_pickup*)    record tasks-checked ;;
   *cortex_detect_changes*|*cortex_changes*) record changes-checked ;;
 esac
@@ -1551,12 +1586,43 @@ STATE_DIR="$STATE_DIR" PROJECT_DIR="$PROJECT_DIR" node -e "$NOTES_JS" 2>/dev/nul
 exit 0
 '@
 
+        # subagent-start.sh
+        Write-ShHook "subagent-start" @'
+#!/bin/bash
+# Cortex Subagent Start (v1.0) — tells a subagent what the session it joins expects.
+#
+# A subagent begins with the prompt its parent wrote and none of the recall /cs did. The
+# recall gate holds its edits until it recalls for itself, and this is where it learns that
+# before running into the gate.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+
+cat >/dev/null 2>&1 || true
+
+# No cortex session in this checkout, or the gates declared off: nothing to follow.
+[ -f "$STATE_DIR/session-started" ] || exit 0
+[ -s "$STATE_DIR/gate-off" ] && exit 0
+
+CONTEXT="Cortex: you are a subagent in a Cortex session, and the parent's recall is not in your context. \
+Before editing any file, run cortex_knowledge_search and cortex_memory_search on your own task: \
+edits stay blocked until you do. \
+Find code with cortex_code_context for a known symbol or cortex_code_search for a behaviour (read all ten hits); \
+grep is for exact literals. \
+When something fails, search knowledge for the error before fixing it."
+
+printf '{"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContext":"%s"}}\n' "$CONTEXT"
+exit 0
+'@
+
         # settings.json — bash .sh hooks (Claude Code uses bash on all platforms)
         $settingsContent = @'
 {
   "hooks": {
     "SessionStart": [
       {"matcher": "", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/session-init.sh\""}]}
+    ],
+    "SubagentStart": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/subagent-start.sh\""}]}
     ],
     "PreToolUse": [
       {"matcher": "Edit|Write|NotebookEdit|Bash", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-session.sh\""}]},
