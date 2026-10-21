@@ -4,12 +4,19 @@ import { ALL_TOOLS, MCP_TOOL_PERMISSIONS, allowedToolNames, toolNameForPermissio
 import type { Env } from '../types.js'
 import { registerAllTools } from './index.js'
 
-function registeredTools(): string[] {
+function register() {
   const names: string[] = []
-  const server = { tool: (name: string) => { names.push(name) } }
+  const upFront: string[] = []
+  const server = {
+    tool: (name: string) => {
+      names.push(name)
+      return { update: (u: { _meta?: Record<string, unknown> }) => { if (u._meta?.['anthropic/alwaysLoad']) upFront.push(name) } }
+    },
+  }
   registerAllTools(server as unknown as McpServer, { DASHBOARD_API_URL: 'http://api' } as Env)
-  return names
+  return { names, upFront }
 }
+const registeredTools = () => register().names
 
 describe('MCP_TOOL_PERMISSIONS', () => {
   // The API Keys page grants tools from this list. A tool missing from it can never be
@@ -22,6 +29,13 @@ describe('MCP_TOOL_PERMISSIONS', () => {
   it('has no duplicate ids', () => {
     const ids = MCP_TOOL_PERMISSIONS.map((p) => p.id)
     expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe('tools loaded up front', () => {
+  // Everything else waits for a ToolSearch call, a turn of its own; finding code should not.
+  it('are the two that find code, and only those', () => {
+    expect(register().upFront.sort()).toEqual(['cortex_code_context', 'cortex_code_search'])
   })
 })
 

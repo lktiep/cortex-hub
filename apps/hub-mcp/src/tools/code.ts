@@ -20,6 +20,11 @@ const ORG_DESC =
   "Organization ID to scope this call to. Omit it and the hub infers the organization from " +
   "your active session; a cross-repo search never leaves it."
 
+// Claude Code defers an MCP tool until a ToolSearch call loads its schema: one more turn before
+// an agent's first lookup. These are the two tools an agent finds code with, so they load with
+// the session and the rest stay deferred.
+const LOAD_UP_FRONT = { _meta: { 'anthropic/alwaysLoad': true } }
+
 export function registerCodeTools(server: McpServer, env: Env) {
 
   // ── Helper: call Dashboard API intel endpoints ──
@@ -208,7 +213,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
         }
       }
     }
-  )
+  ).update(LOAD_UP_FRONT)
 
   // ── code_impact — calculate blast radius for code changes ──
   server.tool(
@@ -379,7 +384,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
         }
       }
     }
-  )
+  ).update(LOAD_UP_FRONT)
 
   // ── detect_changes — pre-commit risk analysis ──
   // The hub cannot see the caller's working tree, so the caller sends its diff. Asking the
