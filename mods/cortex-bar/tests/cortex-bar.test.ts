@@ -29,7 +29,7 @@ import {
   patternKind,
   shellCommands,
 } from '../hooks/lookups.js'
-import { addCounts, addRecord, emptyTranscript, replay } from '../scripts/replay.js'
+import { addCounts, addRecord, cacheHit, emptyTranscript, replay, tokensOf } from '../scripts/replay.js'
 
 const ROOT = '/work'
 const STATE = ROOT + '/.cortex/.session-state'
@@ -1021,5 +1021,22 @@ describe('audit', () => {
     const one = { cortex: 1, native: { symbol: 2 }, fallback: 1, since: { '': 1 } }
     const two = { cortex: 0, native: { symbol: 1, literal: 3 }, fallback: 0, since: {} }
     expect(addCounts(one, two)).toEqual({ cortex: 1, native: { symbol: 3, literal: 3 }, fallback: 1, since: {} })
+  })
+
+  test('tokens count each response once, however many lines it was written in', () => {
+    const read = emptyTranscript()
+    const usage = { input_tokens: 4, cache_creation_input_tokens: 100, cache_read_input_tokens: 896, output_tokens: 50 }
+    // One response with a text block and a tool call is two lines with the same usage.
+    addRecord(read, { type: 'assistant', message: { id: 'msg_1', usage, content: [{ type: 'text', text: 'hi' }] } })
+    addRecord(read, { type: 'assistant', message: { id: 'msg_1', usage, content: [] } })
+    addRecord(read, {
+      type: 'assistant',
+      message: { id: 'msg_2', usage: { ...usage, cache_creation_input_tokens: 0, cache_read_input_tokens: 996 } },
+    })
+    addRecord(read, { type: 'user', message: { id: 'msg_3', usage } })
+    const tokens = tokensOf(read.usage.values())
+    expect(tokens).toEqual({ requests: 2, input: 8, cacheWrite: 100, cacheRead: 1892, output: 100 })
+    expect(cacheHit(tokens)).toBe(1892 / 2000)
+    expect(cacheHit(tokensOf([]))).toBeNull()
   })
 })

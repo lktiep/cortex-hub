@@ -21,14 +21,15 @@ process.on('warning', (warning) => {
   if ('code' in warning && warning.code === 'MODULE_TYPELESS_PACKAGE_JSON') return
   for (const listener of printWarning) listener(warning)
 })
-const { addCounts, addRecord, emptyTranscript, replay } = await import('./replay.js')
+const { addCounts, addRecord, cacheHit, emptyTranscript, replay, tokensOf } = await import('./replay.js')
 const { LOOKUP_KINDS, emptyLookupCounts, formatShare, lookupShare } = await import('../hooks/lookups.js')
-const { LOOKUP_TOOLS, LOOKUP_WINDOW, lookupMetrics } = await import('../hooks/model.js')
+const { LOOKUP_TOOLS, LOOKUP_WINDOW, formatTokens, lookupMetrics } = await import('../hooks/model.js')
 
 /**
  * @typedef {import('./replay.js').ToolAudit} ToolAudit
+ * @typedef {import('./replay.js').Usage} Usage
  * @typedef {import('../hooks/lookups.js').LookupCounts} LookupCounts
- * @typedef {{ started: string, agents: number, calls: number, cortex: number, denied: number, counts: LookupCounts }} SessionRow
+ * @typedef {{ started: string, agents: number, calls: number, cortex: number, denied: number, counts: LookupCounts, usage: Map<string, Usage> }} SessionRow
  */
 
 const USAGE = 'usage: lookup-audit.mjs [--last N] [transcript.jsonl | folder ...]'
@@ -126,6 +127,23 @@ function sessionCells(row) {
   ]
 }
 
+/** @param {SessionRow} row */
+function tokenCells(row) {
+  const tokens = tokensOf(row.usage.values())
+  const hit = cacheHit(tokens)
+  const prompt = tokens.input + tokens.cacheWrite + tokens.cacheRead
+  return [
+    row.started,
+    tokens.requests,
+    formatTokens(tokens.input),
+    formatTokens(tokens.cacheWrite),
+    formatTokens(tokens.cacheRead),
+    formatTokens(tokens.output),
+    hit === null ? '-' : formatShare(hit),
+    row.calls > 0 ? formatTokens(prompt / row.calls) : '-',
+  ]
+}
+
 /**
  * @param {string} name
  * @param {ToolAudit} audit
@@ -196,7 +214,15 @@ const rows = []
 for (const { file } of newest) {
   const files = [file, ...subagentsOf(file)]
   /** @type {SessionRow} */
-  const row = { started: '', agents: files.length, calls: 0, cortex: 0, denied: 0, counts: emptyLookupCounts() }
+  const row = {
+    started: '',
+    agents: files.length,
+    calls: 0,
+    cortex: 0,
+    denied: 0,
+    counts: emptyLookupCounts(),
+    usage: new Map(),
+  }
   for (const each of files) {
     const transcript = await readTranscript(each)
     if (row.started === '') row.started = transcript.started
@@ -206,19 +232,29 @@ for (const { file } of newest) {
     row.cortex += replayed.cortex
     row.denied += replayed.denied
     row.counts = addCounts(row.counts, replayed.counts)
+    for (const [id, usage] of transcript.usage) row.usage.set(id, usage)
   }
   rows.push(row)
 }
 rows.sort((a, b) => a.started.localeCompare(b.started))
 
 /** @type {SessionRow} */
-const all = { started: 'all', agents: 0, calls: 0, cortex: 0, denied: 0, counts: emptyLookupCounts() }
+const all = {
+  started: 'all',
+  agents: 0,
+  calls: 0,
+  cortex: 0,
+  denied: 0,
+  counts: emptyLookupCounts(),
+  usage: new Map(),
+}
 for (const row of rows) {
   all.agents += row.agents
   all.calls += row.calls
   all.cortex += row.cortex
   all.denied += row.denied
   all.counts = addCounts(all.counts, row.counts)
+  for (const [id, usage] of row.usage) all.usage.set(id, usage)
 }
 
 process.stdout.write(
@@ -235,6 +271,16 @@ process.stdout.write(
   '\nshare: cortex code lookups / (those + greps for a symbol or a word, which code_context or\n' +
     '  code_search could answer). other: literals, lines in known files, files by name, logs.\n' +
     `fallback: such a grep within ${LOOKUP_WINDOW} calls of a cortex code lookup, in the same agent.\n\n`,
+)
+
+printTable([
+  ['started', 'requests', 'input', 'cache write', 'cache read', 'output', 'cache hit', 'prompt/call'],
+  ...rows.map((row) => tokenCells({ ...row, started: localTime(row.started) })),
+  tokenCells(all),
+])
+process.stdout.write(
+  '\nrequests: model responses, each counted once. input: prompt tokens not cached. cache hit:\n' +
+    '  cache read / (input + cache write + cache read). prompt/call: prompt tokens per tool call.\n\n',
 )
 
 const byCalls = [...tools.entries()].sort((a, b) => b[1].calls - a[1].calls || a[0].localeCompare(b[0]))

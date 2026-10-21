@@ -24,7 +24,9 @@ import { countTool, emptyLookupCounts, lookupKindOf } from '../hooks/lookups.js'
  * @typedef {import('../hooks/lookups.js').LookupCounts} LookupCounts
  * @typedef {{ id: string, tool: string, input: Record<string, unknown>, agent: string }} ToolUse
  * @typedef {{ isError: boolean, denied: boolean, text: string }} ToolResult
- * @typedef {{ root: string, started: string, uses: ToolUse[], results: Map<string, ToolResult>, cortexIds: Set<string>, offered: Set<string> }} Transcript
+ * @typedef {{ input: number, cacheWrite: number, cacheRead: number, output: number }} Usage
+ * @typedef {Usage & { requests: number }} Tokens
+ * @typedef {{ root: string, started: string, uses: ToolUse[], results: Map<string, ToolResult>, cortexIds: Set<string>, offered: Set<string>, usage: Map<string, Usage> }} Transcript
  * @typedef {{ calls: number, errors: number, good: number, judged: number, named: number, lookups: Lookup[] }} ToolAudit
  * @typedef {{ calls: number, cortex: number, denied: number, counts: LookupCounts }} Replay
  */
@@ -44,7 +46,13 @@ export function emptyTranscript() {
     results: new Map(),
     cortexIds: new Set(),
     offered: new Set(),
+    usage: new Map(),
   }
+}
+
+/** @param {unknown} n */
+function count(n) {
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0
 }
 
 /**
@@ -77,6 +85,16 @@ export function addRecord(transcript, record) {
     for (const name of [...(attachment.addedNames ?? []), ...(attachment.readdedNames ?? [])]) {
       if (typeof name === 'string' && CORTEX_TOOL.test(name)) transcript.offered.add(shortName(name))
     }
+  }
+  // A response is written once per content block, each line with the same usage.
+  const usage = record.message?.usage
+  if (record.type === 'assistant' && typeof record.message?.id === 'string' && usage) {
+    transcript.usage.set(record.message.id, {
+      input: count(usage.input_tokens),
+      cacheWrite: count(usage.cache_creation_input_tokens),
+      cacheRead: count(usage.cache_read_input_tokens),
+      output: count(usage.output_tokens),
+    })
   }
   const content = record.message?.content
   if (!Array.isArray(content)) return
@@ -203,4 +221,30 @@ export function addCounts(a, b) {
   const native = { ...a.native }
   for (const [kind, count] of Object.entries(b.native)) native[kind] = (native[kind] ?? 0) + count
   return { cortex: a.cortex + b.cortex, native, fallback: a.fallback + b.fallback, since: {} }
+}
+
+/**
+ * The tokens of a set of model requests, each counted once.
+ * @param {Iterable<Usage>} usages
+ * @returns {Tokens}
+ */
+export function tokensOf(usages) {
+  const tokens = { requests: 0, input: 0, cacheWrite: 0, cacheRead: 0, output: 0 }
+  for (const usage of usages) {
+    tokens.requests += 1
+    tokens.input += usage.input
+    tokens.cacheWrite += usage.cacheWrite
+    tokens.cacheRead += usage.cacheRead
+    tokens.output += usage.output
+  }
+  return tokens
+}
+
+/**
+ * The share of the prompt read from the cache, or null with no prompt at all.
+ * @param {Usage} tokens
+ */
+export function cacheHit(tokens) {
+  const prompt = tokens.input + tokens.cacheWrite + tokens.cacheRead
+  return prompt > 0 ? tokens.cacheRead / prompt : null
 }

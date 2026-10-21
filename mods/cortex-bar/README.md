@@ -201,6 +201,11 @@ started           agents  calls  cortex  code lookups  symbol  word  other  shar
 2026-10-02 21:01       2   1375     119            21      24    22    294    31%         4
 all                    6   3817     188            33      73    67    748    19%         5
 
+started           requests  input  cache write  cache read  output  cache hit  prompt/call
+2026-10-01 09:12      2363   4.7k         5.0M      252.1M    1.8M        98%         105k
+2026-10-02 21:01      1204   2.5k         4.1M      135.1M    1.3M        97%         101k
+all                   3567   7.2k         9.1M      387.2M    3.1M        97%         104k
+
 cortex tool       calls  err  result ok  used  missed  unused  hit@1  hit@3  hit@10
 detect_changes       30    2      26/28     -       -       -      -      -       -
 code_search          20    1      18/19     9       5       5   6/14   9/14   10/14
@@ -212,7 +217,11 @@ Offered but never called (2 of 26): memory_delete, task_submit_strategy
 Each session is the main transcript and its subagents', and each agent loop is replayed on
 its own, as the hooks see it live. Per cortex tool it adds the errors, how many results said
 something (`result ok`), and for the code lookups whether the agent opened what they named.
-`Offered but never called` lists the cortex tools the session had but never used. It prints
+The tokens come from each model response's usage, counted once per response (a response
+is written as one line per content block). `cache hit` is the share of the prompt read from
+the cache. It stays high whatever the agent does, because every request resends the whole
+conversation and only the newest part is not cached yet; what a better lookup changes is
+`prompt/call`, `cache write` and the number of requests. `Offered but never called` lists the cortex tools the session had but never used. It prints
 counts only: no command, path, result or session id leaves the transcripts.
 
 ## Developing
