@@ -123,7 +123,8 @@ export function registerCodeTools(server: McpServer, env: Env) {
                 projectId: resolvedProject,
                 orgId: org,
               })
-              // Response shape: { success, data: { raw: "{ \"markdown\": \"...\", \"row_count\": N }\n---\n..." } }
+              // Response shape: { success, data: { raw: "| name |\n| --- |\n| … |\n(N rows)\n---\n..." } },
+              // or from a hub before the table was unwrapped, raw opens with { "markdown", "row_count" }.
               const wrapper = cypherRes as { data?: { raw?: string; formatted?: string; row_count?: number } }
               let md = ''
               let rows = 0
@@ -138,7 +139,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
                 } catch {
                   // raw might be plain text, try extracting table directly
                   md = wrapper.data.raw
-                  rows = (md.match(/\| /g) ?? []).length - 2 // rough count minus headers
+                  rows = md.split('\n').filter(l => l.startsWith('|')).length - 2 // table lines minus header and rule
                 }
               } else if (wrapper?.data?.formatted) {
                 md = wrapper.data.formatted
