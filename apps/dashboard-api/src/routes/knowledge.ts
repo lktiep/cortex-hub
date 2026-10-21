@@ -7,13 +7,14 @@
 
 import { Hono } from 'hono'
 import { randomUUID } from 'crypto'
-import { VectorStore } from '@cortex/shared-mem9'
-import type { VectorStoreConfig, Embedder } from '@cortex/shared-mem9'
+import { VectorStore, isSessionSummary } from '@cortex/shared-mem9'
+import type { VectorStoreConfig, Embedder, MemoryItem } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { normalizeProjectId } from '../db/project-utils.js'
 import { createLogger } from '@cortex/shared-utils'
 import { createEmbedder } from '../lib/embedder-factory.js'
 import { linkablePaths, linkFiles, linksOf, notesFor, notesProject, unlinkDocument } from '../services/file-notes.js'
+import { mem9ProxyRouter } from './mem9-proxy.js'
 
 const logger = createLogger('knowledge')
 
@@ -676,200 +677,275 @@ function tokenize(text: string): string[] {
 //   - IDF + pref-detect: 95.8% R@5 (vs 96.0% additive)
 //   - Kept as comments for future reference if re-tuning is needed
 
+interface KnowledgeSearch {
+  query: string
+  tags?: string[]
+  projectId?: string
+  limit?: number
+  hallType?: 'fact' | 'event' | 'discovery' | 'preference' | 'advice' | 'general'
+  asOf?: string
+  /** Count the hits as selections. Off for automatic recall: nobody chose those documents. */
+  countHits?: boolean
+}
+
+/** Vector search over the chunks, re-ranked with lexical, quality and recency signals. */
+async function searchKnowledge({ query, tags, projectId, limit, hallType, asOf, countHits = true }: KnowledgeSearch) {
+  const embedder = getEmbedder()
+  const vector = await embedder.embed(query)
+
+  // Build Qdrant filter
+  const normalizedProjectId = normalizeProjectId(projectId)
+  const must: Array<Record<string, unknown>> = []
+  if (normalizedProjectId) {
+    must.push({ key: 'project_id', match: { value: normalizedProjectId } })
+  }
+  if (tags && tags.length > 0) {
+    for (const tag of tags) {
+      must.push({ key: 'tags', match: { any: [tag] } })
+    }
+  }
+
+  const searchLimit = limit ?? 10
+  // Overfetch for hybrid re-ranking — score more candidates, then trim
+  const fetchLimit = Math.max(searchLimit * 5, 50)
+
+  // Try hierarchical search first (two-stage: clusters → documents)
+  // Falls back to flat search if clustering not available or corpus is small
+  const filter = must.length > 0 ? { must } : undefined
+  let searchResults = await hierarchicalSearch(vector, fetchLimit, filter)
+
+  if (!searchResults) {
+    // Flat search fallback
+    const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION}/points/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        vector,
+        limit: fetchLimit,
+        with_payload: true,
+        filter: filter,
+      }),
+      signal: AbortSignal.timeout(10000),
+    })
+
+    if (res.status === 404) {
+      // No knowledge stored yet: the collection is created on first write.
+      searchResults = []
+    } else if (!res.ok) {
+      const errText = await res.text()
+      throw new Error(`Search failed: ${errText}`)
+    } else {
+      const flatData = (await res.json()) as {
+        result?: Array<{ id: string; score: number; payload?: Record<string, unknown> }>
+      }
+      searchResults = flatData.result ?? []
+    }
+  }
+
+  const data = { result: searchResults }
+
+  // Enrich with document metadata, quality metrics, and re-rank
+  const docIds = new Set<string>()
+  const results = (data.result ?? []).map((hit) => {
+    const docId = hit.payload?.document_id as string | undefined
+    if (docId) docIds.add(docId)
+    return {
+      score: hit.score,
+      chunkId: hit.id,
+      content: hit.payload?.content,
+      documentId: docId,
+      title: hit.payload?.title,
+      chunkIndex: hit.payload?.chunk_index,
+    }
+  })
+
+  // Increment hit counts + selection counts
+  if (countHits && docIds.size > 0) {
+    const placeholders = [...docIds].map(() => '?').join(',')
+    db.prepare(
+      `UPDATE knowledge_documents SET hit_count = hit_count + 1, selection_count = selection_count + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id IN (${placeholders})`
+    ).run(...docIds)
+  }
+
+  // Pre-tokenize query for lexical scoring
+  const queryTokens = tokenize(query)
+
+  // Join document metadata + quality metrics + lexical, then re-rank
+  const now = Date.now()
+  const enriched = results.map((r) => {
+    if (!r.documentId) return r
+    const doc = db.prepare(
+      `SELECT id, title, tags, project_id, source, hit_count, status, content_preview,
+              selection_count, applied_count, completion_count, fallback_count,
+              origin, category, generation, created_by_agent, updated_at,
+              hall_type, valid_from, invalidated_at, superseded_by
+       FROM knowledge_documents WHERE id = ?`
+    ).get(r.documentId) as Record<string, unknown> | undefined
+    if (!doc) return r
+
+    // MemPalace-inspired filters (post-vector filter)
+    if (hallType && doc.hall_type !== hallType) return null
+    if (asOf) {
+      const vf = doc.valid_from as string | null | undefined
+      const ia = doc.invalidated_at as string | null | undefined
+      if (vf && vf > asOf) return null
+      if (ia && ia <= asOf) return null
+    }
+
+    // Compute quality metrics (OpenSpace-inspired)
+    const sel = (doc.selection_count as number) || 0
+    const app = (doc.applied_count as number) || 0
+    const comp = (doc.completion_count as number) || 0
+    const fall = (doc.fallback_count as number) || 0
+    const quality = {
+      selectionCount: sel,
+      appliedCount: app,
+      completionCount: comp,
+      fallbackCount: fall,
+      appliedRate: sel > 0 ? app / sel : 0,
+      completionRate: app > 0 ? comp / app : 0,
+      effectiveRate: sel > 0 ? comp / sel : 0,
+      fallbackRate: sel > 0 ? fall / sel : 0,
+    }
+
+    // Compute lexical score (simple keyword overlap — beats IDF in benchmarks)
+    const lexicalCorpus = [
+      String(doc.title ?? ''),
+      String(r.content ?? ''),
+      String(doc.content_preview ?? ''),
+    ].join(' ')
+    const contentLower = lexicalCorpus.toLowerCase()
+    let lexMatches = 0
+    for (const token of queryTokens) {
+      if (contentLower.includes(token)) lexMatches++
+    }
+    const lex = queryTokens.length > 0 ? lexMatches / queryTokens.length : 0
+
+    // Recency decay over 90 days
+    const updatedAt = doc.updated_at ? new Date(doc.updated_at as string).getTime() : 0
+    const daysSinceUpdate = Math.max(0, (now - updatedAt) / (1000 * 60 * 60 * 24))
+    const recencyScore = Math.max(0, 1 - daysSinceUpdate / 90)
+    const vectorScore = r.score
+
+    // Hybrid weighting (additive — best in LongMemEval-S 500 at 96.0% R@5):
+    //   vector  × 0.55  (semantic match — primary signal)
+    //   lexical × 0.35  (keyword overlap — +2.2 pts vs pure vector)
+    //   quality × 0.05  (only when sel >= 3)
+    //   recency × 0.05
+    //
+    // Tested alternatives (all on full 500 questions):
+    //   multiplicative (vec*(1+lex*0.4)):  95.2% — better pref, worse temporal
+    //   IDF-weighted + pref-detect:        95.8% — marginally worse overall
+    //   pure vector:                       93.8% — baseline without lexical
+    const qualityBonus = sel >= 3 ? quality.effectiveRate : 0
+    const hybridScore =
+      vectorScore * 0.55 +
+      lex * 0.35 +
+      qualityBonus * 0.05 +
+      recencyScore * 0.05
+
+    // Flag high-fallback docs
+    const deprecated = sel >= 5 && quality.fallbackRate > 0.5
+
+    return {
+      ...r,
+      score: hybridScore,
+      vectorScore,
+      lexicalScore: lex,
+      quality,
+      origin: doc.origin,
+      category: doc.category,
+      deprecated,
+      document: doc,
+    }
+  })
+
+  // Drop entries filtered out by hallType/asOf, re-sort, take top searchLimit
+  const filtered = enriched.filter((r): r is NonNullable<typeof r> => r !== null)
+  filtered.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+  const trimmed = filtered.slice(0, searchLimit)
+
+  return trimmed
+}
+
 knowledgeRouter.post('/search', async (c) => {
   try {
-    const body = await c.req.json()
-    const { query, tags, projectId, limit, hallType, asOf } = body as {
-      query: string
-      tags?: string[]
-      projectId?: string
-      limit?: number
-      hallType?: 'fact' | 'event' | 'discovery' | 'preference' | 'advice' | 'general'
-      asOf?: string
-    }
-
-    if (!query) return c.json({ error: 'query is required' }, 400)
-
-    const embedder = getEmbedder()
-    const vector = await embedder.embed(query)
-
-    // Build Qdrant filter
-    const normalizedProjectId = normalizeProjectId(projectId)
-    const must: Array<Record<string, unknown>> = []
-    if (normalizedProjectId) {
-      must.push({ key: 'project_id', match: { value: normalizedProjectId } })
-    }
-    if (tags && tags.length > 0) {
-      for (const tag of tags) {
-        must.push({ key: 'tags', match: { any: [tag] } })
-      }
-    }
-
-    const searchLimit = limit ?? 10
-    // Overfetch for hybrid re-ranking — score more candidates, then trim
-    const fetchLimit = Math.max(searchLimit * 5, 50)
-
-    // Try hierarchical search first (two-stage: clusters → documents)
-    // Falls back to flat search if clustering not available or corpus is small
-    const filter = must.length > 0 ? { must } : undefined
-    let searchResults = await hierarchicalSearch(vector, fetchLimit, filter)
-
-    if (!searchResults) {
-      // Flat search fallback
-      const res = await fetch(`${QDRANT_URL}/collections/${COLLECTION}/points/search`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vector,
-          limit: fetchLimit,
-          with_payload: true,
-          filter: filter,
-        }),
-        signal: AbortSignal.timeout(10000),
-      })
-
-      if (res.status === 404) {
-        // No knowledge stored yet: the collection is created on first write.
-        searchResults = []
-      } else if (!res.ok) {
-        const errText = await res.text()
-        return c.json({ error: `Search failed: ${errText}` }, 500)
-      } else {
-        const flatData = (await res.json()) as {
-          result?: Array<{ id: string; score: number; payload?: Record<string, unknown> }>
-        }
-        searchResults = flatData.result ?? []
-      }
-    }
-
-    const data = { result: searchResults }
-
-    // Enrich with document metadata, quality metrics, and re-rank
-    const docIds = new Set<string>()
-    const results = (data.result ?? []).map((hit) => {
-      const docId = hit.payload?.document_id as string | undefined
-      if (docId) docIds.add(docId)
-      return {
-        score: hit.score,
-        chunkId: hit.id,
-        content: hit.payload?.content,
-        documentId: docId,
-        title: hit.payload?.title,
-        chunkIndex: hit.payload?.chunk_index,
-      }
-    })
-
-    // Increment hit counts + selection counts
-    if (docIds.size > 0) {
-      const placeholders = [...docIds].map(() => '?').join(',')
-      db.prepare(
-        `UPDATE knowledge_documents SET hit_count = hit_count + 1, selection_count = selection_count + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id IN (${placeholders})`
-      ).run(...docIds)
-    }
-
-    // Pre-tokenize query for lexical scoring
-    const queryTokens = tokenize(query)
-
-    // Join document metadata + quality metrics + lexical, then re-rank
-    const now = Date.now()
-    const enriched = results.map((r) => {
-      if (!r.documentId) return r
-      const doc = db.prepare(
-        `SELECT id, title, tags, project_id, source, hit_count, status, content_preview,
-                selection_count, applied_count, completion_count, fallback_count,
-                origin, category, generation, created_by_agent, updated_at,
-                hall_type, valid_from, invalidated_at, superseded_by
-         FROM knowledge_documents WHERE id = ?`
-      ).get(r.documentId) as Record<string, unknown> | undefined
-      if (!doc) return r
-
-      // MemPalace-inspired filters (post-vector filter)
-      if (hallType && doc.hall_type !== hallType) return null
-      if (asOf) {
-        const vf = doc.valid_from as string | null | undefined
-        const ia = doc.invalidated_at as string | null | undefined
-        if (vf && vf > asOf) return null
-        if (ia && ia <= asOf) return null
-      }
-
-      // Compute quality metrics (OpenSpace-inspired)
-      const sel = (doc.selection_count as number) || 0
-      const app = (doc.applied_count as number) || 0
-      const comp = (doc.completion_count as number) || 0
-      const fall = (doc.fallback_count as number) || 0
-      const quality = {
-        selectionCount: sel,
-        appliedCount: app,
-        completionCount: comp,
-        fallbackCount: fall,
-        appliedRate: sel > 0 ? app / sel : 0,
-        completionRate: app > 0 ? comp / app : 0,
-        effectiveRate: sel > 0 ? comp / sel : 0,
-        fallbackRate: sel > 0 ? fall / sel : 0,
-      }
-
-      // Compute lexical score (simple keyword overlap — beats IDF in benchmarks)
-      const lexicalCorpus = [
-        String(doc.title ?? ''),
-        String(r.content ?? ''),
-        String(doc.content_preview ?? ''),
-      ].join(' ')
-      const contentLower = lexicalCorpus.toLowerCase()
-      let lexMatches = 0
-      for (const token of queryTokens) {
-        if (contentLower.includes(token)) lexMatches++
-      }
-      const lex = queryTokens.length > 0 ? lexMatches / queryTokens.length : 0
-
-      // Recency decay over 90 days
-      const updatedAt = doc.updated_at ? new Date(doc.updated_at as string).getTime() : 0
-      const daysSinceUpdate = Math.max(0, (now - updatedAt) / (1000 * 60 * 60 * 24))
-      const recencyScore = Math.max(0, 1 - daysSinceUpdate / 90)
-      const vectorScore = r.score
-
-      // Hybrid weighting (additive — best in LongMemEval-S 500 at 96.0% R@5):
-      //   vector  × 0.55  (semantic match — primary signal)
-      //   lexical × 0.35  (keyword overlap — +2.2 pts vs pure vector)
-      //   quality × 0.05  (only when sel >= 3)
-      //   recency × 0.05
-      //
-      // Tested alternatives (all on full 500 questions):
-      //   multiplicative (vec*(1+lex*0.4)):  95.2% — better pref, worse temporal
-      //   IDF-weighted + pref-detect:        95.8% — marginally worse overall
-      //   pure vector:                       93.8% — baseline without lexical
-      const qualityBonus = sel >= 3 ? quality.effectiveRate : 0
-      const hybridScore =
-        vectorScore * 0.55 +
-        lex * 0.35 +
-        qualityBonus * 0.05 +
-        recencyScore * 0.05
-
-      // Flag high-fallback docs
-      const deprecated = sel >= 5 && quality.fallbackRate > 0.5
-
-      return {
-        ...r,
-        score: hybridScore,
-        vectorScore,
-        lexicalScore: lex,
-        quality,
-        origin: doc.origin,
-        category: doc.category,
-        deprecated,
-        document: doc,
-      }
-    })
-
-    // Drop entries filtered out by hallType/asOf, re-sort, take top searchLimit
-    const filtered = enriched.filter((r): r is NonNullable<typeof r> => r !== null)
-    filtered.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-    const trimmed = filtered.slice(0, searchLimit)
-
-    return c.json({ query, results: trimmed })
+    const body = (await c.req.json()) as KnowledgeSearch
+    if (!body.query) return c.json({ error: 'query is required' }, 400)
+    const results = await searchKnowledge({ ...body, countHits: true })
+    return c.json({ query: body.query, results })
   } catch (error) {
     logger.error(`Knowledge search failed: ${String(error)}`)
     return c.json({ error: String(error) }, 500)
   }
+})
+
+// Floors for /recall. Measured on this hub: a hit that answered the question scored 0.55 on
+// the hybrid score, and unrelated chunks that shared a word with it 0.33–0.35.
+const RECALL_MIN_KNOWLEDGE = 0.45
+const RECALL_MIN_MEMORY = 0.6
+const RECALL_SNIPPET = 240
+
+function recallSnippet(text: unknown): string {
+  const flat = String(text ?? '').replace(/\s+/g, ' ').trim()
+  return flat.length > RECALL_SNIPPET ? `${flat.slice(0, RECALL_SNIPPET - 1)}…` : flat
+}
+
+const round = (score: number | undefined) => Math.round((score ?? 0) * 100) / 100
+
+async function recallKnowledge(query: string, projectId: string, limit: number) {
+  const hits = await searchKnowledge({ query, projectId, limit: limit * 4, countHits: false })
+  const out: Array<{ id: string; title: string; snippet: string; score: number }> = []
+  for (const hit of hits) {
+    if ((hit.score ?? 0) < RECALL_MIN_KNOWLEDGE || out.length >= limit) break
+    if (!hit.documentId || out.some((k) => k.id === hit.documentId)) continue
+    if ('document' in hit && (hit.deprecated || hit.document.status === 'archived' || hit.document.invalidated_at)) continue
+    out.push({ id: hit.documentId, title: String(hit.title ?? ''), snippet: recallSnippet(hit.content), score: round(hit.score) })
+  }
+  return out
+}
+
+async function recallMemories(query: string, projectId: string, limit: number) {
+  // The search merges the latest session summaries in whatever the query; they are left out,
+  // since session start already shows them.
+  const res = await mem9ProxyRouter.request('/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, userId: `project-${projectId}`, limit: limit + 3 }),
+  })
+  if (!res.ok) return []
+  const data = (await res.json()) as { memories?: MemoryItem[] }
+  return (data.memories ?? [])
+    .filter((m) => !isSessionSummary(m) && (m.score ?? 0) >= RECALL_MIN_MEMORY)
+    .slice(0, limit)
+    .map((m) => ({ id: m.id, text: recallSnippet(m.memory), score: round(m.score) }))
+}
+
+// ── POST /recall — What the project already knows about a prompt, as compact JSON ──
+// Body: { query, repo?, projectId?, limit? }. For the hook that recalls on every user prompt:
+// one project (resolved as /file-notes does), only hits above a floor, and nothing counted
+// as a selection. Answers { projectId, knowledge: [{id, title, snippet, score}], memories: [{id, text, score}] }.
+knowledgeRouter.post('/recall', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { query?: unknown; repo?: unknown; projectId?: unknown; limit?: unknown }
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v : undefined)
+  const query = str(body.query)
+  if (!query) return c.json({ error: 'query is required' }, 400)
+  const projectId = notesProject({
+    repo: str(body.repo), projectId: str(body.projectId), apiKeyOwner: c.req.header('X-API-Key-Owner'),
+  })
+  if (!projectId) return c.json({ projectId: null, knowledge: [], memories: [] })
+  const limit = typeof body.limit === 'number' && body.limit >= 1 ? Math.min(Math.floor(body.limit), 10) : 3
+  const [knowledge, memories] = await Promise.all([
+    recallKnowledge(query, projectId, limit).catch((error: unknown) => {
+      logger.warn(`Recall knowledge failed: ${String(error)}`)
+      return []
+    }),
+    recallMemories(query, projectId, limit).catch((error: unknown) => {
+      logger.warn(`Recall memories failed: ${String(error)}`)
+      return []
+    }),
+  ])
+  return c.json({ projectId, knowledge, memories })
 })
 
 // ── POST /migrate-clusters — Assign cluster_id to existing docs (no re-embed) ──

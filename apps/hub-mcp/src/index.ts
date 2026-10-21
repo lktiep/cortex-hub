@@ -363,8 +363,8 @@ app.all('/mcp', async (c) => {
         }).catch((err: unknown) => console.error('[MCP Telemetry Error]', err))
       }
 
-      // cortex_file_notes answers JSON its callers parse, so nothing is appended to it.
-      if (toolName !== 'unknown' && toolName !== 'cortex_health' && toolName !== 'cortex_file_notes' && agentId !== 'unknown') {
+      // cortex_file_notes and cortex_recall answer JSON their callers parse, so nothing is appended to them.
+      if (toolName !== 'unknown' && toolName !== 'cortex_health' && toolName !== 'cortex_file_notes' && toolName !== 'cortex_recall' && agentId !== 'unknown') {
         try {
           // Parse first: the hints endpoint marks conductor notices delivered, so it must only be
           // asked when this body can carry them.

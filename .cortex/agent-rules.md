@@ -24,8 +24,10 @@ for only 8/15. So scan the whole result set before choosing, and never re-run a 
 of the same query — recall@10 is already 1.000, so a paraphrase returns the same files. Ask a
 different question, or switch tool.
 
-**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
-at session start, and again when something breaks.
+**Knowledge and memory are for errors, decisions and earlier work, not for locating code.**
+Recall them once at session start, again when something breaks, and whenever the user refers to
+something as already existing (a published page, a design, a doc) — with the words the documents
+would use (usually English).
 
 ---
 

@@ -28,6 +28,7 @@ TARGETS = [
     '.claude/hooks/session-end-check.sh',
     '.claude/hooks/nudge-lookup.sh',
     '.claude/hooks/recall-notes.sh',
+    '.claude/hooks/recall-prompt.sh',
     '.claude/hooks/subagent-start.sh',
     '.claude/settings.json',
     '.claude/commands/cs.md',
@@ -177,7 +178,7 @@ def main():
 
     # The structural half of the .claude/settings.json check for install.ps1.
     ps1 = open(INSTALLER_PS1).read()
-    for event in ('SessionStart', 'PreToolUse', 'PostToolUse', 'SessionEnd'):
+    for event in ('SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'SessionEnd'):
         if '"%s"' % event not in ps1:
             print('  ?? %s: .claude/settings.json is missing the %s hook' % (INSTALLER_PS1, event))
             drift.append('settings:%s' % event)

@@ -30,6 +30,7 @@ path to the line you need to change:
 | An exact literal (env var, config key, error string, magic number) | `rg` / `grep` | Not a ranking problem. Lexical search alone ranks *worse* than vector on questions (r@1 0.267 vs 0.533) but is exactly right for a string that either appears or does not |
 | A relationship ("who calls X across packages") | `cortex_cypher` | One graph query instead of N searches |
 | Whether someone else is in this file | `cortex_changes` | Before editing anything shared |
+| Something the team already made or decided (a published page, a design, a doc, earlier work) | `cortex_knowledge_search(query)` | The hub holds what the files and transcripts do not. Use the words the documents would use (usually English): a translated prompt rarely clears the relevance floor |
 
 ### Search once, then read the whole set
 
@@ -49,10 +50,11 @@ finding the spot in one call and spending five:
 - `cortex_code_impact(target)` — before editing something exported or shared. Not a ritual
   for every file.
 - `cortex_cypher(query: "MATCH ...")` — when you need exact relationships rather than a ranking.
-- **Knowledge and memory are for errors and decisions, not for locating code.** `/cs` recalls
-  them once at session start; calling them again before each lookup costs two round trips and
-  answers a different question. Reach for them the moment something breaks, or when you need
-  to know *why* the code is the way it is.
+- **Knowledge and memory are for errors, decisions and earlier work, not for locating code.**
+  `/cs` recalls them at session start, and `recall-prompt.sh` adds the ones matching each user
+  prompt. Calling them again before each code lookup costs two round trips and answers a
+  different question. Reach for them the moment something breaks, when you need to know *why*
+  the code is the way it is, and whenever the user refers to something as already existing.
 
 ### When you hit an error
 1. `cortex_knowledge_search(query: "<error message>")` — someone may have solved this already
@@ -138,3 +140,7 @@ Every session must pass before committing:
   `recall-notes.sh` adds up to 3 of those notes (newest first), once per file per agent. The
   project's links are fetched with `cortex_file_notes` and cached 10 minutes in
   `.cortex/.session-state/notes/`. `CORTEX_NOTES=off` turns it off.
+- Never a block: with each user prompt, `recall-prompt.sh` sends the prompt to `cortex_recall`
+  and adds up to 3 knowledge documents and 3 project memories that match it above a relevance
+  floor, each once per conversation. Slash commands and prompts under 12 characters are
+  skipped, and a hub slower than 3 seconds adds nothing. `CORTEX_RECALL=off` turns it off.

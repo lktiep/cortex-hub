@@ -211,4 +211,32 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
       }
     }
   )
+
+  // ── Recall for a prompt ──
+  server.tool(
+    'cortex_recall',
+    'What one project already knows about a text (a user prompt): its knowledge documents and project memories above a relevance floor, archived documents left out. Returns JSON {projectId, knowledge: [{id, title, snippet, score}], memories: [{id, text, score}]}.',
+    {
+      query: z.string().describe('Text to recall for, such as the user\'s prompt'),
+      repo: z.string().optional().describe('Git remote URL or repo name; defaults to your session project'),
+      projectId: z.string().optional().describe('Project ID, when repo is not given'),
+      limit: z.number().optional().describe('Max results of each kind (default 3, max 10)'),
+    },
+    async ({ query, repo, projectId, limit }) => {
+      try {
+        const res = await apiCall(env, '/api/knowledge/recall', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, repo, projectId, limit }),
+        })
+        const text = await res.text()
+        return { content: [{ type: 'text' as const, text: res.ok ? text : `Recall failed: ${res.status} ${text}` }], isError: !res.ok }
+      } catch (error) {
+        return {
+          content: [{ type: 'text' as const, text: `Recall error: ${error instanceof Error ? error.message : 'Unknown'}` }],
+          isError: true,
+        }
+      }
+    }
+  )
 }

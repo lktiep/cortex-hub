@@ -188,6 +188,21 @@ Search the knowledge base by semantic similarity. Supports filtering by tags, pr
 
 ---
 
+### `cortex_recall`
+
+What one project already knows about a piece of text: its knowledge documents and its project memories, in one call. The `recall-prompt` hook calls it on every user prompt. Only hits above a relevance floor are returned, archived documents are left out, and nothing counts as a selection in the quality metrics.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | yes | Text to recall for, such as the user's prompt |
+| `repo` | string | no | Git remote URL or repo name; defaults to your session project |
+| `projectId` | string | no | Project ID, when `repo` is not given |
+| `limit` | number | no | Max results of each kind (default: 3, max: 10) |
+
+**Returns:** JSON `{projectId, knowledge: [{id, title, snippet, score}], memories: [{id, text, score}]}`. `projectId` is `null` when no project is resolved.
+
+---
+
 ## Memory
 
 Per-agent memory with branch-scoped namespacing and semantic recall.

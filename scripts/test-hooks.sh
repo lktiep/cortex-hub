@@ -299,6 +299,10 @@ class Hub(http.server.BaseHTTPRequestHandler):
                 'src/auth.ts': [{'id': 'k1', 'title': 'Risk: refresh races', 'kind': 'risk', 'note': 'Take the lock first', 'at': '2026-10-20T00:00:00Z'}],
                 'src/lib/': [{'id': 'k2', 'title': 'Lib is shared', 'kind': 'lesson', 'note': 'Both apps import it', 'at': '2026-10-19T00:00:00Z'}],
             }})
+        if mode == 'recall':
+            result['content'][0]['text'] = json.dumps({'projectId': 'p1',
+                'knowledge': [{'id': 'kdoc-1', 'title': 'Docs site', 'snippet': 'Published on GitHub Pages', 'score': 0.6}],
+                'memories': [{'id': 'm1', 'text': 'Docs are bilingual', 'score': 0.7}]})
         if mode == 'error':
             result['isError'] = True
         out = json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': result}).encode()
@@ -1036,6 +1040,48 @@ if command -v node >/dev/null 2>&1; then
   check "gate-off silences it"                    quiet "$(recall "$(open_file g Read src/auth.ts)")"
   rm -f "$STATE/gate-off"
   check "unreadable input exits 0"                quiet "$(recall 'not json')"
+  teardown
+else
+  echo "  skip (no node: the hook does nothing without it)"
+fi
+
+echo
+echo "recall-prompt.sh — what the project already knows, shown with each user prompt"
+# Prints the ids it showed (comma-separated), "quiet" or "exit N".
+recall_prompt() {  # $1 = payload, $2.. = env
+  local out rc
+  out=$(printf '%s' "$1" | env -u CORTEX_MCP_URL -u HUB_MCP_URL -u HUB_API_KEY HOME="$SANDBOX/home" \
+    CLAUDE_PROJECT_DIR="$SANDBOX" CORTEX_MCP_URL="$STUB_URL/mcp" HUB_API_KEY=k-sekrit "${@:2}" \
+    bash "$HOOKS_DIR/recall-prompt.sh" 2>/dev/null); rc=$?
+  if [ "$rc" != 0 ]; then echo "exit $rc"; return; fi
+  printf '%s' "$out" | python3 -c 'import json,re,sys
+t=sys.stdin.read()
+if not t: print("quiet"); sys.exit()
+o=json.loads(t)["hookSpecificOutput"]
+assert o["hookEventName"] == "UserPromptSubmit"
+print(",".join(re.findall(r"^- \[(?:knowledge )?([^\]]+)\]", o["additionalContext"], re.M)))'
+}
+prompt_event() { printf '{"session_id":"%s","hook_event_name":"UserPromptSubmit","prompt":"%s"}' "$1" "$2"; }
+if command -v node >/dev/null 2>&1; then
+  setup; mkdir -p "$SANDBOX/home"; start_stub recall
+  check "a prompt gets the project's matches"     "kdoc-1,memory"        "$(recall_prompt "$(prompt_event s1 'make the docs site like the showcase')")"
+  check "with the hub's bearer key"               "Bearer k-sekrit"      "$(got 'r["auth"]')"
+  check "asking cortex_recall"                    "cortex_recall"        "$(got 'r["body"]["params"]["name"]')"
+  check "with the prompt as the query"            "make the docs site like the showcase" "$(got 'r["body"]["params"]["arguments"]["query"]')"
+  check "each one once per conversation"          quiet "$(recall_prompt "$(prompt_event s1 'and the docs site again please')")"
+  check "a new conversation sees them again"      "kdoc-1,memory"        "$(recall_prompt "$(prompt_event s2 'make the docs site like the showcase')")"
+  check "a slash command is not sent"             quiet "$(recall_prompt "$(prompt_event s3 '/cs start the session now')")"
+  check "a short reply is not sent"               quiet "$(recall_prompt "$(prompt_event s3 'yes go on')")"
+  check "the hub was asked three times"           3 "$(requests)"
+  stop_stub; start_stub 500
+  check "a hub error is quiet"                    quiet "$(recall_prompt "$(prompt_event s4 'make the docs site like the showcase')")"
+  stop_stub
+  check "no hub at all is quiet"                  quiet "$(recall_prompt "$(prompt_event s5 'make the docs site like the showcase')" CORTEX_MCP_URL=http://127.0.0.1:9/mcp)"
+  check "CORTEX_RECALL=off silences it"           quiet "$(recall_prompt "$(prompt_event s6 'make the docs site like the showcase')" CORTEX_RECALL=off)"
+  printf 'hub down\n' > "$STATE/gate-off"
+  check "gate-off silences it"                    quiet "$(recall_prompt "$(prompt_event s7 'make the docs site like the showcase')")"
+  rm -f "$STATE/gate-off"
+  check "unreadable input exits 0"                quiet "$(recall_prompt 'not json')"
   teardown
 else
   echo "  skip (no node: the hook does nothing without it)"

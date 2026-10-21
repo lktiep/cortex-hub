@@ -1,6 +1,7 @@
-# /cs — Cortex Start v0.9.1
+# /cs — Cortex Start v0.9.2
 
-> Version: 0.9.1 | Updated: 2026-10-09
+> Version: 0.9.2 | Updated: 2026-10-21
+> Changelog: v0.9.2 — search knowledge when the user refers to something that already exists
 > Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
 > Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
 > Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
@@ -82,8 +83,10 @@ n=15): the target file is in the top 10 for 15/15 queries but at rank 1 for only
 the whole result set, and never re-run a reworded version of the same query — recall@10 is
 already 1.000, so it returns the same set. Ask a different question or switch tool instead.
 
-**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
-at session start, then when something breaks — not before every lookup.
+**Knowledge and memory are for errors, decisions and earlier work, not for locating code.**
+Recall them once at session start, then when something breaks, and whenever the user refers to
+something as already existing (a published page, a design, a doc) — search with the words the
+documents would use (usually English). Not before every code lookup.
 
 `cortex_code_impact` before editing something exported or shared; `cortex_changes` before
 touching a file another agent may hold.
