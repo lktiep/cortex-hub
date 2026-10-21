@@ -21,6 +21,8 @@ const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 const BRANCH_OVERFETCH = 3
 /** Where repos are registered when nobody chose an organization; see db/schema.sql. */
 const PERSONAL_ORG = 'org-default'
+/** A repo listed beside the caller's own reaches at least this share of that repo's best score. */
+const BESIDE_FLOOR = 0.8
 
 /** Max file size for code_read (512KB) */
 const MAX_READ_SIZE = 512 * 1024
@@ -1817,38 +1819,49 @@ async function searchOrganization(
   orgId: string,
   opts: { branch?: string; limit: number; exclude?: string; perRepo?: number },
 ) {
-  const skip = opts.exclude ? findProject(opts.exclude, orgId)?.id : undefined
-  const projects = (db.prepare(
+  type Repo = { id: string; slug: string | null; name: string; default_branch: string | null }
+  const repos = db.prepare(
     'SELECT id, slug, name, default_branch FROM projects WHERE org_id = ? AND indexed_symbols > 0 ORDER BY name'
-  ).all(orgId) as Array<{ id: string; slug: string | null; name: string; default_branch: string | null }>).filter(p => p.id !== skip)
+  ).all(orgId) as Repo[]
+  const skip = opts.exclude ? findProject(opts.exclude, orgId)?.id : undefined
+  const projects = repos.filter(p => p.id !== skip)
   if (projects.length === 0) return []
 
   const vector = await createEmbedder().embed(query)
   const perProject = Math.min(opts.limit, 5) * BRANCH_OVERFETCH
   const CONCURRENCY = 8
+
+  // Each repo on the branch asked for, else on its default branch: see the single-repo search.
+  const searchRepo = async (p: Repo, limit: number) => {
+    const ask = async (branch: string | null | undefined) => {
+      const res = await fetch(`${QDRANT_URL}/collections/cortex-project-${p.id}/points/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vector, limit, with_payload: true,
+          filter: branch ? { must: [{ key: 'branch', match: { value: branch } }] } : undefined,
+        }),
+        signal: AbortSignal.timeout(10000),
+      })
+      // A project with no embeddings yet has no collection: it simply has nothing to add.
+      if (!res.ok) return []
+      return ((await res.json()) as { result?: Array<{ score: number; payload?: Record<string, unknown> }> }).result ?? []
+    }
+    const found = await ask(opts.branch ?? p.default_branch)
+    return found.length === 0 && !opts.branch && p.default_branch ? ask(undefined) : found
+  }
+
+  // Hits listed beside the caller's own repo have to come close to that repo's best. Without a
+  // floor every search listed something: in an organization of related repos, the others' best
+  // stayed under the caller's own on 18 of 18 sampled queries, mostly at a third of its score.
+  const own = skip ? repos.find(p => p.id === skip) : undefined
+  const floorFrom = own ? searchRepo(own, 1).catch(() => []) : Promise.resolve([])
+
   type OrgHit = { repo: string; projectId: string; score: number; filePath?: string; chunkIndex?: number; content?: string; branch?: string }
   const hits: OrgHit[] = []
-
   for (let i = 0; i < projects.length; i += CONCURRENCY) {
-    const settled = await Promise.allSettled(projects.slice(i, i + CONCURRENCY).map(async (p) => {
-      // Each repo on the branch asked for, else on its default branch: see the single-repo search.
-      const ask = async (branch: string | null | undefined) => {
-        const res = await fetch(`${QDRANT_URL}/collections/cortex-project-${p.id}/points/search`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            vector, limit: perProject, with_payload: true,
-            filter: branch ? { must: [{ key: 'branch', match: { value: branch } }] } : undefined,
-          }),
-          signal: AbortSignal.timeout(10000),
-        })
-        // A project with no embeddings yet has no collection: it simply has nothing to add.
-        if (!res.ok) return []
-        return ((await res.json()) as { result?: Array<{ score: number; payload?: Record<string, unknown> }> }).result ?? []
-      }
-      let found = await ask(opts.branch ?? p.default_branch)
-      if (found.length === 0 && !opts.branch && p.default_branch) found = await ask(undefined)
-      return found.map((hit): OrgHit => ({
+    const settled = await Promise.allSettled(projects.slice(i, i + CONCURRENCY).map(async (p) =>
+      (await searchRepo(p, perProject)).map((hit): OrgHit => ({
         repo: p.slug || p.name,
         projectId: p.id,
         score: hit.score,
@@ -1856,16 +1869,17 @@ async function searchOrganization(
         chunkIndex: hit.payload?.chunk_index as number | undefined,
         content: hit.payload?.content as string | undefined,
         branch: hit.payload?.branch as string | undefined,
-      }))
-    }))
+      }))))
     for (const r of settled) if (r.status === 'fulfilled') hits.push(...r.value)
   }
+  const floor = ((await floorFrom)[0]?.score ?? 0) * BESIDE_FLOOR
 
   // A chunk indexed on several branches comes back once per branch. With perRepo a file is
   // listed once, by its best chunk, and a large repo cannot fill every place.
   const seen = new Set<string>()
   const files = new Map<string, number>()
   return hits
+    .filter((hit) => hit.score >= floor)
     .sort((a, b) => b.score - a.score)
     .filter((hit) => {
       const place = opts.perRepo ? `${hit.projectId}:${hit.filePath}` : `${hit.projectId}:${hit.filePath}#${hit.chunkIndex}`

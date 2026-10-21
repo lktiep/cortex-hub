@@ -208,11 +208,18 @@ describe('code search across the organization', () => {
     ])
   })
 
-  it('leaves out the repo the caller already searched', async () => {
+  it('leaves out the repo the caller already searched, asking it only for its best score', async () => {
     const { json } = await post('/code-search', { query: 'login', orgId: 'org-g', exclude: 'game-client' })
 
-    expect(searched).toEqual(['proj-server'])
-    expect(json.data.results).toHaveLength(1)
+    expect(searched.sort()).toEqual(['proj-client', 'proj-server'])
+    expect(json.data.results.map((r: { repo: string }) => r.repo)).toEqual(['game-server'])
+  })
+
+  it('lists beside the caller\'s repo only what comes close to that repo\'s best', async () => {
+    const { json } = await post('/code-search', { query: 'login', orgId: 'org-g', exclude: 'game-server' })
+
+    // game-client's 0.42 is under 80% of game-server's 0.61.
+    expect(json.data.results).toEqual([])
   })
 
   it('takes its organization from the caller\'s checkout', async () => {
@@ -304,7 +311,9 @@ describe('code search on a repo indexed on several branches', () => {
 
     expect(one.json.data.results).toHaveLength(1)
     expect(org.json.data.results).toHaveLength(1)
-    expect(filters).toEqual([expect.anything(), undefined, expect.anything(), undefined])
+    // The single repo, then the other repo and the excluded one asked for its best score.
+    expect(filters).toHaveLength(6)
+    expect(filters.filter((f) => f === undefined)).toHaveLength(3)
   })
 })
 
