@@ -138,6 +138,17 @@ ANALYZE_TIMEOUT="${GITNEXUS_ANALYZE_TIMEOUT:-3600}"
 # to node itself is kept, and two workers parse the same repo within budget.
 ANALYZE_HEAP_MB="${GITNEXUS_ANALYZE_HEAP_MB:-3072}"
 ANALYZE_WORKERS="${GITNEXUS_ANALYZE_WORKERS:-2}"
+# What each repo's graph is doing, one line per repo on the volume cortex-api
+# shares: "analyzing|analyzed <commit> <epoch>", or "failed <commit> <epoch>
+# <failures> <exit code> <retry delay>". The API's index job ends before its
+# graph exists, so without this a lookup in a repo whose analyze was still
+# running, or kept failing, could only answer "Repository not found". Hidden,
+# so the loop below skips it.
+GRAPH_STATUS_DIR="${REPOS_DIR}/.graph-status"
+
+graph_status() {
+    printf '%s\n' "$2" > "${GRAPH_STATUS_DIR}/$1.tmp" && mv -f "${GRAPH_STATUS_DIR}/$1.tmp" "${GRAPH_STATUS_DIR}/$1"
+} 2>/dev/null
 
 # Seconds to wait before retrying a commit that failed $1 times.
 retry_delay() {
@@ -159,6 +170,11 @@ analyze_if_stale() {
 
     head=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null) || return 0
     if [ -d "$repo_dir/.gitnexus" ] && [ "$(cat "${WATCH_STATE_DIR}/${repo_name}.analyzed" 2>/dev/null)" = "$head" ]; then
+        # Also records the repos analyzed before there was a status to read.
+        case "$(cat "${GRAPH_STATUS_DIR}/${repo_name}" 2>/dev/null)" in
+            "analyzed $head "*) ;;
+            *) graph_status "$repo_name" "analyzed $head $(date +%s)" ;;
+        esac
         return 0
     fi
 
@@ -176,6 +192,7 @@ analyze_if_stale() {
     fi
 
     echo "GitNexus watchdog: analyzing ${repo_name} at ${head:0:12}..."
+    graph_status "$repo_name" "analyzing $head $(date +%s)"
     if (
         cd "$repo_dir" || exit 1
         { echo 1000 > /proc/self/oom_score_adj; } 2>/dev/null
@@ -187,17 +204,21 @@ analyze_if_stale() {
     ) 2>&1; then
         printf '%s\n' "$head" > "${WATCH_STATE_DIR}/${repo_name}.analyzed"
         rm -f "$failed_file"
+        graph_status "$repo_name" "analyzed $head $(date +%s)"
         echo "GitNexus watchdog: ${repo_name} analyzed."
     else
+        # 137: killed, the kernel's OOM killer as a rule; 124: ANALYZE_TIMEOUT.
+        rc=$?
         failures=$((failures + 1))
         printf '%s %s %s\n' "$head" "$failures" "$(date +%s)" > "$failed_file"
         delay=$(retry_delay "$failures")
+        graph_status "$repo_name" "failed $head $(date +%s) $failures $rc $delay"
         echo "GitNexus watchdog: analyze of ${repo_name} failed (attempt ${failures}) — retrying in ${delay}s, or on a new commit."
     fi
 }
 
 watch_repos() {
-    mkdir -p "$WATCH_STATE_DIR"
+    mkdir -p "$WATCH_STATE_DIR" "$GRAPH_STATUS_DIR"
     while true; do
         for repo_dir in "$REPOS_DIR"/*/; do
             [ -d "$repo_dir" ] && analyze_if_stale "$repo_dir"

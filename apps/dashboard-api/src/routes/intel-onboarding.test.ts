@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import Database from 'better-sqlite3'
-import { readFileSync } from 'fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+
+const reposDir = vi.hoisted(() => {
+  const dir = `${process.env.TMPDIR ?? '/tmp'}/intel-onboarding-${process.pid}`
+  process.env.REPOS_DIR = dir
+  return dir
+})
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -46,7 +52,19 @@ function job(status: string, extra: { progress?: number; error?: string; started
   ).run(`job-${status}`, status, extra.progress ?? 0, extra.error ?? null, extra.started_at ?? null)
 }
 
+/** What the GitNexus watchdog wrote for proj-tools; see infra/gitnexus-entrypoint.sh. */
+function graph(line: string) {
+  mkdirSync(join(reposDir, '.graph-status'), { recursive: true })
+  writeFileSync(join(reposDir, '.graph-status', 'proj-tools'), `${line}\n`)
+}
+
+/** The analyzer has written its output into the checkout. */
+function analyzedCheckout() {
+  mkdirSync(join(reposDir, 'proj-tools', '.gitnexus'), { recursive: true })
+}
+
 const NOW = Date.parse('2026-10-21T10:06:00Z')
+const at = (iso: string) => Date.parse(iso) / 1000
 
 async function post(path: string, body: Record<string, unknown>) {
   const res = await app.request(`/api/intel${path}`, {
@@ -66,6 +84,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   testDb.close()
+  rmSync(reposDir, { recursive: true, force: true })
 })
 
 describe('a repo that is still being indexed', () => {
@@ -88,6 +107,46 @@ describe('a repo that is still being indexed', () => {
 
   it('says when indexing never started', () => {
     expect(notIndexedYet('game-tools', 'org-g', NOW)).toContain('has not been indexed')
+  })
+
+  // The index job is done once it has cloned the repo, before the graph exists.
+  it('says the graph is waiting its turn when the clone is done but nothing has analysed it', () => {
+    job('done')
+
+    expect(notIndexedYet('game-tools', 'org-g', NOW)).toBe(
+      '⏳ game-tools is cloned and waiting for its code graph to be built. Use Grep/rg on your checkout meanwhile.',
+    )
+  })
+
+  it('says the graph is being built, even when the job counted symbols of its own', () => {
+    job('done')
+    testDb.prepare("UPDATE projects SET indexed_symbols = 42 WHERE id = 'proj-tools'").run()
+    graph(`analyzing c0ffee12 ${at('2026-10-21T09:58:00Z')}`)
+
+    expect(notIndexedYet('game-tools', 'org-g', NOW)).toBe(
+      '⏳ The code graph of game-tools is being built (started 8 min ago; a large repo takes several). Use Grep/rg on your checkout meanwhile.',
+    )
+  })
+
+  it('says why building the graph failed and when it is tried again', () => {
+    job('done')
+    graph(`failed c0ffee12 ${at('2026-10-21T10:01:00Z')} 2 137 600`)
+
+    const text = notIndexedYet('game-tools', 'org-g', NOW)
+
+    expect(text).toContain('Building the code graph of game-tools failed 2 times (the analyzer was killed, most likely out of memory)')
+    expect(text).toContain('retried in 5 min, or on a new commit')
+  })
+
+  it('says nothing once the graph is built, or when the analyzer has run without a status to show', () => {
+    job('done')
+    graph(`analyzed c0ffee12 ${at('2026-10-21T10:01:00Z')}`)
+    expect(notIndexedYet('game-tools', 'org-g', NOW)).toBeUndefined()
+
+    rmSync(join(reposDir, '.graph-status'), { recursive: true })
+    analyzedCheckout()
+    testDb.prepare("UPDATE projects SET indexed_symbols = 42 WHERE id = 'proj-tools'").run()
+    expect(notIndexedYet('game-tools', 'org-g', NOW)).toBeUndefined()
   })
 
   it('says nothing about an indexed repo, or one the hub does not know', () => {

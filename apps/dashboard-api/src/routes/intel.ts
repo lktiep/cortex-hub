@@ -200,11 +200,36 @@ function whyGraphFailed(error: unknown, projectId: string | undefined, orgId: st
 
 type IndexJobRow = { status: string; progress: number | null; error: string | null; started_at: string | null; created_at: string | null }
 
+/** A line of the GitNexus watchdog's status file for one repo (see infra/gitnexus-entrypoint.sh). */
+type GraphStatus =
+  | { state: 'analyzing' | 'analyzed'; at: number }
+  | { state: 'failed'; at: number; failures: number; exitCode: number; retryIn: number }
+
+function readGraphStatus(projectId: string): GraphStatus | undefined {
+  let line: string
+  try {
+    line = readFileSync(join(REPOS_DIR, '.graph-status', projectId), 'utf-8').trim()
+  } catch {
+    return undefined
+  }
+  const [state, , at, failures, exitCode, retryIn] = line.split(/\s+/)
+  const epoch = Number(at) * 1000
+  if (state === 'analyzing' || state === 'analyzed') return { state, at: epoch }
+  if (state === 'failed') {
+    return { state, at: epoch, failures: Number(failures) || 1, exitCode: Number(exitCode), retryIn: Number(retryIn) || 0 }
+  }
+  return undefined
+}
+
+const minutesSince = (then: number, now: number) => Math.max(0, Math.round((now - then) / 60000))
+
 /**
- * Why a project the caller named has no code to search yet, as a line an agent can act on, or
- * undefined once it has been indexed (or when the DB does not know it). A repo registered at
- * onboarding is indexed in the background, and until that finished every lookup in it came
- * back as a 500 "Repository not found", which reads like a broken hub rather than "wait".
+ * Why a project the caller named has no code graph to ask yet, as a line an agent can act on, or
+ * undefined once it has one (or when the DB does not know it). A repo registered at onboarding is
+ * cloned by the API's index job and then analysed by the GitNexus watchdog, which works through
+ * the repos one at a time; until both finished every lookup in it came back as a 500 "Repository
+ * not found", which reads like a broken hub rather than "wait". The job alone cannot tell: it is
+ * 'done', with a symbol count from its own regex pass, before the graph exists.
  */
 export function notIndexedYet(ref: string, orgId?: string, now = Date.now()): string | undefined {
   let project: { id: string; name: string; indexed_symbols: number | null } | undefined
@@ -214,7 +239,7 @@ export function notIndexedYet(ref: string, orgId?: string, now = Date.now()): st
     if (!found) return undefined
     project = db.prepare('SELECT id, name, indexed_symbols FROM projects WHERE id = ?')
       .get(found.id) as typeof project
-    if (!project || (project.indexed_symbols ?? 0) > 0) return undefined
+    if (!project) return undefined
     job = db.prepare(
       'SELECT status, progress, error, started_at, created_at FROM index_jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1'
     ).get(project.id) as IndexJobRow | undefined
@@ -223,17 +248,41 @@ export function notIndexedYet(ref: string, orgId?: string, now = Date.now()): st
     return undefined
   }
 
+  const graph = readGraphStatus(project.id)
+  if (graph?.state === 'analyzed') return undefined
+
   const meanwhile = 'Use Grep/rg on your checkout meanwhile.'
-  if (!job) return `⚠️ ${project.name} has not been indexed, so there is nothing to search. Start it with cortex_code_reindex. ${meanwhile}`
-  if (job.status === 'error') {
+  if (job && job.status !== 'done' && job.status !== 'error') {
+    const since = Date.parse(job.started_at ?? job.created_at ?? '')
+    const ago = Number.isNaN(since) ? '' : `, started ${minutesSince(since, now)} min ago`
+    return `⏳ ${project.name} is still being indexed (${job.status}, ${job.progress ?? 0}%${ago}). ${meanwhile}`
+  }
+  if (job?.status === 'error') {
     // A failed clone prints the remote, which may carry a token: keep the host, drop the credentials.
     const why = (job.error ?? '').split('\n').find(l => l.trim())?.replace(/\/\/[^/@\s]+@/g, '//').trim().slice(0, 200)
     return `⚠️ Indexing ${project.name} failed${why ? `: ${why}` : ''}. Re-run it with cortex_code_reindex. ${meanwhile}`
   }
-  if (job.status === 'done') return `⚠️ ${project.name} was indexed, but no symbols were found in it. ${meanwhile}`
-  const since = Date.parse(job.started_at ?? job.created_at ?? '')
-  const ago = Number.isNaN(since) ? '' : `, started ${Math.max(0, Math.round((now - since) / 60000))} min ago`
-  return `⏳ ${project.name} is still being indexed (${job.status}, ${job.progress ?? 0}%${ago}). ${meanwhile}`
+  if (graph?.state === 'analyzing') {
+    return `⏳ The code graph of ${project.name} is being built (started ${minutesSince(graph.at, now)} min ago; a large repo takes several). ${meanwhile}`
+  }
+  if (graph?.state === 'failed') {
+    const why = graph.exitCode === 137 ? 'the analyzer was killed, most likely out of memory'
+      : graph.exitCode === 124 ? 'the analyzer timed out'
+      : `the analyzer exited with ${graph.exitCode}`
+    const retry = Math.max(0, Math.round((graph.at + graph.retryIn * 1000 - now) / 60000))
+    return `⚠️ Building the code graph of ${project.name} failed ${graph.failures === 1 ? 'once' : `${graph.failures} times`} (${why}); `
+      + `it is retried in ${retry} min, or on a new commit. Whoever runs the hub may need to give GitNexus more memory or time. ${meanwhile}`
+  }
+  if (!job) {
+    if ((project.indexed_symbols ?? 0) > 0) return undefined
+    return `⚠️ ${project.name} has not been indexed, so there is nothing to search. Start it with cortex_code_reindex. ${meanwhile}`
+  }
+  // Cloned, but the watchdog has not reached it: the analyzer writes .gitnexus into the checkout.
+  if (!existsSync(join(REPOS_DIR, project.id, '.gitnexus'))) {
+    return `⏳ ${project.name} is cloned and waiting for its code graph to be built. ${meanwhile}`
+  }
+  if ((project.indexed_symbols ?? 0) > 0) return undefined
+  return `⚠️ ${project.name} was indexed, but no symbols were found in it. ${meanwhile}`
 }
 
 /**
