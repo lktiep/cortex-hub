@@ -17,6 +17,9 @@ export const intelRouter = new Hono()
 const QDRANT_URL = process.env.QDRANT_URL ?? 'http://qdrant:6333'
 const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 
+/** Code search over-fetch, so the copies other branches hold of a chunk do not crowd out the limit. */
+const BRANCH_OVERFETCH = 3
+
 /** Max file size for code_read (512KB) */
 const MAX_READ_SIZE = 512 * 1024
 
@@ -335,8 +338,12 @@ type GitNexusResult = Record<string, any>
 /**
  * Post-process GitNexus raw text to replace CLI hints with MCP tool references.
  */
-function rewriteGitNexusHints(text: string): string {
+export function rewriteGitNexusHints(text: string): string {
   return text
+    // A symbol with no kind prints as "undefined": a flow step as "undefined main → file", an
+    // edge as "[calls] undefined index.ts → file". It is noise in every result an agent reads.
+    .replace(/^(\s+)undefined (?=\S)/gm, '$1')
+    .replace(/(\[\w+\]) undefined (?=\S)/g, '$1 ')
     .replace(/gitnexus-context/g, 'cortex_code_context')
     .replace(/gitnexus-impact/g, 'cortex_code_impact')
     .replace(/gitnexus-query/g, 'cortex_code_search')
@@ -1370,8 +1377,11 @@ intelRouter.post('/code-search', async (c) => {
       return c.json(outsideScopeResponse(projectId), 403)
     }
 
-    // Resolve collection name
-    const collectionName = `cortex-project-${projectId}`
+    // The collection is named after the project id, and agents name the repo ("cortex-hub")
+    // as the tool tells them to. Searching cortex-project-cortex-hub found no collection and
+    // said so only in a message nobody showed, so every such search came back empty.
+    const project = findProject(projectId, scope.orgId)
+    const collectionName = `cortex-project-${project?.id ?? projectId}`
 
     // Embed query through LLM gateway — routes to configured provider (Ollama bge-m3:latest)
     const embedder = createEmbedder()
@@ -1393,7 +1403,7 @@ intelRouter.post('/code-search', async (c) => {
     // "does this actually contain what was asked for", which is what lifts the
     // top few hits. Without one this stays an exact-limit vector search.
     const reranker = getReranker()
-    const fetchLimit = reranker ? Math.min(searchLimit * RERANK_OVERFETCH, 50) : searchLimit
+    const fetchLimit = Math.min(searchLimit * (reranker ? RERANK_OVERFETCH : BRANCH_OVERFETCH), 50)
 
     // Fuse a BM25 arm in when the collection was indexed with one. Each arm
     // returns its own ranking and Qdrant merges them by reciprocal rank, so a
@@ -1452,13 +1462,22 @@ intelRouter.post('/code-search', async (c) => {
     }
     const points = Array.isArray(data.result) ? data.result : (data.result?.points ?? [])
 
+    // A project indexed on several branches holds a copy of each chunk per branch, and without
+    // a branch filter every copy matches: one chunk filled four of a top five. Keep the best
+    // ranked copy of each place in the code.
+    const seen = new Set<string>()
     const hits = points.map((hit) => ({
       score: hit.score,
       filePath: hit.payload?.file_path as string | undefined,
       chunkIndex: hit.payload?.chunk_index as number | undefined,
       content: hit.payload?.content as string | undefined,
       branch: hit.payload?.branch as string | undefined,
-    }))
+    })).filter((hit) => {
+      const place = `${hit.filePath}#${hit.chunkIndex}`
+      if (seen.has(place)) return false
+      seen.add(place)
+      return true
+    })
 
     let results = hits
     let reranked = false
@@ -1484,7 +1503,7 @@ intelRouter.post('/code-search', async (c) => {
       }
     }
 
-    results = results.slice(0, searchLimit)
+    results = results.slice(0, searchLimit).map((hit) => ({ ...hit, ...chunkLines(project?.id ?? projectId, hit) }))
 
     return c.json({
       success: true,
@@ -1497,6 +1516,34 @@ intelRouter.post('/code-search', async (c) => {
     return c.json({ success: false, error: String(error) }, 500)
   }
 })
+
+/**
+ * Where a chunk sits in the project's checkout, so an agent can read those lines and not the
+ * whole file. Chunks are stored without line numbers; without them every hit was followed by a
+ * read of the entire file, 9–25k characters for a 1.5k chunk. The checkout may be on another
+ * branch than the chunk, so a chunk whose text is not in the file gets no lines.
+ */
+export function locateChunk(fileText: string, chunk: string): { startLine: number; endLine: number } | undefined {
+  const body = chunk.replace(/^\/\/ File: [^\n]*\n/, '').replace(/\s+$/, '')
+  if (!body) return undefined
+  const at = fileText.indexOf(body)
+  if (at < 0) return undefined
+  const startLine = fileText.slice(0, at).split('\n').length
+  return { startLine, endLine: startLine + body.split('\n').length - 1 }
+}
+
+function chunkLines(projectDir: string, hit: { filePath?: string; content?: string }) {
+  if (!hit.filePath || !hit.content) return {}
+  const repoDir = join(REPOS_DIR, projectDir)
+  const fullPath = join(repoDir, hit.filePath)
+  if (!fullPath.startsWith(`${repoDir}/`)) return {}
+  try {
+    if (!existsSync(fullPath) || statSync(fullPath).size > MAX_READ_SIZE) return {}
+    return locateChunk(readFileSync(fullPath, 'utf-8'), hit.content) ?? {}
+  } catch {
+    return {}
+  }
+}
 
 // ── File Content: read raw source file from cloned repo ──
 intelRouter.post('/file-content', async (c) => {

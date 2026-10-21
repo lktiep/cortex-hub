@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
+import { formatCodeMatches, type CodeMatch } from './code-matches.js'
 
 /**
  * Register code intelligence tools.
@@ -167,48 +168,21 @@ export function registerCodeTools(server: McpServer, env: Env) {
           }
         }
 
-        // ── Qdrant semantic code search: supplement with actual source code ──
-        const resolvedForCodeSearch = resolvedProject
-        if (resolvedForCodeSearch) {
+        // ── Qdrant semantic code search: the ranked files, ahead of the graph's flows ──
+        if (resolvedProject) {
           try {
             const codeRes = await apiCall(env, '/api/intel/code-search', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query, projectId: resolvedForCodeSearch, orgId: org, branch, limit: limit ?? 5 }),
+              // Paths are cheap and snippets are capped, so ask for more than the flow limit.
+              body: JSON.stringify({ query, projectId: resolvedProject, orgId: org, branch, limit: Math.max(limit ?? 5, 8) }),
               signal: AbortSignal.timeout(15000),
             })
 
             if (codeRes.ok) {
-              const codeData = (await codeRes.json()) as {
-                success?: boolean
-                data?: {
-                  results?: Array<{
-                    score: number
-                    filePath?: string
-                    content?: string
-                    chunkIndex?: number
-                  }>
-                  message?: string
-                }
-              }
-
-              const codeResults = codeData?.data?.results ?? []
-              if (codeResults.length > 0) {
-                const codeLines: string[] = ['\n\n---\n**Source Code Matches** (semantic search)\n']
-                for (const hit of codeResults.slice(0, 5)) {
-                  const score = (hit.score * 100).toFixed(1)
-                  codeLines.push(`### ${hit.filePath ?? 'unknown'} (${score}% match)`)
-                  if (hit.content) {
-                    const ext = hit.filePath?.split('.').pop() ?? ''
-                    const lang = { ts: 'typescript', js: 'javascript', cs: 'csharp', py: 'python', go: 'go', rs: 'rust', java: 'java' }[ext] ?? ext
-                    codeLines.push(`\`\`\`${lang}`)
-                    codeLines.push(hit.content.slice(0, 2000))
-                    codeLines.push('```')
-                  }
-                  codeLines.push('')
-                }
-                formatted += codeLines.join('\n')
-              }
+              const codeData = (await codeRes.json()) as { data?: { results?: CodeMatch[] } }
+              const matches = formatCodeMatches(codeData?.data?.results ?? [])
+              if (matches) formatted = formatted ? `${matches}\n\n---\n${formatted}` : matches
             }
           } catch {
             // Qdrant search is best-effort
@@ -297,9 +271,9 @@ export function registerCodeTools(server: McpServer, env: Env) {
               }
             }
 
-            // Extract method names from context output
-            // Pattern 1: [has_method] undefined MethodName
-            const methodMatches = contextRaw.match(/\[has_method\]\s+\w+\s+\w+/g)
+            // Extract method names from context output: "[has_method] MethodName", or from a hub
+            // older than the one that drops the missing kind, "[has_method] undefined MethodName".
+            const methodMatches = contextRaw.match(/\[has_method\]\s+(?:undefined\s+)?\w+/g)
 
             if (methodMatches && methodMatches.length > 0) {
               const methods = methodMatches

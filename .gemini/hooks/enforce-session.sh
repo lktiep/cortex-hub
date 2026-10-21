@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Session Enforcement (v6.1) — Gemini variant.
+# Cortex Session Enforcement (v6.2) — Gemini variant.
 #
 # v3 only checked that a session existed: once cortex_session_start had run, every tool was
 # allowed. So the discovery-first rule was documentation, not enforcement. This mirrors the
@@ -80,14 +80,16 @@ if [ -f "$STATE_DIR/session-started" ]; then
   allow
 fi
 
-# Session not started: block writes and codebase search, allow plain reads.
+# Session not started: block writes and codebase search, allow plain reads. Searching is
+# reading, so a cortex lookup unlocks it here as it does in a session — see the Claude hook.
+SEARCH_HINT="BLOCKED: look it up with cortex_code_search (a behaviour) or cortex_code_context (a symbol name) first. One call unlocks find/grep/rg, glob and search_file_content for the rest of the session. $HOW_OUT"
 case "$TOOL_NAME" in
   write_file|replace|edit_file|create_file|insert_text)
     deny "BLOCKED: call cortex_session_start first. No edits without a session." ;;
   glob|search_file_content)
-    deny "BLOCKED: call cortex_session_start first, then search with cortex_code_search. $HOW_OUT" ;;
+    marker_ok discovery-used || deny "$SEARCH_HINT" ;;
   run_shell_command|shell)
-    is_codebase_search "$COMMAND" && deny "BLOCKED: call cortex_session_start first, then search with cortex_code_search. $HOW_OUT"
+    is_codebase_search "$COMMAND" && ! marker_ok discovery-used && deny "$SEARCH_HINT"
     is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" \
       && deny "BLOCKED: call cortex_session_start first. No file modifications without a session."
     printf '%s' "$COMMAND" | grep -Eq '(git[[:space:]]+(add|commit|push|reset)|^rm[[:space:]]|^mv[[:space:]]|^cp[[:space:]]|^mkdir[[:space:]])' \

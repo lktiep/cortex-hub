@@ -102,6 +102,21 @@ EOF')")"
 check "gate-off write allowed, no session"  0 "$(run enforce-session.sh "$(bash_payload 'echo why > .cortex/.session-state/gate-off')")"
 teardown
 
+echo "enforce-session.sh — a lookup unlocks search before any session"
+# Searching is reading. A search used to stay blocked here after cortex_code_search had run,
+# under a message saying that call unlocks it, and the agent read whole files instead.
+setup; discovered
+check "Grep allowed after a lookup"         0 "$(run enforce-session.sh "$(tool_payload Grep)")"
+check "Glob allowed after a lookup"         0 "$(run enforce-session.sh "$(tool_payload Glob)")"
+check "rg allowed after a lookup"           0 "$(run enforce-session.sh "$(bash_payload 'rg foo apps/')")"
+check "Edit still needs a session"          2 "$(run enforce-session.sh "$(tool_payload Edit)")"
+check "so does cat > file"                  2 "$(run enforce-session.sh "$(bash_payload 'cat > f.ts << EOF
+x
+EOF')")"
+: > "$STATE/discovery-used"
+check "an empty marker unlocks nothing"     2 "$(run enforce-session.sh "$(tool_payload Grep)")"
+teardown
+
 echo "enforce-session.sh — parses without jq"
 setup; touch "$STATE/session-started"
 NOJQ=$(mktemp -d)
@@ -554,6 +569,11 @@ setup
 check "write_file denied without session"  deny "$(gdecision enforce-session.sh "$(gpayload write_file)")"
 check "glob denied without session"        deny "$(gdecision enforce-session.sh "$(gpayload glob)")"
 check "ls allowed without session"         allow "$(gdecision enforce-session.sh "$(gpayload run_shell_command 'ls -la')")"
+check "rg denied without a lookup"         deny "$(gdecision enforce-session.sh "$(gpayload run_shell_command 'rg foo apps/')")"
+discovered
+check "glob allowed after a lookup"        allow "$(gdecision enforce-session.sh "$(gpayload glob)")"
+check "rg allowed after a lookup"          allow "$(gdecision enforce-session.sh "$(gpayload run_shell_command 'rg foo apps/')")"
+check "write_file still needs a session"   deny "$(gdecision enforce-session.sh "$(gpayload write_file)")"
 teardown
 
 echo "gemini enforce-commit.sh — a report is not a passing build"

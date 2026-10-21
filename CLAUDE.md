@@ -113,9 +113,10 @@ Every session must pass before committing:
 `.claude/hooks/` gates tools on recorded evidence of cortex calls (see `scripts/test-hooks.sh`):
 
 - No `cortex_session_start` → every `Edit`, `Write` and file-modifying Bash command is refused.
-- Session started but no discovery call yet → `Grep`, `Glob` and a `grep`/`rg`/`find` that
-  *starts* a command are refused. A `grep` after a pipe (filtering another command's output)
-  is fine.
+- No discovery call yet (`cortex_code_search`, `cortex_code_context`, `cortex_code_impact`,
+  `cortex_cypher`) → `Grep`, `Glob` and a `grep`/`rg`/`find` that *starts* a command are
+  refused, with or without a session. One discovery call unlocks them. A `grep` after a pipe
+  (filtering another command's output) is fine.
 - Editing before `cortex_knowledge_search` **and** `cortex_memory_search` → refused. This
   covers `cat > file` and `sed -i` too, not just the Edit tool. Running a discovery call does
   not retire this: the recalls are required for every write, all session.
