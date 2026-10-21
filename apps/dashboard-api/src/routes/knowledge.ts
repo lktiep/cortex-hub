@@ -13,6 +13,7 @@ import { db } from '../db/client.js'
 import { normalizeProjectId } from '../db/project-utils.js'
 import { createLogger } from '@cortex/shared-utils'
 import { createEmbedder } from '../lib/embedder-factory.js'
+import { linkablePaths, linkFiles, linksOf, notesFor, notesProject, unlinkDocument } from '../services/file-notes.js'
 
 const logger = createLogger('knowledge')
 
@@ -222,6 +223,7 @@ async function hierarchicalSearch(
 // ── GET / — List documents ──
 knowledgeRouter.get('/', (c) => {
   const tag = c.req.query('tag')
+  const category = c.req.query('category')
   const projectId = normalizeProjectId(c.req.query('projectId'))
   const status = c.req.query('status') ?? 'active'
   const limit = Number(c.req.query('limit') ?? 500)
@@ -238,6 +240,10 @@ knowledgeRouter.get('/', (c) => {
     sql += " AND tags LIKE '%' || ? || '%'"
     params.push(tag)
   }
+  if (category) {
+    sql += ' AND category = ?'
+    params.push(category)
+  }
 
   // Get total count
   const countSql = sql.replace('SELECT *', 'SELECT COUNT(*) as count')
@@ -246,7 +252,9 @@ knowledgeRouter.get('/', (c) => {
   sql += ' ORDER BY updated_at DESC LIMIT ? OFFSET ?'
   params.push(limit, offset)
 
-  const documents = db.prepare(sql).all(...params)
+  const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown> & { id: string }>
+  const links = linksOf(rows.map((d) => d.id))
+  const documents = rows.map((d) => ({ ...d, files: links.get(d.id) ?? [] }))
 
   // Stats
   const stats = db.prepare(
@@ -264,7 +272,7 @@ knowledgeRouter.get('/', (c) => {
 knowledgeRouter.post('/', async (c) => {
   try {
     const body = await c.req.json()
-    const { title, content, tags, projectId, sourceAgentId, source, origin, category, sourceTaskId, parentDocId, hallType, validFrom } = body as {
+    const { title, content, tags, projectId, sourceAgentId, source, origin, category, sourceTaskId, parentDocId, hallType, validFrom, files } = body as {
       title: string
       content: string
       tags?: string[]
@@ -277,6 +285,8 @@ knowledgeRouter.post('/', async (c) => {
       parentDocId?: string
       hallType?: 'fact' | 'event' | 'discovery' | 'preference' | 'advice' | 'general'
       validFrom?: string
+      /** Repo-relative files (or `dir/`) the document is about; see services/file-notes.ts. */
+      files?: string[]
     }
 
     if (!title || !content) {
@@ -287,8 +297,10 @@ knowledgeRouter.post('/', async (c) => {
     const tagList = tags ?? []
     const contentPreview = content.slice(0, 500)
 
-    // Normalize project_id: resolve to canonical lowercase slug
+    // Normalize project_id: resolve to canonical lowercase slug. A note linked to files with no
+    // project named belongs to the caller's session project: links are looked up per project.
     const normalizedProjectId = normalizeProjectId(projectId)
+      ?? (Array.isArray(files) && files.length > 0 ? notesProject({ apiKeyOwner: c.req.header('X-API-Key-Owner') }) ?? null : null)
 
     // Chunk content
     const chunks = chunkText(content)
@@ -323,9 +335,12 @@ knowledgeRouter.post('/', async (c) => {
 
     // Insert document with evolution metadata + MemPalace-inspired hierarchy/temporal fields
     db.prepare(
-      `INSERT INTO knowledge_documents (id, title, source, source_agent_id, project_id, tags, content_preview, chunk_count, origin, category, generation, source_task_id, created_by_agent, hall_type, valid_from)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(docId, title, source ?? 'manual', sourceAgentId ?? null, normalizedProjectId, JSON.stringify(tagList), contentPreview, chunks.length, origin ?? 'manual', category ?? 'general', generation, sourceTaskId ?? null, sourceAgentId ?? null, hallType ?? 'general', validFrom ?? null)
+      `INSERT INTO knowledge_documents (id, title, content, source, source_agent_id, project_id, tags, content_preview, chunk_count, origin, category, generation, source_task_id, created_by_agent, hall_type, valid_from)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(docId, title, content, source ?? 'manual', sourceAgentId ?? null, normalizedProjectId, JSON.stringify(tagList), contentPreview, chunks.length, origin ?? 'manual', category ?? 'general', generation, sourceTaskId ?? null, sourceAgentId ?? null, hallType ?? 'general', validFrom ?? null)
+
+    const linked = linkablePaths(files)
+    if (linked.length > 0) linkFiles(docId, normalizedProjectId, linked)
 
     // Create lineage edge if this is derived/fixed from a parent
     if (parentDocId) {
@@ -374,8 +389,8 @@ knowledgeRouter.post('/', async (c) => {
       }
     }
 
-    const doc = db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(docId)
-    return c.json(doc, 201)
+    const doc = db.prepare('SELECT * FROM knowledge_documents WHERE id = ?').get(docId) as Record<string, unknown>
+    return c.json({ ...doc, files: linked }, 201)
   } catch (error) {
     logger.error(`Create knowledge failed: ${String(error)}`)
     return c.json({ error: String(error) }, 500)
@@ -487,6 +502,66 @@ knowledgeRouter.get('/timeline', (c) => {
   }
 })
 
+// ── POST /file-notes — Notes linked to files, for an agent about to read them ──
+// Body: { repo?, projectId?, files?, text? }. Without repo or projectId the caller's latest
+// session decides (X-API-Key-Owner). See notesFor for what files/text select.
+knowledgeRouter.post('/file-notes', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { repo?: unknown; projectId?: unknown; files?: unknown; text?: unknown }
+  const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined)
+  const projectId = notesProject({
+    repo: str(body.repo), projectId: str(body.projectId), apiKeyOwner: c.req.header('X-API-Key-Owner'),
+  })
+  if (!projectId) return c.json({ projectId: null, notes: {} })
+  const files = Array.isArray(body.files) ? linkablePaths(body.files) : undefined
+  const text = typeof body.text === 'string' ? body.text : undefined
+  return c.json({ projectId, notes: notesFor(projectId, { files, text }) })
+})
+
+/** A document's full text: the stored content, else its chunks with the overlap chunkText adds taken back out. */
+function fullContent(doc: { id: string; content: string | null }): string {
+  if (doc.content) return doc.content
+  const chunks = db.prepare('SELECT content FROM knowledge_chunks WHERE document_id = ? ORDER BY chunk_index')
+    .all(doc.id) as Array<{ content: string }>
+  return chunks.map((ch, i) => (i === 0 ? ch.content : ch.content.slice(CHUNK_OVERLAP))).join('')
+}
+
+// ── GET /export — Documents with full text and linked files, as JSON ──
+// ?projectId= &category= (e.g. risk) &status= (default active). For keeping risks and lessons
+// outside the hub, or reading them in bulk.
+knowledgeRouter.get('/export', (c) => {
+  const projectId = normalizeProjectId(c.req.query('projectId'))
+  const category = c.req.query('category')
+  const status = c.req.query('status') ?? 'active'
+  let sql = 'SELECT * FROM knowledge_documents WHERE status = ?'
+  const params: unknown[] = [status]
+  if (projectId) {
+    sql += ' AND project_id = ?'
+    params.push(projectId)
+  }
+  if (category) {
+    sql += ' AND category = ?'
+    params.push(category)
+  }
+  const rows = db.prepare(`${sql} ORDER BY created_at DESC`).all(...params) as Array<{
+    id: string; title: string; content: string | null; category: string | null; tags: string | null
+    project_id: string | null; source_task_id: string | null; invalidated_at: string | null; created_at: string
+  }>
+  const links = linksOf(rows.map((d) => d.id))
+  const documents = rows.map((d) => ({
+    id: d.id,
+    title: d.title,
+    category: d.category,
+    tags: JSON.parse(d.tags ?? '[]') as string[],
+    projectId: d.project_id,
+    taskId: d.source_task_id,
+    files: links.get(d.id) ?? [],
+    invalidatedAt: d.invalidated_at,
+    createdAt: d.created_at,
+    content: fullContent(d),
+  }))
+  return c.json({ exportedAt: new Date().toISOString(), total: documents.length, documents })
+})
+
 // ── POST /:id/invalidate — Mark a document as superseded ──
 // MemPalace-inspired temporal validity
 // MUST be before /:id to avoid being caught by the parameterized route
@@ -522,7 +597,7 @@ knowledgeRouter.get('/:id', (c) => {
     'SELECT id, chunk_index, content, char_count FROM knowledge_chunks WHERE document_id = ? ORDER BY chunk_index'
   ).all(id)
 
-  return c.json({ ...doc, chunks })
+  return c.json({ ...doc, chunks, files: linksOf([id]).get(id) ?? [] })
 })
 
 // ── PUT /:id — Update metadata ──
@@ -572,6 +647,7 @@ knowledgeRouter.delete('/:id', async (c) => {
 
   // SQLite CASCADE handles chunks
   db.prepare('DELETE FROM knowledge_documents WHERE id = ?').run(id)
+  unlinkDocument(id)
 
   return c.json({ success: true })
 })

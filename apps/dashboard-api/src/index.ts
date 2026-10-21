@@ -28,6 +28,8 @@ import { settingsRouter } from './routes/settings.js'
 import { recoverInterruptedJobs } from './services/indexer.js'
 import { scheduleBranchSweep } from './services/branch-retention.js'
 import { scheduleSessionExpiry } from './services/session-expiry.js'
+import { captureTaskRisks } from './services/task-risks.js'
+import { onTaskSettled } from './conductor/lifecycle.js'
 import { scheduleConductor } from './conductor/scheduler.js'
 import { apiAuth, apiAuthFromEnv, describeApiAuth } from './lib/api-auth.js'
 
@@ -241,6 +243,19 @@ app.route('/api/webhooks', webhooksRouter)
 app.route('/api/tasks', tasksRouter)
 app.route('/api/conductor', conductorRouter)
 app.route('/api/settings', settingsRouter)
+
+// The risks a task reports are kept as knowledge on its files, stored the way
+// cortex_knowledge_store stores (chunked and embedded), off the request that completed it.
+onTaskSettled((task) => {
+  void captureTaskRisks(task, async (doc) => {
+    const res = await knowledgeRouter.request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(doc),
+    })
+    return res.status === 201
+  }).catch((err: unknown) => logger.warn(`[${task.id}] keeping task risks failed: ${String(err)}`))
+})
 
 // Serve Dashboard Web static files (Next.js static export)
 // Clean URLs: /keys → /keys.html, / → /index.html

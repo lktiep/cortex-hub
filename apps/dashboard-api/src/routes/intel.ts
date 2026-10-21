@@ -8,6 +8,7 @@ import { getReranker, RERANK_OVERFETCH } from '../lib/reranker.js'
 import { hasSparseVector, buildHybridQuery, HYBRID_FETCH_FLOOR } from '../lib/hybrid-search.js'
 import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
 import { analyzeDiff, parseCypherTable, MAX_DIFF_CHARS, type RunCypher } from '../lib/diff-symbols.js'
+import { projectOfActiveSession } from '../lib/session-project.js'
 
 const logger = createLogger('intel')
 
@@ -120,35 +121,9 @@ function orgsWithIndexedProjects(): OrgRow[] {
   }
 }
 
-/**
- * The organization the caller is currently working in, taken from its most recent session.
- * The agent already declared its repo at cortex_session_start, so nothing has to be passed
- * on every later call. An active session outranks a closed one, and session start bumps
- * created_at when it reuses a row, so "most recent" means the last repo the agent opened.
- */
+/** The organization the caller is currently working in, taken from its most recent session. */
 function orgOfActiveSession(apiKeyOwner: string | null | undefined): string | undefined {
   return projectOfActiveSession(apiKeyOwner)?.org_id
-}
-
-/** The project of the caller's most recent session, by the same rule as orgOfActiveSession. */
-function projectOfActiveSession(
-  apiKeyOwner: string | null | undefined,
-): { id: string; org_id: string } | undefined {
-  if (!apiKeyOwner) return undefined
-  try {
-    const row = db.prepare(
-      `SELECT p.id AS id, p.org_id AS org_id
-         FROM session_handoffs s
-         JOIN projects p ON p.id = s.project_id
-        WHERE (s.api_key_name = ? OR s.from_agent = ?)
-        ORDER BY (s.status = 'active') DESC, s.created_at DESC
-        LIMIT 1`
-    ).get(apiKeyOwner, apiKeyOwner) as { id?: string; org_id?: string } | undefined
-    return row?.id && row.org_id ? { id: row.id, org_id: row.org_id } : undefined
-  } catch (error) {
-    logger.warn(`projectOfActiveSession failed: ${String(error)}`)
-    return undefined
-  }
 }
 
 type OrgScope = {

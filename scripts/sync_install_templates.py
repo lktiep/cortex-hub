@@ -27,6 +27,7 @@ TARGETS = [
     '.claude/hooks/track-quality.sh',
     '.claude/hooks/session-end-check.sh',
     '.claude/hooks/nudge-lookup.sh',
+    '.claude/hooks/recall-notes.sh',
     '.claude/settings.json',
     '.claude/commands/cs.md',
     '.claude/commands/ce.md',

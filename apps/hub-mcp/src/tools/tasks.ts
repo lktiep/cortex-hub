@@ -207,7 +207,11 @@ export function registerTaskTools(server: McpServer, env: Env) {
       taskId: z.string().describe('The ID of the task to update'),
       status: z.enum(['in_progress', 'review', 'completed', 'failed']).describe('The new status for the task'),
       message: z.string().optional().describe('Progress message or note about the status change'),
-      result: z.record(z.string(), z.unknown()).optional().describe('Result data when completing or failing a task'),
+      result: z.record(z.string(), z.unknown()).optional().describe(
+        'Result data when completing or failing a task: { summary, prUrl?, branch?, commit?, artifactUrl?, risks? }. ' +
+        'risks: what the next agent touching these files should know — each a string, or { text, files } to tie it to some files. ' +
+        "They are kept as knowledge on the task's files and shown to agents that later read or edit them."
+      ),
       parentTaskId: z.string().optional().describe('Set or change the parent task ID (for re-parenting orphan tasks)'),
     },
     async ({ taskId, status, message, result, parentTaskId }) => {

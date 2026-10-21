@@ -229,6 +229,11 @@ class Hub(http.server.BaseHTTPRequestHandler):
             f.write(json.dumps({'path': self.path, 'auth': self.headers.get('Authorization'),
                                 'accept': self.headers.get('Accept'), 'body': json.loads(body or b'null')}) + '\n')
         result = {'content': [{'type': 'text', 'text': '{}'}]}
+        if mode == 'notes':
+            result['content'][0]['text'] = json.dumps({'projectId': 'p1', 'notes': {
+                'src/auth.ts': [{'id': 'k1', 'title': 'Risk: refresh races', 'kind': 'risk', 'note': 'Take the lock first', 'at': '2026-10-20T00:00:00Z'}],
+                'src/lib/': [{'id': 'k2', 'title': 'Lib is shared', 'kind': 'lesson', 'note': 'Both apps import it', 'at': '2026-10-19T00:00:00Z'}],
+            }})
         if mode == 'error':
             result['isError'] = True
         out = json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': result}).encode()
@@ -925,6 +930,47 @@ if command -v node >/dev/null 2>&1; then
   rm -f "$STATE/gate-off"
   check "unreadable input exits 0"            quiet "$(nudge 'not json')"
   check "no session id still works"           nudge "$(nudge '{"tool_name":"Bash","tool_input":{"command":"rg verifyKey"}}')"
+  teardown
+else
+  echo "  skip (no node: the hook does nothing without it)"
+fi
+
+echo
+echo "recall-notes.sh — notes linked to a file, shown before an agent opens it"
+# Prints the notes it showed (titles, comma-separated), "quiet" or "exit N".
+recall() {  # $1 = payload, $2.. = env
+  local out rc
+  out=$(printf '%s' "$1" | env -u CORTEX_MCP_URL -u HUB_MCP_URL -u HUB_API_KEY HOME="$SANDBOX/home" \
+    CLAUDE_PROJECT_DIR="$SANDBOX" CORTEX_MCP_URL="$STUB_URL/mcp" HUB_API_KEY=k-sekrit "${@:2}" \
+    bash "$HOOKS_DIR/recall-notes.sh" 2>/dev/null); rc=$?
+  if [ "$rc" != 0 ]; then echo "exit $rc"; return; fi
+  printf '%s' "$out" | python3 -c 'import json,sys
+t=sys.stdin.read()
+if not t: print("quiet"); sys.exit()
+c=json.loads(t)["hookSpecificOutput"]["additionalContext"]
+print(",".join(l.split("] ",1)[1].split(" — ")[0] for l in c.splitlines() if l.startswith("- [")))'
+}
+open_file() { printf '{"session_id":"s1","agent_id":"%s","tool_name":"%s","tool_input":{"file_path":"%s"}}' "$1" "$2" "$3"; }
+if command -v node >/dev/null 2>&1; then
+  setup; mkdir -p "$SANDBOX/home"; start_stub notes
+  check "a linked file's note is shown on Read"   "Risk: refresh races"  "$(recall "$(open_file a Read "$SANDBOX/src/auth.ts")")"
+  check "with the hub's bearer key"               "Bearer k-sekrit"      "$(got 'r["auth"]')"
+  check "asking cortex_file_notes"                "cortex_file_notes"    "$(got 'r["body"]["params"]["name"]')"
+  check "but once per agent"                      quiet "$(recall "$(open_file a Edit "$SANDBOX/src/auth.ts")")"
+  check "another agent sees it too"               "Risk: refresh races"  "$(recall "$(open_file b Edit src/auth.ts)")"
+  check "a directory note covers its files"       "Lib is shared"        "$(recall "$(open_file a Write "$SANDBOX/src/lib/x/y.ts")")"
+  check "a file with none is quiet"               quiet "$(recall "$(open_file a Read "$SANDBOX/src/other.ts")")"
+  check "a file outside the repo is quiet"        quiet "$(recall "$(open_file c Read /etc/hosts)")"
+  check "the hub was asked once"                  1 "$(requests)"
+  stop_stub; start_stub 500; rm -f "$STATE/notes/index.json"
+  check "a hub error is quiet"                    quiet "$(recall "$(open_file d Read "$SANDBOX/src/auth.ts")")"
+  check "and not asked again right away"          1 "$(recall "$(open_file e Read "$SANDBOX/src/auth.ts")" >/dev/null; requests)"
+  stop_stub
+  check "CORTEX_NOTES=off silences it"            quiet "$(recall "$(open_file f Read src/auth.ts)" CORTEX_NOTES=off)"
+  printf 'hub down\n' > "$STATE/gate-off"
+  check "gate-off silences it"                    quiet "$(recall "$(open_file g Read src/auth.ts)")"
+  rm -f "$STATE/gate-off"
+  check "unreadable input exits 0"                quiet "$(recall 'not json')"
   teardown
 else
   echo "  skip (no node: the hook does nothing without it)"

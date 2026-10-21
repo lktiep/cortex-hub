@@ -10,6 +10,7 @@ import {
   getKnowledgeTags,
   getRecipeStats,
   getAllProjects,
+  knowledgeExportUrl,
   type KnowledgeDocument,
   type Project,
   type RecipeStats,
@@ -151,6 +152,14 @@ function DocumentCard({
 
       {doc.content_preview && (
         <p className={styles.docPreview}>{doc.content_preview}</p>
+      )}
+
+      {doc.files && doc.files.length > 0 && (
+        <div className={styles.docFiles} title="Shown to agents when they open these files">
+          {doc.files.map((f) => (
+            <code key={f} className={styles.docFile}>{f}</code>
+          ))}
+        </div>
       )}
 
       <div className={styles.docFooter}>
@@ -378,13 +387,15 @@ function RecipeHealthPanel({ data }: { data: RecipeStats }) {
 export default function KnowledgePage() {
   const [showCreate, setShowCreate] = useState(false)
   const [filterTag, setFilterTag] = useState('')
+  const [filterCategory, setFilterCategory] = useState('')
   const [filterProject, setFilterProject] = useState<string>('all')
   const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped')
 
   const { data, error, isLoading, mutate } = useSWR(
-    `knowledge-${filterTag}-${filterProject}`,
+    `knowledge-${filterTag}-${filterCategory}-${filterProject}`,
     () => getKnowledgeDocuments({
       tag: filterTag || undefined,
+      category: filterCategory || undefined,
       projectId: filterProject !== 'all' ? (filterProject === 'global' ? undefined : filterProject) : undefined,
     }),
     { refreshInterval: 15000 }
@@ -520,6 +531,18 @@ export default function KnowledgePage() {
             ))}
           </select>
 
+          {/* Kind filter: risks are what tasks report on completion */}
+          <select
+            className={styles.filterSelect}
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+          >
+            <option value="">All kinds</option>
+            {['risk', 'lesson', 'error_fix', 'pattern', 'decision'].map((k) => (
+              <option key={k} value={k}>{k}</option>
+            ))}
+          </select>
+
           {/* View mode toggle */}
           <div className={styles.viewToggle}>
             <button
@@ -539,9 +562,22 @@ export default function KnowledgePage() {
           </div>
         </div>
 
-        <button className="btn btn-primary btn-sm" onClick={() => setShowCreate(true)}>
-          + New Document
-        </button>
+        <div className={styles.filters}>
+          <a
+            className="btn btn-secondary btn-sm"
+            href={knowledgeExportUrl({
+              projectId: filterProject !== 'all' && filterProject !== 'global' ? filterProject : undefined,
+              category: filterCategory || undefined,
+            })}
+            download="knowledge-export.json"
+            title="Full text and linked files of the documents shown, as JSON"
+          >
+            Export
+          </a>
+          <button className="btn btn-primary btn-sm" onClick={() => setShowCreate(true)}>
+            + New Document
+          </button>
+        </div>
       </div>
 
       {/* Error */}

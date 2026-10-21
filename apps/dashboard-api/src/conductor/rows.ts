@@ -136,7 +136,7 @@ export function taskLabel(row: TaskRow): string {
 }
 
 /** TaskResult fields read as text downstream; a non-string value is dropped. */
-const RESULT_TEXT_FIELDS = ['prUrl', 'branch', 'commit', 'testOutput', 'error'] as const
+const RESULT_TEXT_FIELDS = ['prUrl', 'branch', 'commit', 'testOutput', 'error', 'artifactUrl'] as const
 
 /**
  * A REST `result` as a TaskResult: an object keeps its fields (non-string text

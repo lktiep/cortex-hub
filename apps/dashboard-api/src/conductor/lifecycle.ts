@@ -34,6 +34,23 @@ const LEGACY_OPEN_STATUSES = ['pending', 'blocked', 'assigned', 'accepted', 'in_
 /** What a return to `pending` sets: the assignment, acceptance and lease are cleared. */
 const BACK_TO_PENDING = "status = 'pending', assigned_to_agent = NULL, assigned_at = NULL, accepted_at = NULL, lease_expires_at = NULL"
 
+/** Told, after the commit, of each task that settled in `review` or `completed`; see onTaskSettled. */
+let settledListener: ((task: TaskRow) => void) | null = null
+
+/**
+ * Sets the one listener told when a task settles with its result (index.ts keeps the risks it
+ * reports). It runs after the step committed and never fails it; null removes it.
+ */
+export function onTaskSettled(listener: ((task: TaskRow) => void) | null): void {
+  settledListener = listener
+}
+
+function told(task: TaskRow): void {
+  try {
+    settledListener?.(task)
+  } catch { /* a listener never fails the step that told it */ }
+}
+
 function isActive(status: string): boolean {
   return (ACTIVE_STATUSES as readonly string[]).includes(status)
 }
@@ -349,6 +366,7 @@ export function onCompleted(task: TaskRow): void {
   })()
   flush(sends)
   dispatch()
+  told(task)
 }
 
 /** `assigned → accepted`. A repeat accept of a task already accepted or running is a no-op. */
@@ -413,7 +431,7 @@ export function completeTask(
   // failAttempt sends its own revoke ('failed'), so a lead's failure is revoked once
   if (status === 'failed') return failAttempt(taskId, agentId, result.error ?? result.summary, attempt)
   if (agentId === null) revokeBefore(taskId, 'completed', attempt)
-  return settle((): Settled => {
+  const outcome = settle((): Settled => {
     const allowed = agentId === null ? (t: TaskRow) => isActive(t.status) || t.status === 'review' : heldBy(agentId)
     const loaded = load(taskId, agentId, 'complete', allowed, attempt)
     if (!loaded.ok) return refused(loaded)
@@ -445,6 +463,8 @@ export function completeTask(
     completionChain(updated, sends)
     return { outcome: { ok: true, task: updated }, worker, sends }
   })
+  if (outcome.ok) told(outcome.task)
+  return outcome
 }
 
 /**

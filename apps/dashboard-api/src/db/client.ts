@@ -165,6 +165,7 @@ try {
     { table: 'recipe_capture_log', cols: ['created_at'] },
     { table: 'knowledge_documents', cols: ['created_at', 'updated_at', 'valid_from', 'invalidated_at'] },
     { table: 'knowledge_chunks', cols: ['created_at'] },
+    { table: 'knowledge_links', cols: ['created_at'] },
     { table: 'provider_accounts', cols: ['created_at', 'updated_at'] },
     { table: 'model_routing', cols: ['updated_at'] },
     { table: 'agent_ack', cols: ['updated_at'] },

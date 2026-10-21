@@ -63,6 +63,12 @@ finding the spot in one call and spending five:
 ### Sharing what you learn
 - `cortex_memory_store(content: "...")` — personal recall for future sessions
 - `cortex_knowledge_store(title: "...", content: "...")` — team-wide (bug fixes, patterns, decisions)
+- Add `files: ["src/auth.ts", "src/lib/"]` and `category: "risk" | "lesson" | "error_fix" | "pattern" | "decision"`
+  when it is about particular files (a directory ends in `/`): the next agent to open them is
+  shown it before reading, and the code tools append it to results naming them.
+- Completing a conductor task: `cortex_task_update(status: "completed", result: { summary, prUrl?,
+  artifactUrl?, risks?: ["…" | { text, files }] })`. Each risk is kept as a `risk` document on the
+  task's files (or the ones it names), so it is not lost inside the artifact.
 
 ### Before committing
 `cortex_detect_changes(diff: "<output of git diff --staged>")` — shows affected symbols and risk level.
@@ -128,3 +134,7 @@ Every session must pass before committing:
   (`cortex_code_context` for a symbol, `cortex_code_search` for a word). It stays quiet for
   literals, known files and file names, right after a cortex lookup, and between nudges
   (one per agent every 5 such searches). `CORTEX_NUDGE=off` turns it off.
+- Never a block either: before `Read`/`Edit`/`Write` of a file with knowledge linked to it,
+  `recall-notes.sh` adds up to 3 of those notes (newest first), once per file per agent. The
+  project's links are fetched with `cortex_file_notes` and cached 10 minutes in
+  `.cortex/.session-state/notes/`. `CORTEX_NOTES=off` turns it off.

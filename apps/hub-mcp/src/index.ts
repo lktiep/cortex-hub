@@ -11,7 +11,7 @@ import { registerAllTools } from './tools/index.js'
 import { createPlan, treePlan } from './tools/conductor-lead.js'
 import { validateApiKey, invalidateTokenCache } from './middleware/auth.js'
 import { telemetryStorage } from './api-call.js'
-import { appendHintBlocks, canAppendHints } from './hint-blocks.js'
+import { appendHintBlocks, canAppendHints, noteLines, type FileNote } from './hint-blocks.js'
 import { claimTreeUpload, MAX_TREE_UPLOAD_BYTES, releaseTreeUpload } from './tree-upload.js'
 import type { Env } from './types.js'
 
@@ -363,31 +363,36 @@ app.all('/mcp', async (c) => {
         }).catch((err: unknown) => console.error('[MCP Telemetry Error]', err))
       }
 
-      if (toolName !== 'unknown' && toolName !== 'cortex_health' && agentId !== 'unknown') {
+      // cortex_file_notes answers JSON its callers parse, so nothing is appended to it.
+      if (toolName !== 'unknown' && toolName !== 'cortex_health' && toolName !== 'cortex_file_notes' && agentId !== 'unknown') {
         try {
           // Parse first: the hints endpoint marks conductor notices delivered, so it must only be
           // asked when this body can carry them.
           const parsed: unknown = respBody ? JSON.parse(respBody) : null
           if (canAppendHints(parsed)) {
-            const hintsRes = await fetch(
-              `${apiUrl}/api/metrics/hints/${encodeURIComponent(agentId)}?currentTool=${encodeURIComponent(toolName)}`,
-              { signal: AbortSignal.timeout(2000) }
-            )
-            if (hintsRes.ok) {
-              const hintsData = (await hintsRes.json()) as { hints?: string[]; conductor?: string[] }
-              const hints = hintsData.hints ?? []
-              const conductor = hintsData.conductor ?? []
-              const lastItem = parsed.result.content.at(-1)
-              if (lastItem && (hints.length > 0 || conductor.length > 0)) {
-                lastItem.text = appendHintBlocks(lastItem.text, hints, conductor)
-                return new Response(JSON.stringify(parsed), {
-                  status: res.status,
-                  headers: res.headers,
-                })
-              }
+            const lastItem = parsed.result.content.at(-1)!
+            const [hintsData, notes] = await Promise.all([
+              fetch(
+                `${apiUrl}/api/metrics/hints/${encodeURIComponent(agentId)}?currentTool=${encodeURIComponent(toolName)}`,
+                { signal: AbortSignal.timeout(2000) }
+              )
+                .then(async (r) => (r.ok ? ((await r.json()) as { hints?: string[]; conductor?: string[] }) : {}))
+                .catch(() => ({} as { hints?: string[]; conductor?: string[] })),
+              NOTE_TOOLS.has(toolName)
+                ? fileNotesNamedIn(apiUrl, agentId, argsObj, parsed.result.content.map((i) => (typeof i.text === 'string' ? i.text : '')).join('\n'))
+                : Promise.resolve([]),
+            ])
+            const hints = hintsData.hints ?? []
+            const conductor = hintsData.conductor ?? []
+            if (hints.length > 0 || conductor.length > 0 || notes.length > 0) {
+              lastItem.text = appendHintBlocks(lastItem.text, hints, conductor, notes)
+              return new Response(JSON.stringify(parsed), {
+                status: res.status,
+                headers: res.headers,
+              })
             }
           }
-        } catch { /* body not JSON, or hints fetch failed */ }
+        } catch { /* body not JSON */ }
       }
 
       return res
@@ -464,5 +469,30 @@ app.post('/tree-upload/:token', bodyLimit({ maxSize: MAX_TREE_UPLOAD_BYTES, onEr
     releaseTreeUpload(token, created)
   }
 })
+
+/** Code lookups whose answers name files: the notes linked to those files are appended to them. */
+const NOTE_TOOLS = new Set(['cortex_code_search', 'cortex_code_context', 'cortex_code_impact', 'cortex_detect_changes'])
+
+/** Note lines for the linked files a tool answer names; none when the hub is slow or has none. */
+async function fileNotesNamedIn(apiUrl: string, owner: string, args: unknown, text: string): Promise<string[]> {
+  const a = (args ?? {}) as { repo?: unknown; projectId?: unknown }
+  try {
+    const res = await fetch(`${apiUrl}/api/knowledge/file-notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key-Owner': owner },
+      body: JSON.stringify({
+        repo: typeof a.repo === 'string' ? a.repo : undefined,
+        projectId: typeof a.projectId === 'string' ? a.projectId : undefined,
+        text,
+      }),
+      signal: AbortSignal.timeout(1500),
+    })
+    if (!res.ok) return []
+    const data = (await res.json()) as { notes?: Record<string, FileNote[]> }
+    return noteLines(data.notes ?? {})
+  } catch {
+    return []
+  }
+}
 
 export default app

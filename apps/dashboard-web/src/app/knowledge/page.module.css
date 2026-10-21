@@ -322,6 +322,25 @@
   flex: 1;
 }
 
+.docFiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-3) 0;
+}
+
+.docFile {
+  font-size: 0.6875rem;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tag {
   font-size: 0.6875rem;
   padding: 2px 8px;

@@ -817,6 +817,8 @@ export interface KnowledgeDocument {
   valid_from?: string | null
   invalidated_at?: string | null
   superseded_by?: string | null
+  /** Repo files the document is linked to: agents are shown it when they open them. */
+  files?: string[]
 }
 
 export interface KnowledgeStats {
@@ -825,10 +827,11 @@ export interface KnowledgeStats {
   totalHits: number
 }
 
-export async function getKnowledgeDocuments(params?: { tag?: string; projectId?: string }) {
+export async function getKnowledgeDocuments(params?: { tag?: string; projectId?: string; category?: string }) {
   const qs = new URLSearchParams()
   if (params?.tag) qs.set('tag', params.tag)
   if (params?.projectId) qs.set('projectId', params.projectId)
+  if (params?.category) qs.set('category', params.category)
   const query = qs.toString()
   return apiFetch<{ documents: KnowledgeDocument[]; total: number; stats: KnowledgeStats }>(
     `/api/knowledge${query ? '?' + query : ''}`
@@ -842,6 +845,15 @@ export async function createKnowledgeDocument(data: {
   projectId?: string
 }) {
   return apiFetch<KnowledgeDocument>('/api/knowledge', { method: 'POST', body: data })
+}
+
+/** Where the export of documents (full text and linked files, as JSON) downloads from. */
+export function knowledgeExportUrl(params?: { projectId?: string; category?: string }) {
+  const qs = new URLSearchParams()
+  if (params?.projectId) qs.set('projectId', params.projectId)
+  if (params?.category) qs.set('category', params.category)
+  const query = qs.toString()
+  return `${config.api.base}/api/knowledge/export${query ? '?' + query : ''}`
 }
 
 export async function getKnowledgeDocument(id: string) {

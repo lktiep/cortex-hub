@@ -303,6 +303,19 @@ CREATE TABLE IF NOT EXISTS knowledge_usage_log (
 CREATE INDEX IF NOT EXISTS idx_knowledge_usage_doc ON knowledge_usage_log(document_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_usage_task ON knowledge_usage_log(task_id);
 
+-- ── Knowledge Links (the repo files a document is about) ──
+-- A risk, lesson or past fix linked to a file is shown to an agent about to read or edit it,
+-- and next to code lookups that name it. A path ending in `/` covers everything under it.
+-- Foreign keys are off, so the delete route removes a document's links itself.
+CREATE TABLE IF NOT EXISTS knowledge_links (
+    document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+    project_id TEXT,
+    file_path TEXT NOT NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (document_id, file_path)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_links_file ON knowledge_links(project_id, file_path);
+
 -- ── Recipe Capture Log (diagnostics — track attempts and failures) ──
 CREATE TABLE IF NOT EXISTS recipe_capture_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

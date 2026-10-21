@@ -9,7 +9,13 @@ export interface RouteSpec { executor: Executor | null; model: string | null; ef
 export interface EngineInfo { executor: Executor; models: string[]; defaultModel: string | null } // models may contain '*'
 export interface TaskReview { at: string; by: string; verdict: 'approve' | 'reject'; feedback: string }
 export interface TaskHandoff { branch: string; commit: string | null; note: string }
-export interface TaskResult { summary: string; prUrl?: string; branch?: string; commit?: string; testOutput?: string; error?: string }
+/** A risk a task leaves behind; `files` narrows it to some of the task's files (else all of them). */
+export type TaskRisk = string | { text: string; files?: string[] }
+/** `artifactUrl` and `risks` are kept as knowledge linked to the task's files once it completes. */
+export interface TaskResult {
+  summary: string; prUrl?: string; branch?: string; commit?: string; testOutput?: string; error?: string
+  artifactUrl?: string; risks?: TaskRisk[]
+}
 export interface AssignedTask {
   id: string; key: string | null; title: string; description: string
   context: Record<string, unknown>; files: string[]

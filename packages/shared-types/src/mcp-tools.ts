@@ -35,6 +35,7 @@ export const MCP_TOOL_PERMISSIONS: readonly McpToolPermission[] = [
   { id: 'cortex.memory.delete', label: 'Delete Memory (memory_delete)', group: 'Memory' },
   { id: 'cortex.knowledge.store', label: 'Store Team Knowledge (knowledge_store)', group: 'Knowledge' },
   { id: 'cortex.knowledge.search', label: 'Search Team Knowledge (knowledge_search)', group: 'Knowledge' },
+  { id: 'cortex.file.notes', label: 'File Notes (file_notes)', group: 'Knowledge' },
   { id: 'cortex.quality.report', label: 'Report Quality Gates (quality_report)', group: 'Quality' },
   { id: 'cortex.plan.quality', label: 'Assess Plan Quality (plan_quality)', group: 'Quality' },
   { id: 'cortex.task.create', label: 'Create Task (task_create)', group: 'Tasks' },

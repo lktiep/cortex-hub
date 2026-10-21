@@ -23,8 +23,10 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
       agentId: z.string().optional().describe('Contributing agent identifier'),
       hallType: z.enum(['fact', 'event', 'discovery', 'preference', 'advice', 'general']).optional().describe('MemPalace-inspired hall type: fact | event | discovery | preference | advice | general (default)'),
       validFrom: z.string().optional().describe('ISO date when this fact became valid (temporal validity)'),
+      files: z.array(z.string()).optional().describe('Repo-relative files (or "dir/") this is about. Linked notes are shown to the next agent that reads or edits those files, and appended to code tool results that name them — pass them for any risk, pitfall or fix tied to specific code.'),
+      category: z.enum(['risk', 'lesson', 'error_fix', 'pattern', 'decision', 'general']).optional().describe('What kind of note: risk | lesson | error_fix | pattern | decision | general'),
     },
-    async ({ title, content, tags, projectId, agentId, hallType, validFrom }) => {
+    async ({ title, content, tags, projectId, agentId, hallType, validFrom, files, category }) => {
       try {
         const res = await apiCall(env, '/api/knowledge', {
           method: 'POST',
@@ -38,6 +40,8 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
             source: 'agent',
             hallType,
             validFrom,
+            files,
+            category,
           }),
         })
 
@@ -175,6 +179,33 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
               text: `Knowledge search error: ${error instanceof Error ? error.message : 'Unknown'}`,
             },
           ],
+          isError: true,
+        }
+      }
+    }
+  )
+
+  // ── Notes linked to files ──
+  server.tool(
+    'cortex_file_notes',
+    'Known risks, lessons and past fixes linked to repo files (stored with cortex_knowledge_store files: [...]). Returns JSON {projectId, notes: {path: [{id, title, kind, note, at}]}}. Without files, every linked path of the project.',
+    {
+      repo: z.string().optional().describe('Git remote URL or repo name; defaults to your session project'),
+      projectId: z.string().optional().describe('Project ID, when repo is not given'),
+      files: z.array(z.string()).optional().describe('Repo-relative files to get notes for; omit for all linked paths'),
+    },
+    async ({ repo, projectId, files }) => {
+      try {
+        const res = await apiCall(env, '/api/knowledge/file-notes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo, projectId, files }),
+        })
+        const text = await res.text()
+        return { content: [{ type: 'text' as const, text: res.ok ? text : `File notes failed: ${res.status} ${text}` }], isError: !res.ok }
+      } catch (error) {
+        return {
+          content: [{ type: 'text' as const, text: `File notes error: ${error instanceof Error ? error.message : 'Unknown'}` }],
           isError: true,
         }
       }
