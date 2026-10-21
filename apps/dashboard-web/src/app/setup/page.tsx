@@ -12,6 +12,7 @@ import {
   configureProvider,
 } from '@/lib/api'
 import { config } from '@/lib/config'
+import LlmTradeoff from '@/components/LlmTradeoff'
 import {
   Bot,
   Sparkles,
@@ -33,6 +34,8 @@ import {
   ICON_INLINE,
 } from '@/lib/icons'
 import styles from './page.module.css'
+
+const LLM_CHOICE_KEY = 'cortex_setup_llm_mode'
 
 function Ico({ icon: Icon }: { icon: LucideIcon }) {
   return <Icon {...ICON_INLINE} />
@@ -165,6 +168,7 @@ const providers = [
 function SetupWizard() {
   const [step, setStep] = useState<Step>('provider')
   const [selectedProvider, setSelectedProvider] = useState('')
+  const [llmMode, setLlmModeChoice] = useState<'on' | 'off'>('on')
   const [authMethod, setAuthMethod] = useState<AuthMethod>('oauth')
   const [selectedModels, setSelectedModels] = useState<string[]>([])
 
@@ -188,6 +192,24 @@ function SetupWizard() {
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const authWindowRef = useRef<Window | null>(null)
   const searchParams = useSearchParams()
+
+  // The OAuth login can come back through a full page load; keep the LLM choice across it.
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(LLM_CHOICE_KEY) === 'off') setLlmModeChoice('off')
+    } catch {
+      // storage blocked: the choice falls back to "use an LLM"
+    }
+  }, [])
+
+  function chooseLlmMode(mode: 'on' | 'off') {
+    setLlmModeChoice(mode)
+    try {
+      sessionStorage.setItem(LLM_CHOICE_KEY, mode)
+    } catch {
+      // storage blocked: the choice still holds until the page reloads
+    }
+  }
 
   // Listen for postMessage from OAuth callback popup
   useEffect(() => {
@@ -485,6 +507,7 @@ function SetupWizard() {
       const result = await completeSetup({
         provider: selectedProvider,
         models: selectedModels,
+        llmMode,
       })
 
       if (!result || (result as { success?: boolean }).success === false) {
@@ -546,6 +569,36 @@ function SetupWizard() {
               </button>
             ))}
           </div>
+
+          <div className={styles.llmChoice} role="radiogroup" aria-label="Chat model">
+            <button
+              role="radio"
+              aria-checked={llmMode === 'on'}
+              className={`${styles.llmOption} ${llmMode === 'on' ? styles.llmOptionSelected : ''}`}
+              onClick={() => chooseLlmMode('on')}
+            >
+              <div className={styles.providerName}>Use an LLM (recommended)</div>
+              <div className={styles.providerDesc}>Embeddings plus a chat model for memory, recipes and knowledge upkeep</div>
+            </button>
+            <button
+              role="radio"
+              aria-checked={llmMode === 'off'}
+              className={`${styles.llmOption} ${llmMode === 'off' ? styles.llmOptionSelected : ''}`}
+              onClick={() => chooseLlmMode('off')}
+            >
+              <div className={styles.providerName}>No LLM: embeddings only</div>
+              <div className={styles.providerDesc}>No chat model is ever called. You can turn it on later in Settings</div>
+            </button>
+          </div>
+
+          {llmMode === 'off' && (
+            <div className={styles.llmTradeoff}>
+              <LlmTradeoff />
+              <p className={styles.llmHint}>
+                Pick Ollama (Local) above to embed on your own machine without an API key.
+              </p>
+            </div>
+          )}
 
           <button
             className="btn btn-primary btn-lg"

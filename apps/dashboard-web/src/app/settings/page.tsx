@@ -11,11 +11,16 @@ import {
   updateNotificationPreferences,
   getSystemInfo,
   restartService,
+  getLlmStatus,
+  setLlmMode,
+  type LlmFeature,
+  type LlmStatus,
 } from '@/lib/api'
 import { config, getExternalUrl, resolveMcpEndpoint, type McpEndpoint } from '@/lib/config'
 import { workerBootstrap } from '@/lib/worker-bootstrap'
 import { copyToClipboard } from '@/lib/clipboard'
 import { Bot, Radio, Package, CheckCircle, XCircle, AlertTriangle, RefreshCw, Hourglass, Dna, type LucideIcon, ICON_INLINE } from '@/lib/icons'
+import LlmTradeoff from '@/components/LlmTradeoff'
 import styles from './page.module.css'
 
 // ── Types ──
@@ -151,11 +156,30 @@ const NOTIFICATION_LABELS: Record<string, { label: string; description: string }
   },
 }
 
+const LLM_FEATURES: Record<LlmFeature, { label: string; env?: string }> = {
+  memory: { label: 'Memory fact extraction', env: 'MEMORY_LLM' },
+  recipes: { label: 'Recipe capture', env: 'RECIPE_CAPTURE' },
+  evolution: { label: 'Knowledge self-repair' },
+}
+
+function llmStatusText(s: LlmStatus): string {
+  if (s.reason === 'env') {
+    return s.enabled
+      ? `On: CORTEX_LLM=on on the server overrides this switch (chat model ${s.chatModel})`
+      : 'Off: CORTEX_LLM=off on the server overrides this switch'
+  }
+  if (s.reason === 'setting') return 'Off: turned off here. No chat model is called'
+  if (s.reason === 'no-chat-model') return 'Off: no chat model is routed. Add one under Providers to turn it on'
+  return `On: chat model ${s.chatModel}`
+}
+
 export default function SettingsPage() {
   const { data, error, isLoading } = useSWR('settings', getSettings)
   const { data: hubConfig, mutate: mutateHubConfig } = useSWR('hub-config', getHubConfig)
   const { data: notifPrefs, mutate: mutateNotifPrefs } = useSWR('notif-prefs', getNotificationPreferences)
   const { data: systemInfo } = useSWR('system-info', getSystemInfo, { refreshInterval: 30000 })
+  const { data: llm, mutate: mutateLlm } = useSWR('llm-status', getLlmStatus)
+  const [llmSaving, setLlmSaving] = useState(false)
 
   // Dynamic endpoints state to resolve Tailscale/localhost/custom domains
   const [endpoints, setEndpoints] = useState({
@@ -248,6 +272,17 @@ export default function SettingsPage() {
       setActionStatus({ type: 'error', message: `Save failed: ${err instanceof Error ? err.message : String(err)}` })
     } finally {
       setHubSaving(false)
+    }
+  }
+
+  async function handleToggleLlm(on: boolean) {
+    setLlmSaving(true)
+    try {
+      await mutateLlm(await setLlmMode(on ? 'on' : 'off'), { revalidate: false })
+    } catch (err) {
+      setActionStatus({ type: 'error', message: `Failed to update: ${err instanceof Error ? err.message : String(err)}` })
+    } finally {
+      setLlmSaving(false)
     }
   }
 
@@ -368,6 +403,47 @@ export default function SettingsPage() {
             {hubDirty && (
               <span className={styles.unsavedHint}>Unsaved changes</span>
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* LLM */}
+      <div className={styles.section}>
+        <h2 className={styles.sectionTitle}>LLM</h2>
+        <div className={`card ${styles.notificationsCard}`}>
+          <div className={styles.notifRow}>
+            <div className={styles.notifInfo}>
+              <span className={styles.notifLabel}>Use a chat model</span>
+              <span className={styles.notifDesc}>{llm ? llmStatusText(llm) : 'Loading...'}</span>
+            </div>
+            <label className={styles.toggle}>
+              <input
+                type="checkbox"
+                aria-label="Use a chat model"
+                checked={llm ? llm.setting !== 'off' : true}
+                disabled={!llm || llmSaving || llm.env !== null}
+                onChange={(e) => handleToggleLlm(e.target.checked)}
+              />
+              <span className={styles.toggleSlider} />
+            </label>
+          </div>
+          {llm && (
+            <ul className={styles.llmFeatures}>
+              {(Object.keys(LLM_FEATURES) as LlmFeature[]).map((f) => {
+                const { label, env } = LLM_FEATURES[f]
+                const on = llm.features[f]
+                return (
+                  <li key={f}>
+                    {on ? <CheckCircle {...ICON_INLINE} color="var(--status-healthy)" /> : <XCircle {...ICON_INLINE} color="var(--text-tertiary)" />}
+                    {' '}{label}
+                    {!on && llm.enabled && env && <span className={styles.notifDesc}> (off by {env}=off)</span>}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          <div className={styles.llmTradeoff}>
+            <LlmTradeoff />
           </div>
         </div>
       </div>

@@ -34,7 +34,11 @@ export interface VectorStoreConfig {
 }
 
 export interface Mem9Config {
-  llm: LlmConfig
+  /**
+   * The model that extracts facts and merges them with what is stored. Without one,
+   * add() keeps each message as it was written and skips near-duplicates by vector.
+   */
+  llm?: LlmConfig
   embedder: EmbedderConfig
   vectorStore: VectorStoreConfig
 }

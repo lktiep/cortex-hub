@@ -82,6 +82,9 @@ vi.mock('./vector-store.js', () => ({
     async delete(id: string) {
       fake.points.delete(id)
     }
+    async isHealthy() {
+      return true
+    }
   },
 }))
 
@@ -196,6 +199,41 @@ describe('Mem9.add', () => {
     await add(mem9())
 
     expect([...fake.points.values()][0]!.sparse).toBeUndefined()
+  })
+})
+
+describe('Mem9.add without an LLM', () => {
+  const plain = () =>
+    new Mem9({
+      embedder: { provider: 'gemini', apiKey: '', model: 'auto', gatewayUrl: 'http://gateway' },
+      vectorStore: { url: 'http://qdrant', collection: 'memories' },
+    })
+  const store = (m: Mem9, content: string, userId = 'alice') =>
+    m.add({ messages: [{ role: 'system', content: 'ignored' }, { role: 'user', content }], userId })
+
+  it('keeps the message as written, with no LLM call', async () => {
+    const { events, tokensUsed } = await store(plain(), '  Deploy with compose, never with swarm  ')
+
+    expect(events).toEqual([{ type: 'ADD', memoryId: expect.any(String), newMemory: 'Deploy with compose, never with swarm' }])
+    expect(tokensUsed).toBe(0)
+    expect([...fake.points.values()][0]!.payload).toMatchObject({ memory: 'Deploy with compose, never with swarm', user_id: 'alice' })
+    expect(fake.embedCalls.at(-1)).toEqual(['Deploy with compose, never with swarm'])
+  })
+
+  it('answers a repeat, or a near-repeat by vector, as NONE', async () => {
+    const m = plain()
+    const [first] = (await store(m, 'uses pnpm')).events
+    expect((await store(m, 'Uses pnpm')).events).toEqual([{ type: 'NONE', memoryId: first!.memoryId, newMemory: 'Uses pnpm' }])
+
+    fake.dense = [hit('near', 0.97)]
+    expect((await store(m, 'uses pnpm workspaces')).events[0]).toMatchObject({ type: 'NONE', memoryId: 'near' })
+    fake.dense = [hit('related', 0.9)]
+    expect((await store(m, 'uses pnpm 9')).events[0]!.type).toBe('ADD')
+    expect(fake.points.size).toBe(2)
+  })
+
+  it('reports no LLM to be ready', async () => {
+    expect((await plain().isReady()).llm).toBeNull()
   })
 })
 

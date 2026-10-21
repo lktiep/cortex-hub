@@ -2,7 +2,8 @@
  * mem9 — Core Memory class
  *
  * Implements the mem9 pipeline:
- * add()    → 2 LLM calls (extract facts + decide actions) + embed + Qdrant
+ * add()    → 2 LLM calls (extract facts + decide actions) + embed + Qdrant,
+ *            or, without an LLM, each message kept as written (embed + Qdrant)
  * search() → 1 embed call + Qdrant search (vector and BM25, fused by rank)
  * getAll() → Qdrant scroll
  */
@@ -37,6 +38,12 @@ const HYBRID_FETCH_FLOOR = 30
 /** How many stored memories are read to learn the average length BM25 normalises by. */
 const LENGTH_SAMPLE = 1000
 
+/**
+ * Without an LLM to merge facts, a message this close (cosine) to a stored memory is taken
+ * to say the same thing: reworded whitespace or punctuation, not a new fact.
+ */
+const VERBATIM_DUPLICATE = 0.95
+
 /** Internal type for LLM action responses */
 interface MemoryAction {
   type: 'ADD' | 'UPDATE' | 'DELETE' | 'NONE'
@@ -69,7 +76,7 @@ function hashText(text: string): string {
 export class Mem9 {
   private readonly embedder: Embedder
   private readonly vectorStore: VectorStore
-  private readonly llm: LlmClient
+  private readonly llm: LlmClient | null
   private init: Promise<void> | null = null
   /** Whether the collection carries the lexical arm; set once init has run. */
   private hybrid = false
@@ -79,7 +86,7 @@ export class Mem9 {
   constructor(private readonly config: Mem9Config) {
     this.embedder = new Embedder(config.embedder)
     this.vectorStore = new VectorStore(config.vectorStore)
-    this.llm = new LlmClient(config.llm)
+    this.llm = config.llm ? new LlmClient(config.llm) : null
   }
 
   /**
@@ -187,6 +194,7 @@ export class Mem9 {
    */
   async add(req: AddRequest): Promise<AddResult> {
     await this.ensureInit()
+    if (!this.llm) return this.addVerbatim(req)
 
     let totalTokens = 0
     const events: MemoryEvent[] = []
@@ -274,17 +282,7 @@ export class Mem9 {
             break
           }
 
-          const id = randomUUID()
-          const vec = vectors.get(action.memory)!
-          await this.vectorStore.upsert(id, vec, {
-            memory: action.memory,
-            hash,
-            user_id: req.userId,
-            agent_id: req.agentId ?? '',
-            metadata: req.metadata ?? {},
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          }, this.sparseFor(action.memory))
+          const id = await this.insert(req, action.memory, vectors.get(action.memory)!, hash)
           addedHashes.set(hash, id)
           events.push({
             type: 'ADD',
@@ -333,6 +331,56 @@ export class Mem9 {
     }
 
     return { events, tokensUsed: totalTokens }
+  }
+
+  /**
+   * add() without a model: each message is stored as it was written. A repeat is caught by
+   * its hash, a near-repeat by vector (VERBATIM_DUPLICATE), and either is answered as NONE.
+   * Nothing is merged, updated or deleted, since that takes a model to judge.
+   */
+  private async addVerbatim(req: AddRequest): Promise<AddResult> {
+    const texts = [
+      ...new Set(req.messages.filter((m) => m.role !== 'system').map((m) => m.content.trim()).filter(Boolean)),
+    ]
+    if (texts.length === 0) return { events: [], tokensUsed: 0 }
+
+    const filter = buildFilter(req.userId, req.agentId)
+    const vectors = await this.embedder.embedBatch(texts)
+    const nearest = await Promise.all(vectors.map((vec) => this.vectorStore.search(vec, filter, 1)))
+
+    const events: MemoryEvent[] = []
+    const addedHashes = new Map<string, string>()
+    for (const [i, text] of texts.entries()) {
+      const hash = hashText(text)
+      const near = nearest[i]![0]
+      const existingId =
+        addedHashes.get(hash) ??
+        (await this.findByHash(req.userId, req.agentId, hash)) ??
+        (near && near.score >= VERBATIM_DUPLICATE ? near.id : null)
+      if (existingId) {
+        events.push({ type: 'NONE', memoryId: existingId, newMemory: text })
+        continue
+      }
+      const id = await this.insert(req, text, vectors[i]!, hash)
+      addedHashes.set(hash, id)
+      events.push({ type: 'ADD', memoryId: id, newMemory: text })
+    }
+    return { events, tokensUsed: 0 }
+  }
+
+  private async insert(req: AddRequest, memory: string, vector: number[], hash: string): Promise<string> {
+    const id = randomUUID()
+    const now = new Date().toISOString()
+    await this.vectorStore.upsert(id, vector, {
+      memory,
+      hash,
+      user_id: req.userId,
+      agent_id: req.agentId ?? '',
+      metadata: req.metadata ?? {},
+      created_at: now,
+      updated_at: now,
+    }, this.sparseFor(memory))
+    return id
   }
 
   async search(req: SearchRequest): Promise<SearchResult> {
@@ -407,11 +455,11 @@ export class Mem9 {
   }
 
   /**
-   * Check if all dependencies are reachable.
+   * Check if all dependencies are reachable. `llm` is null when there is no LLM to reach.
    */
-  async isReady(): Promise<{ llm: boolean; vectorStore: boolean }> {
+  async isReady(): Promise<{ llm: boolean | null; vectorStore: boolean }> {
     const [llm, vectorStore] = await Promise.all([
-      this.llm.isHealthy(),
+      this.llm ? this.llm.isHealthy() : null,
       this.vectorStore.isHealthy(),
     ])
     return { llm, vectorStore }

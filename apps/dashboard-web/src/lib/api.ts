@@ -105,8 +105,29 @@ export async function getSetupStatus() {
 export async function completeSetup(data: {
   provider: string
   models: string[]
+  /** 'off' when onboarding chose to run without a chat model. */
+  llmMode?: 'on' | 'off'
 }) {
   return apiFetch('/api/setup/complete', { method: 'POST', body: data })
+}
+
+export type LlmFeature = 'memory' | 'recipes' | 'evolution'
+
+export interface LlmStatus {
+  enabled: boolean
+  reason: 'env' | 'setting' | 'no-chat-model' | 'configured'
+  setting: 'on' | 'off' | null
+  env: 'on' | 'off' | null
+  chatModel: string | null
+  features: Record<LlmFeature, boolean>
+}
+
+export async function getLlmStatus() {
+  return apiFetch<LlmStatus>('/api/setup/llm')
+}
+
+export async function setLlmMode(mode: 'on' | 'off') {
+  return apiFetch<LlmStatus>('/api/setup/llm', { method: 'PUT', body: { mode } })
 }
 
 export interface ModelResponse {

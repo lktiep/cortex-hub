@@ -1,0 +1,37 @@
+.tradeoff {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.heading {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.kept {
+  color: var(--status-healthy);
+}
+
+.lost {
+  color: var(--text-tertiary);
+}
+
+@media (max-width: 640px) {
+  .tradeoff {
+    grid-template-columns: 1fr;
+  }
+}

@@ -272,6 +272,9 @@ services:
       # Sessions nobody closed (/ce never ran, the Stop hook missed the hub) are
       # marked expired once they have had no tool call for this many hours. 0 = never.
       SESSION_IDLE_HOURS: ${SESSION_IDLE_HOURS:-72}
+      CORTEX_LLM: ${CORTEX_LLM:-}
+      MEMORY_LLM: ${MEMORY_LLM:-}
+      RECIPE_CAPTURE: ${RECIPE_CAPTURE:-}
       # Reranking (optional). With no key, every search path keeps its current
       # pure-vector behaviour; with one, /api/intel/code-search over-fetches
       # candidates and reorders them with a TypeSafe Jev relevance decision.

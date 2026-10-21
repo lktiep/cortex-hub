@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { db } from '../db/client.js'
 import { isEmbeddingModel } from '../lib/embedding-models.js'
 import { detectedMcpOrigin } from '../lib/mcp-origin.js'
+import { llmStatus, setLlmMode } from '../lib/llm-mode.js'
 
 export const setupRouter = new Hono()
 
@@ -31,6 +32,10 @@ setupRouter.get('/status', (c) => {
 
 setupRouter.post('/complete', async (c) => {
   try {
+    // Onboarding's "No LLM" choice; absent, whatever was set before stays.
+    const body = (await c.req.json().catch(() => ({}))) as { llmMode?: unknown }
+    if (body.llmMode === 'on' || body.llmMode === 'off') setLlmMode(body.llmMode)
+
     // Mark setup as complete in DB
     const stmt = db.prepare(
       "UPDATE setup_status SET completed = 1, completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = 1"
@@ -70,6 +75,16 @@ setupRouter.post('/complete', async (c) => {
   } catch (error) {
     return c.json({ success: false, error: String(error) }, 500)
   }
+})
+
+// ── LLM mode: which features may call a chat model (lib/llm-mode.ts) ──
+setupRouter.get('/llm', (c) => c.json(llmStatus()))
+
+setupRouter.put('/llm', async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { mode?: unknown }
+  if (body.mode !== 'on' && body.mode !== 'off') return c.json({ error: "mode must be 'on' or 'off'" }, 400)
+  setLlmMode(body.mode)
+  return c.json(llmStatus())
 })
 
 // ── Configure mem9 (Gemini API key) ──

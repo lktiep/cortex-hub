@@ -16,6 +16,7 @@ import { db } from '../db/client.js'
 import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
 import { createEmbedder } from '../lib/embedder-factory.js'
 import { MEMORY_COLLECTION, memoryQdrantUrl } from '../lib/memory-collection.js'
+import { llmEnabledFor } from '../lib/llm-mode.js'
 
 export const mem9ProxyRouter = new Hono()
 
@@ -54,7 +55,7 @@ function resolveLlmModel(): string {
  * and singleton needs to be recreated.
  */
 function configFingerprint(): string {
-  return resolveLlmModel()
+  return `${llmEnabledFor('memory') ? 'llm' : 'verbatim'}:${resolveLlmModel()}`
 }
 
 let lastFingerprint = ''
@@ -63,10 +64,10 @@ function getMem9Config(): Mem9Config {
   const gatewayUrl = process.env['LLM_GATEWAY_URL'] ?? `http://localhost:${process.env['PORT'] || 4000}/api/llm`
 
   return {
-    llm: {
-      baseUrl: `http://localhost:${process.env['PORT'] || 4000}/api/llm/v1`,
-      model: resolveLlmModel(),
-    },
+    // Without one, memories are stored as written (see lib/llm-mode.ts).
+    llm: llmEnabledFor('memory')
+      ? { baseUrl: `http://localhost:${process.env['PORT'] || 4000}/api/llm/v1`, model: resolveLlmModel() }
+      : undefined,
     embedder: {
       provider: 'gemini' as const, // Dummy to bypass local check
       apiKey: '',
@@ -127,7 +128,7 @@ mem9ProxyRouter.post('/store', async (c) => {
     })
 
     c.header('X-Cortex-Compute-Tokens', String(result.tokensUsed || 0))
-    c.header('X-Cortex-Compute-Model', resolveLlmModel())
+    if (result.tokensUsed) c.header('X-Cortex-Compute-Model', resolveLlmModel())
 
     return c.json({
       success: true,
@@ -282,8 +283,8 @@ mem9ProxyRouter.get('/health', async (c) => {
     const status = await mem9.isReady()
 
     return c.json({
-      status: status.llm && status.vectorStore ? 'healthy' : 'degraded',
-      llm: status.llm ? 'ok' : 'error',
+      status: status.llm !== false && status.vectorStore ? 'healthy' : 'degraded',
+      llm: status.llm === null ? 'off' : status.llm ? 'ok' : 'error',
       vectorStore: status.vectorStore ? 'ok' : 'error',
     })
   } catch (error) {

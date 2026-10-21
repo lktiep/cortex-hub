@@ -16,6 +16,7 @@ import type { VectorStoreConfig, Embedder } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
 import { createEmbedder } from '../lib/embedder-factory.js'
+import { llmEnabledFor } from '../lib/llm-mode.js'
 
 const logger = createLogger('recipe-capture')
 
@@ -318,6 +319,9 @@ interface TaskRow {
 }
 
 export async function captureFromTask(task: TaskRow): Promise<void> {
+  // Without a chat model there is nothing to judge the task with; logging it as an
+  // error on every completion said nothing new.
+  if (!llmEnabledFor('recipes')) return
   const agentId = task.completed_by ?? task.created_by_agent
 
   // Guards
@@ -411,6 +415,7 @@ export async function captureFromSession(opts: {
   agentId: string | null
   projectId: string | null
 }): Promise<void> {
+  if (!llmEnabledFor('recipes')) return
   if (!opts.summary || opts.summary.length < 50) {
     logCaptureAttempt({ source: 'session', sourceId: opts.sessionId, agentId: opts.agentId, projectId: opts.projectId, status: 'skipped', errorMessage: 'Summary too short or empty' })
     return

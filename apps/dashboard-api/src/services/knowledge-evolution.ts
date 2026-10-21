@@ -15,6 +15,7 @@ import { randomUUID } from 'crypto'
 import { VectorStore } from '@cortex/shared-mem9'
 import type { VectorStoreConfig , Embedder} from '@cortex/shared-mem9'
 import { createEmbedder } from '../lib/embedder-factory.js'
+import { llmEnabledFor } from '../lib/llm-mode.js'
 import { db } from '../db/client.js'
 import { createLogger } from '@cortex/shared-utils'
 
@@ -245,6 +246,8 @@ export interface HealthCheckResult {
   checked: number
   fixed: number
   skipped: number
+  /** Set when the check did not run: it needs a chat model to rewrite a document. */
+  disabled?: string
   details: Array<{
     docId: string
     title: string
@@ -258,6 +261,7 @@ export async function runHealthCheck(): Promise<HealthCheckResult> {
   addressedInCycle.clear()
 
   const result: HealthCheckResult = { checked: 0, fixed: 0, skipped: 0, details: [] }
+  if (!llmEnabledFor('evolution')) return { ...result, disabled: 'The hub has no LLM: knowledge is not rewritten' }
 
   // Find unhealthy docs: high fallback or low completion, with enough data
   const unhealthy = db.prepare(`
