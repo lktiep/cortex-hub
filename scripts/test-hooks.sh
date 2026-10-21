@@ -113,6 +113,10 @@ check "Edit still needs a session"          2 "$(run enforce-session.sh "$(tool_
 check "so does cat > file"                  2 "$(run enforce-session.sh "$(bash_payload 'cat > f.ts << EOF
 x
 EOF')")"
+# `cp ` is the end of `hub-mcp `: matched anywhere, it refused this read as a file modification
+check "grep over hub-mcp is a read"         0 "$(run enforce-session.sh "$(bash_payload 'grep -rn foo apps/hub-mcp --include=*.ts --exclude-dir=node_modules')")"
+check "a write after ls is still a write"   2 "$(run enforce-session.sh "$(bash_payload 'ls; mv a b')")"
+check "and after cd &&"                     2 "$(run enforce-session.sh "$(bash_payload 'cd apps && rm x')")"
 : > "$STATE/discovery-used"
 check "an empty marker unlocks nothing"     2 "$(run enforce-session.sh "$(tool_payload Grep)")"
 teardown

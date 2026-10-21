@@ -853,11 +853,14 @@ case "$TOOL_NAME" in
       echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
       exit 2
     fi
-    [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|show)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0
-    [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ ) ]] && {
+    # Where a command starts, and before the read allowlist: unanchored, `cp ` matched the end of
+    # `hub-mcp ` and refused a read-only grep over that directory, while `ls; rm x` passed as a read.
+    MODIFIES='(^|[;&|(])[[:space:]]*(git[[:space:]]+(add|commit|push|reset)|rm|mv|cp|mkdir|touch|chmod)[[:space:]]'
+    [[ "$COMMAND" =~ $MODIFIES ]] && {
       echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
       exit 2
     }
+    [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|show)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0
     exit 0 ;;
 esac
 exit 0
