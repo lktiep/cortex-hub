@@ -315,6 +315,19 @@ describe('code search on a repo indexed on several branches', () => {
     expect(filters).toHaveLength(6)
     expect(filters.filter((f) => f === undefined)).toHaveLength(3)
   })
+
+  it('falls back to the default branch for a branch that was never indexed', async () => {
+    qdrant('main')
+
+    const one = await post('/code-search', { query: 'login', projectId: 'game-client', orgId: 'org-g', branch: 'feat/new' })
+    const org = await post('/code-search', { query: 'login', orgId: 'org-g', branch: 'feat/new', exclude: 'game-server' })
+
+    expect(one.json.data.results).toHaveLength(1)
+    expect(org.json.data.results).toHaveLength(1)
+    const branches = filters.map((f) => (f as { must: Array<{ match: { value: string } }> } | undefined)?.must[0]?.match.value)
+    expect(branches.slice(0, 2)).toEqual(['feat/new', 'main'])
+    expect(branches).not.toContain(undefined)
+  })
 })
 
 describe('graph flows from every repo of the organization', () => {

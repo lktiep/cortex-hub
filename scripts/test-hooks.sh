@@ -378,6 +378,10 @@ class Hub(http.server.BaseHTTPRequestHandler):
                 'src/auth.ts': [{'id': 'k1', 'title': 'Risk: refresh races', 'kind': 'risk', 'note': 'Take the lock first', 'at': '2026-10-20T00:00:00Z'}],
                 'src/lib/': [{'id': 'k2', 'title': 'Lib is shared', 'kind': 'lesson', 'note': 'Both apps import it', 'at': '2026-10-19T00:00:00Z'}],
             }})
+        if mode in ('start', 'start-down'):
+            head = {'session_id': 'sess_7', 'status': 'active'} if mode == 'start' else {'session_id': 'sess_local', 'hub_error': 'down'}
+            result['content'] = [{'type': 'text', 'text': json.dumps(head)}, {'type': 'text', 'text':
+                'recalled: knowledge+memory for "t" — nothing stored is close to it.\n\nlocated: code for "t"\n1. src/auth.ts — L1-9'}]
         if mode == 'error':
             result['isError'] = True
         out = json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': result}).encode()
@@ -1163,6 +1167,65 @@ if command -v node >/dev/null 2>&1; then
   rm -f "$STATE/gate-off"
   check "unreadable input exits 0"                quiet "$(recall 'not json')"
   teardown
+else
+  echo "  skip (no node: the hook does nothing without it)"
+fi
+
+echo
+echo "prompt-start.sh — the session opened from the user's prompt"
+# Prints the context it added, first line only, or "quiet" / "exit N".
+pstart() {  # $1 = payload, $2.. = env
+  local out rc
+  out=$(printf '%s' "$1" | env -u CORTEX_MCP_URL -u HUB_MCP_URL -u HUB_API_KEY -u CORTEX_PROMPT_START HOME="$SANDBOX/home" \
+    CLAUDE_PROJECT_DIR="$SANDBOX" CORTEX_MCP_URL="$STUB_URL/mcp" HUB_API_KEY=k-sekrit "${@:2}" \
+    bash "$HOOKS_DIR/prompt-start.sh" 2>/dev/null); rc=$?
+  if [ "$rc" != 0 ]; then echo "exit $rc"; return; fi
+  [ -z "$out" ] && { echo quiet; return; }
+  printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"].splitlines()[0])'
+}
+prompt() { python3 -c 'import json,sys;print(json.dumps({"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":sys.argv[1]}))' "$1"; }
+marker() { head -1 "$STATE/$1" 2>/dev/null | cut -d' ' -f1; }
+if command -v node >/dev/null 2>&1; then
+  setup; mkdir -p "$SANDBOX/home"; git -C "$SANDBOX" init -q; git -C "$SANDBOX" remote add origin https://bot:pw@example.com/o/r.git
+  start_stub start
+  check "a prompt opens the session"              "Cortex session sess_7 is open for this prompt: cortex_session_start already ran with it as the task, so do not call it again." \
+    "$(pstart "$(prompt 'Fix the login refresh race; token=abc123xyz is the one I use')")"
+  check "asking cortex_session_start"             "cortex_session_start" "$(got 'r["body"]["params"]["name"]')"
+  check "with the hub's bearer key"               "Bearer k-sekrit"      "$(got 'r["auth"]')"
+  check "the prompt as the task, key removed"     "Fix the login refresh race; token=<redacted> is the one I use" "$(got 'r["body"]["params"]["arguments"]["task"]')"
+  check "for this conversation"                   s1                     "$(got 'r["body"]["params"]["arguments"]["clientSessionId"]')"
+  check "on the repo, without its credentials"    "https://example.com/o/r.git" "$(got 'r["body"]["params"]["arguments"]["repo"]')"
+  check "session-started is evidence"             tool=prompt-start      "$(marker session-started)"
+  check "the recall line arms knowledge"         tool=prompt-start      "$(marker knowledge-recalled)"
+  check "and memory"                              tool=prompt-start      "$(marker memory-recalled)"
+  check "the lookup line arms discovery"          tool=prompt-start      "$(marker discovery-used)"
+  check "filed under the conversation"            sess_7                 "$(cat "$STATE/conversations/s1" 2>/dev/null)"
+  check "so an edit goes through"                 0 "$(run enforce-session.sh '{"tool_name":"Edit","tool_input":{"file_path":"src/a.ts"}}')"
+  check "a short reply sends nothing"             quiet "$(pstart "$(prompt 'ok go on')")"
+  check "nor does a slash command"                quiet "$(pstart "$(prompt '/ce wrap up the session now')")"
+  check "the hub was asked once"                  1 "$(requests)"
+  long=$(python3 -c 'print("refactor the importer " * 40)')
+  pstart "$(prompt "$long")" >/dev/null
+  check "at most 300 characters go"               300 "$(got_at 'len(r["body"]["params"]["arguments"]["task"])' 2)"
+  check "CORTEX_PROMPT_START=off silences it"     quiet "$(pstart "$(prompt 'Fix the login refresh race')" CORTEX_PROMPT_START=off)"
+  printf 'hub down\n' > "$STATE/gate-off"
+  check "gate-off silences it"                    quiet "$(pstart "$(prompt 'Fix the login refresh race')")"
+  rm -f "$STATE/gate-off"
+  check "unreadable input exits 0"                quiet "$(pstart 'not json')"
+  stop_stub; teardown
+
+  setup; mkdir -p "$SANDBOX/home"; git -C "$SANDBOX" init -q; git -C "$SANDBOX" remote add origin https://example.com/o/r.git
+  start_stub start-down
+  check "a hub that could not record it is quiet" quiet "$(pstart "$(prompt 'Fix the login refresh race')")"
+  check "and opens no gate"                       "" "$(marker session-started)"
+  stop_stub; start_stub 500
+  check "a hub error is quiet"                    quiet "$(pstart "$(prompt 'Fix the login refresh race')")"
+  stop_stub; teardown
+
+  setup; mkdir -p "$SANDBOX/home"; start_stub start
+  check "a checkout with no remote is quiet"      quiet "$(pstart "$(prompt 'Fix the login refresh race')")"
+  check "and sends nothing"                       0 "$(requests)"
+  stop_stub; teardown
 else
   echo "  skip (no node: the hook does nothing without it)"
 fi

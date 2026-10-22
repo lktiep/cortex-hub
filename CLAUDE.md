@@ -2,9 +2,12 @@
 
 ## Start (MANDATORY)
 
-Once you know the task: `cortex_session_start(repo: "https://github.com/lktiep/cortex-hub.git", task: "<the task in a few words>")`.
-Its answer is the recall (knowledge, memory) and the first lookup (files, lines and the symbols
-they fall in): read those lines next, with no separate search first. Edits are blocked until then.
+A prompt usually arrives with a "Cortex session … is open" note: the hook already started the
+session with the prompt as the task, and the note holds the recall (knowledge, memory) and the
+first lookup (files, lines and the symbols they fall in). Read those lines next, with no separate
+search first. Without the note, once you know the task:
+`cortex_session_start(repo: "https://github.com/lktiep/cortex-hub.git", task: "<the task in a few words>")`,
+which answers the same. Edits are blocked until one of the two.
 
 ## Tech Stack
 

@@ -1727,7 +1727,8 @@ intelRouter.post('/code-search', async (c) => {
       return Array.isArray(data.result) ? data.result : (data.result?.points ?? [])
     }
 
-    const res = await ask(branch ?? defaultBranch)
+    const asked = branch ?? defaultBranch
+    const res = await ask(asked)
 
     if (!res.ok) {
       const errText = await res.text()
@@ -1747,9 +1748,13 @@ intelRouter.post('/code-search', async (c) => {
     }
 
     let points = await pointsOf(res)
-    if (points.length === 0 && defaultBranch) {
-      const everyBranch = await ask(undefined)
-      if (everyBranch.ok) points = await pointsOf(everyBranch)
+    // A branch the indexer never saw — any feature branch an agent works on before it is
+    // pushed — holds nothing; its default branch is the closest code there is, then every branch.
+    const fallbacks = branch ? [defaultBranchOf(project?.id ?? projectId), undefined] : defaultBranch ? [undefined] : []
+    for (const onBranch of fallbacks.filter((b, i) => b !== asked && fallbacks.indexOf(b) === i)) {
+      if (points.length > 0) break
+      const wider = await ask(onBranch)
+      if (wider.ok) points = await pointsOf(wider)
     }
 
     // Copies of one chunk still come back when no branch filter applied. Keep the best ranked
@@ -1847,7 +1852,13 @@ async function searchOrganization(
       return ((await res.json()) as { result?: Array<{ score: number; payload?: Record<string, unknown> }> }).result ?? []
     }
     const found = await ask(opts.branch ?? p.default_branch)
-    return found.length === 0 && !opts.branch && p.default_branch ? ask(undefined) : found
+    if (found.length > 0) return found
+    // A branch this repo was never indexed on: its default branch, then every branch.
+    if (opts.branch && p.default_branch && p.default_branch !== opts.branch) {
+      const onDefault = await ask(p.default_branch)
+      if (onDefault.length > 0) return onDefault
+    }
+    return opts.branch || p.default_branch ? ask(undefined) : found
   }
 
   // Hits listed beside the caller's own repo have to come close to that repo's best. Without a

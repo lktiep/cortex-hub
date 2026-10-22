@@ -53,7 +53,7 @@ function seed() {
 interface Point { file: string; chunk: number; branch: string; score: number; content?: string }
 
 // ── Qdrant stub: no sparse vector, so the plain vector search runs ──
-let searched: Array<{ collection: string; limit: number }>
+let searched: Array<{ collection: string; limit: number; branch?: string }>
 let points: Point[]
 
 function installQdrantStub() {
@@ -61,9 +61,10 @@ function installQdrantStub() {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
     const search = /\/collections\/([^/]+)\/points\/search$/.exec(url)
     if (!search) return new Response('Not found', { status: 404 })
-    const body = JSON.parse(init?.body ?? '{}') as { limit: number }
-    searched.push({ collection: search[1] ?? '', limit: body.limit })
-    const result = points.slice(0, body.limit).map((p, i) => ({
+    const body = JSON.parse(init?.body ?? '{}') as { limit: number; filter?: { must?: Array<{ key: string; match: { value: string } }> } }
+    const branch = body.filter?.must?.find((m) => m.key === 'branch')?.match.value
+    searched.push({ collection: search[1] ?? '', limit: body.limit, ...(branch ? { branch } : {}) })
+    const result = points.filter((p) => !branch || p.branch === branch).slice(0, body.limit).map((p, i) => ({
       id: String(i),
       score: p.score,
       payload: { file_path: p.file, chunk_index: p.chunk, branch: p.branch, content: p.content ?? `// File: ${p.file}` },
@@ -110,6 +111,36 @@ describe('code search finds the project an agent names', () => {
     await search({ query: 'verify key', projectId: 'proj-hub' })
 
     expect(searched.map((s) => s.collection)).toEqual(['cortex-project-proj-hub'])
+  })
+})
+
+describe('code search on a branch that was never indexed', () => {
+  it('falls back to the default branch, then to every branch', async () => {
+    testDb.exec(`UPDATE projects SET default_branch = 'master' WHERE id = 'proj-hub'`)
+    points = [{ file: 'src/a.ts', chunk: 0, branch: 'master', score: 0.9 }]
+
+    const { json } = await search({ query: 'verify key', projectId: 'proj-hub', branch: 'feat/new' })
+
+    expect(searched.map((s) => s.branch)).toEqual(['feat/new', 'master'])
+    expect(json.data.results).toHaveLength(1)
+  })
+
+  it('searches every branch when the project has no default branch on record', async () => {
+    points = [{ file: 'src/a.ts', chunk: 0, branch: 'dev', score: 0.9 }]
+
+    const { json } = await search({ query: 'verify key', projectId: 'proj-hub', branch: 'feat/new' })
+
+    expect(searched.map((s) => s.branch)).toEqual(['feat/new', undefined])
+    expect(json.data.results).toHaveLength(1)
+  })
+
+  it('stays on the branch asked for when it holds the code', async () => {
+    testDb.exec(`UPDATE projects SET default_branch = 'master' WHERE id = 'proj-hub'`)
+    points = [{ file: 'src/a.ts', chunk: 0, branch: 'feat/new', score: 0.9 }]
+
+    await search({ query: 'verify key', projectId: 'proj-hub', branch: 'feat/new' })
+
+    expect(searched.map((s) => s.branch)).toEqual(['feat/new'])
   })
 })
 
