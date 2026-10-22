@@ -113,8 +113,8 @@ fi
 # cortex-api checks each project's default branch out at /app/data/repos/{projectId}
 # and updates it in place, leaving .gitnexus/ behind; other branches live under the
 # hidden .branches/, which the glob below does not match. A checkout is analysed
-# whenever its HEAD is not the commit last analysed — incrementally, one repo at a
-# time, in the background so eval-server keeps answering meanwhile.
+# whenever its HEAD is not the commit last analysed — one repo at a time, in the
+# background so eval-server keeps answering meanwhile.
 #
 # What used to go wrong here, and what stops it now:
 #   - Under `set -e` one failed analyze ended the loop, and every later analysis
@@ -138,6 +138,20 @@ ANALYZE_TIMEOUT="${GITNEXUS_ANALYZE_TIMEOUT:-3600}"
 # to node itself is kept, and two workers parse the same repo within budget.
 ANALYZE_HEAP_MB="${GITNEXUS_ANALYZE_HEAP_MB:-3072}"
 ANALYZE_WORKERS="${GITNEXUS_ANALYZE_WORKERS:-2}"
+# Every analysis is a full rebuild (--force). On GitNexus 1.6.12 an incremental one
+# exits 0 with the symbols of the files it kept unreadable: no id, so a context
+# lookup of one of them answered with every node that has no id either — hundreds
+# of unrelated callers and execution flows (upstream #3423, fixed after 1.6.12).
+# A full rebuild is staged and swapped in whole, so eval-server answers from the
+# previous graph meanwhile. Set GITNEXUS_ANALYZE_INCREMENTAL=1 on a GitNexus that
+# has the fix.
+if [ "${GITNEXUS_ANALYZE_INCREMENTAL:-0}" = "1" ]; then
+    ANALYZE_MODE=incremental
+    ANALYZE_FORCE=()
+else
+    ANALYZE_MODE=full
+    ANALYZE_FORCE=(--force)
+fi
 # What each repo's graph is doing, one line per repo on the volume cortex-api
 # shares: "analyzing|analyzed <commit> <epoch>", or "failed <commit> <epoch>
 # <failures> <exit code> <retry delay>". The API's index job ends before its
@@ -169,7 +183,9 @@ analyze_if_stale() {
     [ -f "${REPOS_DIR}/${repo_name}.cloning" ] && return 0
 
     head=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null) || return 0
-    if [ -d "$repo_dir/.gitnexus" ] && [ "$(cat "${WATCH_STATE_DIR}/${repo_name}.analyzed" 2>/dev/null)" = "$head" ]; then
+    # "<commit> full": a graph from before the mode was recorded may be an incremental
+    # one, so it is rebuilt once.
+    if [ -d "$repo_dir/.gitnexus" ] && [ "$(cat "${WATCH_STATE_DIR}/${repo_name}.analyzed" 2>/dev/null)" = "$head $ANALYZE_MODE" ]; then
         # Also records the repos analyzed before there was a status to read.
         case "$(cat "${GRAPH_STATUS_DIR}/${repo_name}" 2>/dev/null)" in
             "analyzed $head "*) ;;
@@ -196,13 +212,12 @@ analyze_if_stale() {
     if (
         cd "$repo_dir" || exit 1
         { echo 1000 > /proc/self/oom_score_adj; } 2>/dev/null
-        # Without --force, analyze only redoes what changed since the last run.
         # --index-only keeps AGENTS.md, CLAUDE.md and skills out of the checkout.
         exec timeout --kill-after=60 "$ANALYZE_TIMEOUT" \
             node --max-old-space-size="$ANALYZE_HEAP_MB" "$(command -v gitnexus)" \
-            analyze --index-only --workers "$ANALYZE_WORKERS"
+            analyze --index-only "${ANALYZE_FORCE[@]}" --workers "$ANALYZE_WORKERS"
     ) 2>&1; then
-        printf '%s\n' "$head" > "${WATCH_STATE_DIR}/${repo_name}.analyzed"
+        printf '%s %s\n' "$head" "$ANALYZE_MODE" > "${WATCH_STATE_DIR}/${repo_name}.analyzed"
         rm -f "$failed_file"
         graph_status "$repo_name" "analyzed $head $(date +%s)"
         echo "GitNexus watchdog: ${repo_name} analyzed."
