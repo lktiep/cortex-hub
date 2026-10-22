@@ -36,7 +36,7 @@ describe('tools loaded up front', () => {
   // Everything else waits for a ToolSearch call, a turn of its own; finding code should not.
   it('are the ones every conversation calls first, and only those', () => {
     expect(register().upFront.sort()).toEqual([
-      'cortex_code_context', 'cortex_code_search', 'cortex_knowledge_search', 'cortex_memory_search', 'cortex_session_start',
+      'cortex_code_context', 'cortex_code_search', 'cortex_session_start',
     ])
   })
 })

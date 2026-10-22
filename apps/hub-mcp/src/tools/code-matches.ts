@@ -51,22 +51,23 @@ const lines = (m: CodeMatch) => (m.startLine ? `L${m.startLine}-${m.endLine ?? m
 
 const place = (m: CodeMatch) => (m.repo ? `${m.repo}: ${m.filePath}` : m.filePath!)
 
-export function formatCodeMatches(matches: CodeMatch[], snippets = SNIPPET_COUNT): string {
+export function formatCodeMatches(matches: CodeMatch[], snippets = SNIPPET_COUNT, symbols: OutlineSymbol[] = []): string {
   const ranked = matches.filter((m) => m.filePath)
   if (ranked.length === 0) return ''
 
   // One line per file, in the order its best chunk ranked.
-  const files = new Map<string, string[]>()
-  for (const m of ranked) {
-    const where = files.get(place(m)) ?? []
-    where.push([lines(m), pct(m.score)].filter(Boolean).join(' '))
-    files.set(place(m), where)
-  }
+  const files = new Map<string, CodeMatch[]>()
+  for (const m of ranked) files.set(place(m), [...(files.get(place(m)) ?? []), m])
   const across = ranked.some((m) => m.repo)
   const out = [`**Best matching files**${across ? ' across your organization\'s repos' : ''} (semantic search over the source):`]
   let i = 0
-  for (const [file, where] of files) {
-    out.push(`${++i}. ${file} — ${where.join(', ')}`)
+  let named = false
+  for (const [file, hits] of files) {
+    const where = hits.map((m) => [lines(m), pct(m.score)].filter(Boolean).join(' ')).join(', ')
+    const own = hits[0]!.repo ? [] : symbols.filter((s) => s.file === hits[0]!.filePath)
+    const inside = hitSymbols(own, hits.filter((m) => m.startLine).map((m) => [m.startLine!, m.endLine ?? m.startLine!]))
+    named ||= inside !== ''
+    out.push(`${++i}. ${file} — ${where}${inside ? ` · in ${inside}` : ''}`)
   }
 
   for (const m of ranked.slice(0, snippets)) {
@@ -77,7 +78,7 @@ export function formatCodeMatches(matches: CodeMatch[], snippets = SNIPPET_COUNT
   }
   // Without this an agent read every listed file whole, 9–25k characters for a 1.5k chunk.
   if (ranked.some((m) => m.startLine)) {
-    out.push('', 'To see more, read just those lines (Read with offset/limit) rather than the whole file.')
+    out.push('', `Read just those lines (Read with offset/limit), not the whole file.${named ? ' Callers and callees of a symbol: cortex_code_context.' : ''}`)
   }
   return out.join('\n')
 }
@@ -108,11 +109,11 @@ export function formatOtherRepos(matches: CodeMatch[]): string {
 }
 
 /**
- * The symbols the graph holds in the top files, with their lines, in place of the graph's
- * execution flows. Measured in the agent benchmark: after a search ranked the right file first
- * every time, the flows under it were other features' call chains (~1.2k characters an agent
- * read and never used), and the agent still opened the whole file to find the function it had
- * to change. A line per file of "name L<start>-<end>" lets it read just that function.
+ * The symbols a hit falls in, named on its file's line, in place of the graph's execution flows.
+ * Measured in the agent benchmark: after a search ranked the right file first every time, the
+ * flows under it were other features' call chains (~1.2k characters an agent read and never
+ * used), and the agent still opened the whole file to find the function it had to change. A
+ * whole-file outline after that was no better: a large file's 80 symbols, none of them the one.
  */
 export interface OutlineSymbol {
   file: string
@@ -122,10 +123,10 @@ export interface OutlineSymbol {
   end: number
 }
 
-export const OUTLINE_FILES = 3
-export const OUTLINE_PER_FILE = 10
+export const OUTLINE_FILES = 5
+export const SYMBOLS_PER_FILE = 3
 // What an agent reads or changes as a unit. A property or a one-line constant only crowds the line.
-const OUTLINE_KINDS = new Set(['Function', 'Method', 'Class', 'Interface', 'TypeAlias', 'Route'])
+const OUTLINE_KINDS = ['Function', 'Method', 'Class', 'Interface', 'TypeAlias', 'Route']
 
 /** The files the outline covers: the best few of the repo being searched, in rank order. */
 export function outlineFiles(matches: CodeMatch[]): string[] {
@@ -138,10 +139,11 @@ export function outlineFiles(matches: CodeMatch[]): string[] {
   return files
 }
 
-export function outlineQuery(files: string[]): string {
-  const list = files.map((f) => `'${f.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`).join(', ')
-  return `MATCH (n) WHERE n.filePath IN [${list}] AND n.startLine IS NOT NULL ` +
-    'RETURN n.filePath AS file, n.name AS name, labels(n) AS type, n.startLine AS s, n.endLine AS e ORDER BY file, s LIMIT 300'
+/** One file's symbols. One query per file: with several, a large file used up a shared limit. */
+export function outlineQuery(file: string): string {
+  const path = `'${file.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+  return `MATCH (n) WHERE n.filePath = ${path} AND n.startLine IS NOT NULL AND labels(n) IN [${OUTLINE_KINDS.map((k) => `'${k}'`).join(', ')}] ` +
+    'RETURN n.filePath AS file, n.name AS name, labels(n) AS type, n.startLine AS s, n.endLine AS e ORDER BY s LIMIT 300'
 }
 
 /** The rows of the markdown table the cypher endpoint answers with. */
@@ -157,16 +159,27 @@ export function parseOutline(raw: string): OutlineSymbol[] {
   return out
 }
 
-export function formatOutline(symbols: OutlineSymbol[], files: string[]): string {
-  const out: string[] = []
-  for (const file of files) {
-    const own = symbols.filter((s) => s.file === file && OUTLINE_KINDS.has(s.type))
-    if (own.length === 0) continue
-    const shown = own.slice(0, OUTLINE_PER_FILE).map((s) => `${s.name} L${s.start}-${s.end}`)
-    const more = own.length > OUTLINE_PER_FILE ? `, +${own.length - OUTLINE_PER_FILE} more` : ''
-    out.push(`- ${file}: ${shown.join(', ')}${more}`)
-  }
-  if (out.length === 0) return ''
-  return ['**Symbols in those files** (read just the lines of the one you need):', ...out,
-    'Callers, callees and flows of one: cortex_code_context "<name>".'].join('\n')
+/** The symbols of the files, asked in parallel through `ask` (a cypher query to its raw table). */
+export async function fetchOutline(files: string[], ask: (query: string) => Promise<string>): Promise<OutlineSymbol[]> {
+  const tables = await Promise.all(files.map((f) => ask(outlineQuery(f)).catch(() => '')))
+  return tables.flatMap(parseOutline)
+}
+
+/**
+ * "name L<start>-<end>" for the innermost symbols the hit ranges fall in — a method, not the
+ * class around it — at most a few; '' when no hit falls in one.
+ */
+export function hitSymbols(symbols: OutlineSymbol[], ranges: Array<[number, number]>): string {
+  const hit = symbols.filter((s) => OUTLINE_KINDS.includes(s.type) && ranges.some(([a, b]) => s.start <= b && s.end >= a))
+  const inner = hit.filter((s) => !hit.some((o) => o !== s && o.start >= s.start && o.end <= s.end && (o.start > s.start || o.end < s.end)))
+  const seen = new Set<string>()
+  const shown = inner.sort((a, b) => a.start - b.start).filter((s) => {
+    const key = `${s.name}@${s.start}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  if (shown.length === 0) return ''
+  const more = shown.length > SYMBOLS_PER_FILE ? `, +${shown.length - SYMBOLS_PER_FILE} more` : ''
+  return shown.slice(0, SYMBOLS_PER_FILE).map((s) => `${s.name} L${s.start}-${s.end}`).join(', ') + more
 }

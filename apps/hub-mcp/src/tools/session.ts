@@ -24,23 +24,20 @@ export function alreadyInContext(title: string | undefined): boolean {
 export function registerSessionTools(server: McpServer, env: Env) {
   server.tool(
     'cortex_session_start',
-    'Start the session. Pass `task` once you know it: the answer then also holds what the hub recalls for the task and the files, lines and symbols to read, in place of separate knowledge, memory and code searches.',
+    // Carried on every turn of every conversation: the hook fills in all but repo and task.
+    'Start the session. With `task`, the answer also holds the recall for it and the files, lines and symbols to read.',
     {
-      repo: z.string().describe('The URL of the repository being worked on'),
-      mode: z.string().optional().describe('Session mode: development, onboarding, review'),
-      agentId: z.string().optional().describe('Agent identifier (e.g. claude-code)'),
-      hostname: z.string().optional().describe('Machine hostname'),
-      os: z.string().optional().describe('Operating system (macOS/Windows/Linux)'),
-      ide: z.string().optional().describe('IDE type (claude-code-cli/claude-code-vscode/antigravity/cursor/windsurf/codex)'),
-      branch: z.string().optional().describe('Current git branch'),
-      capabilities: z.array(z.string()).optional().describe('Agent capabilities'),
-      role: z.string().optional().describe('Agent role from agent-identity.json'),
-      task: z.string().max(300).optional().describe(
-        'What you are about to do, in a few words (the feature, the error). The answer then holds what the hub recalls for it and the files and lines to read: no separate knowledge, memory or code search to run.'
-      ),
-      clientSessionId: z.string().max(128).optional().describe(
-        'This conversation\'s id, as the IDE\'s SessionStart hook printed it (Claude Code\'s hook fills it in). Keeps two conversations in one checkout on separate sessions.'
-      ),
+      repo: z.string().describe('The repository URL'),
+      mode: z.string().optional().describe('development, onboarding or review'),
+      agentId: z.string().optional(),
+      hostname: z.string().optional(),
+      os: z.string().optional(),
+      ide: z.string().optional(),
+      branch: z.string().optional(),
+      capabilities: z.array(z.string()).optional(),
+      role: z.string().optional(),
+      task: z.string().max(300).optional().describe('What you are about to do, in a few words (the feature, the error)'),
+      clientSessionId: z.string().max(128).optional().describe('This conversation\'s id; the IDE\'s SessionStart hook prints it'),
     },
     async ({ repo, mode, agentId, hostname, os, ide, branch, capabilities, role, task, clientSessionId }) => {
       // Extract project name from repo URL for context

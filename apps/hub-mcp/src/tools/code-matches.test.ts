@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatCodeMatches, formatOtherRepos, trimChunk, SNIPPET_CHARS, outlineFiles, outlineQuery, parseOutline, formatOutline } from './code-matches.js'
+import { formatCodeMatches, formatOtherRepos, trimChunk, SNIPPET_CHARS, outlineFiles, outlineQuery, parseOutline, hitSymbols } from './code-matches.js'
 
 describe('trimChunk', () => {
   it('drops the indexer header of a first chunk', () => {
@@ -38,7 +38,7 @@ describe('formatCodeMatches', () => {
     expect(out).toContain('### src/routes/keys.ts\n```typescript\nkeysRouter.put("/:id")\n```')
     expect(out).not.toContain('// File:')
     expect(out).toContain('### src/lib/api-auth.ts:40-80\n')
-    expect(out).toContain('read just those lines')
+    expect(out).toContain('Read just those lines')
   })
 
   it('says nothing when there is nothing to show', () => {
@@ -67,32 +67,51 @@ describe('formatOtherRepos', () => {
   })
 })
 
-describe('outline of the top files', () => {
-  it('takes the best three files of the repo searched, once each', () => {
+describe('the symbols the hits fall in', () => {
+  const sym = (name: string, start: number, end: number, type = 'Function') => ({ file: 'a.ts', name, type, start, end })
+
+  it('takes the best five files of the repo searched, once each', () => {
     const files = outlineFiles([
       { score: 0.9, filePath: 'a.ts' }, { score: 0.8, filePath: 'a.ts' }, { score: 0.7, filePath: 'x.ts', repo: 'other' },
-      { score: 0.6, filePath: 'b.ts' }, { score: 0.5, filePath: 'c.ts' }, { score: 0.4, filePath: 'd.ts' },
+      ...['b', 'c', 'd', 'e', 'f'].map((f, i) => ({ score: 0.6 - i / 10, filePath: `${f}.ts` })),
     ])
-    expect(files).toEqual(['a.ts', 'b.ts', 'c.ts'])
+    expect(files).toEqual(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts'])
   })
 
-  it('quotes paths so one cannot end the list', () => {
-    expect(outlineQuery(["it's.ts"])).toContain("['it\\'s.ts']")
+  it('asks for one file\'s symbols, with its path quoted', () => {
+    expect(outlineQuery("it's.ts")).toContain("n.filePath = 'it\\'s.ts'")
+    expect(outlineQuery('a.ts')).toContain("labels(n) IN ['Function', 'Method'")
   })
 
-  it('reads the cypher table and lists functions with their lines, in file rank order', () => {
+  it('reads the cypher table', () => {
     const rows = parseOutline('| file | name | type | s | e |\n| --- | --- | --- | --- | --- |\n' +
-      '| b.ts | helper | Function | 1 | 9 |\n| a.ts | KEY | Const | 2 | 2 |\n| a.ts | run | Function | 4 | 20 |\n(3 rows)\n---\nNext: …')
-    expect(rows).toHaveLength(3)
-    expect(formatOutline(rows, ['a.ts', 'b.ts'])).toContain('- a.ts: run L4-20\n- b.ts: helper L1-9')
+      '| b.ts | helper | Function | 1 | 9 |\n| a.ts | run | Function | 4 | 20 |\n(2 rows)\n---\nNext: …')
+    expect(rows).toEqual([
+      { file: 'b.ts', name: 'helper', type: 'Function', start: 1, end: 9 },
+      { file: 'a.ts', name: 'run', type: 'Function', start: 4, end: 20 },
+    ])
   })
 
-  it('caps a long file and says how many it left out', () => {
-    const rows = Array.from({ length: 12 }, (_, i) => ({ file: 'a.ts', name: `f${i}`, type: 'Function', start: i * 10, end: i * 10 + 5 }))
-    expect(formatOutline(rows, ['a.ts'])).toContain('f9 L90-95, +2 more')
+  it('names the innermost symbol a hit falls in, not the class around it', () => {
+    const symbols = [sym('Api', 1, 200, 'Class'), sym('get', 10, 30, 'Method'), sym('put', 40, 60, 'Method'), sym('KEY', 12, 12, 'Const')]
+    expect(hitSymbols(symbols, [[15, 25]])).toBe('get L10-30')
+    expect(hitSymbols(symbols, [[25, 45]])).toBe('get L10-30, put L40-60')
+    expect(hitSymbols(symbols, [[100, 120]])).toBe('Api L1-200')
   })
 
-  it('says nothing when the graph has no symbols there', () => {
-    expect(formatOutline([], ['a.ts'])).toBe('')
+  it('caps the list and says how many it left out', () => {
+    const symbols = Array.from({ length: 5 }, (_, i) => sym(`f${i}`, i * 10, i * 10 + 5))
+    expect(hitSymbols(symbols, [[0, 50]])).toBe('f0 L0-5, f1 L10-15, f2 L20-25, +2 more')
+  })
+
+  it('says nothing when no hit falls in a symbol', () => {
+    expect(hitSymbols([sym('far', 300, 320)], [[1, 30]])).toBe('')
+    expect(hitSymbols([], [[1, 30]])).toBe('')
+  })
+
+  it('puts them on the file\'s line', () => {
+    const out = formatCodeMatches([{ score: 0.5, filePath: 'a.ts', startLine: 15, endLine: 25 }], 0, [sym('get', 10, 30)])
+    expect(out).toContain('1. a.ts — L15-25 50% · in get L10-30')
+    expect(out).toContain('cortex_code_context')
   })
 })

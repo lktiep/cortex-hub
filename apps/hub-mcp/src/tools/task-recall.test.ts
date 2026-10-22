@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { registerSessionTools } from './session.js'
-import { formatTaskRecall } from './task-recall.js'
+import { formatTaskRecall, terms } from './task-recall.js'
 
 /**
  * cortex_session_start with the task: the recall and the code lookup an agent ran as three more
@@ -25,13 +25,16 @@ function sessionStart(down: string[] = []): Handler {
     const reply: Record<string, unknown> = {
       '/api/sessions/start': { sessionId: 'sess_1', project: { id: 'proj-1', orgId: 'org-1' }, recentSessions: [{ id: 'other' }] },
       '/api/knowledge/search': { results: [
-        { documentId: 'kdoc-1', title: 'Rotate keys in place', content: 'Keep the id,\n swap the hash.' },
-        { documentId: 'kdoc-1', title: 'Rotate keys in place', content: 'second chunk' },
-        { documentId: 'kdoc-2', title: '[CLAUDE.md] Project rules', content: 'already in context' },
+        { documentId: 'kdoc-1', title: 'Rotate keys in place', content: 'Keep the id,\n swap the hash.', score: 0.62 },
+        { documentId: 'kdoc-1', title: 'Rotate keys in place', content: 'second chunk', score: 0.6 },
+        { documentId: 'kdoc-2', title: '[CLAUDE.md] Project rules', content: 'already in context', score: 0.58 },
+        { documentId: 'kdoc-3', title: 'Deploy notes', content: 'unrelated', score: 0.41 },
       ] },
-      '/api/mem9/search': { memories: body.userId === 'project-proj-1' ? [{ id: 'm1', memory: 'Cache is per key hash' }] : [] },
+      '/api/mem9/search': { memories: body.userId === 'project-proj-1'
+        ? [{ id: 'm1', memory: 'Cache is per key hash' }, { id: 'm2', memory: 'Never commit the build folder' }]
+        : [] },
       '/api/intel/code-search': { data: { results: [{ filePath: 'src/routes/keys.ts', score: 0.7, startLine: 40, endLine: 90, content: 'x' }] } },
-      '/api/intel/cypher': { data: { raw: '| file | name | type | s | e |\n| --- | --- | --- | --- | --- |\n| src/routes/keys.ts | generateApiKey | Function | 32 | 38 |' } },
+      '/api/intel/cypher': { data: { raw: '| file | name | type | s | e |\n| --- | --- | --- | --- | --- |\n| src/routes/keys.ts | generateApiKey | Function | 32 | 38 |\n| src/routes/keys.ts | rotateKey | Function | 45 | 80 |' } },
     }
     return new Response(JSON.stringify(reply[path] ?? {}), { status: reply[path] ? 200 : 404 })
   }) as unknown as typeof fetch
@@ -56,10 +59,12 @@ describe('cortex_session_start with a task', () => {
     expect(brief).toContain('- Rotate keys in place — Keep the id, swap the hash. (kdoc-1)')
     expect(brief).not.toContain('second chunk')
     expect(brief).not.toContain('CLAUDE.md')
+    expect(brief).not.toContain('Deploy notes')
     expect(brief).toContain('- Cache is per key hash')
+    expect(brief).not.toContain('build folder')
     expect(brief).toContain('located: code for "rotate an API key"')
-    expect(brief).toContain('1. src/routes/keys.ts — L40-90 70%')
-    expect(brief).toContain('- src/routes/keys.ts: generateApiKey L32-38')
+    expect(brief).toContain('1. src/routes/keys.ts — L40-90 70% · in rotateKey L45-80')
+    expect(brief).not.toContain('generateApiKey')
     expect(brief).not.toContain('```')
   })
 
@@ -92,6 +97,17 @@ describe('cortex_session_start with a task', () => {
 
 describe('formatTaskRecall', () => {
   it('says so when nothing is stored for the task yet, and still counts as a recall', () => {
-    expect(formatTaskRecall('x', [], [])).toBe('recalled: knowledge+memory for "x"\nKnowledge: nothing stored for this yet.\nMemory: nothing stored for this yet.')
+    expect(formatTaskRecall('x', [], [])).toBe('recalled: knowledge+memory for "x" — nothing stored is close to it.')
+  })
+
+  it('shows only the part that has something', () => {
+    expect(formatTaskRecall('x', [], [{ memory: 'm' }])).toBe('recalled: knowledge+memory for "x"\nMemory:\n- m')
+  })
+})
+
+describe('terms', () => {
+  it('splits identifiers, keeps short words that carry meaning, and drops filler', () => {
+    expect([...terms('add the toolStats filter to cortex_tool_stats for API keys')].sort())
+      .toEqual(['api', 'cortex', 'filter', 'key', 'stat', 'tool'])
   })
 })

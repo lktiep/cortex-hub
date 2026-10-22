@@ -63,7 +63,8 @@ describe('cortex_code_search without a repo', () => {
       expect.objectContaining({ projectId: 'game-client' }),
       expect.objectContaining({ exclude: 'game-client', scopeRepo: 'game-client' }),
     ]))
-    expect(text.indexOf('src/login.ts')).toBeLessThan(text.indexOf('flows in game-client'))
+    expect(text).toContain('1. src/login.ts')
+    expect(text).not.toContain('flows in game-client')
     expect(text).toContain('**In other repos of your organization:**\n- game-server — src/auth/login.ts L3-9 55%\n- game-tools — tools/login-bot.ts L3-9 41%')
     expect(text).toContain('repo: "*"')
   })
@@ -113,22 +114,25 @@ describe('cortex_code_search with a repo', () => {
 
 describe('cortex_code_search under its ranked files', () => {
   const table = '| file | name | type | s | e |\n| --- | --- | --- | --- | --- |\n' +
-    '| src/login.ts | LoginForm | Class | 3 | 40 |\n| src/login.ts | user | Property | 5 | 5 |\n| src/login.ts | submit | Method | 12 | 30 |\n(3 rows)'
+    '| src/login.ts | LoginForm | Class | 1 | 40 |\n| src/login.ts | user | Property | 5 | 5 |\n' +
+    '| src/login.ts | validate | Method | 4 | 8 |\n| src/login.ts | submit | Method | 12 | 30 |\n(4 rows)'
 
-  it('outlines the symbols of the top files in place of the graph\'s flows', async () => {
+  it('names the symbol each hit falls in, in place of the graph\'s flows', async () => {
     const res = await codeSearch({ outline: table })({ query: 'login', repo: 'game-client' })
     const text = res.content[0]!.text
 
     expect(asked('cypher')[0]).toMatchObject({ projectId: 'game-client' })
-    expect(String(asked('cypher')[0]!.query)).toContain("n.filePath IN ['src/login.ts']")
-    expect(text).toContain('- src/login.ts: LoginForm L3-40, submit L12-30')
-    expect(text).not.toContain('user L5')
+    expect(String(asked('cypher')[0]!.query)).toContain("n.filePath = 'src/login.ts'")
+    expect(text).toContain('1. src/login.ts — L3-9 60% · in validate L4-8')
+    expect(text).not.toContain('LoginForm')
+    expect(text).not.toContain('submit')
     expect(text).not.toContain('flows in game-client')
   })
 
-  it('keeps the flows when the graph has no symbols for those files', async () => {
+  it('keeps the flows only when no file matched', async () => {
     const res = await codeSearch()({ query: 'login', repo: 'game-client' })
 
-    expect(res.content[0]!.text).toContain('flows in game-client')
+    expect(res.content[0]!.text).toContain('1. src/login.ts — L3-9 60%\n')
+    expect(res.content[0]!.text).not.toContain('flows in game-client')
   })
 })

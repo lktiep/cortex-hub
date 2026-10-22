@@ -2880,41 +2880,21 @@ GSETTINGS
     local agent_id="$1"
     cat << INSTREOF
 <!-- cortex-hub:auto-mcp -->
-## Cortex Hub — Auto MCP (MANDATORY)
+## Cortex Hub — MANDATORY
 
-At the START of every conversation:
-Once you know the task, call \`cortex_session_start\` with repo: "$GIT_REPO", agentId: "$agent_id",
-task: "<the task in a few words>". Its answer holds what the hub recalls for the task and the files
-and line ranges to read: no separate knowledge, memory or code search to run first.
+Once you know the task: \`cortex_session_start(repo: "$GIT_REPO", agentId: "$agent_id", task: "<the task in a few words>")\`.
+Its answer is the recall (knowledge, memory) and the first lookup (files, lines and the symbols
+they fall in): read those lines next, with no separate search first.
 
-### Finding code — start from what you know, not from a fixed ladder
-| You already know | Start with |
-|---|---|
-| A symbol name | \`cortex_code_context(name)\` — exact graph lookup, plus callers/callees/imports in one call |
-| Only the behaviour | \`cortex_code_search(query, limit: 10)\` — ranked hybrid search, one call |
-| An exact literal (env var, config key, error string) | \`rg\` / \`grep\` — this is not a ranking problem |
-| A relationship across files | \`cortex_cypher\` |
-
-**Search once, read all ten.** On the cortex-hub index the target file is in the top 10 for
-15/15 queries but at rank 1 for only 8/15 — so scan the whole result set, and never re-run a
-reworded version of the same query. Ask a different question or switch tool instead.
-
-\`cortex_code_impact\` before editing something exported or shared. Knowledge and memory are
-for errors and decisions, not for locating code.
-
-**Across repos:** omit \`repo:\` to search every repo in the organization of this project
-(the client + server + tools of one product). Projects are isolated per organization, so it never reaches
-another one. Running sessions in two organizations with one API key? Pass \`org:\`.
-
-### Error Protocol
-1. \`cortex_knowledge_search\` first — someone may have solved this
-2. \`cortex_memory_search\` — you may have seen it before
-3. Fix the error
-4. Non-obvious fixes: \`cortex_knowledge_store\`
-
-### Quality Gates
-Run verify commands from \`.cortex/project-profile.json\`, then \`cortex_quality_report\`.
-After a push: \`cortex_code_reindex\`. End session: \`cortex_session_end\` with sessionId and summary.
+- A symbol name → \`cortex_code_context(name)\`. A behaviour → \`cortex_code_search(query)\`: scan the
+  whole list, the target is not always first. An exact literal → \`rg\`.
+- Read just the lines a hit names (Read with offset/limit), not the whole file.
+- \`cortex_code_impact\` before changing something exported or shared.
+- Something breaks → \`cortex_knowledge_search\` and \`cortex_memory_search\` with the error first;
+  store a non-obvious fix with \`cortex_knowledge_store\`.
+- Before committing: the verify commands from \`.cortex/project-profile.json\`, after the last edit
+  (a later write closes the commit gate again), then \`cortex_detect_changes(diff: "<git diff --staged>")\`.
+  After a push: \`cortex_code_reindex(repo: "$GIT_REPO", branch: "<branch>")\`.
 <!-- cortex-hub:auto-mcp -->
 INSTREOF
   }
@@ -3285,49 +3265,22 @@ inject_claude_md() {
   local CONTENT
   CONTENT=$(cat << 'CLAUDEEOF'
 <!-- cortex-hub:auto-mcp -->
-## Cortex Hub — MANDATORY (enforced by hooks — violations are BLOCKED)
+## Cortex Hub — MANDATORY (enforced by hooks)
 
-**Once you know the task, make one call:**
+Once you know the task: `cortex_session_start(repo: "__GIT_REPO__", task: "<the task in a few words>")`.
+Its answer is the recall (knowledge, memory) and the first lookup (files, lines and the symbols
+they fall in): read those lines next, with no separate search first. Until this call, Edit, Write
+and file-modifying Bash are refused.
 
-```
-cortex_session_start(repo: "__GIT_REPO__", task: "<the task in a few words>")
-```
-
-Its answer holds what the hub recalls for the task (knowledge and memory) and the files and line
-ranges to read, with the symbols in them. That is the recall and the first lookup: there is no
-separate knowledge, memory or code search to run before editing. A hook adds the conversation id,
-branch, IDE and `.cortex/agent-identity.json`. Until this call, Edit, Write and file-modifying
-Bash are refused (exit code 2).
-
-### Finding code fast
-
-| You already know | Start with |
-|---|---|
-| A symbol name | `cortex_code_context(name)` — exact graph lookup, with callers and callees |
-| Only the behaviour | `cortex_code_search(query)` — ranked files, line ranges and the symbols in them |
-| An exact literal (env var, config key, error string) | `rg` / `grep` |
-| A relationship across files | `cortex_cypher` |
-
-- Read the lines a hit names (Read with offset/limit), not the whole file.
-- The target is in the top 10 for every query of the retrieval benchmark but first for only half:
-  scan the whole list, and ask a different question rather than a reworded one.
-- Omit `repo:` to search every repo of the organization; `cortex_list_repos()` shows which.
-- `cortex_code_impact` before changing something exported or shared; `cortex_changes` before
-  editing a file another agent may hold.
-- Grep, Glob and a command starting with `grep`/`rg`/`find` unlock after the start with a task,
-  or after one code search.
-
-### When something breaks
-
-Search `cortex_knowledge_search(query: "<the error>")` and `cortex_memory_search` first. A
-non-obvious fix: **YOU MUST** store it with `cortex_knowledge_store`.
-
-### Quality gates (enforced — commit blocked without these)
-
-Run the verify commands from `.cortex/project-profile.json` last, after the final edit: an edit
-after them closes the commit gate again. Then `cortex_detect_changes(diff: "<git diff --staged>")`.
-After a push: `cortex_code_reindex(repo: "__GIT_REPO__", branch: "<branch>")`.
-End the session: `cortex_session_end(sessionId, summary)`.
+- A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`: scan the
+  whole list, the target is not always first. An exact literal → `rg`.
+- Read just the lines a hit names (Read with offset/limit), not the whole file.
+- `cortex_code_impact` before changing something exported or shared.
+- Something breaks → `cortex_knowledge_search` and `cortex_memory_search` with the error first;
+  store a non-obvious fix with `cortex_knowledge_store`.
+- Before committing: the verify commands from `.cortex/project-profile.json`, after the last edit
+  (a later write closes the commit gate again), then `cortex_detect_changes(diff: "<git diff --staged>")`.
+  After a push: `cortex_code_reindex(repo: "__GIT_REPO__", branch: "<branch>")`.
 <!-- cortex-hub:auto-mcp -->
 CLAUDEEOF
   )

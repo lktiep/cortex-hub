@@ -3,7 +3,6 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
-import { LOAD_UP_FRONT } from './load-up-front.js'
 import { DEFAULT_MAX_CHARS, formatKnowledgeDocument, formatKnowledgeResults, type KnowledgeDoc, type KnowledgeHit } from './knowledge-format.js'
 
 /**
@@ -165,7 +164,7 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
         }
       }
     }
-  ).update(LOAD_UP_FRONT)
+  )
 
   // ── Notes linked to files ──
   server.tool(

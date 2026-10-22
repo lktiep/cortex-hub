@@ -5,7 +5,7 @@ import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
 import {
   formatCodeMatches, formatOtherRepos, OTHER_REPOS, FILES_PER_OTHER_REPO, type CodeMatch,
-  outlineFiles, outlineQuery, parseOutline, formatOutline,
+  outlineFiles, fetchOutline, type OutlineSymbol,
 } from './code-matches.js'
 import { formatDiffImpact } from './diff-impact.js'
 import { LOAD_UP_FRONT } from './load-up-front.js'
@@ -21,9 +21,7 @@ import { LOAD_UP_FRONT } from './load-up-front.js'
 // Projects are isolated per organization. Every code tool takes the same optional `org`,
 // and the hub falls back to the organization of the caller's active session, so the common
 // case — no repo, no org — searches this product's repos and stops at the org boundary.
-const ORG_DESC =
-  "Organization ID to scope this call to. Omit it and the hub infers the organization from " +
-  "your active session; a cross-repo search never leaves it."
+const ORG_DESC = "Organization ID. Omit it for your session's organization."
 
 
 export function registerCodeTools(server: McpServer, env: Env) {
@@ -179,34 +177,27 @@ export function registerCodeTools(server: McpServer, env: Env) {
     }
   }
 
-  /** The symbols of a few files with their lines; '' when the graph has none or does not answer. */
-  async function outlineOf(project: string, org: string | undefined, files: string[]): Promise<string> {
-    if (files.length === 0) return ''
-    try {
-      const res = (await callIntel('cypher', { query: outlineQuery(files), projectId: project, orgId: org }, 5000)) as {
-        data?: { raw?: string }
-      }
-      return formatOutline(parseOutline(res?.data?.raw ?? ''), files)
-    } catch {
-      return ''
-    }
+  /** The symbols of a few files with their lines; none when the graph has none or does not answer. */
+  function outlineOf(project: string, org: string | undefined, files: string[]): Promise<OutlineSymbol[]> {
+    return fetchOutline(files, async (query) => {
+      const res = (await callIntel('cypher', { query, projectId: project, orgId: org }, 5000)) as { data?: { raw?: string } }
+      return res?.data?.raw ?? ''
+    })
   }
 
   server.tool(
     'cortex_code_search',
-    'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. ' +
-    'Without repo it searches the repo you are working in (the client names it) and lists what the other repos of your ' +
-    'ORGANIZATION hold for the same query (not in the personal organization, where unrelated repos land). repo: "*" searches every repo of the organization — the way to answer a ' +
-    'question that spans repos (client + server + tools of one product). Projects are isolated per organization, so a ' +
-    'cross-repo search never reaches another organization\'s code.',
+    'Ranked files, with the lines that match and the symbols they fall in, for a question about the code. ' +
+    'Without repo: the repo you are in, plus what the other repos of your organization hold. repo: "*" searches every ' +
+    'repo of the organization; a search never leaves it.',
     {
       query: z.string().describe('Natural language or code query to search for'),
-      repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL, or "*" for every repo of your organization. Omit it for the repo you are working in.'),
-      projectId: z.string().optional().describe('Project ID (e.g. "proj-704127e3"). Use repo name instead if possible.'),
+      repo: z.string().optional().describe('Repository name or git URL, or "*"'),
+      projectId: z.string().optional().describe('Use repo instead if you can'),
       org: z.string().optional().describe(ORG_DESC),
       branch: z.string().optional().describe('Git branch to search'),
-      limit: z.number().optional().describe('Maximum flows to return (default: 5)'),
-      here: z.string().optional().describe('Filled in by the client: the git remote of the checkout you are in. Leave it out.'),
+      limit: z.number().optional(),
+      here: z.string().optional().describe('Filled in by the client. Leave it out.'),
     },
     async ({ query, repo, projectId, org, branch, limit, here }) => {
       try {
@@ -239,10 +230,10 @@ export function registerCodeTools(server: McpServer, env: Env) {
             searchCode({ query, projectId: project, orgId: org, branch, limit: Math.max(flowLimit, 8) }),
           ])
           if (flows !== undefined) {
-            // With ranked files in hand, their symbols say where to read; the flows are kept for
-            // a search the semantic arm found nothing for.
-            const outline = await outlineOf(project, org, outlineFiles(matches))
-            const sections = [formatCodeMatches(matches), outline || flows, formatOtherRepos(await others)].filter(Boolean)
+            // With ranked files in hand, the symbols their hits fall in say where to read; the flows
+            // are kept for a search the semantic arm found nothing for.
+            const symbols = await outlineOf(project, org, outlineFiles(matches))
+            const sections = [formatCodeMatches(matches, undefined, symbols), matches.length ? '' : flows, formatOtherRepos(await others)].filter(Boolean)
             return { content: [{ type: 'text' as const, text: sections.join('\n\n---\n') || 'No results.' }] }
           }
         }
@@ -408,13 +399,13 @@ export function registerCodeTools(server: McpServer, env: Env) {
   // ── code_context — 360° symbol view (callers, callees, methods) ──
   server.tool(
     'cortex_code_context',
-    'Get a 360° view of a code symbol: its methods, callers, callees, and related execution flows. Essential for exploring class hierarchies and understanding how a symbol is used across the codebase.',
+    'A symbol by name: where it is, its methods, callers, callees and flows.',
     {
-      name: z.string().describe('The name of the function, class, or symbol to explore'),
-      repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL'),
-      projectId: z.string().optional().describe('Project ID. Use repo name instead if possible.'),
+      name: z.string().describe('Function, class or other symbol name'),
+      repo: z.string().optional().describe('Repository name or git URL'),
+      projectId: z.string().optional().describe('Use repo instead if you can'),
       org: z.string().optional().describe(ORG_DESC),
-      file: z.string().optional().describe('File path to disambiguate when multiple symbols share the same name'),
+      file: z.string().optional().describe('Its file, when several symbols share the name'),
     },
     async ({ name, repo, projectId, org, file }) => {
       try {
