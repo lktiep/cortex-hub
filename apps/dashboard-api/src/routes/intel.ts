@@ -9,6 +9,7 @@ import { hasSparseVector, buildHybridQuery, HYBRID_FETCH_FLOOR } from '../lib/hy
 import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
 import { analyzeDiff, parseCypherTable, MAX_DIFF_CHARS, type RunCypher } from '../lib/diff-symbols.js'
 import { PERSONAL_ORG, projectOfActiveSession } from '../lib/session-project.js'
+import { grepCheckout, type GrepHit } from '../lib/code-grep.js'
 
 const logger = createLogger('intel')
 
@@ -1984,7 +1985,8 @@ intelRouter.post('/file-content', async (c) => {
     if (!stat.isFile()) {
       return c.json({ error: 'Path is a directory, not a file' }, 400)
     }
-    if (stat.size > MAX_READ_SIZE) {
+    // A line range of a large file is still a small answer: the file the benchmark needed was 21k lines.
+    if (stat.size > MAX_READ_SIZE && !startLine && !endLine) {
       return c.json({
         error: `File too large (${Math.round(stat.size / 1024)}KB > ${MAX_READ_SIZE / 1024}KB limit)`,
         hint: 'Use startLine/endLine to read a portion of the file.',
@@ -2025,6 +2027,105 @@ intelRouter.post('/file-content', async (c) => {
     })
   } catch (error) {
     logger.error(`File content read failed: ${String(error)}`)
+    return c.json({ success: false, error: String(error) }, 500)
+  }
+})
+
+// ── Grep: an exact string across the organization's checkouts ──
+//
+// The checkouts under REPOS_DIR are the default branch of each project, kept current by the
+// indexer. Each repo is searched on its own with a time and output budget, so one huge repo or a
+// pattern that matches every line cannot hold the others up.
+const GREP_MAX_PATTERN = 300
+const GREP_DEFAULT_LIMIT = 60
+const GREP_MAX_LIMIT = 200
+const GREP_CONCURRENCY = 4
+
+intelRouter.post('/grep', async (c) => {
+  try {
+    const body = await c.req.json()
+    const { pattern, projectId, orgId, scopeRepo, path, ignoreCase, fixed, limit } = body as {
+      pattern?: string
+      /** One repo; without it every repo of the organization. */
+      projectId?: string
+      orgId?: string
+      /** The repo the caller is working in: anchors the organization when none is named. */
+      scopeRepo?: string
+      /** Git pathspecs, e.g. "*.cs" or "src/net/". */
+      path?: string | string[]
+      ignoreCase?: boolean
+      fixed?: boolean
+      limit?: number
+    }
+
+    if (!pattern) return c.json({ error: 'pattern is required' }, 400)
+    if (pattern.length > GREP_MAX_PATTERN) return c.json({ error: `pattern is longer than ${GREP_MAX_PATTERN} characters` }, 400)
+    const paths = (Array.isArray(path) ? path : path ? [path] : []).filter((p) => typeof p === 'string' && p.trim())
+    if (paths.length > 10 || paths.some((p) => p.length > 200)) return c.json({ error: 'path takes at most 10 pathspecs of 200 characters' }, 400)
+
+    const scope = resolveOrgScope({ orgId, projectId, scopeRepo, apiKeyOwner: c.req.header('X-API-Key-Owner') })
+    if (!scope.orgId) {
+      return c.json({ success: false, error: 'Several organizations hold indexed code: name the repo, or pass org.' }, 400)
+    }
+
+    type Repo = { id: string; name: string }
+    let repos: Repo[]
+    if (projectId) {
+      if (projectOutsideScope(projectId, scope)) return c.json(outsideScopeResponse(projectId), 403)
+      const project = findProject(projectId, scope.orgId)
+      if (!project) {
+        return c.json({ error: `No repo "${projectId}" in this organization.`, hint: 'cortex_list_repos lists the names to pass as repo.' }, 404)
+      }
+      repos = [project]
+    } else {
+      repos = db.prepare('SELECT id, name FROM projects WHERE org_id = ? ORDER BY name').all(scope.orgId) as Repo[]
+    }
+    const searchable = repos.filter((r) => existsSync(join(REPOS_DIR, r.id, '.git')))
+
+    const max = Math.min(Math.max(1, limit ?? GREP_DEFAULT_LIMIT), GREP_MAX_LIMIT)
+    const results: Array<{ repo: string; projectId: string; hits: GrepHit[]; truncated: boolean; error?: string }> = []
+    const queue = [...searchable]
+    const worker = async () => {
+      for (let repo = queue.shift(); repo; repo = queue.shift()) {
+        try {
+          // Each repo may fill the whole limit: which repos matter is decided after, not by speed.
+          const found = await grepCheckout(join(REPOS_DIR, repo.id), pattern, { ignoreCase, fixed, paths })
+          results.push({ repo: repo.name, projectId: repo.id, hits: found.hits.slice(0, max), truncated: found.truncated || found.hits.length > max })
+        } catch (error) {
+          results.push({ repo: repo.name, projectId: repo.id, hits: [], truncated: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(GREP_CONCURRENCY, searchable.length) }, worker))
+
+    // A bad pattern fails the same way in every repo: say it once, as the caller's error.
+    const failed = results.filter((r) => r.error)
+    if (failed.length > 0 && failed.length === results.length) {
+      return c.json({ success: false, error: `git grep refused the pattern: ${failed[0]!.error}` }, 400)
+    }
+
+    // Fewer hits first: a repo where the string is rare is where it means something, and a repo
+    // that matches everywhere would otherwise spend the whole limit.
+    results.sort((a, b) => (a.hits.length === 0 ? 1 : 0) - (b.hits.length === 0 ? 1 : 0) || a.hits.length - b.hits.length || a.repo.localeCompare(b.repo))
+    let left = max
+    const shown = results.map((r) => {
+      const hits = r.hits.slice(0, Math.max(0, left))
+      left -= hits.length
+      return { ...r, total: r.hits.length, hits, truncated: r.truncated || hits.length < r.hits.length }
+    })
+
+    return c.json({
+      success: true,
+      data: {
+        pattern,
+        orgId: scope.orgId,
+        searched: searchable.map((r) => r.name),
+        notCloned: repos.filter((r) => !searchable.includes(r)).map((r) => r.name),
+        results: shown,
+      },
+    })
+  } catch (error) {
+    logger.error(`Grep failed: ${String(error)}`)
     return c.json({ success: false, error: String(error) }, 500)
   }
 })

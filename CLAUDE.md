@@ -20,7 +20,7 @@ camelCase vars/functions, PascalCase types. `@cortex/*` path aliases. No `any` w
 ## Finding code
 
 - A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`: scan the
-  whole list, the target is not always first. An exact literal → `rg`.
+  whole list, the target is not always first. An exact literal → `rg`; in the organization's other repos → `cortex_code_grep`.
 - Read just the lines a hit names (Read with offset/limit), not the whole file.
 - `cortex_code_impact(target)` before changing something exported or shared.
 

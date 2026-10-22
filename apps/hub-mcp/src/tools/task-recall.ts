@@ -62,6 +62,20 @@ export function formatTaskLocation(task: string, matches: CodeMatch[], symbols: 
   return [`located: code for "${oneLine(task, 120)}"`, files].join('\n')
 }
 
+const ORG_REPOS_LISTED = 20
+
+/**
+ * The repos grouped with this one, which an agent cannot see from its checkout. Without this line
+ * it searched only what was on disk: a question answered in a sibling repo went to the hub once
+ * or not at all.
+ */
+export function formatOrgRepos(names: string[] | undefined): string {
+  if (!names?.length) return ''
+  const listed = names.slice(0, ORG_REPOS_LISTED).join(', ') + (names.length > ORG_REPOS_LISTED ? ', …' : '')
+  return `searchable: ${names.length} other repo(s) of this organization, not on disk here — ${listed}.\n` +
+    'cortex_code_search without repo ranks files across them; cortex_code_grep finds an exact string (a constant, an opcode, an error text) in them.'
+}
+
 /** Knowledge for the task: undefined when the search did not answer. */
 async function searchKnowledge(env: Env, task: string, alreadyInContext: (title?: string) => boolean): Promise<KnowledgeLine[] | undefined> {
   const res = await apiCall(env, '/api/knowledge/search', {

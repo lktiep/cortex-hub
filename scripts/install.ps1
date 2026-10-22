@@ -2035,7 +2035,7 @@ with the task once you have it.
 
 ## 3. While working
 - A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`.
-  An exact literal → `rg`. Read the lines a hit names, not the whole file.
+  An exact literal → `rg`; in the organization's other repos → `cortex_code_grep`. Read the lines a hit names, not the whole file.
 - Something breaks → `cortex_knowledge_search` and `cortex_memory_search` with the error; a
   non-obvious fix → `cortex_knowledge_store`.
 - Before committing → build, typecheck and lint last, then `cortex_detect_changes(diff)`; after
@@ -2754,7 +2754,7 @@ Its answer is the recall (knowledge, memory) and the first lookup (files, lines 
 they fall in): read those lines next, with no separate search first.
 
 - A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`: scan the
-  whole list, the target is not always first. An exact literal → `rg`.
+  whole list, the target is not always first. An exact literal → `rg`; in the organization's other repos → `cortex_code_grep`.
 - Read just the lines a hit names (Read with offset/limit), not the whole file.
 - `cortex_code_impact` before changing something exported or shared.
 - Something breaks → `cortex_knowledge_search` and `cortex_memory_search` with the error first;
@@ -2813,7 +2813,7 @@ task: "<the task in a few words>")`, which answers the same. Until one of the tw
 file-modifying Bash are refused.
 
 - A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`: scan the
-  whole list, the target is not always first. An exact literal → `rg`.
+  whole list, the target is not always first. An exact literal → `rg`; in the organization's other repos → `cortex_code_grep`.
 - Read just the lines a hit names (Read with offset/limit), not the whole file.
 - `cortex_code_impact` before changing something exported or shared.
 - Something breaks → `cortex_knowledge_search` and `cortex_memory_search` with the error first;

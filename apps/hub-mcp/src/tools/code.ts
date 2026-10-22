@@ -8,6 +8,7 @@ import {
   outlineFiles, fetchOutline, type OutlineSymbol,
 } from './code-matches.js'
 import { formatDiffImpact } from './diff-impact.js'
+import { formatGrep, type GrepData } from './code-grep.js'
 import { LOAD_UP_FRONT } from './load-up-front.js'
 
 /**
@@ -22,6 +23,8 @@ import { LOAD_UP_FRONT } from './load-up-front.js'
 // and the hub falls back to the organization of the caller's active session, so the common
 // case — no repo, no org — searches this product's repos and stops at the org boundary.
 const ORG_DESC = "Organization ID. Omit it for your session's organization."
+/** Lines cortex_code_read returns when no end is given. */
+const READ_LINES = 200
 
 
 export function registerCodeTools(server: McpServer, env: Env) {
@@ -262,6 +265,69 @@ export function registerCodeTools(server: McpServer, env: Env) {
       }
     }
   ).update(LOAD_UP_FRONT)
+
+  // ── code_grep — an exact string across the organization's repos ──
+  server.tool(
+    'cortex_code_grep',
+    'git grep over the hub\'s checkout of every repo of your organization (default branch), for an exact ' +
+    'string the ranked search does not find: a constant, an opcode, an error text, a symbol. Searches the repos ' +
+    'that are not on disk here; grep your own checkout locally.',
+    {
+      pattern: z.string().describe('Perl-style regex, or a plain string with fixed: true'),
+      repo: z.string().optional().describe('One repo (name or git URL); omit for every repo of the organization'),
+      path: z.string().optional().describe('Git pathspec to narrow to, e.g. "*.cs" or "src/net/"'),
+      ignoreCase: z.boolean().optional(),
+      fixed: z.boolean().optional().describe('Match the pattern as a plain string'),
+      limit: z.number().optional().describe('Lines to list across all repos (default 60, max 200)'),
+      org: z.string().optional().describe(ORG_DESC),
+    },
+    async ({ pattern, repo, path, ignoreCase, fixed, limit, org }) => {
+      try {
+        const res = (await callIntel('grep', {
+          pattern, projectId: await resolveRepo(repo), path, ignoreCase, fixed, limit, orgId: org,
+        }, 30000)) as { data?: GrepData }
+        return { content: [{ type: 'text' as const, text: formatGrep(res.data ?? { pattern }) }] }
+      } catch (error) {
+        return {
+          content: [{ type: 'text' as const, text: `Code grep error: ${error instanceof Error ? error.message : 'Unknown'}` }],
+          isError: true,
+        }
+      }
+    }
+  )
+
+  // ── code_read — lines of a file in another repo of the organization ──
+  server.tool(
+    'cortex_code_read',
+    'Read lines of a file from the hub\'s checkout of a repo of your organization (default branch): the repos ' +
+    'cortex_code_search and cortex_code_grep point into that are not on disk here.',
+    {
+      repo: z.string().describe('Repository name or git URL'),
+      file: z.string().describe('Path inside the repo, as search or grep printed it'),
+      startLine: z.number().optional(),
+      endLine: z.number().optional().describe(`Default: startLine + ${READ_LINES - 1}`),
+      org: z.string().optional().describe(ORG_DESC),
+    },
+    async ({ repo, file, startLine, endLine, org }) => {
+      try {
+        const start = Math.max(1, startLine ?? 1)
+        const end = Math.max(start, endLine ?? start + READ_LINES - 1)
+        const res = (await callIntel('file-content', {
+          projectId: await resolveRepo(repo), file, startLine: start, endLine: end, orgId: org,
+        })) as { data?: { file: string; totalLines: number; startLine: number; endLine: number; content: string } }
+        const d = res.data
+        if (!d) return { content: [{ type: 'text' as const, text: 'No content.' }] }
+        const numbered = d.content.split('\n').map((l, i) => `${d.startLine + i}\t${l}`).join('\n')
+        const rest = d.endLine < d.totalLines ? `\n… lines ${d.endLine + 1}-${d.totalLines} not shown` : ''
+        return { content: [{ type: 'text' as const, text: `${repo}/${d.file} (${d.totalLines} lines)\n${numbered}${rest}` }] }
+      } catch (error) {
+        return {
+          content: [{ type: 'text' as const, text: `Code read error: ${error instanceof Error ? error.message : 'Unknown'}` }],
+          isError: true,
+        }
+      }
+    }
+  )
 
   // ── code_impact — calculate blast radius for code changes ──
   server.tool(

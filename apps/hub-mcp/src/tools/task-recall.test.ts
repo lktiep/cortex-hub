@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { registerSessionTools } from './session.js'
-import { formatTaskRecall, terms } from './task-recall.js'
+import { formatOrgRepos, formatTaskRecall, terms } from './task-recall.js'
 
 /**
  * cortex_session_start with the task: the recall and the code lookup an agent ran as three more
@@ -15,7 +15,7 @@ type Handler = (args: Record<string, unknown>) => Promise<Result>
 const realFetch = globalThis.fetch
 let asked: Array<{ path: string; body: Record<string, unknown> }>
 
-function sessionStart(down: string[] = []): Handler {
+function sessionStart(down: string[] = [], orgRepos?: string[]): Handler {
   asked = []
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input).replace('http://api', '')
@@ -23,7 +23,7 @@ function sessionStart(down: string[] = []): Handler {
     asked.push({ path, body })
     if (down.includes(path)) return new Response('down', { status: 503 })
     const reply: Record<string, unknown> = {
-      '/api/sessions/start': { sessionId: 'sess_1', project: { id: 'proj-1', orgId: 'org-1' }, recentSessions: [{ id: 'other' }] },
+      '/api/sessions/start': { sessionId: 'sess_1', project: { id: 'proj-1', orgId: 'org-1', orgRepos }, recentSessions: [{ id: 'other' }] },
       '/api/knowledge/search': { results: [
         { documentId: 'kdoc-1', title: 'Rotate keys in place', content: 'Keep the id,\n swap the hash.', score: 0.62 },
         { documentId: 'kdoc-1', title: 'Rotate keys in place', content: 'second chunk', score: 0.6 },
@@ -85,6 +85,16 @@ describe('cortex_session_start with a task', () => {
     expect(text).not.toContain('located:')
   })
 
+  it('names the other repos of the organization, with or without a task', async () => {
+    const withTask = (await sessionStart([], ['Server', 'Tools'])(start)).content.map((c) => c.text)
+    expect(withTask[1]).toContain('searchable: 2 other repo(s) of this organization, not on disk here — Server, Tools.')
+    expect(withTask[1]).toContain('cortex_code_grep')
+
+    const bare = (await sessionStart([], ['Server'])({ repo: start.repo })).content.map((c) => c.text)
+    expect(bare).toHaveLength(2)
+    expect(bare[1]).toContain('— Server.')
+  })
+
   it('without a task, answers as before', async () => {
     const res = await sessionStart()({ repo: start.repo })
     const body = JSON.parse(res.content[0]!.text) as Record<string, unknown>
@@ -102,6 +112,17 @@ describe('formatTaskRecall', () => {
 
   it('shows only the part that has something', () => {
     expect(formatTaskRecall('x', [], [{ memory: 'm' }])).toBe('recalled: knowledge+memory for "x"\nMemory:\n- m')
+  })
+})
+
+describe('formatOrgRepos', () => {
+  it('says nothing for no other repo, and cuts a long list', () => {
+    expect(formatOrgRepos(undefined)).toBe('')
+    expect(formatOrgRepos([])).toBe('')
+    const many = Array.from({ length: 25 }, (_, i) => `r${i}`)
+    expect(formatOrgRepos(many)).toContain('25 other repo(s)')
+    expect(formatOrgRepos(many)).toContain('r19, ….')
+    expect(formatOrgRepos(many)).not.toContain('r20')
   })
 })
 

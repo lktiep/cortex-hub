@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { apiCall } from '../api-call.js'
 import { LOAD_UP_FRONT } from './load-up-front.js'
-import { taskBrief } from './task-recall.js'
+import { formatOrgRepos, taskBrief } from './task-recall.js'
 
 // The docs indexer files each document as "[<path>] <title>". The IDE has already put these
 // instruction files in the agent's context, and the session-summary query ranks them first:
@@ -53,6 +53,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
       // The hub registers a repo of a saved git account on first sight; the agent should say so.
       let autoRegistered: unknown
       let projectNote: string | undefined
+      let orgRepos: string[] | undefined
       // Set when the hub did not record the session: the id above is then local only.
       let hubError: string | undefined
       try {
@@ -77,7 +78,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
         if (response.ok) {
           const data = await response.json() as {
             sessionId?: string
-            project?: { id: string; orgId?: string }
+            project?: { id: string; orgId?: string; orgRepos?: string[] }
             recentSessions?: unknown[]
             autoRegistered?: unknown
             projectNote?: string
@@ -85,6 +86,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
           if (data.sessionId) sessionId = data.sessionId
           if (data.project?.id) resolvedProjectId = data.project.id
           if (data.project?.orgId) resolvedOrgId = data.project.orgId
+          orgRepos = data.project?.orgRepos
           if (data.recentSessions) recentSessions = data.recentSessions
           autoRegistered = data.autoRegistered
           projectNote = data.projectNote
@@ -155,12 +157,15 @@ export function registerSessionTools(server: McpServer, env: Env) {
         // Knowledge search unavailable — continue with basic mission
       }
 
-      const brief = task?.trim()
-        ? await taskBrief(env, {
-            task: task.trim(), project: projectName, projectId: resolvedProjectId,
-            agentId: agentId ?? 'claude-code', branch, alreadyInContext,
-          })
-        : ''
+      const brief = [
+        task?.trim()
+          ? await taskBrief(env, {
+              task: task.trim(), project: projectName, projectId: resolvedProjectId,
+              agentId: agentId ?? 'claude-code', branch, alreadyInContext,
+            })
+          : '',
+        formatOrgRepos(orgRepos),
+      ].filter(Boolean).join('\n\n')
 
       if (task?.trim()) {
         // The agent wrote every identity field itself a moment ago; only what the hub decided goes back.
@@ -209,7 +214,8 @@ export function registerSessionTools(server: McpServer, env: Env) {
               recent_sessions: recentSessions.length > 0 ? recentSessions : undefined,
               relevant_knowledge: relevantKnowledge.length > 0 ? relevantKnowledge : undefined,
             })
-          }
+          },
+          ...(brief ? [{ type: 'text' as const, text: brief }] : []),
         ]
       }
     }
