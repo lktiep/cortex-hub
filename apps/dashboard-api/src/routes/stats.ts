@@ -675,13 +675,27 @@ function isReword(a: Set<string>, b: Set<string>): boolean {
   return shared / Math.min(a.size, b.size) >= 0.5
 }
 
-function loggedQueries(rows: Array<{ tool: string; params: string | null }>, toolFragment: string): string[] {
-  const queries: string[] = []
+// Which index a search ran against. The same words asked of another repo, branch or organization
+// are a new question with new hits, and calling that a reword tells an agent working across repos
+// to stop exactly when it should go on.
+export function searchScope(params: Record<string, unknown>): string {
+  const text = (key: string) => (typeof params[key] === 'string' ? (params[key] as string).trim().toLowerCase() : '')
+  // A repo arrives as a name or a git URL; "*" is how some agents spell "all of them".
+  const repo = text('repo').replace(/\/+$/, '').replace(/\.git$/, '').split('/').pop() ?? ''
+  return [repo === '*' ? '' : repo, text('projectId'), text('org'), text('branch')].join('|')
+}
+
+type LoggedQuery = { query: string; scope: string }
+
+function loggedQueries(rows: Array<{ tool: string; params: string | null }>, toolFragment: string): LoggedQuery[] {
+  const queries: LoggedQuery[] = []
   for (const row of rows) {
     if (!row.tool.includes(toolFragment)) continue
     try {
-      const query = (JSON.parse(row.params ?? '{}') as { query?: unknown }).query
-      if (typeof query === 'string' && query.trim()) queries.push(query)
+      const params = JSON.parse(row.params ?? '{}') as Record<string, unknown>
+      if (typeof params.query === 'string' && params.query.trim()) {
+        queries.push({ query: params.query, scope: searchScope(params) })
+      }
     } catch {
       // params is free-form text for some tools; a row we cannot parse simply is not counted
     }
@@ -689,14 +703,17 @@ function loggedQueries(rows: Array<{ tool: string; params: string | null }>, too
   return queries
 }
 
+function isRewordOf(earlier: LoggedQuery, current: LoggedQuery): boolean {
+  return earlier.scope === current.scope && isReword(queryTokens(earlier.query), queryTokens(current.query))
+}
+
 // Returns how many of these searches were rewordings of an earlier one in the same list.
-function countRewords(queries: string[]): number {
-  const distinct: Array<Set<string>> = []
+function countRewords(queries: LoggedQuery[]): number {
+  const distinct: LoggedQuery[] = []
   let rewords = 0
   for (const query of queries) {
-    const tokens = queryTokens(query)
-    if (distinct.some(seen => isReword(seen, tokens))) rewords++
-    else distinct.push(tokens)
+    if (distinct.some(seen => isRewordOf(seen, query))) rewords++
+    else distinct.push(query)
   }
   return rewords
 }
@@ -841,12 +858,27 @@ statsRouter.get('/hints/:agentId', (c) => {
     }
 
     if (currentTool.includes('code_search')) {
-      const queries = loggedQueries(calls, 'code_search')
-      // The call being answered is already logged, so the last query is this one.
-      const current = queries[queries.length - 1]
-      const earlier = queries.slice(0, -1)
-      const isReworded = current !== undefined
-        && earlier.some(q => isReword(queryTokens(q), queryTokens(current)))
+      // Only this session's searches. Every conversation on one API key logs under the same
+      // agent id, so two hours of that log is other sessions' questions — parallel workers,
+      // yesterday's task — and a query matching one of those is not a reword of anything.
+      let lastStart = -1
+      calls.forEach((c2, i) => { if (c2.tool.includes('session_start')) lastStart = i })
+      const queries = loggedQueries(calls.slice(lastStart + 1), 'code_search')
+      // hub-mcp does not wait for the log write before asking, so the call being answered may
+      // or may not be logged yet. When it sends the query, use that and drop its own row.
+      const sent = c.req.query('query')
+      let current: LoggedQuery | undefined
+      let earlier: LoggedQuery[]
+      if (sent) {
+        const { repo, projectId, org, branch } = c.req.query()
+        current = { query: sent, scope: searchScope({ repo, projectId, org, branch }) }
+        const last = queries[queries.length - 1]
+        earlier = last && last.query === current.query && last.scope === current.scope ? queries.slice(0, -1) : queries
+      } else {
+        current = queries[queries.length - 1]
+        earlier = queries.slice(0, -1)
+      }
+      const isReworded = current !== undefined && earlier.some(q => isRewordOf(q, current))
 
       if (isReworded) {
         hints.push(

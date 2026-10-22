@@ -380,9 +380,18 @@ app.all('/mcp', async (c) => {
           const parsed: unknown = respBody ? JSON.parse(respBody) : null
           if (canAppendHints(parsed)) {
             const lastItem = parsed.result.content.at(-1)!
+            // The search being answered goes along, so the hints endpoint can tell a reword from
+            // a new question without this call's log row, whose write above is not awaited.
+            const hintQuery = new URLSearchParams({ currentTool: toolName })
+            if (toolName === 'cortex_code_search' && argsObj) {
+              for (const key of ['query', 'repo', 'projectId', 'org', 'branch']) {
+                const value: unknown = argsObj[key]
+                if (typeof value === 'string') hintQuery.set(key, value)
+              }
+            }
             const [hintsData, notes] = await Promise.all([
               fetch(
-                `${apiUrl}/api/metrics/hints/${encodeURIComponent(agentId)}?currentTool=${encodeURIComponent(toolName)}`,
+                `${apiUrl}/api/metrics/hints/${encodeURIComponent(agentId)}?${hintQuery}`,
                 { signal: AbortSignal.timeout(2000) }
               )
                 .then(async (r) => (r.ok ? ((await r.json()) as { hints?: string[]; conductor?: string[] }) : {}))
