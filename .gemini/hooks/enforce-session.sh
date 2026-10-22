@@ -74,7 +74,7 @@ if [ -f "$STATE_DIR/session-started" ]; then
   esac
   if [ "$WRITES_A_FILE" = "1" ]; then
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-      deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. $HOW_OUT"
+      deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. $HOW_OUT"
     fi
   fi
   allow

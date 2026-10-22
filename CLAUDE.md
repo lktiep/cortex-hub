@@ -6,8 +6,8 @@ Run `/cs` at the start of every conversation. This initializes the session, reca
 
 If `/cs` is unavailable, run manually:
 1. `cortex_session_start(repo: "cortex-hub", mode: "development", agentId: "claude-code")`
-2. `cortex_knowledge_search(query: "session summary progress next session")`
-3. `cortex_memory_search(query: "session context decisions lessons")`
+2. `cortex_knowledge_search(query: "<the task in a few words>")` — the task's own words, not a generic phrase
+3. `cortex_memory_search(query: "<the task in a few words>")`
 4. `cortex_task_pickup()` — check for assigned tasks
 
 ## Tech Stack

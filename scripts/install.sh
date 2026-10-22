@@ -23,7 +23,7 @@
 set -euo pipefail
 
 HOOKS_VERSION=7
-HOOKS_MINOR=14
+HOOKS_MINOR=15
 MCP_URL_DEFAULT="http://localhost:8318/mcp"
 
 # ── Colors ──
@@ -819,7 +819,7 @@ if [ -f "$STATE_DIR/session-started" ]; then
       exit 0
     fi
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
+      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
       exit 2
     fi
   fi
@@ -2063,9 +2063,10 @@ with open('$USER_SETTINGS','w') as f: json.dump(d, f, indent=2)
   # ── Slash commands (/cs, /ce) ──
   mkdir -p .claude/commands
   cat > .claude/commands/cs.md << 'CMDEOF'
-# /cs — Cortex Start v0.9.3
+# /cs — Cortex Start v0.9.4
 
-> Version: 0.9.3 | Updated: 2026-10-21
+> Version: 0.9.4 | Updated: 2026-10-22
+> Changelog: v0.9.4 — recall with the task's own words; the generic session query is already in session_start's answer
 > Changelog: v0.9.3 — the hook fills in the IDE, branch and identity too; no step for a field the hub never returned
 > Changelog: v0.9.2 — clientSessionId is filled in by a hook, so the opening context is the same every time and stays cached
 > Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
@@ -2089,11 +2090,14 @@ checkout get a session each), the git branch, the IDE and `.cortex/agent-identit
 Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
 
 ## Step 2: Recall Context (parallel)
-Call BOTH in parallel:
-- `cortex_knowledge_search(query: "session summary progress next session")`
-- `cortex_memory_search(query: "session context decisions lessons", agentId: "claude-code")`
+`session_start` already answered "what happened last session" (`mission_brief`, `relevant_knowledge`).
+Do not repeat that with a generic phrase: it returns the same documents every time.
+Once you know the task, call BOTH in parallel with the task's own words (the feature, the error, the file):
+- `cortex_knowledge_search(query: "<the task in a few words>")`
+- `cortex_memory_search(query: "<the task in a few words>", agentId: "claude-code")`
 
-These return what was done last session, key decisions, and next steps.
+If the user has not given a task yet, skip this step and run it when they do. It is required before
+the first edit either way.
 
 ## Step 3: Conflict Check
 `cortex_changes(agentId: "claude-code", projectId: "<from step 1>")`
@@ -2393,7 +2397,7 @@ if [ -f "$STATE_DIR/session-started" ]; then
   esac
   if [ "$WRITES_A_FILE" = "1" ]; then
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-      deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. $HOW_OUT"
+      deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. $HOW_OUT"
     fi
   fi
   allow

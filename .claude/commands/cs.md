@@ -1,6 +1,7 @@
-# /cs — Cortex Start v0.9.3
+# /cs — Cortex Start v0.9.4
 
-> Version: 0.9.3 | Updated: 2026-10-21
+> Version: 0.9.4 | Updated: 2026-10-22
+> Changelog: v0.9.4 — recall with the task's own words; the generic session query is already in session_start's answer
 > Changelog: v0.9.3 — the hook fills in the IDE, branch and identity too; no step for a field the hub never returned
 > Changelog: v0.9.2 — clientSessionId is filled in by a hook, so the opening context is the same every time and stays cached
 > Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
@@ -24,11 +25,14 @@ checkout get a session each), the git branch, the IDE and `.cortex/agent-identit
 Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
 
 ## Step 2: Recall Context (parallel)
-Call BOTH in parallel:
-- `cortex_knowledge_search(query: "session summary progress next session")`
-- `cortex_memory_search(query: "session context decisions lessons", agentId: "claude-code")`
+`session_start` already answered "what happened last session" (`mission_brief`, `relevant_knowledge`).
+Do not repeat that with a generic phrase: it returns the same documents every time.
+Once you know the task, call BOTH in parallel with the task's own words (the feature, the error, the file):
+- `cortex_knowledge_search(query: "<the task in a few words>")`
+- `cortex_memory_search(query: "<the task in a few words>", agentId: "claude-code")`
 
-These return what was done last session, key decisions, and next steps.
+If the user has not given a task yet, skip this step and run it when they do. It is required before
+the first edit either way.
 
 ## Step 3: Conflict Check
 `cortex_changes(agentId: "claude-code", projectId: "<from step 1>")`

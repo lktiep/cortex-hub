@@ -4,6 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
 import { LOAD_UP_FRONT } from './load-up-front.js'
+import { DEFAULT_MAX_CHARS, formatKnowledgeDocument, formatKnowledgeResults, type KnowledgeDoc, type KnowledgeHit } from './knowledge-format.js'
 
 /**
  * Register knowledge tools.
@@ -85,17 +86,32 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
   // ── Search knowledge ──
   server.tool(
     'cortex_knowledge_search',
-    'Search the platform knowledge base by semantic similarity. Returns relevant document snippets with metadata, tags, and hit counts. Supports filtering by tags, project, hall type (MemPalace-inspired hierarchy), and "as of" date (temporal validity).',
+    'Search the platform knowledge base by semantic similarity. Returns one heading and a short excerpt per document; pass `id` for one document in full. Query with the words of the problem in hand (an error message, the feature), not a generic phrase. Supports filtering by tags, project, hall type (MemPalace-inspired hierarchy), and "as of" date (temporal validity).',
     {
-      query: z.string().describe('Text query to search for (auto-embedded)'),
+      query: z.string().optional().describe('Text query to search for (auto-embedded). Required unless id is given'),
+      id: z.string().optional().describe('Document ID from an earlier result: returns that document in full instead of searching'),
       tags: z.array(z.string()).optional().describe('Filter by tags'),
       projectId: z.string().optional().describe('Filter by project ID'),
       limit: z.number().optional().describe('Maximum results (default: 5)'),
+      maxChars: z.number().optional().describe(`Size of the answer in characters (default: ${DEFAULT_MAX_CHARS}); hits past it are listed by heading only`),
       hallType: z.enum(['fact', 'event', 'discovery', 'preference', 'advice', 'general']).optional().describe('Filter by MemPalace hall type'),
       asOf: z.string().optional().describe('ISO date — return only facts that were valid at this point in time'),
     },
-    async ({ query, tags, projectId, limit, hallType, asOf }) => {
+    async ({ query, id, tags, projectId, limit, maxChars, hallType, asOf }) => {
       try {
+        if (id) {
+          const docRes = await apiCall(env, `/api/knowledge/${encodeURIComponent(id)}`)
+          if (!docRes.ok) {
+            return {
+              content: [{ type: 'text' as const, text: `Knowledge document ${id}: ${docRes.status} ${await docRes.text()}` }],
+              isError: true,
+            }
+          }
+          return { content: [{ type: 'text' as const, text: formatKnowledgeDocument((await docRes.json()) as KnowledgeDoc) }] }
+        }
+        if (!query) {
+          return { content: [{ type: 'text' as const, text: 'Give a query to search, or an id to read one document.' }], isError: true }
+        }
         const res = await apiCall(env, '/api/knowledge/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -122,26 +138,7 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
           }
         }
 
-        interface SearchResult {
-          score?: number
-          chunkId?: string
-          content?: string
-          documentId?: string
-          title?: string
-          chunkIndex?: number
-          deprecated?: boolean
-          document?: {
-            tags?: string
-            hall_type?: string
-          }
-        }
-
-        interface SearchResponse {
-          query: string
-          results: SearchResult[]
-        }
-
-        const data = (await res.json()) as SearchResponse
+        const data = (await res.json()) as { query: string; results?: KnowledgeHit[] }
         if (!data.results || data.results.length === 0) {
           return {
             content: [
@@ -153,24 +150,8 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
           }
         }
 
-        const formattedResults = data.results.map((r, index) => {
-          const tagsList = r.document?.tags ? JSON.parse(r.document.tags) : []
-          const tagsStr = tagsList.length > 0 ? ` [Tags: ${tagsList.join(', ')}]` : ''
-          const hallTypeStr = r.document?.hall_type ? ` [Type: ${r.document.hall_type}]` : ''
-          const deprecationWarning = r.deprecated
-            ? `\n⚠️ WARNING: This entry has high fallback rates and might be obsolete/deprecated.`
-            : ''
-          
-          return `### Result ${index + 1}: ${r.title || 'Untitled'} (ID: ${r.documentId ?? 'unknown'}, Chunk: ${r.chunkIndex ?? 0}, Score: ${r.score?.toFixed(3) ?? 'N/A'})${tagsStr}${hallTypeStr}${deprecationWarning}\n\n${r.content || ''}`
-        }).join('\n\n---\n\n')
-
         return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `Search results for query: "${query}"\n\n${formattedResults}`,
-            },
-          ],
+          content: [{ type: 'text' as const, text: formatKnowledgeResults(query, data.results, maxChars) }],
         }
       } catch (error) {
         return {
