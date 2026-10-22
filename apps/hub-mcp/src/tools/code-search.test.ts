@@ -18,7 +18,7 @@ let calls: Call[]
 
 const hit = (repo: string | undefined, filePath: string, score: number) => ({ repo, filePath, score, startLine: 3, endLine: 9 })
 
-function codeSearch(opts: { unknownRepo?: string; outline?: string } = {}): Handler {
+function codeSearch(opts: { unknownRepo?: string; unindexedBranch?: string; outline?: string } = {}): Handler {
   calls = []
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input).replace('http://api', '')
@@ -27,6 +27,9 @@ function codeSearch(opts: { unknownRepo?: string; outline?: string } = {}): Hand
     if (path === '/api/intel/search') {
       if (body.projectId && body.projectId === opts.unknownRepo) {
         return new Response(JSON.stringify({ error: 'Repository not found' }), { status: 500 })
+      }
+      if (body.branch && body.branch === opts.unindexedBranch) {
+        return new Response(JSON.stringify({ error: `Repository "${String(body.projectId)}" not found` }), { status: 500 })
       }
       const formatted = body.projectId ? `flows in ${String(body.projectId)}` : 'flows across the organization'
       return new Response(JSON.stringify({ data: { formatted } }))
@@ -109,6 +112,14 @@ describe('cortex_code_search with a repo', () => {
     expect(asked('search').map((b) => b.projectId)).toEqual(['game-server'])
     expect(asked('code-search').map((b) => b.projectId)).toEqual(['game-server'])
     expect(res.content[0]!.text).not.toContain('other repos')
+  })
+
+  it('a branch the graph never indexed falls back to the default branch, not an error', async () => {
+    const res = await codeSearch({ unindexedBranch: 'feat/new' })({ query: 'login', repo: 'game-server', branch: 'feat/new' })
+
+    expect(res.isError).toBeUndefined()
+    expect(asked('search').map((b) => b.branch)).toEqual(['feat/new', undefined])
+    expect(res.content[0]!.text).toContain('1. src/login.ts')
   })
 })
 

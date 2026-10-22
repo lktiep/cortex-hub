@@ -221,11 +221,15 @@ export function registerCodeTools(server: McpServer, env: Env) {
               })
             : Promise.resolve([])
           const [flows, matches] = await Promise.all([
-            searchRepo(query, project, org, branch, flowLimit).catch((error: unknown) => {
-              // A checkout the hub does not hold: search the organization instead.
-              if (current) return undefined
-              throw error
-            }),
+            searchRepo(query, project, org, branch, flowLimit)
+              // A branch the graph never indexed — a feature branch not pushed yet — has no graph
+              // of its own; the default branch's is the closest there is.
+              .catch((error: unknown) => (branch ? searchRepo(query, project, org, undefined, flowLimit) : Promise.reject(error)))
+              .catch((error: unknown) => {
+                // A checkout the hub does not hold: search the organization instead.
+                if (current) return undefined
+                throw error
+              }),
             // Paths are cheap and snippets are capped, so ask for more than the flow limit.
             searchCode({ query, projectId: project, orgId: org, branch, limit: Math.max(flowLimit, 8) }),
           ])
