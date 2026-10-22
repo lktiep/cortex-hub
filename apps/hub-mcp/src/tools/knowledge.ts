@@ -86,7 +86,7 @@ export function registerKnowledgeTools(server: McpServer, env: Env) {
   // ── Search knowledge ──
   server.tool(
     'cortex_knowledge_search',
-    'Search the platform knowledge base by semantic similarity. Returns one heading and a short excerpt per document; pass `id` for one document in full. Query with the words of the problem in hand (an error message, the feature), not a generic phrase. Supports filtering by tags, project, hall type (MemPalace-inspired hierarchy), and "as of" date (temporal validity).',
+    'Search the platform knowledge base by semantic similarity. Returns one heading and a short excerpt per document; pass `id` for one document in full. Query with the words of the problem in hand (an error message, the feature), not a generic phrase. Without projectId it searches the projects of your organization and the global docs. Supports filtering by tags, project, hall type (MemPalace-inspired hierarchy), and "as of" date (temporal validity).',
     {
       query: z.string().optional().describe('Text query to search for (auto-embedded). Required unless id is given'),
       id: z.string().optional().describe('Document ID from an earlier result: returns that document in full instead of searching'),

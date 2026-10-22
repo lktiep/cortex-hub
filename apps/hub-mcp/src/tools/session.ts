@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { apiCall } from '../api-call.js'
 import { LOAD_UP_FRONT } from './load-up-front.js'
+import { taskBrief } from './task-recall.js'
 
 // The docs indexer files each document as "[<path>] <title>". The IDE has already put these
 // instruction files in the agent's context, and the session-summary query ranks them first:
@@ -23,7 +24,7 @@ export function alreadyInContext(title: string | undefined): boolean {
 export function registerSessionTools(server: McpServer, env: Env) {
   server.tool(
     'cortex_session_start',
-    'Start a new execution session with optional agent identity metadata.',
+    'Start the session. Pass `task` once you know it: the answer then also holds what the hub recalls for the task and the files, lines and symbols to read, in place of separate knowledge, memory and code searches.',
     {
       repo: z.string().describe('The URL of the repository being worked on'),
       mode: z.string().optional().describe('Session mode: development, onboarding, review'),
@@ -34,11 +35,14 @@ export function registerSessionTools(server: McpServer, env: Env) {
       branch: z.string().optional().describe('Current git branch'),
       capabilities: z.array(z.string()).optional().describe('Agent capabilities'),
       role: z.string().optional().describe('Agent role from agent-identity.json'),
+      task: z.string().max(300).optional().describe(
+        'What you are about to do, in a few words (the feature, the error). The answer then holds what the hub recalls for it and the files and lines to read: no separate knowledge, memory or code search to run.'
+      ),
       clientSessionId: z.string().max(128).optional().describe(
-        'This conversation\'s id. Claude Code\'s session-id hook fills it in; elsewhere, pass the id the IDE\'s SessionStart hook printed (clientSessionId: …). Keeps two conversations in one checkout on separate sessions.'
+        'This conversation\'s id, as the IDE\'s SessionStart hook printed it (Claude Code\'s hook fills it in). Keeps two conversations in one checkout on separate sessions.'
       ),
     },
-    async ({ repo, mode, agentId, hostname, os, ide, branch, capabilities, role, clientSessionId }) => {
+    async ({ repo, mode, agentId, hostname, os, ide, branch, capabilities, role, task, clientSessionId }) => {
       // Extract project name from repo URL for context
       const projectName = repo
         ? repo.replace(/\.git$/, '').replace(/\/$/, '').split('/').pop() ?? 'unknown'
@@ -100,7 +104,9 @@ export function registerSessionTools(server: McpServer, env: Env) {
       // Search for: recent session summaries, project context, active goals
       let missionBrief = `# ${projectName}\nMode: ${mode ?? 'development'}`
       let relevantKnowledge: Array<{ id: string; title: string; description: string; origin: string; quality: Record<string, number> }> = []
-      try {
+      // With the task in hand the brief below is replaced by recall on the task itself: the
+      // generic query ranked indexed docs first, a workflow template more often than a summary.
+      if (!task) try {
         const searchQuery = `session summary progress next session ${projectName}`
         const knowledgeRes = await apiCall(env, '/api/knowledge/search', {
           method: 'POST',
@@ -150,6 +156,33 @@ export function registerSessionTools(server: McpServer, env: Env) {
         }
       } catch {
         // Knowledge search unavailable — continue with basic mission
+      }
+
+      const brief = task?.trim()
+        ? await taskBrief(env, {
+            task: task.trim(), project: projectName, projectId: resolvedProjectId,
+            agentId: agentId ?? 'claude-code', branch, alreadyInContext,
+          })
+        : ''
+
+      if (task?.trim()) {
+        // The agent wrote every identity field itself a moment ago; only what the hub decided goes back.
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                session_id: sessionId,
+                status: 'active',
+                project: resolvedProjectId ? { id: resolvedProjectId, orgId: resolvedOrgId } : undefined,
+                auto_registered: autoRegistered,
+                project_note: projectNote,
+                hub_error: hubError,
+              }),
+            },
+            ...(brief ? [{ type: 'text' as const, text: brief }] : []),
+          ],
+        }
       }
 
       return {

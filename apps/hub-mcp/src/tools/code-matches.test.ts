@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatCodeMatches, formatOtherRepos, trimChunk, SNIPPET_CHARS } from './code-matches.js'
+import { formatCodeMatches, formatOtherRepos, trimChunk, SNIPPET_CHARS, outlineFiles, outlineQuery, parseOutline, formatOutline } from './code-matches.js'
 
 describe('trimChunk', () => {
   it('drops the indexer header of a first chunk', () => {
@@ -64,5 +64,35 @@ describe('formatOtherRepos', () => {
 
     expect(text).toContain('- r5 —')
     expect(text).not.toContain('- r6 —')
+  })
+})
+
+describe('outline of the top files', () => {
+  it('takes the best three files of the repo searched, once each', () => {
+    const files = outlineFiles([
+      { score: 0.9, filePath: 'a.ts' }, { score: 0.8, filePath: 'a.ts' }, { score: 0.7, filePath: 'x.ts', repo: 'other' },
+      { score: 0.6, filePath: 'b.ts' }, { score: 0.5, filePath: 'c.ts' }, { score: 0.4, filePath: 'd.ts' },
+    ])
+    expect(files).toEqual(['a.ts', 'b.ts', 'c.ts'])
+  })
+
+  it('quotes paths so one cannot end the list', () => {
+    expect(outlineQuery(["it's.ts"])).toContain("['it\\'s.ts']")
+  })
+
+  it('reads the cypher table and lists functions with their lines, in file rank order', () => {
+    const rows = parseOutline('| file | name | type | s | e |\n| --- | --- | --- | --- | --- |\n' +
+      '| b.ts | helper | Function | 1 | 9 |\n| a.ts | KEY | Const | 2 | 2 |\n| a.ts | run | Function | 4 | 20 |\n(3 rows)\n---\nNext: …')
+    expect(rows).toHaveLength(3)
+    expect(formatOutline(rows, ['a.ts', 'b.ts'])).toContain('- a.ts: run L4-20\n- b.ts: helper L1-9')
+  })
+
+  it('caps a long file and says how many it left out', () => {
+    const rows = Array.from({ length: 12 }, (_, i) => ({ file: 'a.ts', name: `f${i}`, type: 'Function', start: i * 10, end: i * 10 + 5 }))
+    expect(formatOutline(rows, ['a.ts'])).toContain('f9 L90-95, +2 more')
+  })
+
+  it('says nothing when the graph has no symbols there', () => {
+    expect(formatOutline([], ['a.ts'])).toBe('')
   })
 })

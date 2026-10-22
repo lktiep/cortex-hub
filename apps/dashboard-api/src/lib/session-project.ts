@@ -3,6 +3,9 @@ import { db } from '../db/client.js'
 
 const logger = createLogger('session-project')
 
+/** Where every repo lands unasked: its projects are not related to each other. */
+export const PERSONAL_ORG = 'org-default'
+
 /**
  * The project of the caller's most recent session. The agent already declared its repo at
  * cortex_session_start, so nothing has to be passed on every later call. An active session
@@ -26,5 +29,23 @@ export function projectOfActiveSession(
   } catch (error) {
     logger.warn(`projectOfActiveSession failed: ${String(error)}`)
     return undefined
+  }
+}
+
+/**
+ * The projects whose knowledge an unscoped search reads: the caller's session project, and the
+ * other projects of its organization unless that is the personal one. undefined when the caller
+ * has no session, which leaves the search as wide as it always was.
+ */
+export function recallProjects(apiKeyOwner: string | null | undefined): string[] | undefined {
+  const project = projectOfActiveSession(apiKeyOwner)
+  if (!project) return undefined
+  if (project.org_id === PERSONAL_ORG) return [project.id]
+  try {
+    const rows = db.prepare('SELECT id FROM projects WHERE org_id = ?').all(project.org_id) as Array<{ id: string }>
+    return rows.map((r) => r.id)
+  } catch (error) {
+    logger.warn(`recallProjects failed: ${String(error)}`)
+    return [project.id]
   }
 }

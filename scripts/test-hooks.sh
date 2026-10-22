@@ -300,6 +300,23 @@ check "memory_search records the recall"   0 "$(grep -q '^tool=' "$STATE/memory-
 check "memory_search is not discovery"     0 "$([ ! -f "$STATE/discovery-used" ] && echo 0 || echo 1)"
 teardown
 
+echo "track-quality.sh — a session started with the task carries its recall and lookup"
+setup
+POST='{"tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{"task":"rotate a key"},"tool_response":[{"type":"text","text":"{\"session_id\":\"sess_9\"}"},{"type":"text","text":"recalled: knowledge+memory for \"rotate a key\"\nKnowledge: nothing stored for this yet.\n\nlocated: code for \"rotate a key\"\n1. src/keys.ts — L1-9 70%"}]}'
+printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "the start's recall counts as knowledge" 0 "$(grep -q '^tool=' "$STATE/knowledge-recalled" 2>/dev/null && echo 0 || echo 1)"
+check "and as memory"                      0 "$(grep -q '^tool=' "$STATE/memory-recalled" 2>/dev/null && echo 0 || echo 1)"
+check "its located files count as discovery" 0 "$(grep -q '^tool=' "$STATE/discovery-used" 2>/dev/null && echo 0 || echo 1)"
+teardown
+
+setup
+# The hub prints a line only for the part that answered; the task's words are not one.
+POST='{"tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{"task":"recalled: knowledge+memory for x"},"tool_response":[{"type":"text","text":"{\"session_id\":\"sess_9\",\"task\":\"located: code for x\"}"}]}'
+printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "no recall line, no recall"          0 "$([ ! -f "$STATE/knowledge-recalled" ] && [ ! -f "$STATE/memory-recalled" ] && echo 0 || echo 1)"
+check "no located line, no discovery"      0 "$([ ! -f "$STATE/discovery-used" ] && echo 0 || echo 1)"
+teardown
+
 echo "track-quality.sh — session id comes from tool_response"
 setup
 POST='{"tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{},"tool_response":{"content":[{"type":"text","text":"{\"session_id\":\"sess_42\",\"projectId\":\"proj-1\"}"}]}}'
@@ -735,6 +752,13 @@ setup
 POST='{"session_id":"g-uuid","tool_name":"mcp_cortex-hub_cortex_session_start","tool_input":{},"tool_response":{"llmContent":"{\"session_id\":\"sess_77\"}"}}'
 printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
 check "tracker takes the hub id"            sess_77 "$(cat "$STATE/session-id" 2>/dev/null)"
+check "no task, no recall"                  0 "$([ ! -f "$STATE/knowledge-recalled" ] && echo 0 || echo 1)"
+teardown
+setup
+POST='{"session_id":"g-uuid","tool_name":"mcp_cortex-hub_cortex_session_start","tool_input":{"task":"x"},"tool_response":{"llmContent":"{\"session_id\":\"sess_77\"}\nrecalled: knowledge+memory for \"x\"\nlocated: code for \"x\""}}'
+printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
+check "a start with the task is the recall" 0 "$(grep -q '^tool=' "$STATE/knowledge-recalled" && grep -q '^tool=' "$STATE/memory-recalled" && echo 0 || echo 1)"
+check "and the discovery"                   0 "$(grep -q '^tool=' "$STATE/discovery-used" 2>/dev/null && echo 0 || echo 1)"
 teardown
 start_stub ok
 armed .gemini/antigravity/mcp_config.json "{\"mcpServers\":{\"cortex-hub\":{\"serverUrl\":\"$STUB_URL/mcp\",\"headers\":{\"Authorization\":\"Bearer gem-key\"}}}}"

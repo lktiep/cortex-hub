@@ -51,7 +51,7 @@ const lines = (m: CodeMatch) => (m.startLine ? `L${m.startLine}-${m.endLine ?? m
 
 const place = (m: CodeMatch) => (m.repo ? `${m.repo}: ${m.filePath}` : m.filePath!)
 
-export function formatCodeMatches(matches: CodeMatch[]): string {
+export function formatCodeMatches(matches: CodeMatch[], snippets = SNIPPET_COUNT): string {
   const ranked = matches.filter((m) => m.filePath)
   if (ranked.length === 0) return ''
 
@@ -69,7 +69,7 @@ export function formatCodeMatches(matches: CodeMatch[]): string {
     out.push(`${++i}. ${file} — ${where.join(', ')}`)
   }
 
-  for (const m of ranked.slice(0, SNIPPET_COUNT)) {
+  for (const m of ranked.slice(0, snippets)) {
     if (!m.content) continue
     const ext = m.filePath!.split('.').pop() ?? ''
     out.push('', `### ${place(m)}${m.startLine ? `:${m.startLine}-${m.endLine ?? m.startLine}` : ''}`)
@@ -105,4 +105,68 @@ export function formatOtherRepos(matches: CodeMatch[]): string {
   for (const [repo, files] of repos) out.push(`- ${repo} — ${files.join(', ')}`)
   out.push('Search one with `repo: "<name>"`, or all of them with `repo: "*"`.')
   return out.join('\n')
+}
+
+/**
+ * The symbols the graph holds in the top files, with their lines, in place of the graph's
+ * execution flows. Measured in the agent benchmark: after a search ranked the right file first
+ * every time, the flows under it were other features' call chains (~1.2k characters an agent
+ * read and never used), and the agent still opened the whole file to find the function it had
+ * to change. A line per file of "name L<start>-<end>" lets it read just that function.
+ */
+export interface OutlineSymbol {
+  file: string
+  name: string
+  type: string
+  start: number
+  end: number
+}
+
+export const OUTLINE_FILES = 3
+export const OUTLINE_PER_FILE = 10
+// What an agent reads or changes as a unit. A property or a one-line constant only crowds the line.
+const OUTLINE_KINDS = new Set(['Function', 'Method', 'Class', 'Interface', 'TypeAlias', 'Route'])
+
+/** The files the outline covers: the best few of the repo being searched, in rank order. */
+export function outlineFiles(matches: CodeMatch[]): string[] {
+  const files: string[] = []
+  for (const m of matches) {
+    if (m.repo || !m.filePath || files.includes(m.filePath)) continue
+    files.push(m.filePath)
+    if (files.length === OUTLINE_FILES) break
+  }
+  return files
+}
+
+export function outlineQuery(files: string[]): string {
+  const list = files.map((f) => `'${f.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`).join(', ')
+  return `MATCH (n) WHERE n.filePath IN [${list}] AND n.startLine IS NOT NULL ` +
+    'RETURN n.filePath AS file, n.name AS name, labels(n) AS type, n.startLine AS s, n.endLine AS e ORDER BY file, s LIMIT 300'
+}
+
+/** The rows of the markdown table the cypher endpoint answers with. */
+export function parseOutline(raw: string): OutlineSymbol[] {
+  const out: OutlineSymbol[] = []
+  for (const line of raw.split('\n')) {
+    if (!line.startsWith('|') || line.startsWith('| ---')) continue
+    const [file, name, type, s, e] = line.split('|').slice(1, -1).map((c) => c.trim())
+    const start = Number(s)
+    if (!file || !name || file === 'file' || !Number.isFinite(start)) continue
+    out.push({ file, name, type: type ?? '', start, end: Number(e) || start })
+  }
+  return out
+}
+
+export function formatOutline(symbols: OutlineSymbol[], files: string[]): string {
+  const out: string[] = []
+  for (const file of files) {
+    const own = symbols.filter((s) => s.file === file && OUTLINE_KINDS.has(s.type))
+    if (own.length === 0) continue
+    const shown = own.slice(0, OUTLINE_PER_FILE).map((s) => `${s.name} L${s.start}-${s.end}`)
+    const more = own.length > OUTLINE_PER_FILE ? `, +${own.length - OUTLINE_PER_FILE} more` : ''
+    out.push(`- ${file}: ${shown.join(', ')}${more}`)
+  }
+  if (out.length === 0) return ''
+  return ['**Symbols in those files** (read just the lines of the one you need):', ...out,
+    'Callers, callees and flows of one: cortex_code_context "<name>".'].join('\n')
 }

@@ -18,7 +18,7 @@ let calls: Call[]
 
 const hit = (repo: string | undefined, filePath: string, score: number) => ({ repo, filePath, score, startLine: 3, endLine: 9 })
 
-function codeSearch(opts: { unknownRepo?: string } = {}): Handler {
+function codeSearch(opts: { unknownRepo?: string; outline?: string } = {}): Handler {
   calls = []
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input).replace('http://api', '')
@@ -36,6 +36,9 @@ function codeSearch(opts: { unknownRepo?: string } = {}): Handler {
         ? [hit(undefined, 'src/login.ts', 0.6)]
         : [hit('game-server', 'src/auth/login.ts', 0.55), hit('game-tools', 'tools/login-bot.ts', 0.41)]
       return new Response(JSON.stringify({ data: { results } }))
+    }
+    if (path === '/api/intel/cypher' && opts.outline) {
+      return new Response(JSON.stringify({ success: true, data: { raw: opts.outline } }))
     }
     return new Response('{}', { status: 404 })
   }) as unknown as typeof fetch
@@ -105,5 +108,27 @@ describe('cortex_code_search with a repo', () => {
     expect(asked('search').map((b) => b.projectId)).toEqual(['game-server'])
     expect(asked('code-search').map((b) => b.projectId)).toEqual(['game-server'])
     expect(res.content[0]!.text).not.toContain('other repos')
+  })
+})
+
+describe('cortex_code_search under its ranked files', () => {
+  const table = '| file | name | type | s | e |\n| --- | --- | --- | --- | --- |\n' +
+    '| src/login.ts | LoginForm | Class | 3 | 40 |\n| src/login.ts | user | Property | 5 | 5 |\n| src/login.ts | submit | Method | 12 | 30 |\n(3 rows)'
+
+  it('outlines the symbols of the top files in place of the graph\'s flows', async () => {
+    const res = await codeSearch({ outline: table })({ query: 'login', repo: 'game-client' })
+    const text = res.content[0]!.text
+
+    expect(asked('cypher')[0]).toMatchObject({ projectId: 'game-client' })
+    expect(String(asked('cypher')[0]!.query)).toContain("n.filePath IN ['src/login.ts']")
+    expect(text).toContain('- src/login.ts: LoginForm L3-40, submit L12-30')
+    expect(text).not.toContain('user L5')
+    expect(text).not.toContain('flows in game-client')
+  })
+
+  it('keeps the flows when the graph has no symbols for those files', async () => {
+    const res = await codeSearch()({ query: 'login', repo: 'game-client' })
+
+    expect(res.content[0]!.text).toContain('flows in game-client')
   })
 })

@@ -1,14 +1,17 @@
 # Cortex Hub — Claude Code Instructions
 
-## Quick Start (MANDATORY)
+## Start (MANDATORY)
 
-Run `/cs` at the start of every conversation. This initializes the session, recalls context from previous sessions, and checks for conflicts. **Editing is blocked until this completes.**
+Once you know the task, make one call:
 
-If `/cs` is unavailable, run manually:
-1. `cortex_session_start(repo: "cortex-hub", mode: "development", agentId: "claude-code")`
-2. `cortex_knowledge_search(query: "<the task in a few words>")` — the task's own words, not a generic phrase
-3. `cortex_memory_search(query: "<the task in a few words>")`
-4. `cortex_task_pickup()` — check for assigned tasks
+```
+cortex_session_start(repo: "https://github.com/lktiep/cortex-hub.git", task: "<the task in a few words>")
+```
+
+Its answer holds what the hub recalls for the task (knowledge and memory) and the files and line
+ranges to read, with the symbols in them. That is the recall and the first lookup: there is no
+separate knowledge, memory or code search to run before editing, and no `/cs` to run first.
+A hook adds the conversation id, branch and IDE. Edits are blocked until this call is made.
 
 ## Tech Stack
 
@@ -20,126 +23,42 @@ camelCase vars/functions, PascalCase types. `@cortex/*` path aliases. No `any` w
 
 ## Finding code fast
 
-Don't run a fixed ladder of tools. Start from what you already know and take the shortest
-path to the line you need to change:
+| You already know | Start with |
+|---|---|
+| A symbol name | `cortex_code_context(name)` — exact graph lookup, with callers and callees |
+| Only the behaviour | `cortex_code_search(query)` — ranked files, line ranges and the symbols in them |
+| An exact literal (env var, config key, error string) | `rg` / `grep` |
+| A relationship across files | `cortex_cypher` |
 
-| You already know | Start with | Why this one |
-|---|---|---|
-| A symbol name (`buildHybridQuery`, `HybridSearch`) | `cortex_code_context(name)` | Exact graph lookup — no ranking to get wrong — and it answers callers, callees and imports in one call |
-| Only the behaviour ("where do we verify API keys?") | `cortex_code_search(query, limit: 10)` | Ranked hybrid search over the index. One call, then read the list |
-| An exact literal (env var, config key, error string, magic number) | `rg` / `grep` | Not a ranking problem. Lexical search alone ranks *worse* than vector on questions (r@1 0.267 vs 0.533) but is exactly right for a string that either appears or does not |
-| A relationship ("who calls X across packages") | `cortex_cypher` | One graph query instead of N searches |
-| Whether someone else is in this file | `cortex_changes` | Before editing anything shared |
+- Read the lines a hit names (Read with offset/limit), not the whole file.
+- The target is in the top 10 for every query of the retrieval benchmark but first for only half:
+  scan the whole list, and ask a different question rather than a reworded one.
+- Omit `repo:` to search every repo of the organization; `cortex_list_repos()` shows which.
+- `cortex_code_impact(target)` before changing something exported or shared;
+  `cortex_changes` before editing a file another agent may hold.
 
-### Search once, then read the whole set
+## When something breaks
 
-Measured on this repo's own index (`benchmarks/retrieval_bench.ts`, hand-written gold set,
-n=15): the target file is in the **top 10 for 15/15** queries, top 3 for 11/15, and at
-**rank 1 for only 8/15**. Two rules follow from that, and they are the difference between
-finding the spot in one call and spending five:
+Search `cortex_knowledge_search(query: "<the error>")` and `cortex_memory_search` first. If the fix
+was not obvious, store it: `cortex_knowledge_store(title, content)`.
 
-- **Scan all ten hits before choosing.** Acting on hit #1 alone is wrong about four times
-  in ten.
-- **Don't re-search the same question.** Recall@10 is 1.000, so a reworded query returns
-  the same set for another round trip. If nothing fits, ask a *different* question or
-  switch tool — don't paraphrase.
-- **Read the lines a hit names, not the file.** Each hit carries its line range (`L120-168`):
-  Read with that offset and limit, or `rg -n` inside the file. A whole file is often ten
-  times the chunk you came for.
+## Quality Gates (before committing)
 
-### The rest of the toolbox
+1. `pnpm build && pnpm typecheck && pnpm lint` (full build, never `--filter`), in one command, last.
+2. `cortex_detect_changes(diff: "<git diff --staged -U0 | grep -E '^(diff |--- |\+\+\+ |@@ )'>")`.
+   `risk_level: "unknown"` means a lookup failed, not that the change is safe.
+3. After pushing: `cortex_code_reindex(repo: "cortex-hub", branch: "<branch>")`.
 
-- `cortex_code_impact(target)` — before editing something exported or shared. Not a ritual
-  for every file.
-- `cortex_cypher(query: "MATCH ...")` — when you need exact relationships rather than a ranking.
-- **Knowledge and memory are for errors and decisions, not for locating code.** `/cs` recalls
-  them once at session start; calling them again before each lookup costs two round trips and
-  answers a different question. Reach for them the moment something breaks, or when you need
-  to know *why* the code is the way it is.
+## What the hooks block
 
-### When you hit an error
-1. `cortex_knowledge_search(query: "<error message>")` — someone may have solved this already
-2. `cortex_memory_search(query: "<error context>")` — you may have seen this before
-3. Fix the error
-4. If the fix was non-obvious: `cortex_knowledge_store(title: "<fix>", content: "<steps>")`
-
-### Sharing what you learn
-- `cortex_memory_store(content: "...")` — personal recall for future sessions
-- `cortex_knowledge_store(title: "...", content: "...")` — team-wide (bug fixes, patterns, decisions)
-- Add `files: ["src/auth.ts", "src/lib/"]` and `category: "risk" | "lesson" | "error_fix" | "pattern" | "decision"`
-  when it is about particular files (a directory ends in `/`): the next agent to open them is
-  shown it before reading, and the code tools append it to results naming them.
-- Completing a conductor task: `cortex_task_update(status: "completed", result: { summary, prUrl?,
-  artifactUrl?, risks?: ["…" | { text, files }] })`. Each risk is kept as a `risk` document on the
-  task's files (or the ones it names), so it is not lost inside the artifact.
-
-### Before committing
-`cortex_detect_changes(diff: "<output of git diff --staged>")` — shows affected symbols and risk level.
-The hub cannot see your working tree, so the diff has to be passed; for a large change send only
-the headers: `git diff --staged -U0 | grep -E '^(diff |--- |\+\+\+ |@@ )'`. `risk_level: "unknown"`
-means a lookup failed, not that the change is safe.
-
-### After pushing
-`cortex_code_reindex(repo: "cortex-hub", branch: "<branch>")` — keeps code intelligence fresh.
-
-### Cross-project lookup
-Projects are isolated per **organization**. Related repos — a product's client, server and
-tools — belong in the same one, and that is the boundary of a cross-repo search:
-```
-cortex_code_search(query: "login packet")                     # this repo, plus a line per other repo
-cortex_code_search(query: "login packet", repo: "*")          # every repo in your organization
-cortex_code_search(query: "user auth", repo: "my-backend")     # one repo
-cortex_code_context(name: "validateToken", repo: "my-backend")
-cortex_list_repos()                                            # what "every repo" covers
-```
-The organization comes from `org:` if you pass it, else the repo you named, else your latest
-`cortex_session_start` (its `project.orgId`). With several organizations and none of those,
-the search is refused rather than widened. If you run sessions in two organizations with one
-API key at once, pass `org:` — the latest session is the other one's.
+- No `cortex_session_start` → `Edit`, `Write` and file-modifying Bash are refused.
+- No discovery yet (a start with `task`, or a code search/context/impact/cypher call) → `Grep`,
+  `Glob` and a command that starts with `grep`/`rg`/`find` are refused.
+- No recall (a start with `task`, or knowledge and memory searches) → every write is refused.
+- `git commit` needs build, typecheck and lint to have passed after the last write.
+- Hub genuinely unreachable: `echo '<reason>' > .cortex/.session-state/gate-off` (recorded).
 
 ## Ending a Session
 
-Run `/ce` or manually:
-1. `pnpm build && pnpm typecheck && pnpm lint`
-2. `cortex_quality_report` with results
-3. `cortex_memory_store` with session context (what was done, key decisions, next steps)
-4. `cortex_session_end(sessionId, summary)` — this also auto-saves the summary as searchable memory
-
-## Quality Gates
-
-Every session must pass before committing:
-- `pnpm build` (full build, never `--filter`)
-- `pnpm typecheck`
-- `pnpm lint`
-
-## What the hooks actually block
-
-`.claude/hooks/` gates tools on recorded evidence of cortex calls (see `scripts/test-hooks.sh`):
-
-- No `cortex_session_start` → every `Edit`, `Write` and file-modifying Bash command is refused.
-- No discovery call yet (`cortex_code_search`, `cortex_code_context`, `cortex_code_impact`,
-  `cortex_cypher`) → `Grep`, `Glob` and a `grep`/`rg`/`find` that *starts* a command are
-  refused, with or without a session. One discovery call unlocks them. A `grep` after a pipe
-  (filtering another command's output) is fine.
-- Editing before `cortex_knowledge_search` **and** `cortex_memory_search` → refused. This
-  covers `cat > file` and `sed -i` too, not just the Edit tool. Running a discovery call does
-  not retire this: the recalls are required for every write, all session.
-- `git commit` without discovery and without build/typecheck/lint passing → refused. Calling
-  `cortex_quality_report` does not substitute for the gates.
-- A green build certifies the **tree**, not the session: any write after the gates pass
-  (`Edit`, `Write`, `sed -i`, `cat > file`) clears them, and the commit gate closes again
-  until build/typecheck/lint are re-run. So run the gates last, then commit.
-- Markers live in `.cortex/.session-state/` and must contain `tool=` evidence written by the
-  PostToolUse hook — an empty file does not open a gate.
-- If the hub is genuinely unreachable, the gates have no path through them. Say so and
-  declare it: `echo '<reason>' > .cortex/.session-state/gate-off`. It is recorded in the
-  session summary.
-- After discovery, a repo-wide search for a symbol or a word is not refused, but
-  `nudge-lookup.sh` adds one line naming the cortex call that answers it
-  (`cortex_code_context` for a symbol, `cortex_code_search` for a word). It stays quiet for
-  literals, known files and file names, right after a cortex lookup, and between nudges
-  (one per agent every 5 such searches). `CORTEX_NUDGE=off` turns it off.
-- Never a block either: before `Read`/`Edit`/`Write` of a file with knowledge linked to it,
-  `recall-notes.sh` adds up to 3 of those notes (newest first), once per file per agent. The
-  project's links are fetched with `cortex_file_notes` and cached 10 minutes in
-  `.cortex/.session-state/notes/`. `CORTEX_NOTES=off` turns it off.
+Run `/ce`, or: `cortex_memory_store` what was done and what is next, then
+`cortex_session_end(sessionId, summary)`.

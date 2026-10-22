@@ -8,7 +8,7 @@ import { getReranker, RERANK_OVERFETCH } from '../lib/reranker.js'
 import { hasSparseVector, buildHybridQuery, HYBRID_FETCH_FLOOR } from '../lib/hybrid-search.js'
 import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
 import { analyzeDiff, parseCypherTable, MAX_DIFF_CHARS, type RunCypher } from '../lib/diff-symbols.js'
-import { projectOfActiveSession } from '../lib/session-project.js'
+import { PERSONAL_ORG, projectOfActiveSession } from '../lib/session-project.js'
 
 const logger = createLogger('intel')
 
@@ -20,7 +20,6 @@ const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
 /** Code search over-fetch, so the copies other branches hold of a chunk do not crowd out the limit. */
 const BRANCH_OVERFETCH = 3
 /** Where repos are registered when nobody chose an organization; see db/schema.sql. */
-const PERSONAL_ORG = 'org-default'
 /** A repo listed beside the caller's own reaches at least this share of that repo's best score. */
 const BESIDE_FLOOR = 0.8
 

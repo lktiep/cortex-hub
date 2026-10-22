@@ -37,7 +37,7 @@ if (-not [string]::IsNullOrWhiteSpace($InputData)) {
         $Command = $json.tool_input.command
 
         if ($ToolName -match "^(Edit|Write|NotebookEdit)$") {
-            [Console]::Error.WriteLine("BLOCKED: Call cortex_session_start first (or run /cs). No edits without session.")
+            [Console]::Error.WriteLine("BLOCKED: Call cortex_session_start first, with the task (task: '<the task in a few words>'). No edits without session.")
             exit 2
         }
         if ($ToolName -eq "Bash") {
@@ -45,7 +45,7 @@ if (-not [string]::IsNullOrWhiteSpace($InputData)) {
                 exit 0
             }
             if ($Command -match "(git (add|commit|push|reset)|rm |mv |cp |mkdir |touch |chmod |sed -i)") {
-                [Console]::Error.WriteLine("BLOCKED: Call cortex_session_start first (or run /cs). No file modifications without session.")
+                [Console]::Error.WriteLine("BLOCKED: Call cortex_session_start first, with the task (task: '<the task in a few words>'). No file modifications without session.")
                 exit 2
             }
         }

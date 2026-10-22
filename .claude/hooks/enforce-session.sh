@@ -114,7 +114,7 @@ if [ -f "$STATE_DIR/session-started" ]; then
       exit 0
     fi
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
+      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. Or pass the task to cortex_session_start (task: \"<the task in a few words>\"): its answer is that recall. $HOW_OUT" >&2
       exit 2
     fi
   fi
@@ -132,7 +132,7 @@ fi
 SEARCH_HINT="BLOCKED: look it up with cortex_code_search (a behaviour) or cortex_code_context (a symbol name) first. One call unlocks find/grep/rg and Grep/Glob for the rest of the session. $HOW_OUT"
 case "$TOOL_NAME" in
   Edit|Write|NotebookEdit)
-    echo "BLOCKED: call cortex_session_start first (or run /cs). No edits without a session." >&2
+    echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No edits without a session." >&2
     exit 2 ;;
   Grep|Glob)
     marker_ok discovery-used && exit 0
@@ -145,14 +145,14 @@ case "$TOOL_NAME" in
     fi
     # The write check goes before the read allowlist, or `cat > file` passes as a read.
     if is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND"; then
-      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+      echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No file modifications without a session." >&2
       exit 2
     fi
     # Where a command starts, and before the read allowlist: unanchored, `cp ` matched the end of
     # `hub-mcp ` and refused a read-only grep over that directory, while `ls; rm x` passed as a read.
     MODIFIES='(^|[;&|(])[[:space:]]*(git[[:space:]]+(add|commit|push|reset)|rm|mv|cp|mkdir|touch|chmod)[[:space:]]'
     [[ "$COMMAND" =~ $MODIFIES ]] && {
-      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+      echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No file modifications without a session." >&2
       exit 2
     }
     [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|show)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0

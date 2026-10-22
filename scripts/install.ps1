@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $HOOKS_VERSION = 7
-$HOOKS_MINOR = 15
+$HOOKS_MINOR = 16
 $LATEST_VERSION = "$HOOKS_VERSION.$HOOKS_MINOR"
 $MCP_URL_DEFAULT = "http://localhost:8318/mcp"
 
@@ -469,7 +469,7 @@ rm -rf "$STATE_DIR/agents" 2>/dev/null
 [ -d "$STATE_DIR/nudge" ] && find "$STATE_DIR/nudge" -type f -mtime +1 -exec rm -f {} + 2>/dev/null
 # File notes are shown once per conversation and agent; the record of which were is a day's.
 [ -d "$STATE_DIR/notes" ] && find "$STATE_DIR/notes" -type f -name 'shown-*' -mtime +1 -exec rm -f {} + 2>/dev/null
-echo "Run /cs first: cortex_session_start, then knowledge+memory recall. Until then edits are BLOCKED, and Grep/Glob stay blocked until a cortex discovery tool has run."
+echo "Start with cortex_session_start(repo, task: \"<the task in a few words>\"): one call answers what the hub recalls for the task and which files and lines to read, and opens the edit and search gates. Until then edits are BLOCKED."
 exit 0
 '@
 
@@ -591,7 +591,7 @@ if [ -f "$STATE_DIR/session-started" ]; then
       exit 0
     fi
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
+      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. Or pass the task to cortex_session_start (task: \"<the task in a few words>\"): its answer is that recall. $HOW_OUT" >&2
       exit 2
     fi
   fi
@@ -609,7 +609,7 @@ fi
 SEARCH_HINT="BLOCKED: look it up with cortex_code_search (a behaviour) or cortex_code_context (a symbol name) first. One call unlocks find/grep/rg and Grep/Glob for the rest of the session. $HOW_OUT"
 case "$TOOL_NAME" in
   Edit|Write|NotebookEdit)
-    echo "BLOCKED: call cortex_session_start first (or run /cs). No edits without a session." >&2
+    echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No edits without a session." >&2
     exit 2 ;;
   Grep|Glob)
     marker_ok discovery-used && exit 0
@@ -622,14 +622,14 @@ case "$TOOL_NAME" in
     fi
     # The write check goes before the read allowlist, or `cat > file` passes as a read.
     if is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND"; then
-      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+      echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No file modifications without a session." >&2
       exit 2
     fi
     # Where a command starts, and before the read allowlist: unanchored, `cp ` matched the end of
     # `hub-mcp ` and refused a read-only grep over that directory, while `ls; rm x` passed as a read.
     MODIFIES='(^|[;&|(])[[:space:]]*(git[[:space:]]+(add|commit|push|reset)|rm|mv|cp|mkdir|touch|chmod)[[:space:]]'
     [[ "$COMMAND" =~ $MODIFIES ]] && {
-      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+      echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No file modifications without a session." >&2
       exit 2
     }
     [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|show)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0
@@ -849,6 +849,15 @@ case "$TOOL_NAME" in
     # A new hub session is open, so an earlier one's "ended" no longer applies — left in
     # place it made the exit hook skip this session too.
     rm -f "$STATE_DIR/session-ended"
+    # Started with the task, the answer carries the recall and the code lookup that used to be
+    # three more calls. The hub prints each line only when that part answered, at the start of
+    # a line ("text":"… or \n… in the escaped output, never after \"), so the task's own words
+    # cannot pass for one.
+    if printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)recalled: knowledge\+memory for '; then
+      record knowledge-recalled; record_agent knowledge-recalled
+      record memory-recalled; record_agent memory-recalled
+    fi
+    printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)located: code for ' && record discovery-used
     ;;
   *cortex_session_end*)
     record session-ended
@@ -1795,127 +1804,37 @@ exit 0
         if (-not (Test-Path $cmdDir)) { New-Item -ItemType Directory -Path $cmdDir -Force | Out-Null }
 
         @'
-# /cs — Cortex Start v0.9.4
+# /cs — Cortex Start v0.10.0
 
-> Version: 0.9.4 | Updated: 2026-10-22
+> Version: 0.10.0 | Updated: 2026-10-22
+> Changelog: v0.10.0 — one call: session_start with the task answers the recall and the files to read
 > Changelog: v0.9.4 — recall with the task's own words; the generic session query is already in session_start's answer
-> Changelog: v0.9.3 — the hook fills in the IDE, branch and identity too; no step for a field the hub never returned
-> Changelog: v0.9.2 — clientSessionId is filled in by a hook, so the opening context is the same every time and stays cached
-> Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
 > Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
 > Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
-> Changelog: v0.7.0 — unified versioning, removed STATE.md, streamlined tool guidance, auto-memory safety net
-> Changelog: v2.1 — added plan quality gate before implementation
-> Changelog: v2.0 — added task pickup, detect changes, recipe health, workflow recipes, versioning
 
-Run ALL steps IN ORDER. Do NOT proceed to user work until Step 7 completes.
-
-## Step 1: Session Start
-Call `cortex_session_start`:
+## 1. Start, with the task
 ```
-repo: "__GIT_REPO__"
-mode: "development"
-agentId: "claude-code"
+cortex_session_start(repo: "__GIT_REPO__", task: "<the task in a few words>")
 ```
-Nothing else: the `session-id.sh` hook adds this conversation's id (so two conversations in one
-checkout get a session each), the git branch, the IDE and `.cortex/agent-identity.json`.
-Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
+The task's own words: the feature, the error, the file. The answer holds the recall for it
+(`recalled:` knowledge and memory) and where the code is (`located:` files, line ranges, symbols).
+That is the recall and the first lookup: do not repeat them with separate searches. A hook adds
+the conversation id, branch, IDE and identity. No task yet? Start without one, and call it again
+with the task once you have it.
 
-## Step 2: Recall Context (parallel)
-`session_start` already answered "what happened last session" (`mission_brief`, `relevant_knowledge`).
-Do not repeat that with a generic phrase: it returns the same documents every time.
-Once you know the task, call BOTH in parallel with the task's own words (the feature, the error, the file):
-- `cortex_knowledge_search(query: "<the task in a few words>")`
-- `cortex_memory_search(query: "<the task in a few words>", agentId: "claude-code")`
+## 2. Only when it applies
+- Uncommitted changes in `git status` → `cortex_detect_changes(diff: "<git diff HEAD>")`.
+- Shared files another agent may hold → `cortex_changes(projectId)`.
+- Conductor work → `cortex_task_pickup()`; then `cortex_task_accept`, `cortex_task_update`.
+- A plan of several steps → `cortex_plan_quality(plan, request)`; 8.0 or more → execute.
 
-If the user has not given a task yet, skip this step and run it when they do. It is required before
-the first edit either way.
-
-## Step 3: Conflict Check
-`cortex_changes(agentId: "claude-code", projectId: "<from step 1>")`
-
-## Step 4: Task Pickup (Optional)
-If `cortex_task_pickup` tool is available:
-`cortex_task_pickup()` — check for Conductor tasks assigned to you.
-If tasks exist → list them. Ask user which to work on, or continue with their request.
-If the tool is not available (e.g. in solo dev mode), skip this step.
-
-## Step 5: Working State Check
-Run `git status`. If uncommitted changes:
-- `cortex_detect_changes(diff: "<output of git diff HEAD>")` — analyze risk level. The hub cannot see your working tree, so pass the diff
-- Report affected symbols and blast radius
-
-## Step 6: Situational Summary
-Print a concise report:
-
-```
-## Session Init Complete
-- **Last session**: <what was done, from memory/knowledge recall>
-- **Pending tasks**: <N tasks> or none
-- **Unseen changes**: <from other agents> or clean
-- **Working state**: clean / <N uncommitted files, risk level>
-- **Key context**: <relevant decisions or lessons>
-- Ready to start work.
-```
-
-## Step 7: Activate Workflow Intelligence
-For the REST of this session, use cortex tools naturally:
-
-### Before implementing a plan:
-1. Draft plan with steps + files to change
-2. `cortex_plan_quality(plan: "<your plan>", request: "<what the user asked>")` → scorecard, 0-10
-3. 8.0 or more → execute. Below that → address the listed improvements and resubmit with `iteration: 2` (max 3), then escalate to the user.
-
-### Finding the code to change:
-**Start from what you know, not from a fixed ladder:**
-
-| You already know | Start with |
-|---|---|
-| A symbol name | `cortex_code_context(name)` — exact graph lookup, plus callers/callees/imports in one call |
-| Only the behaviour | `cortex_code_search(query, limit: 10)` — ranked hybrid search, one call |
-| An exact literal (env var, config key, error string) | `rg` / `grep` — this is not a ranking problem |
-| A relationship across files | `cortex_cypher` |
-
-**Search once, read all ten.** Measured on cortex-hub's own index (`benchmarks/retrieval_bench.ts`,
-n=15): the target file is in the top 10 for 15/15 queries but at rank 1 for only 8/15. So scan
-the whole result set, and never re-run a reworded version of the same query — recall@10 is
-already 1.000, so it returns the same set. Ask a different question or switch tool instead.
-
-**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
-at session start, then when something breaks — not before every lookup.
-
-`cortex_code_impact` before editing something exported or shared; `cortex_changes` before
-touching a file another agent may hold.
-
-### Cross-project lookup:
-Projects are isolated per organization; related repos (client, server, tools) share one.
-```
-cortex_code_search(query: "...")                      # this repo, plus a line per other repo
-cortex_code_search(query: "...", repo: "*")           # every repo in this organization
-cortex_code_search(query: "...", repo: "my-backend")  # one repo
-cortex_code_context(name: "...", repo: "my-backend")
-cortex_list_repos()                                   # the repos "every repo" covers
-```
-Running sessions in two organizations with one API key at once? Pass `org: "<orgId>"`.
-
-### When hitting an error:
-1. `cortex_knowledge_search` → check if known
-2. `cortex_memory_search` → check if seen before
-3. Fix the error
-4. If non-obvious → `cortex_knowledge_store` to save for others
-
-### Before committing:
-1. `cortex_detect_changes(diff: "<output of git diff --staged>")` — verify blast radius. `risk_level: "unknown"` means a lookup failed: it is not a pass
-2. Commit
-3. After push → `cortex_code_reindex(repo: "...", branch: "<branch>")`
-
-### Working on a Conductor task:
-1. `cortex_task_accept(taskId)` at start
-2. `cortex_task_update(taskId, status: "in_progress")` during work
-3. `cortex_task_update(taskId, status: "completed", result: {...})` when done
-
----
-All cortex gates satisfied. Proceed with user tasks.
+## 3. While working
+- A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`.
+  An exact literal → `rg`. Read the lines a hit names, not the whole file.
+- Something breaks → `cortex_knowledge_search` and `cortex_memory_search` with the error; a
+  non-obvious fix → `cortex_knowledge_store`.
+- Before committing → build, typecheck and lint last, then `cortex_detect_changes(diff)`; after
+  pushing → `cortex_code_reindex(repo, branch)`.
 '@ | Out-File -FilePath (Join-Path $cmdDir "cs.md") -Encoding utf8
         $cmdPath = Join-Path $cmdDir "cs.md"
         (Get-Content $cmdPath -Raw).Replace("__GIT_REPO__", $GitRepo) | Set-Content $cmdPath -Encoding utf8
@@ -2053,7 +1972,7 @@ rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" \
       "$STATE_DIR/tasks-checked" "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
 # Other conversations' sessions stay theirs to close; only week-old records are dropped.
 [ -d "$STATE_DIR/conversations" ] && find "$STATE_DIR/conversations" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
-echo '{"systemMessage":"MANDATORY: call cortex_session_start, then cortex_knowledge_search + cortex_memory_search, before any edit. search_file_content and glob stay blocked until a cortex discovery tool has run.'"$CONVERSATION"'"}'
+echo '{"systemMessage":"MANDATORY: call cortex_session_start with the task (task: <the task in a few words>) before any edit: one call answers the recall for the task and the files and lines to read, and opens the edit and search gates.'"$CONVERSATION"'"}'
 exit 0
 '@ | Out-File -FilePath "$geminiHooksDir\session-init.sh" -Encoding utf8 -NoNewline
 
@@ -2145,15 +2064,15 @@ fi
 SEARCH_HINT="BLOCKED: look it up with cortex_code_search (a behaviour) or cortex_code_context (a symbol name) first. One call unlocks find/grep/rg, glob and search_file_content for the rest of the session. $HOW_OUT"
 case "$TOOL_NAME" in
   write_file|replace|edit_file|create_file|insert_text)
-    deny "BLOCKED: call cortex_session_start first. No edits without a session." ;;
+    deny "BLOCKED: call cortex_session_start first, with the task (task: <the task in a few words>). No edits without a session." ;;
   glob|search_file_content)
     marker_ok discovery-used || deny "$SEARCH_HINT" ;;
   run_shell_command|shell)
     is_codebase_search "$COMMAND" && ! marker_ok discovery-used && deny "$SEARCH_HINT"
     is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" \
-      && deny "BLOCKED: call cortex_session_start first. No file modifications without a session."
+      && deny "BLOCKED: call cortex_session_start first, with the task (task: <the task in a few words>). No file modifications without a session."
     printf '%s' "$COMMAND" | grep -Eq '(git[[:space:]]+(add|commit|push|reset)|^rm[[:space:]]|^mv[[:space:]]|^cp[[:space:]]|^mkdir[[:space:]])' \
-      && deny "BLOCKED: call cortex_session_start first. No file modifications without a session." ;;
+      && deny "BLOCKED: call cortex_session_start first, with the task (task: <the task in a few words>). No file modifications without a session." ;;
 esac
 allow
 '@ | Out-File -FilePath "$geminiHooksDir\enforce-session.sh" -Encoding utf8 -NoNewline
@@ -2297,6 +2216,12 @@ case "$TOOL_NAME" in
     # A new hub session is open, so an earlier one's "ended" no longer applies — left in
     # place it made the exit hook skip this session too.
     rm -f "$STATE_DIR/session-ended"
+    # Started with the task, the answer carries the recall and the code lookup. The hub prints
+    # each line only when that part answered, at the start of a line, never after \".
+    if printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)recalled: knowledge\+memory for '; then
+      record knowledge-recalled; record memory-recalled
+    fi
+    printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)located: code for ' && record discovery-used
     ;;
   *cortex_session_end*)
     record session-ended
@@ -2620,8 +2545,9 @@ exit 0
 ## Cortex Hub — Auto MCP (MANDATORY)
 
 At the START of every conversation:
-1. Call `cortex_session_start` with repo: "__GIT_REPO__", agentId: "__AGENT_ID__", mode: "development"
-2. `cortex_knowledge_search` + `cortex_memory_search` once — recall what the last session decided
+Once you know the task, call `cortex_session_start` with repo: "__GIT_REPO__", agentId: "__AGENT_ID__",
+task: "<the task in a few words>". Its answer holds what the hub recalls for the task and the files
+and line ranges to read: no separate knowledge, memory or code search to run first.
 
 ### Finding code — start from what you know, not from a fixed ladder
 | You already know | Start with |
@@ -2694,81 +2620,47 @@ $cortexMarker = "<!-- cortex-hub:auto-mcp -->"
 $claudeMdBody = @'
 ## Cortex Hub — MANDATORY (enforced by hooks — violations are BLOCKED)
 
-**Call `cortex_session_start` in the first turn of every conversation.** Without it, every
-Edit, Write and file-modifying Bash command is refused by a hook (exit code 2). It does not
-depend on anything else, so send it in the same message as your first lookup, not a turn of
-its own.
+**Once you know the task, make one call:**
 
 ```
-cortex_session_start(repo: "__GIT_REPO__", mode: "development", agentId: "claude-code")
+cortex_session_start(repo: "__GIT_REPO__", task: "<the task in a few words>")
 ```
 
-Pass nothing else: a hook adds the id of this conversation, the git branch, the IDE and the
-fields of `.cortex/agent-identity.json`, so the dashboard can tell your machines and IDEs apart.
+Its answer holds what the hub recalls for the task (knowledge and memory) and the files and line
+ranges to read, with the symbols in them. That is the recall and the first lookup: there is no
+separate knowledge, memory or code search to run before editing. A hook adds the conversation id,
+branch, IDE and `.cortex/agent-identity.json`. Until this call, Edit, Write and file-modifying
+Bash are refused (exit code 2).
 
-### Finding code fast (MANDATORY — and a fixed ladder is the slow way)
+### Finding code fast
 
-Start from what you already know. Until one cortex discovery call has run in this session,
-a hook refuses Grep, Glob and a Bash command that starts with `grep`, `rg` or `find`, even
-for a literal: make the cortex call first, then grep freely.
+| You already know | Start with |
+|---|---|
+| A symbol name | `cortex_code_context(name)` — exact graph lookup, with callers and callees |
+| Only the behaviour | `cortex_code_search(query)` — ranked files, line ranges and the symbols in them |
+| An exact literal (env var, config key, error string) | `rg` / `grep` |
+| A relationship across files | `cortex_cypher` |
 
-| You already know | Start with | Why |
-|---|---|---|
-| A symbol name | `cortex_code_context(name)` | Exact graph lookup — no ranking to get wrong — and it answers callers, callees and imports in one call |
-| Only the behaviour | `cortex_code_search(query, limit: 10)` | Ranked hybrid search over the index. One call, then read the list |
-| An exact literal (env var, config key, error string) | `rg` / `grep` | Not a ranking problem. Lexical search alone ranks *worse* than vector on questions, but it is right for a string that either appears or does not |
-| A relationship across files | `cortex_cypher` | One graph query instead of N searches |
+- Read the lines a hit names (Read with offset/limit), not the whole file.
+- The target is in the top 10 for every query of the retrieval benchmark but first for only half:
+  scan the whole list, and ask a different question rather than a reworded one.
+- Omit `repo:` to search every repo of the organization; `cortex_list_repos()` shows which.
+- `cortex_code_impact` before changing something exported or shared; `cortex_changes` before
+  editing a file another agent may hold.
+- Grep, Glob and a command starting with `grep`/`rg`/`find` unlock after the start with a task,
+  or after one code search.
 
-**Search once, then read the whole set.** Measured on the cortex-hub index (n=15): the target
-file is in the top 10 for 15/15 queries, top 3 for 11/15, rank 1 for only 8/15. So scan all ten
-hits before choosing, and do not re-run a reworded version of the same query — recall@10 is
-already 1.000, so it returns the same set. Ask a different question or switch tool instead.
+### When something breaks
 
-**Read the lines a hit names, not the file.** Each hit carries its line range (`L120-168`):
-Read with that offset and limit, or `rg -n` inside the file. A whole file is often ten times
-the chunk you came for.
-
-`cortex_code_impact` before editing something exported or shared — not as a ritual on every file.
-
-**Across repos:** omit `repo:` to search every repo in the organization of this project —
-related repos (the client, server and tools of one product) belong to one, and a cross-repo
-search never leaves it. `cortex_list_repos()` shows exactly which repos that covers. Running sessions in two
-organizations with one API key at once? Pass `org:` — the `project.orgId` returned by `cortex_session_start`.
-
-**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
-at session start, then whenever something breaks.
-
-### Before editing shared files
-
-Call `cortex_changes` to check if another agent modified the same files.
-
-### When encountering an error or bug
-
-1. **FIRST** search `cortex_knowledge_search` — someone may have solved this already
-2. **THEN** `cortex_memory_search` — you may have seen this before
-3. Fix the error
-4. Non-obvious fixes: **YOU MUST** call `cortex_knowledge_store` to record the solution
-
-### After pushing code
-
-Call `cortex_code_reindex` to update code intelligence:
-```
-repo: "__GIT_REPO__"
-branch: "<current branch>"
-```
+Search `cortex_knowledge_search(query: "<the error>")` and `cortex_memory_search` first. A
+non-obvious fix: **YOU MUST** store it with `cortex_knowledge_store`.
 
 ### Quality gates (enforced — commit blocked without these)
 
-Every session must end with verification commands from `.cortex/project-profile.json`.
-Call `cortex_quality_report` with results. Call `cortex_session_end` to close the session.
-**Commits are BLOCKED by hooks until quality gates pass.**
-
-### Compliance Enforcement (Automated)
-
-Your tool usage is **automatically tracked and scored**:
-
-1. **Session Compliance Score** — `cortex_session_end` returns a grade (A/B/C/D) based on 5-category tool coverage.
-2. **MCP Response Hints** — Every tool response includes adaptive hints about what to use next.
+Run the verify commands from `.cortex/project-profile.json` last, after the final edit: an edit
+after them closes the commit gate again. Then `cortex_detect_changes(diff: "<git diff --staged>")`.
+After a push: `cortex_code_reindex(repo: "__GIT_REPO__", branch: "<branch>")`.
+End the session: `cortex_session_end(sessionId, summary)`.
 '@
 $claudeMdBody = $claudeMdBody -replace "__GIT_REPO__", $GitRepo
 $claudeMdContent = "$cortexMarker`n$claudeMdBody`n$cortexMarker"

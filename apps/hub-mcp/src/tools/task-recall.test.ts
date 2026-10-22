@@ -1,0 +1,97 @@
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import type { Env } from '../types.js'
+import { registerSessionTools } from './session.js'
+import { formatTaskRecall } from './task-recall.js'
+
+/**
+ * cortex_session_start with the task: the recall and the code lookup an agent ran as three more
+ * calls come back in the start's answer, with the lines the client hooks take as evidence.
+ */
+
+type Result = { content: Array<{ text: string }>; isError?: boolean }
+type Handler = (args: Record<string, unknown>) => Promise<Result>
+
+const realFetch = globalThis.fetch
+let asked: Array<{ path: string; body: Record<string, unknown> }>
+
+function sessionStart(down: string[] = []): Handler {
+  asked = []
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input).replace('http://api', '')
+    const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+    asked.push({ path, body })
+    if (down.includes(path)) return new Response('down', { status: 503 })
+    const reply: Record<string, unknown> = {
+      '/api/sessions/start': { sessionId: 'sess_1', project: { id: 'proj-1', orgId: 'org-1' }, recentSessions: [{ id: 'other' }] },
+      '/api/knowledge/search': { results: [
+        { documentId: 'kdoc-1', title: 'Rotate keys in place', content: 'Keep the id,\n swap the hash.' },
+        { documentId: 'kdoc-1', title: 'Rotate keys in place', content: 'second chunk' },
+        { documentId: 'kdoc-2', title: '[CLAUDE.md] Project rules', content: 'already in context' },
+      ] },
+      '/api/mem9/search': { memories: body.userId === 'project-proj-1' ? [{ id: 'm1', memory: 'Cache is per key hash' }] : [] },
+      '/api/intel/code-search': { data: { results: [{ filePath: 'src/routes/keys.ts', score: 0.7, startLine: 40, endLine: 90, content: 'x' }] } },
+      '/api/intel/cypher': { data: { raw: '| file | name | type | s | e |\n| --- | --- | --- | --- | --- |\n| src/routes/keys.ts | generateApiKey | Function | 32 | 38 |' } },
+    }
+    return new Response(JSON.stringify(reply[path] ?? {}), { status: reply[path] ? 200 : 404 })
+  }) as unknown as typeof fetch
+
+  const tools: Record<string, Handler> = {}
+  const server = { tool: (name: string, _d: string, _s: unknown, handler: Handler) => { tools[name] = handler; return { update: () => {} } } }
+  registerSessionTools(server as unknown as McpServer, { DASHBOARD_API_URL: 'http://api' } as Env)
+  return tools.cortex_session_start!
+}
+
+afterEach(() => { globalThis.fetch = realFetch })
+
+const start = { repo: 'https://example.com/acme/keys-api.git', agentId: 'claude-code', task: 'rotate an API key' }
+
+describe('cortex_session_start with a task', () => {
+  it('answers the recall and where the code is, once each', async () => {
+    const res = await sessionStart()(start)
+    const [head, brief] = res.content.map((c) => c.text)
+
+    expect(JSON.parse(head!)).toEqual({ session_id: 'sess_1', status: 'active', project: { id: 'proj-1', orgId: 'org-1' } })
+    expect(brief).toContain('recalled: knowledge+memory for "rotate an API key"')
+    expect(brief).toContain('- Rotate keys in place — Keep the id, swap the hash. (kdoc-1)')
+    expect(brief).not.toContain('second chunk')
+    expect(brief).not.toContain('CLAUDE.md')
+    expect(brief).toContain('- Cache is per key hash')
+    expect(brief).toContain('located: code for "rotate an API key"')
+    expect(brief).toContain('1. src/routes/keys.ts — L40-90 70%')
+    expect(brief).toContain('- src/routes/keys.ts: generateApiKey L32-38')
+    expect(brief).not.toContain('```')
+  })
+
+  it('searches the task\'s words, not the generic session-summary query', async () => {
+    await sessionStart()(start)
+
+    const queries = asked.filter((a) => a.path === '/api/knowledge/search').map((a) => a.body.query)
+    expect(queries).toEqual(['rotate an API key'])
+    expect(asked.find((a) => a.path === '/api/intel/code-search')!.body).toMatchObject({ query: 'rotate an API key', projectId: 'keys-api' })
+    expect(asked.filter((a) => a.path === '/api/mem9/search').map((a) => a.body.userId)).toEqual(['project-proj-1', 'claude-code'])
+  })
+
+  it('claims no recall when a search did not answer, and no location without files', async () => {
+    const res = await sessionStart(['/api/mem9/search', '/api/intel/code-search'])(start)
+    const text = res.content.map((c) => c.text).join('\n')
+
+    expect(text).not.toContain('recalled:')
+    expect(text).not.toContain('located:')
+  })
+
+  it('without a task, answers as before', async () => {
+    const res = await sessionStart()({ repo: start.repo })
+    const body = JSON.parse(res.content[0]!.text) as Record<string, unknown>
+
+    expect(res.content).toHaveLength(1)
+    expect(body).toHaveProperty('mission_brief')
+    expect(body).toHaveProperty('identity')
+  })
+})
+
+describe('formatTaskRecall', () => {
+  it('says so when nothing is stored for the task yet, and still counts as a recall', () => {
+    expect(formatTaskRecall('x', [], [])).toBe('recalled: knowledge+memory for "x"\nKnowledge: nothing stored for this yet.\nMemory: nothing stored for this yet.')
+  })
+})

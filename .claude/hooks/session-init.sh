@@ -56,5 +56,5 @@ rm -rf "$STATE_DIR/agents" 2>/dev/null
 [ -d "$STATE_DIR/nudge" ] && find "$STATE_DIR/nudge" -type f -mtime +1 -exec rm -f {} + 2>/dev/null
 # File notes are shown once per conversation and agent; the record of which were is a day's.
 [ -d "$STATE_DIR/notes" ] && find "$STATE_DIR/notes" -type f -name 'shown-*' -mtime +1 -exec rm -f {} + 2>/dev/null
-echo "Run /cs first: cortex_session_start, then knowledge+memory recall. Until then edits are BLOCKED, and Grep/Glob stay blocked until a cortex discovery tool has run."
+echo "Start with cortex_session_start(repo, task: \"<the task in a few words>\"): one call answers what the hub recalls for the task and which files and lines to read, and opens the edit and search gates. Until then edits are BLOCKED."
 exit 0

@@ -3,7 +3,10 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
-import { formatCodeMatches, formatOtherRepos, OTHER_REPOS, FILES_PER_OTHER_REPO, type CodeMatch } from './code-matches.js'
+import {
+  formatCodeMatches, formatOtherRepos, OTHER_REPOS, FILES_PER_OTHER_REPO, type CodeMatch,
+  outlineFiles, outlineQuery, parseOutline, formatOutline,
+} from './code-matches.js'
 import { formatDiffImpact } from './diff-impact.js'
 import { LOAD_UP_FRONT } from './load-up-front.js'
 
@@ -176,6 +179,19 @@ export function registerCodeTools(server: McpServer, env: Env) {
     }
   }
 
+  /** The symbols of a few files with their lines; '' when the graph has none or does not answer. */
+  async function outlineOf(project: string, org: string | undefined, files: string[]): Promise<string> {
+    if (files.length === 0) return ''
+    try {
+      const res = (await callIntel('cypher', { query: outlineQuery(files), projectId: project, orgId: org }, 5000)) as {
+        data?: { raw?: string }
+      }
+      return formatOutline(parseOutline(res?.data?.raw ?? ''), files)
+    } catch {
+      return ''
+    }
+  }
+
   server.tool(
     'cortex_code_search',
     'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. ' +
@@ -223,7 +239,10 @@ export function registerCodeTools(server: McpServer, env: Env) {
             searchCode({ query, projectId: project, orgId: org, branch, limit: Math.max(flowLimit, 8) }),
           ])
           if (flows !== undefined) {
-            const sections = [formatCodeMatches(matches), flows, formatOtherRepos(await others)].filter(Boolean)
+            // With ranked files in hand, their symbols say where to read; the flows are kept for
+            // a search the semantic arm found nothing for.
+            const outline = await outlineOf(project, org, outlineFiles(matches))
+            const sections = [formatCodeMatches(matches), outline || flows, formatOtherRepos(await others)].filter(Boolean)
             return { content: [{ type: 'text' as const, text: sections.join('\n\n---\n') || 'No results.' }] }
           }
         }
