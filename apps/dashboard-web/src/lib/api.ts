@@ -1139,9 +1139,11 @@ export async function routeConductorTask(id: string, body: RouteBody) {
   return apiFetch<{ task: ConductorTask }>(`/api/conductor/${encodeURIComponent(id)}/route`, { method: 'POST', body })
 }
 
-export async function getConductorTasks(options?: { limit?: number; status?: string; assignedTo?: string }) {
+export async function getConductorTasks(options?: { limit?: number; trees?: number; status?: string; assignedTo?: string }) {
   const params = new URLSearchParams()
   if (options?.limit) params.set('limit', String(options.limit))
+  // whole task trees, the most recently active first
+  if (options?.trees) params.set('trees', String(options.trees))
   if (options?.status) params.set('status', options.status)
   if (options?.assignedTo) params.set('assigned_to', options.assignedTo)
   const qs = params.toString()

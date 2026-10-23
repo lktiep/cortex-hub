@@ -567,6 +567,56 @@ describe('GET /', () => {
   })
 })
 
+describe('GET /?trees=', () => {
+  const day = (d: number, i = 0): string => `2026-10-${String(d).padStart(2, '0')}T00:${String(i % 60).padStart(2, '0')}:00Z`
+
+  beforeEach(() => {
+    // An old group of 80 subtasks that rank ahead of their root (priority 5), then newer loose tasks.
+    insertTask(testDb, { id: 'big', kind: 'group', priority: 5, created_at: day(1) })
+    testDb.transaction(() => {
+      for (let i = 0; i < 80; i++) {
+        insertTask(testDb, { id: `big${i}`, parent_task_id: 'big', priority: 1, created_at: day(2, i), completed_at: day(3, i) })
+      }
+      for (let i = 0; i < 30; i++) insertTask(testDb, { id: `new${i}`, priority: 5, created_at: day(10, i), project_id: 'p2' })
+    })()
+  })
+
+  it('row paging cuts the root off a big tree; trees keeps it whole', async () => {
+    const rows = (await call('GET', '?limit=60')).body.tasks ?? []
+    expect(rows.some((t) => t.id === 'big')).toBe(false)
+
+    const tasks = (await call('GET', '?trees=50')).body.tasks ?? []
+    expect(tasks).toHaveLength(111)
+    const present = new Set(tasks.map((t) => t.id))
+    expect(tasks.every((t) => t.parent_task_id === null || present.has(t.parent_task_id))).toBe(true)
+  })
+
+  it('takes the most recently active trees, each one parent first', async () => {
+    const tasks = (await call('GET', '?trees=31')).body.tasks ?? []
+    expect(tasks.filter((t) => t.parent_task_id === null).map((t) => t.id)).toContain('big')
+    expect(tasks.findIndex((t) => t.id === 'big')).toBeLessThan(tasks.findIndex((t) => t.id === 'big0'))
+
+    const newest = (await call('GET', '?trees=30')).body.tasks ?? []
+    expect(newest.some((t) => t.id.startsWith('big'))).toBe(false)
+  })
+
+  it('counts a subtask whose parent was deleted as a tree of its own', async () => {
+    insertTask(testDb, { id: 'stray', parent_task_id: 'gone', created_at: day(20) })
+    expect(ids((await call('GET', '?trees=1')).body.tasks)).toEqual(['stray'])
+  })
+
+  it('a limit never leaves a child without its parent; projectId picks the trees', async () => {
+    const cut = (await call('GET', '?trees=50&limit=40')).body.tasks ?? []
+    expect(cut).toHaveLength(40)
+    const present = new Set(cut.map((t) => t.id))
+    expect(cut.every((t) => t.parent_task_id === null || present.has(t.parent_task_id))).toBe(true)
+
+    expect((await call('GET', '?trees=50&projectId=p2')).body.tasks).toHaveLength(30)
+    expect((await call('GET', '?trees=0')).status).toBe(400)
+    expect((await call('GET', '?trees=5&status=pending')).status).toBe(400)
+  })
+})
+
 describe('POST /:id/cancel', () => {
   it('revokes an active task from its worker', async () => {
     const w1 = connect('w1')
