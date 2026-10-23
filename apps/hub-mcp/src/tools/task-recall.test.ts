@@ -92,6 +92,7 @@ describe('cortex_session_start with a task', () => {
     projectMemories = [
       { id: 's1', memory: '[Session Summary] older work', createdAt: '2026-10-20T00:00:00Z', metadata: { type: 'session-summary' } },
       { id: 'm3', memory: 'Deprecated options print a warning once', createdAt: '2026-10-22T00:00:00Z' },
+      { id: 'f1', memory: 'Uses node --test for the suite', createdAt: '2026-10-22T09:05:00Z', metadata: { type: 'session-summary' } },
       { id: 's2', memory: `[Session Summary] Added Option.deprecated and its tests. ${'x'.repeat(200)} ${next}`, createdAt: '2026-10-22T09:00:00Z', metadata: { type: 'session-summary' } },
     ]
 
@@ -102,6 +103,7 @@ describe('cortex_session_start with a task', () => {
     expect(memory).toContain(next)
     expect(memory).toContain('- Deprecated options print a warning once')
     expect(memory).not.toContain('older work')
+    expect(memory).not.toContain('node --test')
   })
 
   it('claims no recall when a search did not answer, and no location without files', async () => {

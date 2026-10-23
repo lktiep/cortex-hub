@@ -20,7 +20,7 @@ const oneLine = (text: string, max = LINE_CHARS) => {
 }
 
 export interface KnowledgeLine { documentId?: string; title?: string; content?: string; deprecated?: boolean; score?: number }
-export interface MemoryLine { id?: string; memory?: string; createdAt?: string; metadata?: { type?: string } }
+export interface MemoryLine { id?: string; memory?: string; createdAt?: string }
 
 // Whatever ranked first came back, related or not: in the benchmark every start carried three
 // notes and three memories, ~1k characters, none about the task. Measured on the hub's own
@@ -51,7 +51,10 @@ const sharesTerm = (task: Set<string>, text: string) => {
   return [...terms(text)].some((t) => stems.has(stem(t)))
 }
 
-const isSummary = (m: MemoryLine) => m.metadata?.type === 'session-summary'
+// The summary as the session wrote it. The facts an LLM extracts from it carry the same metadata
+// type and a later date, so the type alone picked a fragment like "Uses node --test" as "the
+// last session".
+const isSummary = (m: MemoryLine) => (m.memory ?? '').startsWith('[Session Summary]')
 
 export function formatTaskRecall(task: string, knowledge: KnowledgeLine[] | undefined, memories: MemoryLine[] | undefined): string {
   if (!knowledge || !memories) return ''
