@@ -9,7 +9,7 @@ import { hasSparseVector, buildHybridQuery, HYBRID_FETCH_FLOOR } from '../lib/hy
 import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
 import { analyzeDiff, parseCypherTable, MAX_DIFF_CHARS, type RunCypher } from '../lib/diff-symbols.js'
 import { PERSONAL_ORG, projectOfActiveSession } from '../lib/session-project.js'
-import { grepCheckout, type GrepHit } from '../lib/code-grep.js'
+import { grepCheckout, type GrepFile, type GrepHit } from '../lib/code-grep.js'
 
 const logger = createLogger('intel')
 
@@ -2039,12 +2039,16 @@ intelRouter.post('/file-content', async (c) => {
 const GREP_MAX_PATTERN = 300
 const GREP_DEFAULT_LIMIT = 60
 const GREP_MAX_LIMIT = 200
+// A file list is what a broad sweep (encrypt|decrypt|cipher) is for: a name costs a few dozen
+// bytes, so many more fit than lines do.
+const GREP_FILES_DEFAULT_LIMIT = 150
+const GREP_FILES_MAX_LIMIT = 400
 const GREP_CONCURRENCY = 4
 
 intelRouter.post('/grep', async (c) => {
   try {
     const body = await c.req.json()
-    const { pattern, projectId, orgId, scopeRepo, path, ignoreCase, fixed, limit } = body as {
+    const { pattern, projectId, orgId, scopeRepo, path, ignoreCase, fixed, files, limit } = body as {
       pattern?: string
       /** One repo; without it every repo of the organization. */
       projectId?: string
@@ -2055,6 +2059,8 @@ intelRouter.post('/grep', async (c) => {
       path?: string | string[]
       ignoreCase?: boolean
       fixed?: boolean
+      /** Name the matching files with a count each, instead of listing lines. */
+      files?: boolean
       limit?: number
     }
 
@@ -2082,17 +2088,22 @@ intelRouter.post('/grep', async (c) => {
     }
     const searchable = repos.filter((r) => existsSync(join(REPOS_DIR, r.id, '.git')))
 
-    const max = Math.min(Math.max(1, limit ?? GREP_DEFAULT_LIMIT), GREP_MAX_LIMIT)
-    const results: Array<{ repo: string; projectId: string; hits: GrepHit[]; truncated: boolean; error?: string }> = []
+    const filesOnly = files === true
+    const max = filesOnly
+      ? Math.min(Math.max(1, limit ?? GREP_FILES_DEFAULT_LIMIT), GREP_FILES_MAX_LIMIT)
+      : Math.min(Math.max(1, limit ?? GREP_DEFAULT_LIMIT), GREP_MAX_LIMIT)
+    type Found = { repo: string; projectId: string; hits: GrepHit[]; files: GrepFile[]; truncated: boolean; error?: string }
+    const results: Found[] = []
+    const items = (r: Found) => (filesOnly ? r.files : r.hits)
     const queue = [...searchable]
     const worker = async () => {
       for (let repo = queue.shift(); repo; repo = queue.shift()) {
         try {
           // Each repo may fill the whole limit: which repos matter is decided after, not by speed.
-          const found = await grepCheckout(join(REPOS_DIR, repo.id), pattern, { ignoreCase, fixed, paths })
-          results.push({ repo: repo.name, projectId: repo.id, hits: found.hits.slice(0, max), truncated: found.truncated || found.hits.length > max })
+          const found = await grepCheckout(join(REPOS_DIR, repo.id), pattern, { ignoreCase, fixed, paths, filesOnly })
+          results.push({ repo: repo.name, projectId: repo.id, ...found })
         } catch (error) {
-          results.push({ repo: repo.name, projectId: repo.id, hits: [], truncated: false, error: error instanceof Error ? error.message : String(error) })
+          results.push({ repo: repo.name, projectId: repo.id, hits: [], files: [], truncated: false, error: error instanceof Error ? error.message : String(error) })
         }
       }
     }
@@ -2106,18 +2117,21 @@ intelRouter.post('/grep', async (c) => {
 
     // Fewer hits first: a repo where the string is rare is where it means something, and a repo
     // that matches everywhere would otherwise spend the whole limit.
-    results.sort((a, b) => (a.hits.length === 0 ? 1 : 0) - (b.hits.length === 0 ? 1 : 0) || a.hits.length - b.hits.length || a.repo.localeCompare(b.repo))
+    results.sort((a, b) => (items(a).length === 0 ? 1 : 0) - (items(b).length === 0 ? 1 : 0) || items(a).length - items(b).length || a.repo.localeCompare(b.repo))
     let left = max
     const shown = results.map((r) => {
-      const hits = r.hits.slice(0, Math.max(0, left))
-      left -= hits.length
-      return { ...r, total: r.hits.length, hits, truncated: r.truncated || hits.length < r.hits.length }
+      const all = items(r)
+      const kept = all.slice(0, Math.max(0, left))
+      left -= kept.length
+      const listed = filesOnly ? { hits: [], files: kept as GrepFile[] } : { hits: kept as GrepHit[], files: [] }
+      return { ...r, ...listed, total: all.length, truncated: r.truncated || kept.length < all.length }
     })
 
     return c.json({
       success: true,
       data: {
         pattern,
+        filesOnly,
         orgId: scope.orgId,
         searched: searchable.map((r) => r.name),
         notCloned: repos.filter((r) => !searchable.includes(r)).map((r) => r.name),

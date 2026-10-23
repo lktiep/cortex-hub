@@ -69,7 +69,8 @@ type GrepReply = {
   data: {
     searched: string[]
     notCloned: string[]
-    results: Array<{ repo: string; total: number; truncated: boolean; hits: Array<{ file: string; line: number }> }>
+    filesOnly: boolean
+    results: Array<{ repo: string; total: number; truncated: boolean; hits: Array<{ file: string; line: number }>; files: Array<{ file: string; count: number }> }>
   }
 }
 
@@ -107,6 +108,17 @@ describe('POST /api/intel/grep', () => {
     const shown = json.data.results.reduce((n: number, r: { hits: unknown[] }) => n + r.hits.length, 0)
     expect(shown).toBe(2)
     expect(json.data.results.find((r) => r.repo === 'Server')!.truncated).toBe(true)
+  })
+
+  it('names files with a count each, rare repos first, within the limit', async () => {
+    const { json } = await grep({ pattern: '144', orgId: 'org-game', files: true })
+    expect(json.data.filesOnly).toBe(true)
+    expect(json.data.results.map((r) => `${r.repo}:${r.total}`)).toEqual(['Tools:1', 'Server:2'])
+    expect(json.data.results[1]!.files).toEqual([{ file: 'src/Map.cs', count: 1 }, { file: 'src/Player.cs', count: 1 }])
+    expect(json.data.results.every((r) => r.hits.length === 0)).toBe(true)
+
+    const capped = await grep({ pattern: '144', orgId: 'org-game', files: true, limit: 2 })
+    expect(capped.json.data.results.find((r) => r.repo === 'Server')!).toMatchObject({ total: 2, truncated: true })
   })
 
   it('answers a broken pattern once, as a bad request', async () => {

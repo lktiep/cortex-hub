@@ -271,20 +271,22 @@ export function registerCodeTools(server: McpServer, env: Env) {
     'cortex_code_grep',
     'git grep over the hub\'s checkout of every repo of your organization (default branch), for an exact ' +
     'string the ranked search does not find: a constant, an opcode, an error text, a symbol. Searches the repos ' +
-    'that are not on disk here; grep your own checkout locally.',
+    'that are not on disk here; grep your own checkout locally. With files: true it names each matching file ' +
+    'with a count, as grep -l does: the way to sweep for a concept (encrypt|decrypt|cipher) before reading.',
     {
       pattern: z.string().describe('Perl-style regex, or a plain string with fixed: true'),
       repo: z.string().optional().describe('One repo (name or git URL); omit for every repo of the organization'),
       path: z.string().optional().describe('Git pathspec to narrow to, e.g. "*.cs" or "src/net/"'),
       ignoreCase: z.boolean().optional(),
       fixed: z.boolean().optional().describe('Match the pattern as a plain string'),
-      limit: z.number().optional().describe('Lines to list across all repos (default 60, max 200)'),
+      files: z.boolean().optional().describe('List matching files with a count each instead of lines'),
+      limit: z.number().optional().describe('Lines to list across all repos (default 60, max 200); files: default 150, max 400'),
       org: z.string().optional().describe(ORG_DESC),
     },
-    async ({ pattern, repo, path, ignoreCase, fixed, limit, org }) => {
+    async ({ pattern, repo, path, ignoreCase, fixed, files, limit, org }) => {
       try {
         const res = (await callIntel('grep', {
-          pattern, projectId: await resolveRepo(repo), path, ignoreCase, fixed, limit, orgId: org,
+          pattern, projectId: await resolveRepo(repo), path, ignoreCase, fixed, files, limit, orgId: org,
         }, 30000)) as { data?: GrepData }
         return { content: [{ type: 'text' as const, text: formatGrep(res.data ?? { pattern }) }] }
       } catch (error) {

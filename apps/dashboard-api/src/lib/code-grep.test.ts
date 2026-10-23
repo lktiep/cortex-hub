@@ -3,7 +3,7 @@ import { execFileSync } from 'child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { grepArgs, grepCheckout, parseGrepOutput, MAX_LINE_CHARS } from './code-grep.js'
+import { grepArgs, grepCheckout, parseGrepCounts, parseGrepOutput, MAX_LINE_CHARS } from './code-grep.js'
 
 let repo: string
 
@@ -34,6 +34,13 @@ describe('parseGrepOutput', () => {
   })
 })
 
+describe('parseGrepCounts', () => {
+  it('reads path and count, and drops a cut-off last line', () => {
+    expect(parseGrepCounts('a/b.cs\x003\nc.md\x0012\n', true)).toEqual([{ file: 'a/b.cs', count: 3 }, { file: 'c.md', count: 12 }])
+    expect(parseGrepCounts('a/b.cs\x003\nc.md\x001', false)).toEqual([{ file: 'a/b.cs', count: 3 }])
+  })
+})
+
 describe('grepArgs', () => {
   it('passes the pattern after -e so a leading dash is not an option', () => {
     const args = grepArgs('--open-files-in-pager=sh', '-F', {})
@@ -52,6 +59,12 @@ describe('grepCheckout', () => {
     expect((await grepCheckout(repo, 'TalkNpc(p)', { fixed: true })).hits).toHaveLength(1)
     expect((await grepCheckout(repo, 'talknpc', { ignoreCase: true, paths: ['*.md'] })).hits.map((h) => h.file)).toEqual(['notes.md'])
     expect((await grepCheckout(repo, '-x', { fixed: true })).hits).toHaveLength(1)
+  })
+
+  it('names each matching file with its count when asked for files', async () => {
+    const { hits, files } = await grepCheckout(repo, 'talknpc', { ignoreCase: true, filesOnly: true })
+    expect(hits).toEqual([])
+    expect(files).toEqual([{ file: 'net/Handler.cs', count: 1 }, { file: 'notes.md', count: 1 }])
   })
 
   it('answers no hits for no match, and refuses a broken pattern', async () => {

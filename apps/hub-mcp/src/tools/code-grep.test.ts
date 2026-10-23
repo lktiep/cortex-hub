@@ -36,6 +36,22 @@ describe('formatGrep', () => {
     expect(text).toContain('narrow with path')
   })
 
+  it('names files with a count each when asked for files', () => {
+    const text = formatGrep({
+      pattern: 'encrypt|cipher',
+      filesOnly: true,
+      searched: ['china', 'tools'],
+      results: [
+        { repo: 'china', total: 2, truncated: false, hits: [], files: [{ file: 'Network/NetState.cs', count: 1 }, { file: 'clsWorld.cs', count: 2 }] },
+        { repo: 'tools', total: 90, truncated: false, hits: [], files: [{ file: 'a.py', count: 4 }] },
+      ],
+    })
+    expect(text).toContain('92 file(s) in 2 of 2 repo(s)')
+    expect(text).toContain('## china — 2 file(s)\nNetwork/NetState.cs (1)\nclsWorld.cs (2)')
+    expect(text).toContain('## tools — 90 file(s), 1 shown\na.py (4)')
+    expect(text).toContain('path: file')
+  })
+
   it('says no match plainly', () => {
     expect(formatGrep({ pattern: 'nope', searched: ['a', 'b'], results: [] })).toBe('grep "nope": no match in 2 repo(s), on each repo\'s default branch.')
   })

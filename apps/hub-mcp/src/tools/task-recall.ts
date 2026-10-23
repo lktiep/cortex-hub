@@ -73,7 +73,8 @@ export function formatOrgRepos(names: string[] | undefined): string {
   if (!names?.length) return ''
   const listed = names.slice(0, ORG_REPOS_LISTED).join(', ') + (names.length > ORG_REPOS_LISTED ? ', …' : '')
   return `searchable: ${names.length} other repo(s) of this organization, not on disk here — ${listed}.\n` +
-    'cortex_code_search without repo ranks files across them; cortex_code_grep finds an exact string (a constant, an opcode, an error text) in them.'
+    'cortex_code_search without repo ranks files across them; cortex_code_grep finds an exact string (a constant, an opcode, an error text) in them, ' +
+    'and with files: true names every file that mentions a word (encrypt|cipher) — sweep that way before reading.'
 }
 
 /** Knowledge for the task: undefined when the search did not answer. */

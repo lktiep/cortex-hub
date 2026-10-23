@@ -7,7 +7,8 @@ import { spawn } from 'child_process'
 // only on the hub.
 
 export interface GrepHit { file: string; line: number; text: string }
-export interface GrepResult { hits: GrepHit[]; truncated: boolean }
+export interface GrepFile { file: string; count: number }
+export interface GrepResult { hits: GrepHit[]; files: GrepFile[]; truncated: boolean }
 
 export interface GrepOptions {
   ignoreCase?: boolean
@@ -15,6 +16,8 @@ export interface GrepOptions {
   fixed?: boolean
   /** Git pathspecs, e.g. "*.cs" or "src/". */
   paths?: string[]
+  /** Name each matching file with its count of matching lines, as `grep -l` does, instead of listing lines. */
+  filesOnly?: boolean
   timeoutMs?: number
   /** Output read before the search is stopped. */
   maxBytes?: number
@@ -40,10 +43,23 @@ export function parseGrepOutput(stdout: string, complete: boolean): GrepHit[] {
   return hits
 }
 
+/** `git grep -c -z` output: path NUL count, one file per line. A cut-off last line is dropped. */
+export function parseGrepCounts(stdout: string, complete: boolean): GrepFile[] {
+  const lines = stdout.split('\n')
+  if (!complete || lines[lines.length - 1] === '') lines.pop()
+  const files: GrepFile[] = []
+  for (const raw of lines) {
+    const sep = raw.indexOf('\0')
+    const count = Number(raw.slice(sep + 1))
+    if (sep > 0 && Number.isInteger(count)) files.push({ file: raw.slice(0, sep), count })
+  }
+  return files
+}
+
 /** The arguments for one search; `-e` keeps a pattern that starts with "-" from being read as an option. */
 export function grepArgs(pattern: string, syntax: '-P' | '-E' | '-F', opts: GrepOptions): string[] {
   return [
-    'grep', '-n', '-z', '-I', '--no-color', '--full-name', syntax,
+    'grep', opts.filesOnly ? '-c' : '-n', '-z', '-I', '--no-color', '--full-name', syntax,
     ...(opts.ignoreCase ? ['-i'] : []),
     '-e', pattern, '--', ...(opts.paths ?? []),
   ]
@@ -83,11 +99,15 @@ export async function grepCheckout(dir: string, pattern: string, opts: GrepOptio
   const syntaxes: Array<'-P' | '-E' | '-F'> = opts.fixed ? ['-F'] : ['-P', '-E']
   for (const syntax of syntaxes) {
     const res = await run(dir, grepArgs(pattern, syntax, opts), timeoutMs, maxBytes)
-    if (res.cut) return { hits: parseGrepOutput(res.stdout, false), truncated: true }
     // 1 is "no line matched".
-    if (res.code === 0 || (res.code === 1 && !res.stderr.trim())) return { hits: parseGrepOutput(res.stdout, true), truncated: false }
+    const complete = res.code === 0 || (res.code === 1 && !res.stderr.trim())
+    if (res.cut || complete) {
+      return opts.filesOnly
+        ? { hits: [], files: parseGrepCounts(res.stdout, !res.cut), truncated: res.cut }
+        : { hits: parseGrepOutput(res.stdout, !res.cut), files: [], truncated: res.cut }
+    }
     if (syntax === '-P' && /perl|pcre/i.test(res.stderr)) continue
     throw new Error(res.stderr.trim().split('\n')[0] || `git grep exited with ${res.code}`)
   }
-  return { hits: [], truncated: false }
+  return { hits: [], files: [], truncated: false }
 }
