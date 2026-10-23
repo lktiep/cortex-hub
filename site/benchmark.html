@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Cortex Benchmarks</title>
+<meta name="description" content="How we measure whether Cortex Hub helps a coding agent find the right code: the harness, the tasks, how they are scored, and every result so far, including the ones that did not move.">
+<link rel="canonical" href="https://lktiep.github.io/cortex-hub/benchmark.html">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'><rect width='26' height='26' rx='6' fill='%23dc440c'/><g fill='white'><circle cx='8' cy='9' r='2.4'/><circle cx='18' cy='9' r='2.4'/><circle cx='13' cy='18' r='2.4'/></g><path d='M10.2 9.6 L15.8 9.6 M9.2 11 L11.8 15.8 M16.8 11 L14.2 15.8' stroke='white' stroke-width='1.4'/></svg>">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Cortex Benchmarks: does the hub help an agent find the right code?">
+<meta property="og:description" content="The same agent, model and prompt, with and without Cortex, on a real seven-repository product. Scored mechanically from the agent's own answer.">
+<meta property="og:url" content="https://lktiep.github.io/cortex-hub/benchmark.html">
+<meta name="twitter:card" content="summary">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+:root{
+  /* Layout: one 1160px column, gutters max(16px, safe-area), sections split by hairline rules.
+     The replay board is the one dense, wide moment; everything around it stays editorial.
+     Type: Bricolage Grotesque for display, IBM Plex Sans for prose, IBM Plex Mono for anything
+     a hub or a worker would actually print.
+     Color: graphite on paper plus a single signal orange. Status hues appear only on task state. */
+  --bg:#f3f4f6; --bg-2:#e8eaee; --surface:#ffffff; --surface-2:#f8f9fa;
+  --line:#dadde3; --line-strong:#b8bfc9;
+  --text:#0f1318; --muted:#56606c; --faint:#88909b;
+  --signal:#dc440c; --signal-soft:rgba(220,68,12,.09); --on-signal:#ffffff;
+  --st-done:#0f8a5f; --st-review:#7c4fd8; --st-run:#1f6feb; --st-ready:#0e7c8f;
+  --st-wait:#8a929c; --st-held:#b26a00; --st-crit:#d22f43;
+  --code-bg:#12161c; --code-text:#e4e7ec; --code-muted:#8d96a3;
+  --shadow:0 1px 2px rgba(15,19,24,.06),0 8px 24px -12px rgba(15,19,24,.18);
+  --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --gutter-l:max(clamp(16px,4vw,40px),env(safe-area-inset-left,0px));
+  --gutter-r:max(clamp(16px,4vw,40px),env(safe-area-inset-right,0px));
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0a0c0f; --bg-2:#11141a; --surface:#14181d; --surface-2:#191e24;
+    --line:#252b33; --line-strong:#38404b;
+    --text:#e9ecf0; --muted:#9aa3ae; --faint:#6b7480;
+    --signal:#ff6a2b; --signal-soft:rgba(255,106,43,.13); --on-signal:#160700;
+    --st-done:#3ccf91; --st-review:#b38dff; --st-run:#5aa2ff; --st-ready:#3cc6d8;
+    --st-wait:#6f7884; --st-held:#eaa53c; --st-crit:#ff5c6c;
+    --code-bg:#0d1014; --code-text:#e4e7ec; --code-muted:#7f8895;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -14px rgba(0,0,0,.7);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0a0c0f; --bg-2:#11141a; --surface:#14181d; --surface-2:#191e24;
+  --line:#252b33; --line-strong:#38404b;
+  --text:#e9ecf0; --muted:#9aa3ae; --faint:#6b7480;
+  --signal:#ff6a2b; --signal-soft:rgba(255,106,43,.13); --on-signal:#160700;
+  --st-done:#3ccf91; --st-review:#b38dff; --st-run:#5aa2ff; --st-ready:#3cc6d8;
+  --st-wait:#6f7884; --st-held:#eaa53c; --st-crit:#ff5c6c;
+  --code-bg:#0d1014; --code-text:#e4e7ec; --code-muted:#7f8895;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -14px rgba(0,0,0,.7);
+  color-scheme:dark;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:400 16px/1.6 var(--sans);overflow-x:hidden}
+a{color:inherit;text-decoration-color:var(--signal);text-underline-offset:3px}
+a:hover{color:var(--signal)}
+code,kbd,.mono{font-family:var(--mono);font-size:.92em}
+p code,li code,td code{background:var(--bg-2);border:1px solid var(--line);padding:.05em .35em;border-radius:4px;overflow-wrap:anywhere;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+
+.wrap{max-width:1160px;margin:0 auto;padding-left:var(--gutter-l);padding-right:var(--gutter-r)}
+section{border-top:1px solid var(--line);padding-block:clamp(56px,8vw,104px)}
+.kicker{font:600 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--signal);margin:0 0 18px;display:flex;align-items:center;gap:10px}
+.kicker::before{content:"";width:22px;height:2px;background:var(--signal)}
+h2{font:700 clamp(30px,4.4vw,52px)/1.04 var(--display);letter-spacing:-.025em;margin:0 0 18px;max-width:20ch}
+.lede{color:var(--muted);font-size:clamp(16px,1.6vw,18.5px);max-width:64ch;margin:0}
+
+/* ── top bar ── */
+.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:saturate(1.4) blur(10px);-webkit-backdrop-filter:saturate(1.4) blur(10px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:20px;height:58px}
+.mark{display:flex;align-items:center;gap:10px;font:700 17px/1 var(--display);letter-spacing:-.01em;text-decoration:none;white-space:nowrap}
+.mark svg{flex:none}
+.mark span{color:var(--muted);font-weight:500}
+.nav{display:flex;gap:22px;margin-left:auto;font-size:14px}
+.nav a{text-decoration:none;color:var(--muted)}
+.nav a:hover{color:var(--text)}
+.theme{margin-left:8px;width:36px;height:36px;display:grid;place-items:center;border:1px solid var(--line);background:var(--surface);border-radius:8px;cursor:pointer;flex:none}
+.theme:hover{border-color:var(--line-strong)}
+.theme .moon{display:none}
+:root[data-theme="dark"] .theme .sun{display:none}
+:root[data-theme="dark"] .theme .moon{display:block}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .theme .sun{display:none}:root:not([data-theme="light"]) .theme .moon{display:block}}
+@media (max-width:820px){.nav{display:none}.theme{margin-left:auto}}
+
+/* ── hero ── */
+.hero{padding-block:clamp(48px,8vw,96px) clamp(40px,6vw,72px);border-top:0}
+.eyebrow{font:500 13px/1.4 var(--mono);color:var(--muted);margin:0 0 26px;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.eyebrow .pill{border:1px solid var(--line-strong);border-radius:999px;padding:4px 10px;color:var(--text)}
+.eyebrow .live{display:inline-flex;align-items:center;gap:8px;color:var(--st-done)}
+.eyebrow .live i{width:8px;height:8px;border-radius:50%;background:var(--st-done);box-shadow:0 0 0 4px color-mix(in srgb,var(--st-done) 20%,transparent)}
+h1{font:800 clamp(46px,8.6vw,118px)/.9 var(--display);letter-spacing:-.034em;margin:0 0 30px;max-width:13ch}
+h1 em{font-style:normal;color:var(--signal)}
+.hero .lede{font-size:clamp(17px,1.9vw,21px);max-width:58ch;color:var(--muted)}
+.hero .lede strong{color:var(--text);font-weight:600}
+.cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:34px}
+.btn{display:inline-flex;align-items:center;gap:10px;height:46px;padding:0 18px;border-radius:8px;font-weight:600;font-size:15px;text-decoration:none;border:1px solid var(--line-strong);background:var(--surface)}
+.btn:hover{color:var(--text);border-color:var(--text)}
+.btn.primary{background:var(--signal);border-color:var(--signal);color:var(--on-signal)}
+.btn.primary:hover{color:var(--on-signal);filter:brightness(1.06)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-top:clamp(48px,7vw,80px);border-top:1px solid var(--line-strong)}
+.stat{padding:20px 20px 0 0;min-width:0}
+.stat+.stat{padding-left:20px;border-left:1px solid var(--line)}
+.stat b{display:block;font:700 clamp(30px,4vw,46px)/1 var(--display);letter-spacing:-.03em}
+.stat span{display:block;color:var(--muted);font-size:14px;margin-top:8px}
+@media (max-width:720px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat:nth-child(3){padding-left:0;border-left:0}.stat:nth-child(n+3){border-top:1px solid var(--line);margin-top:18px}}
+
+/* ── flow ── */
+.flow{list-style:none;margin:44px 0 0;padding:0;display:grid;gap:0}
+.flow>li{display:grid;grid-template-columns:96px minmax(0,1fr);gap:24px;padding:32px 0;border-top:1px solid var(--line)}
+.flow>li:first-child{border-top:0;padding-top:8px}
+.flow .num{font:800 54px/.9 var(--display);color:var(--signal);letter-spacing:-.04em}
+.flow h3{font:700 clamp(22px,2.4vw,28px)/1.15 var(--display);letter-spacing:-.015em;margin:0 0 10px}
+.flow p{margin:0 0 14px;color:var(--muted);max-width:68ch}
+@media (max-width:620px){.flow>li{grid-template-columns:minmax(0,1fr);gap:6px}.flow .num{font-size:38px}}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:28px;align-items:start}
+@media (max-width:900px){.split{grid-template-columns:minmax(0,1fr)}}
+pre.code{margin:0;background:var(--code-bg);color:var(--code-text);border-radius:10px;padding:16px 18px;font:400 12.5px/1.6 var(--mono);overflow-x:auto;tab-size:2;min-width:0}
+pre.code .k{color:#ffb38a}
+pre.code .s{color:#9fd8a8}
+pre.code .c{color:var(--code-muted)}
+pre.code .f{color:#8ec5ff}
+.pipe{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0 16px;font:500 12.5px/1 var(--mono)}
+.pipe span{border:1px solid var(--line-strong);background:var(--surface);padding:8px 10px;border-radius:6px}
+.pipe span.hot{border-color:var(--signal);color:var(--signal)}
+.pipe i{color:var(--faint);font-style:normal}
+.verdicts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;max-width:760px}
+.verdicts div{border:1px solid var(--line);border-top:3px solid var(--c);background:var(--surface);border-radius:8px;padding:12px 14px;font-size:14px;color:var(--muted)}
+.verdicts b{display:block;color:var(--text);font:600 13px/1.3 var(--mono);margin-bottom:4px}
+@media (max-width:620px){.verdicts{grid-template-columns:minmax(0,1fr)}}
+
+/* ── safety ── */
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:40px}
+.card{background:var(--surface);padding:24px 22px 26px;min-width:0}
+.card .ic{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;background:var(--signal-soft);color:var(--signal);margin-bottom:16px}
+.card h3{font:700 19px/1.2 var(--display);margin:0 0 8px;letter-spacing:-.01em}
+.card p{margin:0;color:var(--muted);font-size:14.5px}
+@media (max-width:900px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.cards{grid-template-columns:minmax(0,1fr)}}
+
+/* ── status / proof ── */
+.status-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:40px;margin-top:40px;align-items:start}
+@media (max-width:900px){.status-grid{grid-template-columns:minmax(0,1fr)}}
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:420px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+th{font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint);background:var(--surface-2)}
+td.s{white-space:nowrap;width:1%}
+.grp td{font:600 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--surface-2);padding-top:12px}
+.bars{display:flex;flex-direction:column;gap:12px}
+.bars .b{display:grid;grid-template-columns:132px minmax(0,1fr) 54px;gap:12px;align-items:center;font-size:13.5px}
+.bars .b span:first-child{font:500 12.5px/1.2 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+.bars .b i{display:block;height:10px;border-radius:3px;background:var(--text);width:var(--w)}
+.bars .b.hk i{background:var(--signal)}
+.bars .b b{font:600 13px/1 var(--mono);text-align:right}
+.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-top:28px}
+.facts div{background:var(--surface);padding:16px 18px;min-width:0}
+.facts b{display:block;font:700 28px/1 var(--display);letter-spacing:-.02em}
+.facts span{display:block;font-size:13.5px;color:var(--muted);margin-top:6px}
+.limits{margin:36px 0 0;padding:0;list-style:none;counter-reset:l;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 40px}
+.limits li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;color:var(--muted);font-size:15px}
+.limits li::before{counter-increment:l;content:counter(l,decimal-leading-zero);font:600 12px/1.9 var(--mono);color:var(--signal)}
+.limits b{color:var(--text);font-weight:600}
+@media (max-width:760px){.limits{grid-template-columns:minmax(0,1fr)}}
+
+footer{border-top:1px solid var(--line);padding-block:40px 56px;color:var(--muted);font-size:14px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:16px 32px;justify-content:space-between;align-items:baseline}
+footer nav{display:flex;flex-wrap:wrap;gap:8px 20px}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+
+/* ── benchmark page ── */
+.nav a[aria-current="page"]{color:var(--text)}
+.arm{display:inline-grid;place-items:center;min-width:34px;height:34px;padding:0 8px;border-radius:8px;background:var(--signal-soft);color:var(--signal);font:700 15px/1 var(--mono);margin-bottom:16px}
+.card .what{font:500 12.5px/1.45 var(--mono);color:var(--text);margin:12px 0 0;padding-top:12px;border-top:1px dashed var(--line)}
+td.n,th.n{text-align:right;font-family:var(--mono);white-space:nowrap}
+td.n{font-size:13.5px}
+tr.hl td{background:var(--signal-soft)}
+tr.hl td:first-child{box-shadow:inset 3px 0 0 var(--signal)}
+td small{display:block;color:var(--faint);font-size:12.5px;margin-top:2px}
+.cap{font-size:13px;color:var(--faint);margin:12px 0 0;max-width:80ch}
+.results{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:40px;margin-top:40px;align-items:start}
+@media (max-width:960px){.results{grid-template-columns:minmax(0,1fr)}}
+.results.stack{grid-template-columns:minmax(0,1fr)}
+.pair{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:40px;align-items:start}
+@media (max-width:860px){.pair{grid-template-columns:minmax(0,1fr)}}
+.bars .b.mid i{background:var(--muted)}
+.sub{font:700 clamp(22px,2.4vw,28px)/1.2 var(--display);letter-spacing:-.015em;margin:64px 0 0}
+.sub+.lede{margin-top:10px}
+.kinds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px;margin-top:40px}
+.kinds h3{font:700 22px/1.2 var(--display);margin:0 0 8px;letter-spacing:-.01em}
+.kinds p{margin:0 0 12px;color:var(--muted);font-size:15px}
+.kinds ul{margin:0;padding-left:18px;color:var(--muted);font-size:14.5px}
+.kinds li{margin:4px 0}
+@media (max-width:860px){.kinds{grid-template-columns:minmax(0,1fr)}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="mark" href="./" aria-label="Cortex Conductor home">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="9" r="2.4" fill="var(--signal)"/><circle cx="18" cy="9" r="2.4" fill="currentColor"/><circle cx="13" cy="18" r="2.4" fill="currentColor"/><path d="M10.2 9.6 L15.8 9.6 M9.2 11 L11.8 15.8 M16.8 11 L14.2 15.8" stroke="currentColor" stroke-width="1.4"/></svg>
+      Cortex <span>Benchmarks</span>
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="./">Conductor</a><a href="#harness">Harness</a><a href="#tasks">Tasks</a><a href="#results">Results</a><a href="#retrieval">Retrieval</a><a href="#limits">Limits</a><a href="https://github.com/lktiep/cortex-hub">GitHub</a>
+    </nav>
+    <button class="theme" type="button" aria-label="Switch light or dark theme">
+      <svg class="sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>
+      <svg class="moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 14.6A8.2 8.2 0 0 1 9.4 4a8.2 8.2 0 1 0 10.6 10.6Z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main id="top">
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow"><span class="pill">Cortex Hub</span><span>agent benchmark</span><span class="live"><i></i>last run · 2026-10-23</span></p>
+    <h1>Does the hub make an agent find <em>the right code</em>?</h1>
+    <p class="lede">The same coding agent, the same model and the same prompt — once with only the repository it was asked about, once with every repository of the product on disk, and once with <strong>one repository plus Cortex</strong>. Each answer is scored mechanically from what the agent wrote. This page shows the harness, the tasks and every number, including the ones that did not move.</p>
+    <div class="cta">
+      <a class="btn primary" href="#results">See the results
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 3v10M3.5 8.5 8 13l4.5-4.5"/></svg></a>
+      <a class="btn" href="#harness">How a run works</a>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>0.90</b><span>recall on cross-repo questions with Cortex — 0.26 from the repository alone</span></div>
+      <div class="stat"><b>77%</b><span>of the cost of putting every repository on disk, at the same recall — 0.90 against 0.88</span></div>
+      <div class="stat"><b>7 repos</b><span>one real product, private code the model has never seen</span></div>
+      <div class="stat"><b>120</b><span>headless agent runs, each in a fresh worktree</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="harness">
+  <div class="wrap">
+    <p class="kicker">The harness</p>
+    <h2>Three setups, one variable at a time</h2>
+    <p class="lede">Every run is a headless <code>claude -p</code> session with Claude Sonnet, started in a throwaway git worktree pinned to a fixed commit. The prompt is identical across setups except for one sentence that tells the agent where the other repositories are — or that they are not on this machine.</p>
+    <div class="cards">
+      <div class="card">
+        <div class="arm">A</div>
+        <h3>The repository alone</h3>
+        <p>What most agents get today: the repo the task is about, and nothing else. Cortex tools are disallowed.</p>
+        <p class="what">cwd = one worktree<br>other repos: “not on this machine”</p>
+      </div>
+      <div class="card">
+        <div class="arm">AA</div>
+        <h3>Every repository on disk</h3>
+        <p>The ceiling for plain search: all seven repos checked out side by side, so <code>grep</code> sees everything. Cortex tools are disallowed.</p>
+        <p class="what">cwd = seven worktrees<br>other repos: “next to you, here”</p>
+      </div>
+      <div class="card">
+        <div class="arm">B</div>
+        <h3>One repository + Cortex</h3>
+        <p>Setup A plus exactly what the Cortex installer writes into a project — hooks, their settings, the <code>/cs</code> and <code>/ce</code> commands and the <code>CLAUDE.md</code> block — taken from the hub commit under test.</p>
+        <p class="what">cwd = one worktree + install<br>hub: the organization's index</p>
+      </div>
+    </div>
+
+    <ol class="flow">
+      <li>
+        <div class="num">01</div>
+        <div>
+          <h3>Fresh, pinned, isolated</h3>
+          <p>Each run gets its own detached worktree at a fixed commit, removed when the run ends. Runs execute three at a time, interleaved by repetition so a slow hour hits every setup alike. Unrelated MCP servers on the machine are disabled in all setups.</p>
+        </div>
+      </li>
+      <li>
+        <div class="num">02</div>
+        <div>
+          <h3>No run can teach the next one</h3>
+          <p>In setup B every hub tool that writes — knowledge, memory, notes, tasks, session summaries, re-indexing — is disallowed. Every run starts from the same hub state, so repetitions are independent and a good answer cannot be cached for the run after it.</p>
+          <div class="pipe"><span>read: search · grep · read · context</span><i>allowed</i><span class="hot">write: store · notes · tasks · reindex</span><i>disallowed</i></div>
+        </div>
+      </li>
+      <li>
+        <div class="num">03</div>
+        <div>
+          <h3>Scored from the transcript, not by eye</h3>
+          <p>The run's <code>stream-json</code> transcript is kept. Cost and turns come from its result event; tool calls are counted by kind — hub calls, file searches (the Grep tool plus any <code>rg</code>, <code>grep</code>, <code>find</code> or <code>git grep</code> in a shell), and file reads. Recall is computed from the final answer only, as below.</p>
+        </div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section id="tasks">
+  <div class="wrap">
+    <p class="kicker">The tasks</p>
+    <h2>Real questions from a real product</h2>
+    <p class="lede">The product is one system split across seven private repositories: a server, a web front end, internal tools, two generations of a client, an older upstream codebase, analysis tools and protocol documentation. It grew over many years and several teams, so the same idea often lives in four places under four names. The model has never seen this code.</p>
+
+    <div class="kinds">
+      <div>
+        <h3>Find — the answer spans repositories</h3>
+        <p>A question a developer actually asked, whose answer is spread over several repos. The agent is told not to change code and to end with the relevant files, one per line, as <code>repo/path/to/file</code>.</p>
+        <ul>
+          <li>Every implementation of the wire protocol's packet cipher — server, tools, docs, the upstream codebase, analysis notes.</li>
+          <li>Where a login password is encoded, where the server decodes and checks it, and how each client does it.</li>
+          <li>Every handler of one message type, on both sides of the connection.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Fix — a real bug, after the index</h3>
+        <p>A bug the team fixed after the hub's index was built. The worktree starts at the fix's parent commit, so the index has never seen the answer. The prompt is the bug report.</p>
+        <ul>
+          <li>Six fixes from the server's history, each touching one or two files, none of them guessable from the file names alone.</li>
+          <li>Scored by whether the agent changed the files the real fix changed, and by a judge model comparing the agent's diff with the real one: 0 wrong, 1 partial, 2 equivalent.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="split" style="margin-top:44px">
+      <div>
+        <h3 style="font:700 22px/1.2 var(--display);margin:0 0 8px;letter-spacing:-.01em">How a find task is scored</h3>
+        <p style="color:var(--muted);margin:0 0 12px;font-size:15px">Each task carries one regular expression per repository that holds part of the answer. A group counts as found when the agent's final reply names a matching file. Recall is the share of groups found — so an answer that describes the right code without naming its file scores nothing for it.</p>
+        <p style="color:var(--muted);margin:0;font-size:15px">This is deliberately strict and deliberately dumb: no judge, no partial credit, nothing a reviewer could argue about. It measures one thing — did the agent find the files.</p>
+      </div>
+      <pre class="code"><span class="c">// shape only — paths invented, the real ones are private</span>
+{ id: <span class="s">'x-wire-crypto'</span>, kind: <span class="s">'find'</span>,
+  repo: <span class="s">'&lt;docs repo&gt;'</span>,     <span class="c">// where the agent starts</span>
+  gold: {
+    server:   <span class="s">/net\/crypto\/\w+Cipher\.cs/</span>,
+    tools:    <span class="s">/codec\/\w+Packet\.cs/</span>,
+    docs:     <span class="s">/crypto\/\w+\.cs|protocol\.md/</span>,
+    upstream: <span class="s">/net\/Session\.cs/</span>,
+    notes:    <span class="s">/decoder\.py|cipher\.md/</span>,
+  } }
+
+<span class="k">const</span> hit = Object.<span class="f">entries</span>(task.gold)
+  .<span class="f">filter</span>(([, re]) =&gt; re.<span class="f">test</span>(finalAnswer))
+recall = hit.length / Object.<span class="f">keys</span>(task.gold).length</pre>
+    </div>
+  </div>
+</section>
+
+<section id="results">
+  <div class="wrap">
+    <p class="kicker">Results</p>
+    <h2>Cross-repo questions: as good as “everything on disk”, for less</h2>
+    <p class="lede">Three find tasks. Setup A shows the problem: from one repository the agent finds about a quarter of the answer. Putting all seven repositories on disk (AA) finds nearly all of it, but doubles the cost and the time. Setup B is the hub's job: get to AA's recall from A's footprint. In the latest run it did — 0.90 against 0.88, at 77% of the cost and 65% of the time.</p>
+
+    <div class="results stack">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Setup</th><th class="n">Runs</th><th class="n">Recall</th><th class="n">Cost / run</th><th class="n">Turns</th><th class="n">Minutes</th><th class="n">Searches</th></tr></thead>
+          <tbody>
+            <tr class="grp"><td colspan="7">Latest run · 5 repetitions</td></tr>
+            <tr class="hl"><td>B · one repo + Cortex<small>hub at v1.3.11</small></td><td class="n">15</td><td class="n"><b>0.90</b></td><td class="n">$0.34</td><td class="n">21.9</td><td class="n">1.1</td><td class="n">2.5</td></tr>
+            <tr><td>AA · all seven repos on disk</td><td class="n">15</td><td class="n">0.88</td><td class="n">$0.44</td><td class="n">22.1</td><td class="n">1.7</td><td class="n">16.5</td></tr>
+            <tr class="grp"><td colspan="7">Pilot · 3 repetitions</td></tr>
+            <tr><td>A · the repository alone</td><td class="n">9</td><td class="n">0.26</td><td class="n">$0.24</td><td class="n">10.2</td><td class="n">1.0</td><td class="n">7.1</td></tr>
+            <tr><td>AA · all seven repos on disk</td><td class="n">9</td><td class="n">0.95</td><td class="n">$0.46</td><td class="n">21.3</td><td class="n">2.0</td><td class="n">16.2</td></tr>
+            <tr><td>B · one repo + Cortex<small>before the changes below</small></td><td class="n">9</td><td class="n">0.59</td><td class="n">$0.26</td><td class="n">14.3</td><td class="n">1.2</td><td class="n">4.6</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pair">
+        <div>
+        <h3 style="font:700 22px/1.2 var(--display);margin:0 0 6px;letter-spacing:-.01em">Recall, latest of each</h3>
+        <p style="color:var(--muted);margin:0 0 22px;font-size:15px">Share of answer groups whose file the agent named.</p>
+        <div class="bars">
+          <div class="b mid"><span>A · one repo</span><i style="--w:26%"></i><b>0.26</b></div>
+          <div class="b"><span>AA · all repos</span><i style="--w:88%"></i><b>0.88</b></div>
+          <div class="b hk"><span>B · + Cortex</span><i style="--w:90%"></i><b>0.90</b></div>
+        </div>
+        </div>
+        <div class="facts" style="margin-top:0">
+          <div><b>77%</b><span>of AA's cost per run, at the same recall</span></div>
+          <div><b>65%</b><span>of AA's wall time per run</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="cap">Searches = Grep tool calls plus shell <code>rg</code>/<code>grep</code>/<code>find</code>/<code>git grep</code>. In B most lookups go through the hub instead (16.1 hub calls per run on average). Cost is what the CLI reports for the run, at list price.</p>
+
+    <h3 class="sub">How B got from 0.59 to 0.90</h3>
+    <p class="lede">Every miss was read in its transcript, the cause fixed in the hub, merged, deployed, and the same three tasks run again. Nothing in the tasks, prompts or scoring changed between rounds.</p>
+    <div class="tbl-wrap" style="margin-top:28px">
+      <table>
+        <thead><tr><th>Round</th><th>What changed in the hub</th><th class="n">Runs</th><th class="n">Recall</th><th class="n">Cost / run</th></tr></thead>
+        <tbody>
+          <tr><td>Baseline</td><td>Ranked hybrid search across the organization's repos, symbol context, knowledge recall.<small>The agent searched well but could not prove a name was absent — a ranking never says “nowhere else”.</small></td><td class="n">9</td><td class="n">0.59</td><td class="n">$0.26</td></tr>
+          <tr><td><a href="https://github.com/lktiep/cortex-hub/pull/95">#95</a></td><td>Reword hints judged within one session and one search scope.<small>Stopped nudging the agent off a search that was in fact new.</small></td><td class="n">7</td><td class="n">0.64</td><td class="n">—</td></tr>
+          <tr><td><a href="https://github.com/lktiep/cortex-hub/pull/96">#96</a></td><td>Exact search and file reads across every repo of the organization.<small>The agent can now grep repos that are not on its machine, and read the file it found.</small></td><td class="n">9</td><td class="n">0.82</td><td class="n">$0.32</td></tr>
+          <tr><td><a href="https://github.com/lktiep/cortex-hub/pull/97">#97</a></td><td>A files-only mode: each matching file with a count, like <code>grep -l</code>.<small>Remaining misses were not truncation — the agent's patterns never matched the file. The all-repos setup found it with one broad sweep, so the hub got the same move.</small></td><td class="n">9</td><td class="n">0.86</td><td class="n">$0.32</td></tr>
+          <tr class="hl"><td>Latest</td><td>Same hub, more repetitions.</td><td class="n">15</td><td class="n"><b>0.90</b></td><td class="n">$0.34</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="sub">Single-repo bug fixes: no difference, and we say so</h3>
+    <p class="lede">On the six fix tasks the bug lives in the repository the agent starts in. Both setups changed the right files every time; the judge scored B's diffs slightly closer to the real fix, within noise. The hub is not what makes these tasks easier — it neither helps much nor gets in the way.</p>
+    <div class="tbl-wrap" style="margin-top:28px;max-width:860px">
+      <table>
+        <thead><tr><th>Setup</th><th class="n">Runs</th><th class="n">Right files</th><th class="n">Judge (0–2)</th><th class="n">Cost / run</th><th class="n">Turns</th><th class="n">Searches</th></tr></thead>
+        <tbody>
+          <tr><td>A · the repository alone</td><td class="n">18</td><td class="n">1.00</td><td class="n">1.50</td><td class="n">$0.21</td><td class="n">14.2</td><td class="n">9.4</td></tr>
+          <tr><td>B · one repo + Cortex</td><td class="n">18</td><td class="n">1.00</td><td class="n">1.67</td><td class="n">$0.20</td><td class="n">12.8</td><td class="n">7.7</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="retrieval">
+  <div class="wrap">
+    <p class="kicker">Retrieval</p>
+    <h2>Underneath: how well the index ranks</h2>
+    <p class="lede">The agent benchmark tests the whole loop. These test the search layer alone, with no model in the loop, and anyone can rerun them from <a href="https://github.com/lktiep/cortex-hub/tree/master/benchmarks"><code>benchmarks/</code></a>.</p>
+    <div class="results">
+      <div>
+        <h3 style="font:700 22px/1.2 var(--display);margin:0 0 6px;letter-spacing:-.01em">Code search — this repository's own index</h3>
+        <p style="color:var(--muted);margin:0 0 18px;font-size:15px">15 hand-written questions, each with one file that answers it. Same chunks and the same query embedding in every mode.</p>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Mode</th><th class="n">r@1</th><th class="n">r@3</th><th class="n">r@10</th><th class="n">MRR</th></tr></thead>
+            <tbody>
+              <tr><td>vector</td><td class="n">0.533</td><td class="n">0.667</td><td class="n">1.000</td><td class="n">0.656</td></tr>
+              <tr><td>BM25</td><td class="n">0.267</td><td class="n">0.667</td><td class="n">1.000</td><td class="n">0.530</td></tr>
+              <tr class="hl"><td>hybrid (RRF) — shipped</td><td class="n"><b>0.600</b></td><td class="n"><b>0.733</b></td><td class="n">1.000</td><td class="n"><b>0.703</b></td></tr>
+              <tr><td>vector + LLM rerank</td><td class="n" colspan="4">no change to r@1, +2.1 s and ~1.4k tokens per query</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="cap">The right file is always in the top 10 and first only about half the time — which is why the agent is told to scan all ten hits before choosing.</p>
+      </div>
+      <div>
+        <h3 style="font:700 22px/1.2 var(--display);margin:0 0 6px;letter-spacing:-.01em">Knowledge recall — LongMemEval-S</h3>
+        <p style="color:var(--muted);margin:0 0 18px;font-size:15px">500 questions over a shared haystack of past sessions, local embedder, no API key.</p>
+        <div class="facts" style="margin-top:0">
+          <div><b>96.0%</b><span>R@5 — the right session in the top five</span></div>
+          <div><b>97.8%</b><span>R@10</span></div>
+          <div><b>0.685</b><span>MRR on memory search, hybrid (vector alone: 0.601)</span></div>
+          <div><b>$0</b><span>per run: embeddings are computed in process</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="limits">
+  <div class="wrap">
+    <p class="kicker">Limits</p>
+    <h2>Read these before quoting a number</h2>
+    <ol class="limits">
+      <li><span><b>Small n.</b> Three find tasks and six fix tasks on one product. The numbers are evidence of direction, not a leaderboard.</span></li>
+      <li><span><b>One model, one agent.</b> Claude Sonnet through Claude Code. Other agents read the same hooks and tools, but are not measured here.</span></li>
+      <li><span><b>The repositories are private.</b> The agent runs cannot be reproduced outside the team; the retrieval benchmarks can.</span></li>
+      <li><span><b>Recall is strict.</b> A correct explanation that does not name the file scores zero for that repository. Some of B's remaining misses are exactly that.</span></li>
+      <li><span><b>The hub was tuned on these tasks.</b> Each round fixed a cause seen in their transcripts. The fixes are general — exact search, file listing — but fresh tasks are the honest next test.</span></li>
+      <li><span><b>Next-day memory is not measured yet.</b> Hub writes are off in these runs so each one is independent. Whether yesterday's decisions and dead ends reach today's fresh session is the next benchmark.</span></li>
+      <li><span><b>Cost is list price for one run.</b> Hub hosting and indexing are not included; on a small server the index costs no tokens to query.</span></li>
+    </ol>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Cortex Hub benchmarks · last run 2026-10-23.</span>
+    <nav aria-label="More">
+      <a href="./">Conductor</a>
+      <a href="https://github.com/lktiep/cortex-hub/blob/master/benchmarks/README.md">Retrieval benchmarks</a>
+      <a href="https://github.com/lktiep/cortex-hub">Source</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem('cc-theme'); if (saved === 'light' || saved === 'dark') root.setAttribute('data-theme', saved); } catch (e) {}
+  document.querySelector('.theme').addEventListener('click', function () {
+    var cur = root.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    var next = cur === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('cc-theme', next); } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>
