@@ -11,6 +11,8 @@ import { fetchOutline, formatCodeMatches, outlineFiles, type CodeMatch, type Out
 
 export const RECALL_LIMIT = 3
 const LINE_CHARS = 180
+// A session summary ends with what was left to do, past the first 180 characters.
+const SUMMARY_CHARS = 600
 
 const oneLine = (text: string, max = LINE_CHARS) => {
   const flat = text.replace(/\s+/g, ' ').trim()
@@ -18,7 +20,7 @@ const oneLine = (text: string, max = LINE_CHARS) => {
 }
 
 export interface KnowledgeLine { documentId?: string; title?: string; content?: string; deprecated?: boolean; score?: number }
-export interface MemoryLine { id?: string; memory?: string }
+export interface MemoryLine { id?: string; memory?: string; createdAt?: string; metadata?: { type?: string } }
 
 // Whatever ranked first came back, related or not: in the benchmark every start carried three
 // notes and three memories, ~1k characters, none about the task. Measured on the hub's own
@@ -41,7 +43,15 @@ export function terms(text: string): Set<string> {
   return new Set(kept.map((w) => (w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w)))
 }
 
-const sharesTerm = (task: Set<string>, text: string) => [...terms(text)].some((t) => task.has(t))
+// A word's first six letters, so "deprecation" meets "deprecated" and "configure" meets "config".
+const stem = (word: string) => word.slice(0, 6)
+
+const sharesTerm = (task: Set<string>, text: string) => {
+  const stems = new Set([...task].map(stem))
+  return [...terms(text)].some((t) => stems.has(stem(t)))
+}
+
+const isSummary = (m: MemoryLine) => m.metadata?.type === 'session-summary'
 
 export function formatTaskRecall(task: string, knowledge: KnowledgeLine[] | undefined, memories: MemoryLine[] | undefined): string {
   if (!knowledge || !memories) return ''
@@ -52,7 +62,7 @@ export function formatTaskRecall(task: string, knowledge: KnowledgeLine[] | unde
     out.push('Knowledge (full text: cortex_knowledge_search id):',
       ...knowledge.map((k) => `- ${oneLine(k.title ?? '', 90)} — ${oneLine(k.content ?? '')} (${k.documentId})`))
   }
-  if (memories.length) out.push('Memory:', ...memories.map((m) => `- ${oneLine(m.memory ?? '')}`))
+  if (memories.length) out.push('Memory:', ...memories.map((m) => `- ${oneLine(m.memory ?? '', isSummary(m) ? SUMMARY_CHARS : LINE_CHARS)}`))
   return out.join('\n')
 }
 
@@ -96,26 +106,25 @@ async function searchKnowledge(env: Env, task: string, alreadyInContext: (title?
   }).slice(0, RECALL_LIMIT)
 }
 
-/** The project's memories first, then the agent's own; undefined when neither search answered. */
+/**
+ * The project's memories that share a word with the task, after its last session summary;
+ * undefined when the search did not answer. Only the project's: the agent's own scope held what
+ * it had stored for every other project too, and a common word like "commit" let those through.
+ * The summary comes whatever the words: "pick up where we left off" names nothing it holds.
+ */
 async function searchMemory(env: Env, task: string, projectId: string | undefined, agentId: string): Promise<MemoryLine[] | undefined> {
-  const scopes = [projectId ? `project-${projectId}` : undefined, agentId].filter((s): s is string => Boolean(s))
+  const res = await apiCall(env, '/api/mem9/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: task, userId: projectId ? `project-${projectId}` : agentId, limit: RECALL_LIMIT * 2 }),
+    signal: AbortSignal.timeout(5000),
+  })
+  if (!res.ok) return undefined
+  const memories = ((await res.json()) as { memories?: MemoryLine[] }).memories?.filter((m) => (m.memory ?? '').trim()) ?? []
   const words = terms(task)
-  const found: MemoryLine[] = []
-  let answered = false
-  for (const userId of scopes) {
-    if (found.length >= RECALL_LIMIT) break
-    const res = await apiCall(env, '/api/mem9/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: task, userId, limit: RECALL_LIMIT * 2 }),
-      signal: AbortSignal.timeout(5000),
-    })
-    if (!res.ok) continue
-    answered = true
-    const data = (await res.json()) as { memories?: MemoryLine[] }
-    found.push(...(data.memories ?? []).filter((m) => (m.memory ?? '').trim() && sharesTerm(words, m.memory!)))
-  }
-  return answered ? found.slice(0, RECALL_LIMIT) : undefined
+  const last = memories.filter(isSummary).sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))[0]
+  const related = memories.filter((m) => m !== last && sharesTerm(words, m.memory!)).slice(0, RECALL_LIMIT)
+  return last ? [last, ...related] : related
 }
 
 async function locateCode(env: Env, task: string, project: string, branch: string | undefined): Promise<string> {

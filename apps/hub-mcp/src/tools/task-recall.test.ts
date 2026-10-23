@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { registerSessionTools } from './session.js'
@@ -14,6 +14,7 @@ type Handler = (args: Record<string, unknown>) => Promise<Result>
 
 const realFetch = globalThis.fetch
 let asked: Array<{ path: string; body: Record<string, unknown> }>
+let projectMemories: Array<Record<string, unknown>>
 
 function sessionStart(down: string[] = [], orgRepos?: string[]): Handler {
   asked = []
@@ -31,8 +32,8 @@ function sessionStart(down: string[] = [], orgRepos?: string[]): Handler {
         { documentId: 'kdoc-3', title: 'Deploy notes', content: 'unrelated', score: 0.41 },
       ] },
       '/api/mem9/search': { memories: body.userId === 'project-proj-1'
-        ? [{ id: 'm1', memory: 'Cache is per key hash' }, { id: 'm2', memory: 'Never commit the build folder' }]
-        : [] },
+        ? projectMemories
+        : [{ id: 'm9', memory: 'Another project rotates its key on deploy' }] },
       '/api/intel/code-search': { data: { results: [{ filePath: 'src/routes/keys.ts', score: 0.7, startLine: 40, endLine: 90, content: 'x' }] } },
       '/api/intel/cypher': { data: { raw: '| file | name | type | s | e |\n| --- | --- | --- | --- | --- |\n| src/routes/keys.ts | generateApiKey | Function | 32 | 38 |\n| src/routes/keys.ts | rotateKey | Function | 45 | 80 |' } },
     }
@@ -45,6 +46,9 @@ function sessionStart(down: string[] = [], orgRepos?: string[]): Handler {
   return tools.cortex_session_start!
 }
 
+beforeEach(() => {
+  projectMemories = [{ id: 'm1', memory: 'Cache is per key hash' }, { id: 'm2', memory: 'Never commit the build folder' }]
+})
 afterEach(() => { globalThis.fetch = realFetch })
 
 const start = { repo: 'https://example.com/acme/keys-api.git', agentId: 'claude-code', task: 'rotate an API key' }
@@ -74,7 +78,30 @@ describe('cortex_session_start with a task', () => {
     const queries = asked.filter((a) => a.path === '/api/knowledge/search').map((a) => a.body.query)
     expect(queries).toEqual(['rotate an API key'])
     expect(asked.find((a) => a.path === '/api/intel/code-search')!.body).toMatchObject({ query: 'rotate an API key', projectId: 'keys-api' })
-    expect(asked.filter((a) => a.path === '/api/mem9/search').map((a) => a.body.userId)).toEqual(['project-proj-1', 'claude-code'])
+    expect(asked.filter((a) => a.path === '/api/mem9/search').map((a) => a.body.userId)).toEqual(['project-proj-1'])
+  })
+
+  it('recalls only the project\'s memories, never what the agent stored for another one', async () => {
+    const brief = (await sessionStart()(start)).content.map((c) => c.text).join('\n')
+
+    expect(brief).not.toContain('Another project')
+  })
+
+  it('leads with the last session summary, whole, even when the task names nothing in it', async () => {
+    const next = 'Next: wire the flag into the help output and add a test for the hidden option.'
+    projectMemories = [
+      { id: 's1', memory: '[Session Summary] older work', createdAt: '2026-10-20T00:00:00Z', metadata: { type: 'session-summary' } },
+      { id: 'm3', memory: 'Deprecated options print a warning once', createdAt: '2026-10-22T00:00:00Z' },
+      { id: 's2', memory: `[Session Summary] Added Option.deprecated and its tests. ${'x'.repeat(200)} ${next}`, createdAt: '2026-10-22T09:00:00Z', metadata: { type: 'session-summary' } },
+    ]
+
+    const brief = (await sessionStart()({ ...start, task: 'continue the deprecation work where we left off' })).content[1]!.text
+    const memory = brief.slice(brief.indexOf('Memory:'))
+
+    expect(memory.split('\n')[1]).toContain('[Session Summary] Added Option.deprecated')
+    expect(memory).toContain(next)
+    expect(memory).toContain('- Deprecated options print a warning once')
+    expect(memory).not.toContain('older work')
   })
 
   it('claims no recall when a search did not answer, and no location without files', async () => {
