@@ -47,6 +47,12 @@ describe('claude classify', () => {
     expect(c.kind).toBe('quota');
     if (c.kind === 'quota') expect(c.resetAt).toBeUndefined();
   });
+  it('classifies the weekly limit as quota and reads its reset time', () => {
+    const out = `{"type":"result","is_error":true,"result":"You've hit your weekly limit · resets Oct 26, 12am (Asia/Bangkok)"}\n`;
+    const c = claude.classify(1, out, '');
+    expect(c.kind).toBe('quota');
+    if (c.kind === 'quota') expect(c.resetAt).toMatch(/-10-25T17:00:00\.000Z$/);
+  });
   it('ignores quota words in a non-error result event', () => {
     const out = '{"type":"result","is_error":false,"result":"usage limit docs"}\n';
     expect(claude.classify(1, out, 'boom').kind).toBe('error');

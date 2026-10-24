@@ -3,7 +3,8 @@
 The benchmarks live in `benchmarks/` as their own package, `@cortex/benchmarks`. The numbers here
 are copied from its
 [README](https://github.com/lktiep/cortex-hub/blob/master/benchmarks/README.md), which has the
-method, the flags and the full logs.
+method, the flags and the full logs. The same results, with charts, are on the
+[benchmark report](/conductor/benchmark.html){target="_self"}.
 
 ## Code search: vector, BM25 and hybrid
 

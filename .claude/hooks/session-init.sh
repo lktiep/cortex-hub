@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Session Init (v7.3) — arms the gates; keeps discovery state across compaction.
+# Cortex Session Init (v7.4) — arms the gates; keeps discovery state across compaction.
 #
 # SessionStart fires on four different things: startup, resume, clear and compact.
 # Wiping the discovery markers on all four is why a long task suddenly finds Grep and
@@ -14,32 +14,27 @@
 # v7.2 prints this conversation's id for /cs to pass as clientSessionId. Everything else the
 # hub matches a session on is the same for two conversations in one checkout, so without it
 # they shared one session, and the first to finish closed it under the other.
+#
+# v7.4 stops printing it. A line that differs in every conversation, this early in the
+# context, kept the prompt cache from reusing anything after it. session-id.sh now puts the
+# id straight into the cortex_session_start call.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 mkdir -p "$STATE_DIR"
 
 INPUT=$(cat 2>/dev/null || true)
 SOURCE=""
-CLIENT_ID=""
 if [ -n "$INPUT" ]; then
   if command -v jq >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null || true)
-    CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
   elif command -v python3 >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("source",""))' 2>/dev/null || true)
-    CLIENT_ID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || true)
   fi
 fi
-# The same id the tracker and the exit hook file this conversation's session under.
-CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
-conversation_line() {
-  [ -n "$CLIENT_ID" ] && echo "Cortex: this conversation's clientSessionId is ${CLIENT_ID} — pass it to cortex_session_start."
-}
 
 case "$SOURCE" in
   compact|resume)
     echo "Cortex: same session (${SOURCE}) — discovery state kept, gates stay as they were."
-    conversation_line
     exit 0 ;;
 esac
 
@@ -61,6 +56,5 @@ rm -rf "$STATE_DIR/agents" 2>/dev/null
 [ -d "$STATE_DIR/nudge" ] && find "$STATE_DIR/nudge" -type f -mtime +1 -exec rm -f {} + 2>/dev/null
 # File notes are shown once per conversation and agent; the record of which were is a day's.
 [ -d "$STATE_DIR/notes" ] && find "$STATE_DIR/notes" -type f -name 'shown-*' -mtime +1 -exec rm -f {} + 2>/dev/null
-echo "Run /cs first: cortex_session_start, then knowledge+memory recall. Until then edits are BLOCKED, and Grep/Glob stay blocked until a cortex discovery tool has run."
-conversation_line
+echo "The prompt hook starts the cortex session from the first prompt; without its note, call cortex_session_start(repo, task: \"<the task in a few words>\") first. Until one of the two, edits are BLOCKED."
 exit 0

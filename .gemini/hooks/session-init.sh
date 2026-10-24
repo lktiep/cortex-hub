@@ -48,5 +48,5 @@ rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" \
       "$STATE_DIR/tasks-checked" "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
 # Other conversations' sessions stay theirs to close; only week-old records are dropped.
 [ -d "$STATE_DIR/conversations" ] && find "$STATE_DIR/conversations" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
-echo '{"systemMessage":"MANDATORY: call cortex_session_start, then cortex_knowledge_search + cortex_memory_search, before any edit. search_file_content and glob stay blocked until a cortex discovery tool has run.'"$CONVERSATION"'"}'
+echo '{"systemMessage":"MANDATORY: call cortex_session_start with the task (task: <the task in a few words>) before any edit: one call answers the recall for the task and the files and lines to read, and opens the edit and search gates.'"$CONVERSATION"'"}'
 exit 0

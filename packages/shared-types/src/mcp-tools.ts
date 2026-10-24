@@ -24,6 +24,8 @@ export const MCP_TOOL_PERMISSIONS: readonly McpToolPermission[] = [
   { id: 'cortex.session.end', label: 'End Session (session_end)', group: 'Session' },
   { id: 'cortex.changes', label: 'Check Remote Changes (changes)', group: 'Changes' },
   { id: 'cortex.code.search', label: 'Code Search (code_search)', group: 'Code' },
+  { id: 'cortex.code.grep', label: 'Exact Search Across Repos (code_grep)', group: 'Code' },
+  { id: 'cortex.code.read', label: 'Read a File of Another Repo (code_read)', group: 'Code' },
   { id: 'cortex.code.context', label: 'Symbol Context (code_context)', group: 'Code' },
   { id: 'cortex.code.impact', label: 'Blast Radius (code_impact)', group: 'Code' },
   { id: 'cortex.code.reindex', label: 'Trigger Reindex (code_reindex)', group: 'Code' },

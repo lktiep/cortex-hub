@@ -20,10 +20,20 @@ const CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes in milliseconds
  * which validates the hashed token against the SQLite database.
  * Caches the result in memory to prevent database roundtrips on every tool call.
  */
+export interface AuthResult {
+  valid: boolean;
+  error?: string;
+  agentId?: string;
+  scope?: string;
+  permissions?: string[];
+  /** The key was not judged: the dashboard API did not answer (it restarts with the hub). */
+  unavailable?: boolean;
+}
+
 export async function validateApiKey(
   request: Request,
-  env: Env
-): Promise<{ valid: boolean; error?: string; agentId?: string; scope?: string; permissions?: string[] }> {
+  env: Pick<Env, 'DASHBOARD_API_URL'>
+): Promise<AuthResult> {
   // Allow health checks without auth
   const url = new URL(request.url)
   if (url.pathname === '/health') {
@@ -83,7 +93,7 @@ export async function validateApiKey(
         tokenCache.set(token, { valid: false, error: errorMsg, expiresAt: now + 15 * 1000 })
         return { valid: false, error: errorMsg }
       }
-      return { valid: false, error: `Authentication service returned ${res.status}` }
+      return { valid: false, unavailable: true, error: `Authentication service returned ${res.status}` }
     }
 
     const data = await res.json() as { valid: boolean; agentId?: string; scope?: string; permissions?: string[]; error?: string }
@@ -100,7 +110,7 @@ export async function validateApiKey(
       return { valid: false, error: errorMsg }
     }
   } catch (err) {
-    return { valid: false, error: `Failed to contact authentication service: ${String(err)}` }
+    return { valid: false, unavailable: true, error: `Failed to contact authentication service: ${String(err)}` }
   }
 }
 

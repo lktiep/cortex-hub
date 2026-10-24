@@ -2,6 +2,17 @@ import type { Env } from '../types.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { apiCall } from '../api-call.js'
+import { LOAD_UP_FRONT } from './load-up-front.js'
+import { formatOrgRepos, taskBrief } from './task-recall.js'
+
+// The docs indexer files each document as "[<path>] <title>". The IDE has already put these
+// instruction files in the agent's context, and the session-summary query ranks them first:
+// the brief and the knowledge list were the project's CLAUDE.md twice, ~2.4k of 3.4k characters.
+const IN_CONTEXT = /^\[(?:.*\/)?(?:CLAUDE|AGENTS|GEMINI)\.md\]/i
+
+export function alreadyInContext(title: string | undefined): boolean {
+  return IN_CONTEXT.test(title ?? '')
+}
 
 /**
  * Register Session Tools
@@ -13,22 +24,22 @@ import { apiCall } from '../api-call.js'
 export function registerSessionTools(server: McpServer, env: Env) {
   server.tool(
     'cortex_session_start',
-    'Start a new execution session with optional agent identity metadata.',
+    // Carried on every turn of every conversation: the hook fills in all but repo and task.
+    'Start the session. With `task`, the answer also holds the recall for it and the files, lines and symbols to read.',
     {
-      repo: z.string().describe('The URL of the repository being worked on'),
-      mode: z.string().optional().describe('Session mode: development, onboarding, review'),
-      agentId: z.string().optional().describe('Agent identifier (e.g. claude-code)'),
-      hostname: z.string().optional().describe('Machine hostname'),
-      os: z.string().optional().describe('Operating system (macOS/Windows/Linux)'),
-      ide: z.string().optional().describe('IDE type (claude-code-cli/claude-code-vscode/antigravity/cursor/windsurf/codex)'),
-      branch: z.string().optional().describe('Current git branch'),
-      capabilities: z.array(z.string()).optional().describe('Agent capabilities'),
-      role: z.string().optional().describe('Agent role from agent-identity.json'),
-      clientSessionId: z.string().max(128).optional().describe(
-        'This conversation\'s id as the IDE\'s SessionStart hook printed it (clientSessionId: …). Keeps two conversations in one checkout on separate sessions.'
-      ),
+      repo: z.string().describe('The repository URL'),
+      mode: z.string().optional().describe('development, onboarding or review'),
+      agentId: z.string().optional(),
+      hostname: z.string().optional(),
+      os: z.string().optional(),
+      ide: z.string().optional(),
+      branch: z.string().optional(),
+      capabilities: z.array(z.string()).optional(),
+      role: z.string().optional(),
+      task: z.string().max(300).optional().describe('What you are about to do, in a few words (the feature, the error)'),
+      clientSessionId: z.string().max(128).optional().describe('This conversation\'s id; the IDE\'s SessionStart hook prints it'),
     },
-    async ({ repo, mode, agentId, hostname, os, ide, branch, capabilities, role, clientSessionId }) => {
+    async ({ repo, mode, agentId, hostname, os, ide, branch, capabilities, role, task, clientSessionId }) => {
       // Extract project name from repo URL for context
       const projectName = repo
         ? repo.replace(/\.git$/, '').replace(/\/$/, '').split('/').pop() ?? 'unknown'
@@ -42,6 +53,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
       // The hub registers a repo of a saved git account on first sight; the agent should say so.
       let autoRegistered: unknown
       let projectNote: string | undefined
+      let orgRepos: string[] | undefined
       // Set when the hub did not record the session: the id above is then local only.
       let hubError: string | undefined
       try {
@@ -66,7 +78,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
         if (response.ok) {
           const data = await response.json() as {
             sessionId?: string
-            project?: { id: string; orgId?: string }
+            project?: { id: string; orgId?: string; orgRepos?: string[] }
             recentSessions?: unknown[]
             autoRegistered?: unknown
             projectNote?: string
@@ -74,6 +86,7 @@ export function registerSessionTools(server: McpServer, env: Env) {
           if (data.sessionId) sessionId = data.sessionId
           if (data.project?.id) resolvedProjectId = data.project.id
           if (data.project?.orgId) resolvedOrgId = data.project.orgId
+          orgRepos = data.project?.orgRepos
           if (data.recentSessions) recentSessions = data.recentSessions
           autoRegistered = data.autoRegistered
           projectNote = data.projectNote
@@ -90,7 +103,9 @@ export function registerSessionTools(server: McpServer, env: Env) {
       // Search for: recent session summaries, project context, active goals
       let missionBrief = `# ${projectName}\nMode: ${mode ?? 'development'}`
       let relevantKnowledge: Array<{ id: string; title: string; description: string; origin: string; quality: Record<string, number> }> = []
-      try {
+      // With the task in hand the brief below is replaced by recall on the task itself: the
+      // generic query ranked indexed docs first, a workflow template more often than a summary.
+      if (!task) try {
         const searchQuery = `session summary progress next session ${projectName}`
         const knowledgeRes = await apiCall(env, '/api/knowledge/search', {
           method: 'POST',
@@ -113,7 +128,14 @@ export function registerSessionTools(server: McpServer, env: Env) {
               deprecated?: boolean
             }>
           }
-          const results = (data.results ?? []).filter(r => r.documentId && !r.deprecated)
+          const seen = new Set<string>()
+          const results = (data.results ?? []).filter((r) => {
+            if (!r.documentId || r.deprecated || alreadyInContext(r.title)) return false
+            // A document indexed in several chunks comes back once per chunk.
+            if (seen.has(r.documentId)) return false
+            seen.add(r.documentId)
+            return true
+          })
 
           // Build mission from top knowledge hit (most relevant session summary)
           if (results.length > 0) {
@@ -133,6 +155,36 @@ export function registerSessionTools(server: McpServer, env: Env) {
         }
       } catch {
         // Knowledge search unavailable — continue with basic mission
+      }
+
+      const brief = [
+        task?.trim()
+          ? await taskBrief(env, {
+              task: task.trim(), project: projectName, projectId: resolvedProjectId,
+              agentId: agentId ?? 'claude-code', branch, alreadyInContext,
+            })
+          : '',
+        formatOrgRepos(orgRepos),
+      ].filter(Boolean).join('\n\n')
+
+      if (task?.trim()) {
+        // The agent wrote every identity field itself a moment ago; only what the hub decided goes back.
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({
+                session_id: sessionId,
+                status: 'active',
+                project: resolvedProjectId ? { id: resolvedProjectId, orgId: resolvedOrgId } : undefined,
+                auto_registered: autoRegistered,
+                project_note: projectNote,
+                hub_error: hubError,
+              }),
+            },
+            ...(brief ? [{ type: 'text' as const, text: brief }] : []),
+          ],
+        }
       }
 
       return {
@@ -161,12 +213,13 @@ export function registerSessionTools(server: McpServer, env: Env) {
               hub_error: hubError,
               recent_sessions: recentSessions.length > 0 ? recentSessions : undefined,
               relevant_knowledge: relevantKnowledge.length > 0 ? relevantKnowledge : undefined,
-            }, null, 2)
-          }
+            })
+          },
+          ...(brief ? [{ type: 'text' as const, text: brief }] : []),
         ]
       }
     }
-  )
+  ).update(LOAD_UP_FRONT)
 
   server.tool(
     'cortex_session_end',

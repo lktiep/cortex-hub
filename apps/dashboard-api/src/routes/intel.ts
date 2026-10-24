@@ -8,7 +8,8 @@ import { getReranker, RERANK_OVERFETCH } from '../lib/reranker.js'
 import { hasSparseVector, buildHybridQuery, HYBRID_FETCH_FLOOR } from '../lib/hybrid-search.js'
 import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
 import { analyzeDiff, parseCypherTable, MAX_DIFF_CHARS, type RunCypher } from '../lib/diff-symbols.js'
-import { projectOfActiveSession } from '../lib/session-project.js'
+import { PERSONAL_ORG, projectOfActiveSession } from '../lib/session-project.js'
+import { grepCheckout, type GrepFile, type GrepHit } from '../lib/code-grep.js'
 
 const logger = createLogger('intel')
 
@@ -16,6 +17,12 @@ export const intelRouter = new Hono()
 
 const QDRANT_URL = process.env.QDRANT_URL ?? 'http://qdrant:6333'
 const REPOS_DIR = process.env.REPOS_DIR ?? '/app/data/repos'
+
+/** Code search over-fetch, so the copies other branches hold of a chunk do not crowd out the limit. */
+const BRANCH_OVERFETCH = 3
+/** Where repos are registered when nobody chose an organization; see db/schema.sql. */
+/** A repo listed beside the caller's own reaches at least this share of that repo's best score. */
+const BESIDE_FLOOR = 0.8
 
 /** Max file size for code_read (512KB) */
 const MAX_READ_SIZE = 512 * 1024
@@ -40,7 +47,8 @@ async function callGitNexus(
   const text = await res.text()
 
   if (!res.ok) {
-    throw new Error(text || `GitNexus ${tool} failed: ${res.status}`)
+    // "Multiple repositories indexed ... Available: <every repo>" names other organizations' repos.
+    throw new Error(text.replace(/\s*Available: [^\n]*/g, '') || `GitNexus ${tool} failed: ${res.status}`)
   }
 
   // GitNexus may return JSON or plain text
@@ -93,6 +101,13 @@ function findProject(ref: string, orgId?: string): ProjectRef | undefined {
                (name = ? COLLATE NOCASE) DESC
       LIMIT 1`
   ).get(ref, ref, ref, `%${ref}%`, orgId ?? null, orgId ?? null, ref, ref, ref) as ProjectRef | undefined
+}
+
+/** The branch a project's remote HEAD names, once the indexer has resolved it. */
+function defaultBranchOf(projectId: string): string | undefined {
+  const row = db.prepare('SELECT default_branch FROM projects WHERE id = ?').get(projectId) as
+    { default_branch: string | null } | undefined
+  return row?.default_branch ?? undefined
 }
 
 /** org_id of a project named by id, slug or name. undefined when the DB knows no such project. */
@@ -183,6 +198,102 @@ function outsideScopeResponse(ref: string) {
     error: `Project "${ref}" belongs to another organization.`,
     hint: 'Projects are isolated per organization. Search within your own organization, or open that project from its own organization.',
   }
+}
+
+/** A lookup in a project that has no graph yet; its message says why. */
+class NotIndexedError extends Error {}
+
+/** The graph's error, or, when the project has not been indexed yet, why there is nothing to ask it. */
+function whyGraphFailed(error: unknown, projectId: string | undefined, orgId: string | undefined): unknown {
+  const pending = projectId ? notIndexedYet(projectId, orgId) : undefined
+  return pending ? new NotIndexedError(pending) : error
+}
+
+type IndexJobRow = { status: string; progress: number | null; error: string | null; started_at: string | null; created_at: string | null }
+
+/** A line of the GitNexus watchdog's status file for one repo (see infra/gitnexus-entrypoint.sh). */
+type GraphStatus =
+  | { state: 'analyzing' | 'analyzed'; at: number }
+  | { state: 'failed'; at: number; failures: number; exitCode: number; retryIn: number }
+
+function readGraphStatus(projectId: string): GraphStatus | undefined {
+  let line: string
+  try {
+    line = readFileSync(join(REPOS_DIR, '.graph-status', projectId), 'utf-8').trim()
+  } catch {
+    return undefined
+  }
+  const [state, , at, failures, exitCode, retryIn] = line.split(/\s+/)
+  const epoch = Number(at) * 1000
+  if (state === 'analyzing' || state === 'analyzed') return { state, at: epoch }
+  if (state === 'failed') {
+    return { state, at: epoch, failures: Number(failures) || 1, exitCode: Number(exitCode), retryIn: Number(retryIn) || 0 }
+  }
+  return undefined
+}
+
+const minutesSince = (then: number, now: number) => Math.max(0, Math.round((now - then) / 60000))
+
+/**
+ * Why a project the caller named has no code graph to ask yet, as a line an agent can act on, or
+ * undefined once it has one (or when the DB does not know it). A repo registered at onboarding is
+ * cloned by the API's index job and then analysed by the GitNexus watchdog, which works through
+ * the repos one at a time; until both finished every lookup in it came back as a 500 "Repository
+ * not found", which reads like a broken hub rather than "wait". The job alone cannot tell: it is
+ * 'done', with a symbol count from its own regex pass, before the graph exists.
+ */
+export function notIndexedYet(ref: string, orgId?: string, now = Date.now()): string | undefined {
+  let project: { id: string; name: string; indexed_symbols: number | null } | undefined
+  let job: IndexJobRow | undefined
+  try {
+    const found = findProject(ref, orgId)
+    if (!found) return undefined
+    project = db.prepare('SELECT id, name, indexed_symbols FROM projects WHERE id = ?')
+      .get(found.id) as typeof project
+    if (!project) return undefined
+    job = db.prepare(
+      'SELECT status, progress, error, started_at, created_at FROM index_jobs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1'
+    ).get(project.id) as IndexJobRow | undefined
+  } catch (error) {
+    logger.warn(`notIndexedYet failed for "${ref}": ${String(error)}`)
+    return undefined
+  }
+
+  const graph = readGraphStatus(project.id)
+  if (graph?.state === 'analyzed') return undefined
+
+  const meanwhile = 'Use Grep/rg on your checkout meanwhile.'
+  if (job && job.status !== 'done' && job.status !== 'error') {
+    const since = Date.parse(job.started_at ?? job.created_at ?? '')
+    const ago = Number.isNaN(since) ? '' : `, started ${minutesSince(since, now)} min ago`
+    return `⏳ ${project.name} is still being indexed (${job.status}, ${job.progress ?? 0}%${ago}). ${meanwhile}`
+  }
+  if (job?.status === 'error') {
+    // A failed clone prints the remote, which may carry a token: keep the host, drop the credentials.
+    const why = (job.error ?? '').split('\n').find(l => l.trim())?.replace(/\/\/[^/@\s]+@/g, '//').trim().slice(0, 200)
+    return `⚠️ Indexing ${project.name} failed${why ? `: ${why}` : ''}. Re-run it with cortex_code_reindex. ${meanwhile}`
+  }
+  if (graph?.state === 'analyzing') {
+    return `⏳ The code graph of ${project.name} is being built (started ${minutesSince(graph.at, now)} min ago; a large repo takes several). ${meanwhile}`
+  }
+  if (graph?.state === 'failed') {
+    const why = graph.exitCode === 137 ? 'the analyzer was killed, most likely out of memory'
+      : graph.exitCode === 124 ? 'the analyzer timed out'
+      : `the analyzer exited with ${graph.exitCode}`
+    const retry = Math.max(0, Math.round((graph.at + graph.retryIn * 1000 - now) / 60000))
+    return `⚠️ Building the code graph of ${project.name} failed ${graph.failures === 1 ? 'once' : `${graph.failures} times`} (${why}); `
+      + `it is retried in ${retry} min, or on a new commit. Whoever runs the hub may need to give GitNexus more memory or time. ${meanwhile}`
+  }
+  if (!job) {
+    if ((project.indexed_symbols ?? 0) > 0) return undefined
+    return `⚠️ ${project.name} has not been indexed, so there is nothing to search. Start it with cortex_code_reindex. ${meanwhile}`
+  }
+  // Cloned, but the watchdog has not reached it: the analyzer writes .gitnexus into the checkout.
+  if (!existsSync(join(REPOS_DIR, project.id, '.gitnexus'))) {
+    return `⏳ ${project.name} is cloned and waiting for its code graph to be built. ${meanwhile}`
+  }
+  if ((project.indexed_symbols ?? 0) > 0) return undefined
+  return `⚠️ ${project.name} was indexed, but no symbols were found in it. ${meanwhile}`
 }
 
 /**
@@ -280,7 +391,7 @@ async function callGitNexusWithFallback(
   orgId?: string,
 ): Promise<unknown> {
   if (!projectId) {
-    return callGitNexus(tool, params)
+    return callGitNexusAcrossOrg(tool, params, orgId)
   }
 
   const candidates = resolveRepoNames(projectId, orgId)
@@ -306,6 +417,54 @@ async function callGitNexusWithFallback(
   } catch {
     throw lastError
   }
+}
+
+function indexedProjectsOf(orgId: string): Array<{ id: string; name: string }> {
+  return db.prepare('SELECT id, name FROM projects WHERE org_id = ? AND indexed_symbols > 0 ORDER BY name')
+    .all(orgId) as Array<{ id: string; name: string }>
+}
+
+/** A GitNexus answer that names nothing: the symbol is not in that repo, or the query failed. */
+function foundNothing(result: unknown): boolean {
+  const text = typeof (result as { raw?: unknown })?.raw === 'string' ? (result as { raw: string }).raw : JSON.stringify(result)
+  return /not found|^Error/i.test(text ?? '')
+}
+
+/**
+ * A graph lookup that names no project. GitNexus without a repo answers only while it holds a
+ * single one; with more it refused, and listed every repo it holds, every organization's. So each
+ * indexed project of the caller's organization is asked by its own name, and the answers that
+ * found something are kept, under the project's name when there are several.
+ */
+async function callGitNexusAcrossOrg(tool: string, params: Record<string, unknown>, orgId?: string): Promise<unknown> {
+  if (!orgId) {
+    if (orgsWithIndexedProjects().length > 1) {
+      throw new Error('Several organizations hold indexed code: name the repo, or pass org.')
+    }
+    return callGitNexus(tool, params)
+  }
+  const projects = indexedProjectsOf(orgId)
+  if (projects.length === 0) return callGitNexus(tool, params)
+  if (projects.length === 1) return callGitNexusWithFallback(tool, params, projects[0]?.id, orgId)
+
+  const answers = await Promise.all(projects.map(async (project) => {
+    try {
+      return { project, result: await callGitNexusWithFallback(tool, params, project.id, orgId) }
+    } catch (error) {
+      return { project, error }
+    }
+  }))
+  const found = answers.filter((a) => !a.error && !foundNothing(a.result))
+  if (found.length === 1) return found[0]?.result
+  if (found.length > 1) {
+    if (found.every((a) => typeof (a.result as { raw?: unknown }).raw === 'string')) {
+      return { raw: found.map((a) => `## ${a.project.name}\n${(a.result as { raw: string }).raw}`).join('\n\n') }
+    }
+    return found[0]?.result
+  }
+  const answered = answers.find((a) => !a.error)
+  if (answered) return answered.result
+  throw answers[0]?.error ?? new Error(`GitNexus ${tool} failed`)
 }
 
 /**
@@ -335,8 +494,12 @@ type GitNexusResult = Record<string, any>
 /**
  * Post-process GitNexus raw text to replace CLI hints with MCP tool references.
  */
-function rewriteGitNexusHints(text: string): string {
+export function rewriteGitNexusHints(text: string): string {
   return text
+    // A symbol with no kind prints as "undefined": a flow step as "undefined main → file", an
+    // edge as "[calls] undefined index.ts → file". It is noise in every result an agent reads.
+    .replace(/^(\s+)undefined (?=\S)/gm, '$1')
+    .replace(/(\[\w+\]) undefined (?=\S)/g, '$1 ')
     .replace(/gitnexus-context/g, 'cortex_code_context')
     .replace(/gitnexus-impact/g, 'cortex_code_impact')
     .replace(/gitnexus-query/g, 'cortex_code_search')
@@ -353,6 +516,97 @@ function rewriteGitNexusHints(text: string): string {
       'Tip: Use cortex_code_context with file parameter to disambiguate.',
     )
     .replace(/Read the source with cat /g, 'Examine the source at ')
+}
+
+const CYPHER_SCHEMA_HINT =
+  '💡 Node labels: Function, Method, Class, Interface, TypeAlias, Const, Property, File, Folder, Route. ' +
+  'Every edge is one table, CodeRelation, with its kind in r.type (CALLS, IMPORTS, DEFINES, HAS_METHOD, ' +
+  'EXTENDS, IMPLEMENTS, ACCESSES, HANDLES_ROUTE). Properties: id, name, filePath, startLine, endLine.\n' +
+  'Example: MATCH (a)-[r:CodeRelation {type: \'CALLS\'}]->(b:Function {name: \'X\'}) RETURN a.name, labels(a) AS type, a.filePath LIMIT 20'
+
+/**
+ * A cypher answer as an agent reads it. The graph returns a table as JSON — {"markdown": "| a |
+ * …", "row_count": 2} — which reached agents escaped twice, every row break a literal \n. And it
+ * answers a failed query with HTTP 200 and an "Error:" body, so the schema is named right there:
+ * the usual failure is guessing an edge table such as [:CALLS], which does not exist.
+ */
+export function formatCypherRaw(raw: string): string {
+  let text = rewriteGitNexusHints(raw).replace(/^\{\n[\s\S]*?\n\}$/gm, (block) => {
+    try {
+      const { markdown, row_count: rows } = JSON.parse(block) as { markdown?: unknown; row_count?: unknown }
+      return typeof markdown === 'string' ? `${markdown}\n(${String(rows)} row${rows === 1 ? '' : 's'})` : block
+    } catch {
+      return block
+    }
+  })
+  if (/^Error:/m.test(text) && /does not exist|Cannot find property|Binder exception/.test(text)) {
+    text += `\n${CYPHER_SCHEMA_HINT}`
+  }
+  return text
+}
+
+const MAX_CALL_SITES = 6
+
+/**
+ * The lines of each caller's file that name the symbol. The graph keeps one edge per file and
+ * prints the caller as a bare path, so every lookup of callers was followed by an `rg` of the
+ * repository for the line numbers. Import lines are left out: they name the symbol but call
+ * nothing. A file the checkout does not hold, or no longer names the symbol in, stays bare.
+ */
+export function addCallSites(raw: string, name: string, readSource: (path: string) => string | undefined): string {
+  // A method asked for as `Class.method` is called as `.method`.
+  const word = name.split(/[.:#]/).pop() ?? name
+  const named = new RegExp(`(^|[^\\w$])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w$])`)
+  const withSites = (line: string, head: string, path: string, tail = ''): string => {
+    if (/:\d/.test(path)) return line
+    const lines = readSource(path)?.split('\n')
+    if (!lines) return line
+    const sites: number[] = []
+    lines.forEach((text, i) => {
+      if (named.test(text) && !/^\s*import\b/.test(text)) sites.push(i + 1)
+    })
+    if (sites.length === 0) return line
+    const more = sites.length > MAX_CALL_SITES ? ` (+${sites.length - MAX_CALL_SITES} more)` : ''
+    return `${head}${path}:${sites.slice(0, MAX_CALL_SITES).join(',')}${more}${tail}`
+  }
+  return raw
+    // code_context: "  ← [calls] intel.ts → apps/api/src/routes/intel.ts"
+    .replace(/^(\s*← \[\w+\] .*→ )(\S+)[ \t]*$/gm, (line, head: string, path: string) => withSites(line, head, path))
+    // code_impact upstream: "  intel.ts → apps/api/src/routes/intel.ts [CALLS] (conf: 0.85)"
+    .replace(/^(\s+\S+ → )(\S+)( \[CALLS\].*)$/gm, (line, head: string, path: string, tail: string) =>
+      withSites(line, head, path, tail))
+}
+
+/**
+ * The checkout a graph result reads from. Without a project the graph answers across the
+ * organization, so the checkout is the project's that holds a file the result names: where the
+ * symbol is defined for code_context, the first caller for code_impact.
+ */
+function graphCheckout(raw: string, projectId: string | undefined, orgId: string | undefined): string | undefined {
+  try {
+    if (projectId) {
+      const dir = join(REPOS_DIR, findProject(projectId, orgId)?.id ?? projectId)
+      return existsSync(dir) ? dir : undefined
+    }
+    const definedIn = raw.match(/^\S+ \S+ → (\S+?):\d/m)?.[1] ?? raw.match(/→ (\S+) \[CALLS\]/)?.[1]
+    if (!definedIn) return undefined
+    const projects = db.prepare('SELECT id FROM projects WHERE (? IS NULL OR org_id = ?)')
+      .all(orgId ?? null, orgId ?? null) as Array<{ id: string }>
+    return projects.map((p) => join(REPOS_DIR, p.id)).find((dir) => existsSync(join(dir, definedIn)))
+  } catch {
+    return undefined
+  }
+}
+
+function readCheckoutFile(repoDir: string, path: string): string | undefined {
+  const fullPath = join(repoDir, path)
+  if (!fullPath.startsWith(`${repoDir}/`)) return undefined
+  try {
+    if (!existsSync(fullPath) || statSync(fullPath).size > MAX_READ_SIZE) return undefined
+    return readFileSync(fullPath, 'utf-8')
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -707,7 +961,7 @@ intelRouter.post('/search', async (c) => {
           } else {
             // Flow results
             const raw = ((hit.result as Record<string, unknown>)?.raw as string) ?? ''
-            const truncated = raw.split('\n').slice(0, 15).join('\n')
+            const truncated = rewriteGitNexusHints(raw).split('\n').slice(0, 15).join('\n')
             lines.push(truncated)
           }
           lines.push(`💡 Refine: cortex_code_search(query: "${query}", repo: "${hit.project.slug ?? hit.project.name}")`)
@@ -751,7 +1005,14 @@ intelRouter.post('/search', async (c) => {
       }
     }
 
-    if (lastError) throw lastError
+    if (lastError) {
+      // A repo registered at onboarding is indexed in the background: say so, not 500.
+      const pending = notIndexedYet(projectId, scope.orgId)
+      if (pending) {
+        return c.json({ success: true, data: { query, limit: limit ?? 5, source: 'gitnexus', formatted: pending, results: null, pending: true } })
+      }
+      throw lastError
+    }
 
     // Format results as readable report
     const formatted = formatSearchResults(query, results)
@@ -809,12 +1070,22 @@ intelRouter.post('/impact', async (c) => {
     }
 
     const results = await callGitNexusWithFallback('impact', params, projectId, scope.orgId)
+      .catch((error: unknown) => { throw whyGraphFailed(error, projectId, scope.orgId) }) as { raw?: string }
+    if (typeof results?.raw === 'string') {
+      results.raw = rewriteGitNexusHints(results.raw)
+      // Upstream, the callers are what breaks: name the lines that call, as code_context does.
+      if (params.direction === 'upstream' && results.raw.includes('[CALLS]')) {
+        const repoDir = graphCheckout(results.raw, projectId, scope.orgId)
+        if (repoDir) results.raw = addCallSites(results.raw, target, (path) => readCheckoutFile(repoDir, path))
+      }
+    }
 
     return c.json({
       success: true,
       data: { target, direction: direction ?? 'downstream', results },
     })
   } catch (error) {
+    if (error instanceof NotIndexedError) return c.json({ success: false, error: error.message }, 409)
     logger.error(`Impact analysis failed: ${String(error)}`)
     return c.json(
       {
@@ -849,7 +1120,8 @@ intelRouter.post('/context', async (c) => {
     const params: Record<string, unknown> = { name, content: true }
     if (file) params.file = file
 
-    let results = await callGitNexusWithFallback('context', params, projectId, scope.orgId) as { raw?: string }
+    let results = await callGitNexusWithFallback('context', params, projectId, scope.orgId)
+      .catch((error: unknown) => { throw whyGraphFailed(error, projectId, scope.orgId) }) as { raw?: string }
 
     // Post-process CLI hints
     if (results?.raw) {
@@ -894,11 +1166,17 @@ intelRouter.post('/context', async (c) => {
       }
     }
 
+    if (results?.raw?.includes('←')) {
+      const repoDir = graphCheckout(results.raw, projectId, scope.orgId)
+      if (repoDir) results.raw = addCallSites(results.raw, name, (path) => readCheckoutFile(repoDir, path))
+    }
+
     return c.json({
       success: true,
       data: { name, results },
     })
   } catch (error) {
+    if (error instanceof NotIndexedError) return c.json({ success: false, error: error.message }, 409)
     logger.error(`Context lookup failed: ${String(error)}`)
     return c.json(
       {
@@ -1203,8 +1481,11 @@ intelRouter.post('/cypher', async (c) => {
     const params: Record<string, unknown> = { query: cypherQuery }
 
     const results = await callGitNexusWithFallback('cypher', params, projectId, scope.orgId)
+      .catch((error: unknown) => { throw whyGraphFailed(error, projectId, scope.orgId) }) as { raw?: string }
+    if (typeof results?.raw === 'string') results.raw = formatCypherRaw(results.raw)
     return c.json({ success: true, data: results })
   } catch (error) {
+    if (error instanceof NotIndexedError) return c.json({ success: false, error: error.message }, 409)
     logger.error(`Cypher query failed: ${String(error)}`)
     return c.json(
       { success: false, error: String(error) },
@@ -1351,17 +1632,36 @@ intelRouter.post('/sync-repos', async (c) => {
 intelRouter.post('/code-search', async (c) => {
   try {
     const body = await c.req.json()
-    const { query, projectId, branch, limit, file, orgId } = body as {
+    const { query, projectId, branch, limit, file, orgId, scopeRepo, exclude, perRepo } = body as {
       query: string
       projectId?: string
       branch?: string
       limit?: number
       file?: string
       orgId?: string
+      /** The repo the caller is working in. Anchors a search across repos to its organization. */
+      scopeRepo?: string
+      /** Without projectId: a repo to leave out, the one the caller already searched on its own. */
+      exclude?: string
+      /** Without projectId: at most this many files from any one repo. */
+      perRepo?: number
     }
 
     if (!query) return c.json({ error: 'query is required' }, 400)
-    if (!projectId) return c.json({ error: 'projectId is required for code search' }, 400)
+    if (!projectId) {
+      const scope = resolveOrgScope({ orgId, scopeRepo, apiKeyOwner: c.req.header('X-API-Key-Owner') })
+      if (!scope.orgId) {
+        return c.json({ success: false, error: 'Several organizations hold indexed code: name the repo, or pass org.' }, 400)
+      }
+      // The repos beside the caller's are worth showing only where someone grouped them. The
+      // personal organization is where every repo lands unasked, so its neighbours are unrelated:
+      // measured on one, they outscored the caller's own top hit for 15 of 15 gold queries.
+      if (exclude && scope.orgId === PERSONAL_ORG) {
+        return c.json({ success: true, data: { query, orgId: scope.orgId, retrieval: 'vector', results: [] } })
+      }
+      const results = await searchOrganization(query, scope.orgId, { branch, limit: limit ?? 10, exclude, perRepo })
+      return c.json({ success: true, data: { query, orgId: scope.orgId, retrieval: 'vector', results } })
+    }
 
     // One Qdrant collection per project, so this route is single-project by construction —
     // but the project it is handed still has to be one the caller may read.
@@ -1370,21 +1670,22 @@ intelRouter.post('/code-search', async (c) => {
       return c.json(outsideScopeResponse(projectId), 403)
     }
 
-    // Resolve collection name
-    const collectionName = `cortex-project-${projectId}`
+    // The collection is named after the project id, and agents name the repo ("cortex-hub")
+    // as the tool tells them to. Searching cortex-project-cortex-hub found no collection and
+    // said so only in a message nobody showed, so every such search came back empty.
+    const project = findProject(projectId, scope.orgId)
+    const collectionName = `cortex-project-${project?.id ?? projectId}`
 
     // Embed query through LLM gateway — routes to configured provider (Ollama bge-m3:latest)
     const embedder = createEmbedder()
     const vector = await embedder.embed(query)
 
-    // Build Qdrant filter
-    const must: Array<Record<string, unknown>> = []
-    if (branch) {
-      must.push({ key: 'branch', match: { value: branch } })
-    }
-    if (file) {
-      must.push({ key: 'file_path', match: { text: file } })
-    }
+    // A project indexed on several branches holds a copy of every chunk per branch, and an
+    // unfiltered search spends its depth on the copies: 30 hits on a repo with seven branches
+    // came back as 3–7 files, and the expected file was in the top 10 for 10 of 15 gold queries
+    // (13 of 15 on one branch). Unless the caller names a branch, search the project's default
+    // branch, and every branch only when that one holds nothing.
+    const defaultBranch = branch ? undefined : defaultBranchOf(project?.id ?? projectId)
 
     const searchLimit = limit ?? 10
 
@@ -1393,40 +1694,42 @@ intelRouter.post('/code-search', async (c) => {
     // "does this actually contain what was asked for", which is what lifts the
     // top few hits. Without one this stays an exact-limit vector search.
     const reranker = getReranker()
-    const fetchLimit = reranker ? Math.min(searchLimit * RERANK_OVERFETCH, 50) : searchLimit
+    const fetchLimit = Math.min(searchLimit * (reranker ? RERANK_OVERFETCH : BRANCH_OVERFETCH), 50)
 
     // Fuse a BM25 arm in when the collection was indexed with one. Each arm
     // returns its own ranking and Qdrant merges them by reciprocal rank, so a
     // chunk that both arms like outranks one that only looks similar. Collections
     // indexed before this existed have no sparse vector and search exactly as
     // before.
-    const hybrid = (await hasSparseVector(QDRANT_URL, collectionName))
-      ? buildHybridQuery({
-          vector,
-          query,
-          limit: Math.max(fetchLimit, HYBRID_FETCH_FLOOR),
-          filter: must.length > 0 ? { must } : undefined,
-        })
-      : null
+    const sparse = await hasSparseVector(QDRANT_URL, collectionName)
+    const ask = (onBranch: string | undefined) => {
+      const must: Array<Record<string, unknown>> = []
+      if (onBranch) must.push({ key: 'branch', match: { value: onBranch } })
+      if (file) must.push({ key: 'file_path', match: { text: file } })
+      const filter = must.length > 0 ? { must } : undefined
+      return sparse
+        ? fetch(`${QDRANT_URL}/collections/${collectionName}/points/query`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(buildHybridQuery({ vector, query, limit: Math.max(fetchLimit, HYBRID_FETCH_FLOOR), filter })),
+            signal: AbortSignal.timeout(10000),
+          })
+        : fetch(`${QDRANT_URL}/collections/${collectionName}/points/search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ vector, limit: fetchLimit, with_payload: true, filter }),
+            signal: AbortSignal.timeout(10000),
+          })
+    }
+    // /points/search answers with an array, /points/query wraps it in `points`.
+    type Point = { id: string; score: number; payload?: Record<string, unknown> }
+    const pointsOf = async (r: Response) => {
+      const data = (await r.json()) as { result?: Point[] | { points?: Point[] } }
+      return Array.isArray(data.result) ? data.result : (data.result?.points ?? [])
+    }
 
-    const res = hybrid
-      ? await fetch(`${QDRANT_URL}/collections/${collectionName}/points/query`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(hybrid),
-          signal: AbortSignal.timeout(10000),
-        })
-      : await fetch(`${QDRANT_URL}/collections/${collectionName}/points/search`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            vector,
-            limit: fetchLimit,
-            with_payload: true,
-            filter: must.length > 0 ? { must } : undefined,
-          }),
-          signal: AbortSignal.timeout(10000),
-        })
+    const asked = branch ?? defaultBranch
+    const res = await ask(asked)
 
     if (!res.ok) {
       const errText = await res.text()
@@ -1437,28 +1740,39 @@ intelRouter.post('/code-search', async (c) => {
           data: {
             query,
             results: [],
-            message: `No embedded code found for project ${projectId}. Run Mem9 embedding first via the dashboard.`,
+            message: notIndexedYet(projectId, scope.orgId)
+              ?? `No embedded code found for project ${projectId}. Run Mem9 embedding first via the dashboard.`,
           },
         })
       }
       return c.json({ error: `Qdrant search failed: ${errText}` }, 500)
     }
 
-    // /points/search answers with an array, /points/query wraps it in `points`.
-    const data = (await res.json()) as {
-      result?:
-        | Array<{ id: string; score: number; payload?: Record<string, unknown> }>
-        | { points?: Array<{ id: string; score: number; payload?: Record<string, unknown> }> }
+    let points = await pointsOf(res)
+    // A branch the indexer never saw — any feature branch an agent works on before it is
+    // pushed — holds nothing; its default branch is the closest code there is, then every branch.
+    const fallbacks = branch ? [defaultBranchOf(project?.id ?? projectId), undefined] : defaultBranch ? [undefined] : []
+    for (const onBranch of fallbacks.filter((b, i) => b !== asked && fallbacks.indexOf(b) === i)) {
+      if (points.length > 0) break
+      const wider = await ask(onBranch)
+      if (wider.ok) points = await pointsOf(wider)
     }
-    const points = Array.isArray(data.result) ? data.result : (data.result?.points ?? [])
 
+    // Copies of one chunk still come back when no branch filter applied. Keep the best ranked
+    // copy of each place in the code.
+    const seen = new Set<string>()
     const hits = points.map((hit) => ({
       score: hit.score,
       filePath: hit.payload?.file_path as string | undefined,
       chunkIndex: hit.payload?.chunk_index as number | undefined,
       content: hit.payload?.content as string | undefined,
       branch: hit.payload?.branch as string | undefined,
-    }))
+    })).filter((hit) => {
+      const place = `${hit.filePath}#${hit.chunkIndex}`
+      if (seen.has(place)) return false
+      seen.add(place)
+      return true
+    })
 
     let results = hits
     let reranked = false
@@ -1484,19 +1798,133 @@ intelRouter.post('/code-search', async (c) => {
       }
     }
 
-    results = results.slice(0, searchLimit)
+    results = results.slice(0, searchLimit).map((hit) => ({ ...hit, ...chunkLines(project?.id ?? projectId, hit) }))
 
     return c.json({
       success: true,
       // `retrieval` says what `score` means: a cosine similarity from the vector
       // arm alone, or a reciprocal-rank-fusion score once both arms have voted.
-      data: { query, projectId, retrieval: hybrid ? 'hybrid' : 'vector', reranked, results },
+      data: { query, projectId, retrieval: sparse ? 'hybrid' : 'vector', reranked, results },
     })
   } catch (error) {
     logger.error(`Code search (Qdrant) failed: ${String(error)}`)
     return c.json({ success: false, error: String(error) }, 500)
   }
 })
+
+/**
+ * The code that best matches a query across every indexed repo of one organization: one
+ * embedding, each project's collection asked in parallel, and the hits merged by score. The
+ * organization is the unit that shares code — a product's client, server and tools — so this
+ * is what answers "where else is this". Each collection is asked by the dense vector alone:
+ * a fused hybrid score is a rank within one collection and does not compare across them.
+ */
+async function searchOrganization(
+  query: string,
+  orgId: string,
+  opts: { branch?: string; limit: number; exclude?: string; perRepo?: number },
+) {
+  type Repo = { id: string; slug: string | null; name: string; default_branch: string | null }
+  const repos = db.prepare(
+    'SELECT id, slug, name, default_branch FROM projects WHERE org_id = ? AND indexed_symbols > 0 ORDER BY name'
+  ).all(orgId) as Repo[]
+  const skip = opts.exclude ? findProject(opts.exclude, orgId)?.id : undefined
+  const projects = repos.filter(p => p.id !== skip)
+  if (projects.length === 0) return []
+
+  const vector = await createEmbedder().embed(query)
+  const perProject = Math.min(opts.limit, 5) * BRANCH_OVERFETCH
+  const CONCURRENCY = 8
+
+  // Each repo on the branch asked for, else on its default branch: see the single-repo search.
+  const searchRepo = async (p: Repo, limit: number) => {
+    const ask = async (branch: string | null | undefined) => {
+      const res = await fetch(`${QDRANT_URL}/collections/cortex-project-${p.id}/points/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vector, limit, with_payload: true,
+          filter: branch ? { must: [{ key: 'branch', match: { value: branch } }] } : undefined,
+        }),
+        signal: AbortSignal.timeout(10000),
+      })
+      // A project with no embeddings yet has no collection: it simply has nothing to add.
+      if (!res.ok) return []
+      return ((await res.json()) as { result?: Array<{ score: number; payload?: Record<string, unknown> }> }).result ?? []
+    }
+    const found = await ask(opts.branch ?? p.default_branch)
+    if (found.length > 0) return found
+    // A branch this repo was never indexed on: its default branch, then every branch.
+    if (opts.branch && p.default_branch && p.default_branch !== opts.branch) {
+      const onDefault = await ask(p.default_branch)
+      if (onDefault.length > 0) return onDefault
+    }
+    return opts.branch || p.default_branch ? ask(undefined) : found
+  }
+
+  // Hits listed beside the caller's own repo have to come close to that repo's best. Without a
+  // floor every search listed something: in an organization of related repos, the others' best
+  // stayed under the caller's own on 18 of 18 sampled queries, mostly at a third of its score.
+  const own = skip ? repos.find(p => p.id === skip) : undefined
+  const floorFrom = own ? searchRepo(own, 1).catch(() => []) : Promise.resolve([])
+
+  type OrgHit = { repo: string; projectId: string; score: number; filePath?: string; chunkIndex?: number; content?: string; branch?: string }
+  const hits: OrgHit[] = []
+  for (let i = 0; i < projects.length; i += CONCURRENCY) {
+    const settled = await Promise.allSettled(projects.slice(i, i + CONCURRENCY).map(async (p) =>
+      (await searchRepo(p, perProject)).map((hit): OrgHit => ({
+        repo: p.slug || p.name,
+        projectId: p.id,
+        score: hit.score,
+        filePath: hit.payload?.file_path as string | undefined,
+        chunkIndex: hit.payload?.chunk_index as number | undefined,
+        content: hit.payload?.content as string | undefined,
+        branch: hit.payload?.branch as string | undefined,
+      }))))
+    for (const r of settled) if (r.status === 'fulfilled') hits.push(...r.value)
+  }
+  const floor = ((await floorFrom)[0]?.score ?? 0) * BESIDE_FLOOR
+
+  // A chunk indexed on several branches comes back once per branch. With perRepo a file is
+  // listed once, by its best chunk, and a large repo cannot fill every place.
+  const seen = new Set<string>()
+  const files = new Map<string, number>()
+  return hits
+    .filter((hit) => hit.score >= floor)
+    .sort((a, b) => b.score - a.score)
+    .filter((hit) => {
+      const place = opts.perRepo ? `${hit.projectId}:${hit.filePath}` : `${hit.projectId}:${hit.filePath}#${hit.chunkIndex}`
+      if (seen.has(place)) return false
+      seen.add(place)
+      if (!opts.perRepo) return true
+      const n = files.get(hit.projectId) ?? 0
+      files.set(hit.projectId, n + 1)
+      return n < opts.perRepo
+    })
+    .slice(0, opts.limit)
+    .map((hit) => ({ ...hit, ...chunkLines(hit.projectId, hit) }))
+}
+
+/**
+ * Where a chunk sits in the project's checkout, so an agent can read those lines and not the
+ * whole file. Chunks are stored without line numbers; without them every hit was followed by a
+ * read of the entire file, 9–25k characters for a 1.5k chunk. The checkout may be on another
+ * branch than the chunk, so a chunk whose text is not in the file gets no lines.
+ */
+export function locateChunk(fileText: string, chunk: string): { startLine: number; endLine: number } | undefined {
+  const body = chunk.replace(/^\/\/ File: [^\n]*\n/, '').replace(/\s+$/, '')
+  if (!body) return undefined
+  const at = fileText.indexOf(body)
+  if (at < 0) return undefined
+  const startLine = fileText.slice(0, at).split('\n').length
+  return { startLine, endLine: startLine + body.split('\n').length - 1 }
+}
+
+function chunkLines(projectDir: string, hit: { filePath?: string; content?: string }) {
+  if (!hit.filePath || !hit.content) return {}
+  const fileText = readCheckoutFile(join(REPOS_DIR, projectDir), hit.filePath)
+  return (fileText && locateChunk(fileText, hit.content)) || {}
+}
 
 // ── File Content: read raw source file from cloned repo ──
 intelRouter.post('/file-content', async (c) => {
@@ -1557,7 +1985,8 @@ intelRouter.post('/file-content', async (c) => {
     if (!stat.isFile()) {
       return c.json({ error: 'Path is a directory, not a file' }, 400)
     }
-    if (stat.size > MAX_READ_SIZE) {
+    // A line range of a large file is still a small answer: the file the benchmark needed was 21k lines.
+    if (stat.size > MAX_READ_SIZE && !startLine && !endLine) {
       return c.json({
         error: `File too large (${Math.round(stat.size / 1024)}KB > ${MAX_READ_SIZE / 1024}KB limit)`,
         hint: 'Use startLine/endLine to read a portion of the file.',
@@ -1598,6 +2027,119 @@ intelRouter.post('/file-content', async (c) => {
     })
   } catch (error) {
     logger.error(`File content read failed: ${String(error)}`)
+    return c.json({ success: false, error: String(error) }, 500)
+  }
+})
+
+// ── Grep: an exact string across the organization's checkouts ──
+//
+// The checkouts under REPOS_DIR are the default branch of each project, kept current by the
+// indexer. Each repo is searched on its own with a time and output budget, so one huge repo or a
+// pattern that matches every line cannot hold the others up.
+const GREP_MAX_PATTERN = 300
+const GREP_DEFAULT_LIMIT = 60
+const GREP_MAX_LIMIT = 200
+// A file list is what a broad sweep (encrypt|decrypt|cipher) is for: a name costs a few dozen
+// bytes, so many more fit than lines do.
+const GREP_FILES_DEFAULT_LIMIT = 150
+const GREP_FILES_MAX_LIMIT = 400
+const GREP_CONCURRENCY = 4
+
+intelRouter.post('/grep', async (c) => {
+  try {
+    const body = await c.req.json()
+    const { pattern, projectId, orgId, scopeRepo, path, ignoreCase, fixed, files, limit } = body as {
+      pattern?: string
+      /** One repo; without it every repo of the organization. */
+      projectId?: string
+      orgId?: string
+      /** The repo the caller is working in: anchors the organization when none is named. */
+      scopeRepo?: string
+      /** Git pathspecs, e.g. "*.cs" or "src/net/". */
+      path?: string | string[]
+      ignoreCase?: boolean
+      fixed?: boolean
+      /** Name the matching files with a count each, instead of listing lines. */
+      files?: boolean
+      limit?: number
+    }
+
+    if (!pattern) return c.json({ error: 'pattern is required' }, 400)
+    if (pattern.length > GREP_MAX_PATTERN) return c.json({ error: `pattern is longer than ${GREP_MAX_PATTERN} characters` }, 400)
+    const paths = (Array.isArray(path) ? path : path ? [path] : []).filter((p) => typeof p === 'string' && p.trim())
+    if (paths.length > 10 || paths.some((p) => p.length > 200)) return c.json({ error: 'path takes at most 10 pathspecs of 200 characters' }, 400)
+
+    const scope = resolveOrgScope({ orgId, projectId, scopeRepo, apiKeyOwner: c.req.header('X-API-Key-Owner') })
+    if (!scope.orgId) {
+      return c.json({ success: false, error: 'Several organizations hold indexed code: name the repo, or pass org.' }, 400)
+    }
+
+    type Repo = { id: string; name: string }
+    let repos: Repo[]
+    if (projectId) {
+      if (projectOutsideScope(projectId, scope)) return c.json(outsideScopeResponse(projectId), 403)
+      const project = findProject(projectId, scope.orgId)
+      if (!project) {
+        return c.json({ error: `No repo "${projectId}" in this organization.`, hint: 'cortex_list_repos lists the names to pass as repo.' }, 404)
+      }
+      repos = [project]
+    } else {
+      repos = db.prepare('SELECT id, name FROM projects WHERE org_id = ? ORDER BY name').all(scope.orgId) as Repo[]
+    }
+    const searchable = repos.filter((r) => existsSync(join(REPOS_DIR, r.id, '.git')))
+
+    const filesOnly = files === true
+    const max = filesOnly
+      ? Math.min(Math.max(1, limit ?? GREP_FILES_DEFAULT_LIMIT), GREP_FILES_MAX_LIMIT)
+      : Math.min(Math.max(1, limit ?? GREP_DEFAULT_LIMIT), GREP_MAX_LIMIT)
+    type Found = { repo: string; projectId: string; hits: GrepHit[]; files: GrepFile[]; truncated: boolean; error?: string }
+    const results: Found[] = []
+    const items = (r: Found) => (filesOnly ? r.files : r.hits)
+    const queue = [...searchable]
+    const worker = async () => {
+      for (let repo = queue.shift(); repo; repo = queue.shift()) {
+        try {
+          // Each repo may fill the whole limit: which repos matter is decided after, not by speed.
+          const found = await grepCheckout(join(REPOS_DIR, repo.id), pattern, { ignoreCase, fixed, paths, filesOnly })
+          results.push({ repo: repo.name, projectId: repo.id, ...found })
+        } catch (error) {
+          results.push({ repo: repo.name, projectId: repo.id, hits: [], files: [], truncated: false, error: error instanceof Error ? error.message : String(error) })
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(GREP_CONCURRENCY, searchable.length) }, worker))
+
+    // A bad pattern fails the same way in every repo: say it once, as the caller's error.
+    const failed = results.filter((r) => r.error)
+    if (failed.length > 0 && failed.length === results.length) {
+      return c.json({ success: false, error: `git grep refused the pattern: ${failed[0]!.error}` }, 400)
+    }
+
+    // Fewer hits first: a repo where the string is rare is where it means something, and a repo
+    // that matches everywhere would otherwise spend the whole limit.
+    results.sort((a, b) => (items(a).length === 0 ? 1 : 0) - (items(b).length === 0 ? 1 : 0) || items(a).length - items(b).length || a.repo.localeCompare(b.repo))
+    let left = max
+    const shown = results.map((r) => {
+      const all = items(r)
+      const kept = all.slice(0, Math.max(0, left))
+      left -= kept.length
+      const listed = filesOnly ? { hits: [], files: kept as GrepFile[] } : { hits: kept as GrepHit[], files: [] }
+      return { ...r, ...listed, total: all.length, truncated: r.truncated || kept.length < all.length }
+    })
+
+    return c.json({
+      success: true,
+      data: {
+        pattern,
+        filesOnly,
+        orgId: scope.orgId,
+        searched: searchable.map((r) => r.name),
+        notCloned: repos.filter((r) => !searchable.includes(r)).map((r) => r.name),
+        results: shown,
+      },
+    })
+  } catch (error) {
+    logger.error(`Grep failed: ${String(error)}`)
     return c.json({ success: false, error: String(error) }, 500)
   }
 })

@@ -75,7 +75,8 @@ describe('POST /tree-upload/:token', () => {
 
     const first = await upload(url, JSON.stringify(plan))
     expect(first.status).toBe(201)
-    expect(first.text.split('\n')).toEqual(['**Plan created** — 2 tasks, 1 ready now', '- A → id-a', '- B → id-b'])
+    expect(first.text.split('\n').slice(0, 3)).toEqual(['**Plan created** — 2 tasks, 1 ready now', '- A → id-a', '- B → id-b'])
+    expect(first.text).toContain('**Plan check**')
     expect(treeCalls).toEqual([{ owner: 'lead-a', body: plan }])
 
     const again = await upload(url, JSON.stringify(plan))

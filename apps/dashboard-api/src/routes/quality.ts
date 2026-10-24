@@ -3,6 +3,7 @@ import { db } from '../db/client.js'
 import { findProjectByRepo, normalizeRepo } from '../lib/project-match.js'
 import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
 import { getMem9 } from './mem9-proxy.js'
+import { PERSONAL_ORG } from '../lib/session-project.js'
 import { autoRegisterProject, indexRegisteredProject } from '../services/auto-register.js'
 import {
   calculateFromVerificationResults,
@@ -367,6 +368,14 @@ sessionsRouter.post('/start', async (c) => {
     const projectName = (project?.name as string) ?? 'Unknown Project'
     const projectDesc = (project?.description as string) ?? ''
     const orgId = (project?.org_id as string) ?? ''
+    // The repos grouped with this one. An agent that does not know they exist searches only its
+    // own checkout: in the benchmark, a question whose answer sat in a sibling repo was asked of
+    // the hub once or not at all. The personal organization groups nothing, so it lists nothing.
+    const orgRepos = project && orgId && orgId !== PERSONAL_ORG
+      ? (db.prepare(
+          'SELECT name FROM projects WHERE org_id = ? AND id != ? AND indexed_symbols > 0 ORDER BY name'
+        ).all(orgId, project.id) as Array<{ name: string }>).map((r) => r.name)
+      : []
 
     // Resolve project display name: use DB project name if found, otherwise extract from repo URL
     const resolvedProject = projectName !== 'Unknown Project'
@@ -472,6 +481,7 @@ sessionsRouter.post('/start', async (c) => {
         repo: project.git_repo_url,
         indexedAt: project.indexed_at,
         indexedSymbols: project.indexed_symbols,
+        orgRepos,
       } : null,
       autoRegistered: registered ? {
         projectId: registered.projectId,

@@ -11,6 +11,7 @@ import { VectorStore } from '@cortex/shared-mem9'
 import type { VectorStoreConfig, Embedder } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { normalizeProjectId } from '../db/project-utils.js'
+import { recallProjects } from '../lib/session-project.js'
 import { createLogger } from '@cortex/shared-utils'
 import { createEmbedder } from '../lib/embedder-factory.js'
 import { linkablePaths, linkFiles, linksOf, notesFor, notesProject, unlinkDocument } from '../services/file-notes.js'
@@ -679,10 +680,12 @@ function tokenize(text: string): string[] {
 knowledgeRouter.post('/search', async (c) => {
   try {
     const body = await c.req.json()
-    const { query, tags, projectId, limit, hallType, asOf } = body as {
+    const { query, tags, projectId, allProjects, limit, hallType, asOf } = body as {
       query: string
       tags?: string[]
       projectId?: string
+      /** Search every project on the hub, as an unscoped search did before it had a default. */
+      allProjects?: boolean
       limit?: number
       hallType?: 'fact' | 'event' | 'discovery' | 'preference' | 'advice' | 'general'
       asOf?: string
@@ -698,6 +701,14 @@ knowledgeRouter.post('/search', async (c) => {
     const must: Array<Record<string, unknown>> = []
     if (normalizedProjectId) {
       must.push({ key: 'project_id', match: { value: normalizedProjectId } })
+    } else if (!allProjects) {
+      // No project named: the caller's own work and the hub-wide notes, not every project on
+      // the hub. Unscoped, a cortex-hub session's recall was other repos' docs, three of four
+      // hits, ~2k characters an agent read for nothing. Hub-wide notes carry no project ('').
+      const scoped = recallProjects(c.req.header('X-API-Key-Owner'))
+      if (scoped) {
+        must.push({ should: [{ key: 'project_id', match: { any: [...scoped, ''] } }, { is_empty: { key: 'project_id' } }] })
+      }
     }
     if (tags && tags.length > 0) {
       for (const tag of tags) {

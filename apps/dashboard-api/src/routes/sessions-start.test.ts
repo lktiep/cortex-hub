@@ -180,6 +180,39 @@ describe('POST /api/sessions/start session reuse', () => {
   })
 })
 
+describe('POST /api/sessions/start organization repos', () => {
+  beforeEach(() => {
+    testDb = createTestDb()
+    testDb.exec(`
+      INSERT INTO organizations (id, name, slug) VALUES ('org-1', 'Org', 'org'), ('org-2', 'Other', 'other');
+      INSERT INTO projects (id, org_id, name, slug, git_repo_url, indexed_symbols) VALUES
+        ('proj-hub', 'org-1', 'Hub', 'hub', '${HUB_URL}', 10),
+        ('proj-tools', 'org-1', 'Tools', 'tools', NULL, 10),
+        ('proj-new', 'org-1', 'Not Indexed', 'new', NULL, 0),
+        ('proj-else', 'org-2', 'Elsewhere', 'else', NULL, 10),
+        ('proj-mine', 'org-default', 'Mine', 'mine', 'https://github.com/acme/mine.git', 10),
+        ('proj-mine2', 'org-default', 'Mine Too', 'mine2', NULL, 10);
+    `)
+  })
+
+  async function orgReposFor(repo: string) {
+    const res = await app.request('/api/sessions/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key-Owner': 'k' },
+      body: JSON.stringify({ ...workspace.body, repo }),
+    })
+    return ((await res.json()) as { project: { orgRepos: string[] } }).project.orgRepos
+  }
+
+  it('lists the indexed repos grouped with this one, and none of another organization', async () => {
+    expect(await orgReposFor(HUB_URL)).toEqual(['Tools'])
+  })
+
+  it('lists nothing for a repo in the personal organization', async () => {
+    expect(await orgReposFor('https://github.com/acme/mine.git')).toEqual([])
+  })
+})
+
 describe('POST /api/sessions/start auto-registration', () => {
   const SANDBOX = 'https://github.com/acme/sandbox.git'
 

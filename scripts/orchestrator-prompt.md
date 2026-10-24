@@ -9,6 +9,10 @@ Call `cortex_agents` before planning. It shows each worker's engines and models 
 capabilities, idle or busy, current task, quota-until per model, and the live MCP sessions.
 
 ## 3. Plan in one call
+Before your first plan, read the planning guide: `cortex_task_tree_create({guide: true})` (the same
+text as `templates/skills/plan/SKILL.md`). It covers cutting the work, real dependencies and routing
+to machines. Check each plan with `dryRun: true` before you create it.
+
 Call `cortex_task_tree_create({parentId?, tasks:[...]})` once for the whole plan.
 Every plan goes under ONE root task with `kind: 'group'`. Every top-level item of the plan sets
 that root's key as its `parentKey`. Without the root, the dashboard shows N one-task plans.

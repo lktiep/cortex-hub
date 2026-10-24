@@ -1,55 +1,16 @@
 import { serve } from '@hono/node-server'
 import type { IncomingMessage } from 'node:http'
-import { publicOrigin } from '@cortex/shared-types'
 import app from './index.js'
 import { defaultBundlePath, serveWorkerAsset } from './worker-asset.js'
 import { forwardCloseCode } from './ws-close.js'
 import { withInternalSecret } from './internal-secret.js'
+import { refusalStatus, validateWsAuth } from './ws-auth.js'
 
 const port = Number(process.env.PORT) || 8317
 const DASHBOARD_API_URL = (process.env.DASHBOARD_API_URL || 'http://localhost:4000').replace(/\/$/, '')
 globalThis.fetch = withInternalSecret(globalThis.fetch, DASHBOARD_API_URL, process.env.INTERNAL_API_SECRET)
 
 console.log(`Cortex Hub MCP Server starting on port ${port}...`)
-
-/**
- * Validate Bearer token from query string or Authorization header.
- * Returns { valid, agentId } or { valid: false, error }.
- */
-async function validateWsAuth(req: IncomingMessage): Promise<{ valid: boolean; agentId?: string; error?: string }> {
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
-
-  // Try apiKey from query param first, then Authorization header
-  let token = url.searchParams.get('apiKey') || ''
-  if (!token) {
-    const authHeader = req.headers['authorization'] || ''
-    const [scheme, t] = authHeader.split(' ')
-    if (scheme?.toLowerCase() === 'bearer' && t) token = t
-  }
-
-  if (!token) {
-    return { valid: false, error: 'Missing API key. Use ?apiKey=xxx or Authorization: Bearer xxx' }
-  }
-
-  try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    const origin = publicOrigin((name) => {
-      const v = req.headers[name]
-      return Array.isArray(v) ? v[0] : v
-    })
-    if (origin) headers['X-Cortex-Public-Origin'] = origin
-    const res = await fetch(`${DASHBOARD_API_URL}/api/keys/verify`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ token }),
-    })
-    if (!res.ok) return { valid: false, error: 'Invalid API key' }
-    const data = await res.json() as { valid: boolean; agentId?: string; error?: string }
-    return data.valid ? { valid: true, agentId: data.agentId } : { valid: false, error: data.error || 'Auth failed' }
-  } catch (err) {
-    return { valid: false, error: `Auth service unavailable: ${String(err)}` }
-  }
-}
 
 const assetOpts = { bundlePath: defaultBundlePath(process.env, import.meta.url) }
 
@@ -75,9 +36,9 @@ server.on('upgrade', async (req: IncomingMessage, socket, head) => {
   }
 
   // Validate API key
-  const auth = await validateWsAuth(req)
+  const auth = await validateWsAuth(req.url || '/', req.headers, DASHBOARD_API_URL)
   if (!auth.valid) {
-    socket.write(`HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\n\r\n${auth.error}`)
+    socket.write(`${refusalStatus(auth)}\r\nContent-Type: text/plain\r\n\r\n${auth.error}`)
     socket.destroy()
     return
   }

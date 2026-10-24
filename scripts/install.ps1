@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $HOOKS_VERSION = 7
-$HOOKS_MINOR = 13
+$HOOKS_MINOR = 16
 $LATEST_VERSION = "$HOOKS_VERSION.$HOOKS_MINOR"
 $MCP_URL_DEFAULT = "http://localhost:8318/mcp"
 
@@ -88,6 +88,31 @@ if ($Tools -ne "") {
 }
 
 function Test-IDESelected { param([string]$ide) return $SelectedIDEs -contains $ide }
+
+# Merge-HookSettings: $ours is the settings JSON this installer writes, $prevText the file it
+# replaces. Returns the old file with its hook entries that run a cortex hook script swapped
+# for ours, and everything else (permissions, plugins, the repo's own hooks) kept. With $ours
+# empty it only strips cortex entries - for the user-level file, where an older install put
+# them - and returns $null when there were none. Throws on invalid JSON.
+$CortexHookPattern = '\.(claude|gemini)/hooks/(session-init|subagent-start|enforce-session|enforce-commit|nudge-lookup|session-id|recall-notes|recall-prompt|prompt-start|track-quality|session-end-check)\.sh'
+function Merge-HookSettings([string]$prevText, [string]$ours) {
+    $prev = $prevText | ConvertFrom-Json
+    $mine = if ($ours) { ($ours | ConvertFrom-Json).hooks } else { $null }
+    $hooks = [ordered]@{}
+    if ($prev.hooks) { foreach ($p in $prev.hooks.PSObject.Properties) { $hooks[$p.Name] = @($p.Value) } }
+    $before = ConvertTo-Json -InputObject $hooks -Depth 20 -Compress
+    if ($mine) { foreach ($p in $mine.PSObject.Properties) { if (-not $hooks.Contains($p.Name)) { $hooks[$p.Name] = @() } } }
+    $merged = [ordered]@{}
+    foreach ($event in @($hooks.Keys)) {
+        $kept = @($hooks[$event] | Where-Object { -not (@($_.hooks) | Where-Object { "$($_.command)" -match $CortexHookPattern }) })
+        if ($mine -and $mine.$event) { $kept += @($mine.$event) }
+        if ($kept.Count) { $merged[$event] = $kept }
+    }
+    if (-not $ours -and (ConvertTo-Json -InputObject $merged -Depth 20 -Compress) -eq $before) { return $null }
+    if ($prev.hooks) { $prev.PSObject.Properties.Remove('hooks') }
+    if ($merged.Count) { $prev | Add-Member -NotePropertyName hooks -NotePropertyValue $merged }
+    return (ConvertTo-Json -InputObject $prev -Depth 20)
+}
 
 # ══════════════════════════════════════════════
 # Phase 0: Global Skill Install
@@ -387,7 +412,7 @@ if ($NeedsUpdate) {
         # session-init.sh
         Write-ShHook "session-init" @'
 #!/bin/bash
-# Cortex Session Init (v7.3) — arms the gates; keeps discovery state across compaction.
+# Cortex Session Init (v7.4) — arms the gates; keeps discovery state across compaction.
 #
 # SessionStart fires on four different things: startup, resume, clear and compact.
 # Wiping the discovery markers on all four is why a long task suddenly finds Grep and
@@ -402,32 +427,27 @@ if ($NeedsUpdate) {
 # v7.2 prints this conversation's id for /cs to pass as clientSessionId. Everything else the
 # hub matches a session on is the same for two conversations in one checkout, so without it
 # they shared one session, and the first to finish closed it under the other.
+#
+# v7.4 stops printing it. A line that differs in every conversation, this early in the
+# context, kept the prompt cache from reusing anything after it. session-id.sh now puts the
+# id straight into the cortex_session_start call.
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
 mkdir -p "$STATE_DIR"
 
 INPUT=$(cat 2>/dev/null || true)
 SOURCE=""
-CLIENT_ID=""
 if [ -n "$INPUT" ]; then
   if command -v jq >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null || true)
-    CLIENT_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
   elif command -v python3 >/dev/null 2>&1; then
     SOURCE=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("source",""))' 2>/dev/null || true)
-    CLIENT_ID=$(printf '%s' "$INPUT" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || true)
   fi
 fi
-# The same id the tracker and the exit hook file this conversation's session under.
-CLIENT_ID=$(printf '%s' "$CLIENT_ID" | tr -cd 'A-Za-z0-9_-' | cut -c1-128)
-conversation_line() {
-  [ -n "$CLIENT_ID" ] && echo "Cortex: this conversation's clientSessionId is ${CLIENT_ID} — pass it to cortex_session_start."
-}
 
 case "$SOURCE" in
   compact|resume)
     echo "Cortex: same session (${SOURCE}) — discovery state kept, gates stay as they were."
-    conversation_line
     exit 0 ;;
 esac
 
@@ -449,15 +469,14 @@ rm -rf "$STATE_DIR/agents" 2>/dev/null
 [ -d "$STATE_DIR/nudge" ] && find "$STATE_DIR/nudge" -type f -mtime +1 -exec rm -f {} + 2>/dev/null
 # File notes are shown once per conversation and agent; the record of which were is a day's.
 [ -d "$STATE_DIR/notes" ] && find "$STATE_DIR/notes" -type f -name 'shown-*' -mtime +1 -exec rm -f {} + 2>/dev/null
-echo "Run /cs first: cortex_session_start, then knowledge+memory recall. Until then edits are BLOCKED, and Grep/Glob stay blocked until a cortex discovery tool has run."
-conversation_line
+echo "The prompt hook starts the cortex session from the first prompt; without its note, call cortex_session_start(repo, task: \"<the task in a few words>\") first. Until one of the two, edits are BLOCKED."
 exit 0
 '@
 
         # enforce-session.sh
         Write-ShHook "enforce-session" @'
 #!/bin/bash
-# Cortex Session Enforcement (v6.2) — hold tools back until the cortex workflow is followed.
+# Cortex Session Enforcement (v6.3) — hold tools back until the cortex workflow is followed.
 #
 # What this can and cannot do: the hook shares a filesystem with the agent it gates, so
 # it cannot stop an agent that decides to forge a marker. What it can do is make the
@@ -572,7 +591,7 @@ if [ -f "$STATE_DIR/session-started" ]; then
       exit 0
     fi
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
+      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. Or pass the task to cortex_session_start (task: \"<the task in a few words>\"): its answer is that recall. $HOW_OUT" >&2
       exit 2
     fi
   fi
@@ -582,28 +601,38 @@ fi
 # ── Session NOT started: block writes and codebase search, allow plain reads ──
 # Until v7.1 of session-init this branch never ran: the init hook created the session-started
 # marker itself, so every session looked started before cortex_session_start was ever called.
+#
+# Searching is reading, and what this gate wants before it is a cortex lookup, not a session.
+# Until v6.3 a search stayed blocked here after cortex_code_search had run, under a message
+# saying that very call unlocks it: an agent asked a quick question looked the code up, was
+# refused grep twice, and read whole files instead — 25k characters where one grep would do.
+SEARCH_HINT="BLOCKED: look it up with cortex_code_search (a behaviour) or cortex_code_context (a symbol name) first. One call unlocks find/grep/rg and Grep/Glob for the rest of the session. $HOW_OUT"
 case "$TOOL_NAME" in
   Edit|Write|NotebookEdit)
-    echo "BLOCKED: call cortex_session_start first (or run /cs). No edits without a session." >&2
+    echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No edits without a session." >&2
     exit 2 ;;
   Grep|Glob)
-    echo "BLOCKED: run /cs first (cortex_session_start + knowledge/memory recall), then search with cortex_code_search. $HOW_OUT" >&2
+    marker_ok discovery-used && exit 0
+    echo "$SEARCH_HINT" >&2
     exit 2 ;;
   Bash)
-    if is_codebase_search "$COMMAND"; then
-      echo "BLOCKED: run /cs first, then search with cortex_code_search. find/grep/rg unlock once a cortex discovery tool has run. $HOW_OUT" >&2
+    if is_codebase_search "$COMMAND" && ! marker_ok discovery-used; then
+      echo "$SEARCH_HINT" >&2
       exit 2
     fi
     # The write check goes before the read allowlist, or `cat > file` passes as a read.
     if is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND"; then
-      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+      echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No file modifications without a session." >&2
       exit 2
     fi
-    [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|show)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0
-    [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ ) ]] && {
-      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+    # Where a command starts, and before the read allowlist: unanchored, `cp ` matched the end of
+    # `hub-mcp ` and refused a read-only grep over that directory, while `ls; rm x` passed as a read.
+    MODIFIES='(^|[;&|(])[[:space:]]*(git[[:space:]]+(add|commit|push|reset)|rm|mv|cp|mkdir|touch|chmod)[[:space:]]'
+    [[ "$COMMAND" =~ $MODIFIES ]] && {
+      echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No file modifications without a session." >&2
       exit 2
     }
+    [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|show)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0
     exit 0 ;;
 esac
 exit 0
@@ -820,6 +849,15 @@ case "$TOOL_NAME" in
     # A new hub session is open, so an earlier one's "ended" no longer applies — left in
     # place it made the exit hook skip this session too.
     rm -f "$STATE_DIR/session-ended"
+    # Started with the task, the answer carries the recall and the code lookup that used to be
+    # three more calls. The hub prints each line only when that part answered, at the start of
+    # a line ("text":"… or \n… in the escaped output, never after \"), so the task's own words
+    # cannot pass for one.
+    if printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)recalled: knowledge\+memory for '; then
+      record knowledge-recalled; record_agent knowledge-recalled
+      record memory-recalled; record_agent memory-recalled
+    fi
+    printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)located: code for ' && record discovery-used
     ;;
   *cortex_session_end*)
     record session-ended
@@ -1586,6 +1624,208 @@ STATE_DIR="$STATE_DIR" PROJECT_DIR="$PROJECT_DIR" node -e "$NOTES_JS" 2>/dev/nul
 exit 0
 '@
 
+        # prompt-start.sh
+        Write-ShHook "prompt-start" @'
+#!/bin/bash
+# Cortex Prompt Start (v1) — opens the cortex session from the user's prompt, before the agent's first turn.
+#
+# cortex_session_start with the task answers the recall and the first code lookup in one call,
+# but the agent still spent a whole turn making it: a turn that re-reads the entire context to
+# write one tool call whose arguments a script already knows. Measured on a large repo, that
+# turn was most of what a hub-backed run cost over a plain grep one. So the prompt goes to the
+# hub here, the answer goes in front of the agent with the prompt, and the gates open on the
+# hub's evidence lines, the same ones track-quality.sh accepts from the agent's own call.
+#
+# What is sent: the first 300 characters of the prompt (the hub's limit on a task), with
+# anything that looks like a key, token or password replaced. The hub embeds it to search
+# and keeps nothing of it; no model reads it. Slash commands and short replies ("ok", "go on")
+# send nothing, and a hub that does not answer in time leaves the agent to start the session
+# itself, as before.
+#
+# CORTEX_PROMPT_START=off turns it off; so does gate-off, since the hub is down. It is JavaScript
+# in a shell file so the installers can ship it like every other hook; without node it does nothing.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+STATE_DIR="$PROJECT_DIR/.cortex/.session-state"
+
+[ "${CORTEX_PROMPT_START:-}" = "off" ] && exit 0
+[ -s "$STATE_DIR/gate-off" ] && exit 0
+command -v node >/dev/null 2>&1 || exit 0
+
+# read, not $(cat << …): bash 3.2, macOS's own, misparses quotes in a heredoc inside $( ).
+IFS= read -r -d '' START_JS << 'STARTJS' || true
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
+const { execFileSync } = require('child_process')
+
+/** The prompt waits on this hook: a slow hub costs the user this much, then the agent starts it. */
+const START_TIMEOUT = 5000
+const MIN_CHARS = 12
+/** The hub's limit on a task, and more than enough to say what a prompt is about. */
+const MAX_TASK = 300
+
+const project = process.env.PROJECT_DIR
+const stateDir = process.env.STATE_DIR
+
+function load(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return {} }
+}
+
+// The hub this machine's agents talk to, found where session-end-check.sh finds it: the env,
+// then the MCP configs of each IDE. The key never leaves this process.
+function hubEndpoint() {
+  const bearer = (auth) => (/^bearer /i.test(auth) ? auth : `Bearer ${auth}`)
+  const envUrl = process.env.CORTEX_MCP_URL || process.env.HUB_MCP_URL
+  if (envUrl && process.env.HUB_API_KEY) return { url: envUrl, auth: bearer(process.env.HUB_API_KEY) }
+  const home = os.homedir()
+  const servers = (doc) => ({ ...(doc.mcpServers || {}), ...(doc.servers || {}) })
+  const claude = load(path.join(home, '.claude.json'))
+  const configs = [
+    servers(load(path.join(project, '.mcp.json'))),
+    servers((claude.projects || {})[project] || {}),
+    servers(claude),
+    servers(load(path.join(project, '.gemini', 'settings.json'))),
+    servers(load(path.join(home, '.gemini', 'settings.json'))),
+    servers(load(path.join(home, '.gemini', 'antigravity', 'mcp_config.json'))),
+    servers(load(path.join(home, '.cursor', 'mcp.json'))),
+    servers(load(path.join(home, '.codeium', 'windsurf', 'mcp_config.json'))),
+    servers(load(path.join(project, '.vscode', 'mcp.json'))),
+  ]
+  for (const found of configs) {
+    const e = found['cortex-hub'] || Object.entries(found).find(([k]) => k.toLowerCase().includes('cortex'))?.[1]
+    if (!e || typeof e !== 'object') continue
+    const env = e.env && typeof e.env === 'object' ? e.env : {}
+    const args = (e.args || []).filter((a) => typeof a === 'string')
+    const url = e.url || e.httpUrl || e.serverUrl || args.find((a) => a.startsWith('http'))
+    let auth = (e.headers || {}).Authorization || (e.headers || {}).authorization
+    for (let i = 0; i < args.length - 1; i++) {
+      if (args[i] === '--header' && /^authorization:/i.test(args[i + 1])) auth = auth || args[i + 1].split(':').slice(1).join(':')
+    }
+    auth = String(auth || '').replace(/\$\{(\w+)\}/g, (_, v) => env[v] || process.env[v] || '').trim()
+    if (url && auth) return { url, auth: bearer(auth) }
+  }
+  return null
+}
+
+function git(...args) {
+  try {
+    return execFileSync('git', ['-C', project, ...args], { encoding: 'utf8', timeout: 2000 }).trim() || undefined
+  } catch { return undefined }
+}
+
+// Keys pasted into a prompt stay on this machine: provider-shaped keys, JWTs, credentials in a
+// URL, `token=…`-style assignments, and any long unbroken run of key-like characters.
+const SECRETS = [
+  [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, '$1<redacted>@'],
+  [/\b((?:api[_-]?)?(?:key|token|secret|passw(?:or)?d|pwd))(\s*[=:]\s*)\S+/gi, '$1$2<redacted>'],
+  [/\bBearer\s+\S+/gi, 'Bearer <redacted>'],
+  [/\b(?:sk|pk|rk)[_-][A-Za-z0-9_-]{8,}/g, '<redacted>'],
+  [/\bgh[pousr]_[A-Za-z0-9]{8,}/g, '<redacted>'],
+  [/\bgithub_pat_[A-Za-z0-9_]{8,}/g, '<redacted>'],
+  [/\bAKIA[0-9A-Z]{12,}/g, '<redacted>'],
+  [/\bxox[abprs]-[A-Za-z0-9-]{8,}/g, '<redacted>'],
+  [/\beyJ[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]+){1,2}/g, '<redacted>'],
+  // Letters and digits mixed, 32 or more: a key or a hash. A long-named path or symbol has no digit.
+  [/(?=[A-Za-z0-9+_=-]*\d)(?=[A-Za-z0-9+_=-]*[A-Za-z])[A-Za-z0-9+_=-]{32,}/g, '<redacted>'],
+]
+
+/** The prompt as the hub gets it: no secrets, one line, at most MAX_TASK characters. */
+function scrub(prompt) {
+  let task = prompt
+  for (const [re, to] of SECRETS) task = task.replace(re, to)
+  return task.replace(/\s+/g, ' ').trim().slice(0, MAX_TASK)
+}
+
+/** The same identity session-id.sh puts on the agent's own call, so the hub keeps one session. */
+function identity() {
+  const who = load(path.join(project, '.cortex', 'agent-identity.json'))
+  const env = who.environment && typeof who.environment === 'object' ? who.environment : {}
+  const found = {
+    hostname: env.hostname, os: env.os, role: who.role, branch: git('branch', '--show-current'),
+    ide: /vscode/.test(process.env.CLAUDE_CODE_ENTRYPOINT || '') ? 'claude-code-vscode' : 'claude-code-cli',
+  }
+  const out = Object.fromEntries(Object.entries(found).filter(([, v]) => typeof v === 'string' && v))
+  if (Array.isArray(who.capabilities) && who.capabilities.length && who.capabilities.every((c) => typeof c === 'string')) {
+    out.capabilities = who.capabilities
+  }
+  return out
+}
+
+/** An MCP answer, plain JSON or one server-sent event: its text blocks. */
+function rpcTexts(text) {
+  const data = text.trimStart().startsWith('{') ? text : text.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5)).join('')
+  const msg = JSON.parse(data)
+  if (msg.error || msg.result?.isError) throw new Error('hub refused')
+  return (msg.result.content || []).filter((b) => b.type === 'text').map((b) => b.text)
+}
+
+async function startSession(task, clientSessionId) {
+  const hub = hubEndpoint()
+  // Credentials in the remote stay here: only the host and path go to the hub.
+  const repo = git('config', '--get', 'remote.origin.url')?.replace(/:\/\/[^/@]+@/, '://')
+  if (!hub || !repo) return null
+  const res = await fetch(hub.url, {
+    method: 'POST',
+    headers: { Authorization: hub.auth, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: {
+        name: 'cortex_session_start',
+        arguments: { ...identity(), repo, mode: 'development', agentId: 'claude-code', task, clientSessionId },
+      },
+    }),
+    signal: AbortSignal.timeout(START_TIMEOUT),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const [head, ...brief] = rpcTexts(await res.text())
+  const status = JSON.parse(head)
+  // Without the hub the tool still answers, with an id only it knows: no session to speak of.
+  if (status.hub_error || !/^sess_/.test(String(status.session_id || ''))) return null
+  return { sessionId: status.session_id, note: status.project_note, brief: brief.join('\n') }
+}
+
+/** Evidence as track-quality.sh writes it, naming this hook. */
+function record(name) {
+  fs.writeFileSync(path.join(stateDir, name), `tool=prompt-start at=${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}\n`)
+}
+
+async function main() {
+  let event = {}
+  try { event = JSON.parse(fs.readFileSync(0, 'utf8')) } catch { return }
+  const prompt = typeof event.prompt === 'string' ? event.prompt.trim() : ''
+  // A slash command runs its own start; a short reply has no task to look up.
+  if (prompt.length < MIN_CHARS || prompt.startsWith('/')) return
+  const clientSessionId = String(event.session_id || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 128)
+  if (!clientSessionId) return
+  const task = scrub(prompt)
+  if (task.length < MIN_CHARS) return
+
+  const started = await startSession(task, clientSessionId).catch(() => null)
+  if (!started) return
+
+  fs.mkdirSync(path.join(stateDir, 'conversations'), { recursive: true })
+  fs.writeFileSync(path.join(stateDir, 'session-id'), `${started.sessionId}\n`)
+  fs.writeFileSync(path.join(stateDir, 'conversations', clientSessionId), `${started.sessionId}\n`)
+  record('session-started')
+  fs.rmSync(path.join(stateDir, 'session-ended'), { force: true })
+  // The hub prints each line only when that part answered.
+  if (/^recalled: knowledge\+memory for /m.test(started.brief)) { record('knowledge-recalled'); record('memory-recalled') }
+  if (/^located: code for /m.test(started.brief)) record('discovery-used')
+
+  const context = [
+    `Cortex session ${started.sessionId} is open for this prompt: cortex_session_start already ran with it as the task, so do not call it again.`,
+    started.note,
+    started.brief,
+  ].filter(Boolean).join('\n')
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: context } }))
+}
+
+main().catch(() => {})
+STARTJS
+STATE_DIR="$STATE_DIR" PROJECT_DIR="$PROJECT_DIR" node -e "$START_JS" 2>/dev/null
+exit 0
+'@
+
         # subagent-start.sh
         Write-ShHook "subagent-start" @'
 #!/bin/bash
@@ -1614,6 +1854,95 @@ printf '{"hookSpecificOutput":{"hookEventName":"SubagentStart","additionalContex
 exit 0
 '@
 
+        # session-id.sh
+        Write-ShHook "session-id" @'
+#!/bin/bash
+# Cortex Session Id (v1.2) — fills in clientSessionId and the agent identity on cortex_session_start,
+# and the checkout's repo on cortex_code_search.
+#
+# The hub keeps two conversations in one checkout on separate sessions by this id. Until
+# session-init v7.4 the agent copied it from a line that hook printed, but that line differs
+# in every conversation and sits ahead of CLAUDE.md and the rest of the opening context, so
+# the prompt cache could never reuse anything after it: ~6k tokens written anew per
+# conversation, most of what made a hub lookup cost more than a plain grep. The hook payload
+# already carries the id, so it goes straight into the call and the context stays the same.
+#
+# v1.1: the identity too. CLAUDE.md told the agent to read .cortex/agent-identity.json and the
+# git branch before its first call, two more turns in every conversation for values a script
+# can look up. What the agent passes itself still wins; only the id is always this hook's.
+#
+# v1.2: a cortex_code_search that names no repo, project or org gets `here`, this checkout's
+# remote. Agents left repo out in half their searches, and the hub then searched every repo of
+# the organization at once: graph flows only, no ranked files or lines, and nothing from the
+# repo being worked on. With `here` it searches this repo in full and lists the others below.
+INPUT=$(cat 2>/dev/null || true)
+[ -z "$INPUT" ] && exit 0
+
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+IDENTITY_FILE="$PROJECT_DIR/.cortex/agent-identity.json"
+BRANCH=$(git -C "$PROJECT_DIR" branch --show-current 2>/dev/null || true)
+case "${CLAUDE_CODE_ENTRYPOINT:-}" in
+  *vscode*) IDE=claude-code-vscode ;;
+  *) IDE=claude-code-cli ;;
+esac
+
+# Credentials in the remote stay here: only the host and path go to the hub.
+HERE=$(git -C "$PROJECT_DIR" remote get-url origin 2>/dev/null | sed -E 's#://[^/@]+@#://#' || true)
+
+# The same id, with the same characters kept, that the tracker and the exit hook file this
+# conversation's session under. Whatever the agent passed is replaced: this one is current.
+if command -v jq >/dev/null 2>&1; then
+  IDENTITY=$(jq -c 'if type == "object" then . else {} end' "$IDENTITY_FILE" 2>/dev/null || true)
+  [ -z "$IDENTITY" ] && IDENTITY='{}'
+  printf '%s' "$INPUT" | jq -c --argjson who "$IDENTITY" --arg branch "$BRANCH" --arg ide "$IDE" --arg here "$HERE" '
+    if (.tool_name // "" | test("cortex_code_search$")) then
+      (.tool_input // {}) as $in
+      | select($here != "" and ([$in.repo, $in.projectId, $in.org, $in.here] | all(. == null)))
+      | {hookSpecificOutput: {hookEventName: "PreToolUse", updatedInput: ($in + {here: $here})}}
+    else
+    (.session_id // "" | gsub("[^A-Za-z0-9_-]"; "") | .[0:128]) as $id
+    | select($id != "")
+    | ($who.environment | if type == "object" then . else {} end) as $env
+    # A value of the wrong type fails the schema of the tool, and with it the whole call, so a
+    # hand-edited file only contributes what it got right.
+    | (({hostname: $env.hostname, os: $env.os, role: $who.role, branch: $branch, ide: $ide}
+        | with_entries(select(.value | type == "string" and . != "")))
+       + ($who.capabilities | if type == "array" and length > 0 and all(type == "string")
+           then {capabilities: .} else {} end)) as $found
+    | {hookSpecificOutput: {hookEventName: "PreToolUse",
+        updatedInput: ($found + (.tool_input // {}) + {clientSessionId: $id})}}
+    end' 2>/dev/null
+elif command -v python3 >/dev/null 2>&1; then
+  printf '%s' "$INPUT" | IDENTITY_FILE="$IDENTITY_FILE" BRANCH="$BRANCH" IDE="$IDE" HERE="$HERE" python3 -c '
+import json, os, re, sys
+d = json.load(sys.stdin)
+cid = re.sub(r"[^A-Za-z0-9_-]", "", str(d.get("session_id") or ""))[:128]
+if str(d.get("tool_name") or "").endswith("cortex_code_search"):
+    args = d.get("tool_input") or {}
+    if os.environ.get("HERE") and all(args.get(k) is None for k in ("repo", "projectId", "org", "here")):
+        args["here"] = os.environ["HERE"]
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": args}}))
+elif cid:
+    try:
+        who = json.load(open(os.environ["IDENTITY_FILE"], encoding="utf-8-sig"))
+        who = who if isinstance(who, dict) else {}
+    except Exception:
+        who = {}
+    env = who.get("environment") if isinstance(who.get("environment"), dict) else {}
+    found = {"hostname": env.get("hostname"), "os": env.get("os"), "role": who.get("role"),
+             "branch": os.environ.get("BRANCH"), "ide": os.environ.get("IDE")}
+    args = {k: v for k, v in found.items() if isinstance(v, str) and v}
+    caps = who.get("capabilities")
+    if isinstance(caps, list) and caps and all(isinstance(c, str) for c in caps):
+        args["capabilities"] = caps
+    args.update(d.get("tool_input") or {})
+    args["clientSessionId"] = cid
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": args}}))
+' 2>/dev/null
+fi
+exit 0
+'@
+
         # settings.json — bash .sh hooks (Claude Code uses bash on all platforms)
         $settingsContent = @'
 {
@@ -1624,10 +1953,14 @@ exit 0
     "SubagentStart": [
       {"matcher": "", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/subagent-start.sh\""}]}
     ],
+    "UserPromptSubmit": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/prompt-start.sh\"", "timeout": 10}]}
+    ],
     "PreToolUse": [
-      {"matcher": "Edit|Write|NotebookEdit|Bash", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-session.sh\""}]},
+      {"matcher": "Edit|Write|NotebookEdit|Bash|Grep|Glob", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-session.sh\""}]},
       {"matcher": "Bash", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/enforce-commit.sh\""}]},
       {"matcher": "Bash|Grep|Glob|mcp__.*cortex_(code_search|code_context|code_impact|cypher)", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/nudge-lookup.sh\""}]},
+      {"matcher": "mcp__.*cortex_(session_start|code_search)", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/session-id.sh\""}]},
       {"matcher": "Read|Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "bash -c \"cd \\$(git rev-parse --show-toplevel 2>/dev/null) && bash .claude/hooks/recall-notes.sh\""}]}
     ],
     "PostToolUse": [
@@ -1639,7 +1972,20 @@ exit 0
   }
 }
 '@
-        [System.IO.File]::WriteAllText((Join-Path $ProjectDir ".claude/settings.json"), $settingsContent)
+        # A repo may already commit its own settings (permissions, hooks, plugins): merge into
+        # them, or onboarding wipes them.
+        $settingsPath = Join-Path $ProjectDir ".claude/settings.json"
+        if (Test-Path $settingsPath) {
+            $prevSettings = Get-Content $settingsPath -Raw
+            try {
+                $settingsContent = Merge-HookSettings $prevSettings $settingsContent
+                Write-Ok "Settings: cortex hooks merged into the existing .claude/settings.json"
+            } catch {
+                [System.IO.File]::WriteAllText("$settingsPath.bak", $prevSettings)
+                Write-Warn "Settings: could not merge into the existing .claude/settings.json (invalid JSON) - replaced it, the old one is .claude/settings.json.bak"
+            }
+        }
+        [System.IO.File]::WriteAllText($settingsPath, $settingsContent)
 
         Write-Ok ("Claude: bash hooks + settings.json installed (v" + $LATEST_VERSION + ")")
 
@@ -1647,11 +1993,11 @@ exit 0
         $userSettings = Join-Path $env:USERPROFILE ".claude\settings.json"
         if (Test-Path $userSettings) {
             try {
-                $userJson = Get-Content $userSettings -Raw | ConvertFrom-Json
-                if ($userJson.hooks) {
-                    $userJson.PSObject.Properties.Remove('hooks')
-                    $userJson | ConvertTo-Json -Depth 10 | Set-Content $userSettings -Encoding UTF8
-                    Write-Ok "Removed stale hooks from user-level settings (~/.claude/settings.json)"
+                # Only the entries an older install put there: the user's own hooks are not ours.
+                $cleaned = Merge-HookSettings (Get-Content $userSettings -Raw) ""
+                if ($cleaned) {
+                    [System.IO.File]::WriteAllText($userSettings, $cleaned)
+                    Write-Ok "Removed stale cortex hooks from user-level settings (~/.claude/settings.json)"
                 }
             } catch {
                 Write-Warn "Could not clean user-level settings: $_"
@@ -1663,124 +2009,37 @@ exit 0
         if (-not (Test-Path $cmdDir)) { New-Item -ItemType Directory -Path $cmdDir -Force | Out-Null }
 
         @'
-# /cs — Cortex Start v0.9.1
+# /cs — Cortex Start v0.10.0
 
-> Version: 0.9.1 | Updated: 2026-10-09
-> Changelog: v0.9.1 — passes clientSessionId, so parallel conversations in one checkout get a session each
+> Version: 0.10.0 | Updated: 2026-10-22
+> Changelog: v0.10.0 — one call: session_start with the task answers the recall and the files to read
+> Changelog: v0.9.4 — recall with the task's own words; the generic session query is already in session_start's answer
 > Changelog: v0.9.0 — cortex_plan_quality is actually registered; it scores 0-10 and takes the request too
 > Changelog: v0.8.0 — search-once/read-all-ten ordering from measured retrieval; recall no longer counts as discovery
-> Changelog: v0.7.0 — unified versioning, removed STATE.md, streamlined tool guidance, auto-memory safety net
-> Changelog: v2.1 — added plan quality gate before implementation
-> Changelog: v2.0 — added task pickup, detect changes, recipe health, workflow recipes, versioning
 
-Run ALL steps IN ORDER. Do NOT proceed to user work until Step 7 completes.
-
-## Step 1: Session Start
-Call `cortex_session_start`:
+## 1. Start, with the task
 ```
-repo: "__GIT_REPO__"
-mode: "development"
-agentId: "claude-code"
-ide: "<your IDE>"
-branch: "<current git branch>"
-clientSessionId: "<the id from the SessionStart hook's 'clientSessionId is …' line>"
+cortex_session_start(repo: "__GIT_REPO__", task: "<the task in a few words>")
 ```
-Leave `clientSessionId` out only if no hook printed one. Without it, two conversations in this
-checkout share one hub session, and the first to end closes it under the other.
-Save `session_id`, `projectId` and `project.orgId` from the response. `orgId` is the boundary of a cross-repo search.
-If `recentChanges.count > 0` → warn user and `git pull` before any edits.
+The task's own words: the feature, the error, the file. The answer holds the recall for it
+(`recalled:` knowledge and memory) and where the code is (`located:` files, line ranges, symbols).
+That is the recall and the first lookup: do not repeat them with separate searches. A hook adds
+the conversation id, branch, IDE and identity. No task yet? Start without one, and call it again
+with the task once you have it.
 
-## Step 2: Recall Context (parallel)
-Call BOTH in parallel:
-- `cortex_knowledge_search(query: "session summary progress next session")`
-- `cortex_memory_search(query: "session context decisions lessons", agentId: "claude-code")`
+## 2. Only when it applies
+- Uncommitted changes in `git status` → `cortex_detect_changes(diff: "<git diff HEAD>")`.
+- Shared files another agent may hold → `cortex_changes(projectId)`.
+- Conductor work → `cortex_task_pickup()`; then `cortex_task_accept`, `cortex_task_update`.
+- A plan of several steps → `cortex_plan_quality(plan, request)`; 8.0 or more → execute.
 
-These return what was done last session, key decisions, and next steps.
-
-## Step 3: Conflict Check
-`cortex_changes(agentId: "claude-code", projectId: "<from step 1>")`
-
-## Step 4: Task Pickup (Optional)
-If `cortex_task_pickup` tool is available:
-`cortex_task_pickup()` — check for Conductor tasks assigned to you.
-If tasks exist → list them. Ask user which to work on, or continue with their request.
-If the tool is not available (e.g. in solo dev mode), skip this step.
-
-## Step 5: Working State Check
-Run `git status`. If uncommitted changes:
-- `cortex_detect_changes(diff: "<output of git diff HEAD>")` — analyze risk level. The hub cannot see your working tree, so pass the diff
-- Report affected symbols and blast radius
-
-## Step 6: Situational Summary
-Print a concise report:
-
-```
-## Session Init Complete
-- **Last session**: <what was done, from memory/knowledge recall>
-- **Pending tasks**: <N tasks> or none
-- **Unseen changes**: <from other agents> or clean
-- **Working state**: clean / <N uncommitted files, risk level>
-- **Key context**: <relevant decisions or lessons>
-- Ready to start work.
-```
-
-## Step 7: Activate Workflow Intelligence
-For the REST of this session, use cortex tools naturally:
-
-### Before implementing a plan:
-1. Draft plan with steps + files to change
-2. `cortex_plan_quality(plan: "<your plan>", request: "<what the user asked>")` → scorecard, 0-10
-3. 8.0 or more → execute. Below that → address the listed improvements and resubmit with `iteration: 2` (max 3), then escalate to the user.
-
-### Finding the code to change:
-**Start from what you know, not from a fixed ladder:**
-
-| You already know | Start with |
-|---|---|
-| A symbol name | `cortex_code_context(name)` — exact graph lookup, plus callers/callees/imports in one call |
-| Only the behaviour | `cortex_code_search(query, limit: 10)` — ranked hybrid search, one call |
-| An exact literal (env var, config key, error string) | `rg` / `grep` — this is not a ranking problem |
-| A relationship across files | `cortex_cypher` |
-
-**Search once, read all ten.** Measured on cortex-hub's own index (`benchmarks/retrieval_bench.ts`,
-n=15): the target file is in the top 10 for 15/15 queries but at rank 1 for only 8/15. So scan
-the whole result set, and never re-run a reworded version of the same query — recall@10 is
-already 1.000, so it returns the same set. Ask a different question or switch tool instead.
-
-**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
-at session start, then when something breaks — not before every lookup.
-
-`cortex_code_impact` before editing something exported or shared; `cortex_changes` before
-touching a file another agent may hold.
-
-### Cross-project lookup:
-Projects are isolated per organization; related repos (client, server, tools) share one.
-```
-cortex_code_search(query: "...")                      # every repo in this organization
-cortex_code_search(query: "...", repo: "my-backend")  # one repo
-cortex_code_context(name: "...", repo: "my-backend")
-cortex_list_repos()                                   # the repos "every repo" covers
-```
-Running sessions in two organizations with one API key at once? Pass `org: "<orgId>"`.
-
-### When hitting an error:
-1. `cortex_knowledge_search` → check if known
-2. `cortex_memory_search` → check if seen before
-3. Fix the error
-4. If non-obvious → `cortex_knowledge_store` to save for others
-
-### Before committing:
-1. `cortex_detect_changes(diff: "<output of git diff --staged>")` — verify blast radius. `risk_level: "unknown"` means a lookup failed: it is not a pass
-2. Commit
-3. After push → `cortex_code_reindex(repo: "...", branch: "<branch>")`
-
-### Working on a Conductor task:
-1. `cortex_task_accept(taskId)` at start
-2. `cortex_task_update(taskId, status: "in_progress")` during work
-3. `cortex_task_update(taskId, status: "completed", result: {...})` when done
-
----
-All cortex gates satisfied. Proceed with user tasks.
+## 3. While working
+- A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`.
+  An exact literal → `rg`; in the organization's other repos → `cortex_code_grep`. Read the lines a hit names, not the whole file.
+- Something breaks → `cortex_knowledge_search` and `cortex_memory_search` with the error; a
+  non-obvious fix → `cortex_knowledge_store`.
+- Before committing → build, typecheck and lint last, then `cortex_detect_changes(diff)`; after
+  pushing → `cortex_code_reindex(repo, branch)`.
 '@ | Out-File -FilePath (Join-Path $cmdDir "cs.md") -Encoding utf8
         $cmdPath = Join-Path $cmdDir "cs.md"
         (Get-Content $cmdPath -Raw).Replace("__GIT_REPO__", $GitRepo) | Set-Content $cmdPath -Encoding utf8
@@ -1918,13 +2177,13 @@ rm -f "$STATE_DIR/session-started" "$STATE_DIR/quality-gates-passed" \
       "$STATE_DIR/tasks-checked" "$STATE_DIR/gate-off" "$STATE_DIR/session-id" 2>/dev/null
 # Other conversations' sessions stay theirs to close; only week-old records are dropped.
 [ -d "$STATE_DIR/conversations" ] && find "$STATE_DIR/conversations" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
-echo '{"systemMessage":"MANDATORY: call cortex_session_start, then cortex_knowledge_search + cortex_memory_search, before any edit. search_file_content and glob stay blocked until a cortex discovery tool has run.'"$CONVERSATION"'"}'
+echo '{"systemMessage":"MANDATORY: call cortex_session_start with the task (task: <the task in a few words>) before any edit: one call answers the recall for the task and the files and lines to read, and opens the edit and search gates.'"$CONVERSATION"'"}'
 exit 0
 '@ | Out-File -FilePath "$geminiHooksDir\session-init.sh" -Encoding utf8 -NoNewline
 
         @'
 #!/bin/bash
-# Cortex Session Enforcement (v6.1) — Gemini variant.
+# Cortex Session Enforcement (v6.2) — Gemini variant.
 #
 # v3 only checked that a session existed: once cortex_session_start had run, every tool was
 # allowed. So the discovery-first rule was documentation, not enforcement. This mirrors the
@@ -1999,24 +2258,26 @@ if [ -f "$STATE_DIR/session-started" ]; then
   esac
   if [ "$WRITES_A_FILE" = "1" ]; then
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-      deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. $HOW_OUT"
+      deny "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. $HOW_OUT"
     fi
   fi
   allow
 fi
 
-# Session not started: block writes and codebase search, allow plain reads.
+# Session not started: block writes and codebase search, allow plain reads. Searching is
+# reading, so a cortex lookup unlocks it here as it does in a session — see the Claude hook.
+SEARCH_HINT="BLOCKED: look it up with cortex_code_search (a behaviour) or cortex_code_context (a symbol name) first. One call unlocks find/grep/rg, glob and search_file_content for the rest of the session. $HOW_OUT"
 case "$TOOL_NAME" in
   write_file|replace|edit_file|create_file|insert_text)
-    deny "BLOCKED: call cortex_session_start first. No edits without a session." ;;
+    deny "BLOCKED: call cortex_session_start first, with the task (task: <the task in a few words>). No edits without a session." ;;
   glob|search_file_content)
-    deny "BLOCKED: call cortex_session_start first, then search with cortex_code_search. $HOW_OUT" ;;
+    marker_ok discovery-used || deny "$SEARCH_HINT" ;;
   run_shell_command|shell)
-    is_codebase_search "$COMMAND" && deny "BLOCKED: call cortex_session_start first, then search with cortex_code_search. $HOW_OUT"
+    is_codebase_search "$COMMAND" && ! marker_ok discovery-used && deny "$SEARCH_HINT"
     is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND" \
-      && deny "BLOCKED: call cortex_session_start first. No file modifications without a session."
+      && deny "BLOCKED: call cortex_session_start first, with the task (task: <the task in a few words>). No file modifications without a session."
     printf '%s' "$COMMAND" | grep -Eq '(git[[:space:]]+(add|commit|push|reset)|^rm[[:space:]]|^mv[[:space:]]|^cp[[:space:]]|^mkdir[[:space:]])' \
-      && deny "BLOCKED: call cortex_session_start first. No file modifications without a session." ;;
+      && deny "BLOCKED: call cortex_session_start first, with the task (task: <the task in a few words>). No file modifications without a session." ;;
 esac
 allow
 '@ | Out-File -FilePath "$geminiHooksDir\enforce-session.sh" -Encoding utf8 -NoNewline
@@ -2160,6 +2421,12 @@ case "$TOOL_NAME" in
     # A new hub session is open, so an earlier one's "ended" no longer applies — left in
     # place it made the exit hook skip this session too.
     rm -f "$STATE_DIR/session-ended"
+    # Started with the task, the answer carries the recall and the code lookup. The hub prints
+    # each line only when that part answered, at the start of a line, never after \".
+    if printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)recalled: knowledge\+memory for '; then
+      record knowledge-recalled; record memory-recalled
+    fi
+    printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)located: code for ' && record discovery-used
     ;;
   *cortex_session_end*)
     record session-ended
@@ -2420,7 +2687,8 @@ fi
 exit 0
 '@ | Out-File -FilePath "$geminiHooksDir\session-end-check.sh" -Encoding utf8 -NoNewline
 
-        # Gemini settings.json
+        # Gemini settings.json - merged into one the repo already has, like .claude/settings.json.
+        $prevGemini = if (Test-Path ".gemini\settings.json") { Get-Content ".gemini\settings.json" -Raw } else { $null }
         @'
 {
   "hooks": {
@@ -2463,6 +2731,15 @@ exit 0
   }
 }
 '@ | Out-File -FilePath ".gemini\settings.json" -Encoding utf8
+        if ($prevGemini) {
+            $geminiSettings = (Resolve-Path ".gemini\settings.json").Path
+            try {
+                [System.IO.File]::WriteAllText($geminiSettings, (Merge-HookSettings $prevGemini (Get-Content $geminiSettings -Raw)))
+            } catch {
+                [System.IO.File]::WriteAllText("$geminiSettings.bak", $prevGemini)
+                Write-Warn "Gemini: could not merge into the existing .gemini/settings.json (invalid JSON) - replaced it, the old one is .gemini/settings.json.bak"
+            }
+        }
 
         Write-Ok ("Gemini: hooks + settings.json installed (v" + $LATEST_VERSION + ")")
     }
@@ -2470,41 +2747,21 @@ exit 0
     # ── Instruction files for other IDEs ──
     $instructionContent = @'
 <!-- cortex-hub:auto-mcp -->
-## Cortex Hub — Auto MCP (MANDATORY)
+## Cortex Hub — MANDATORY
 
-At the START of every conversation:
-1. Call `cortex_session_start` with repo: "__GIT_REPO__", agentId: "__AGENT_ID__", mode: "development"
-2. If `recentChanges.count > 0`, warn user and run `git pull`
-3. `cortex_knowledge_search` + `cortex_memory_search` once — recall what the last session decided
+Once you know the task: `cortex_session_start(repo: "__GIT_REPO__", agentId: "__AGENT_ID__", task: "<the task in a few words>")`.
+Its answer is the recall (knowledge, memory) and the first lookup (files, lines and the symbols
+they fall in): read those lines next, with no separate search first.
 
-### Finding code — start from what you know, not from a fixed ladder
-| You already know | Start with |
-|---|---|
-| A symbol name | `cortex_code_context(name)` — exact graph lookup, plus callers/callees/imports in one call |
-| Only the behaviour | `cortex_code_search(query, limit: 10)` — ranked hybrid search, one call |
-| An exact literal (env var, config key, error string) | `rg` / `grep` — this is not a ranking problem |
-| A relationship across files | `cortex_cypher` |
-
-**Search once, read all ten.** On the cortex-hub index the target file is in the top 10 for
-15/15 queries but at rank 1 for only 8/15 — so scan the whole result set, and never re-run a
-reworded version of the same query. Ask a different question or switch tool instead.
-
-`cortex_code_impact` before editing something exported or shared. Knowledge and memory are
-for errors and decisions, not for locating code.
-
-**Across repos:** omit `repo:` to search every repo in the organization of this project
-(the client + server + tools of one product). Projects are isolated per organization, so it never reaches
-another one. Running sessions in two organizations with one API key? Pass `org:`.
-
-### Error Protocol
-1. `cortex_knowledge_search` first — someone may have solved this
-2. `cortex_memory_search` — you may have seen it before
-3. Fix the error
-4. Non-obvious fixes: `cortex_knowledge_store`
-
-### Quality Gates
-Run verify commands from `.cortex/project-profile.json`, then `cortex_quality_report`.
-After a push: `cortex_code_reindex`. End session: `cortex_session_end` with sessionId and summary.
+- A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`: scan the
+  whole list, the target is not always first. An exact literal → `rg`; in the organization's other repos → `cortex_code_grep`.
+- Read just the lines a hit names (Read with offset/limit), not the whole file.
+- `cortex_code_impact` before changing something exported or shared.
+- Something breaks → `cortex_knowledge_search` and `cortex_memory_search` with the error first;
+  store a non-obvious fix with `cortex_knowledge_store`.
+- Before committing: the verify commands from `.cortex/project-profile.json`, after the last edit
+  (a later write closes the commit gate again), then `cortex_detect_changes(diff: "<git diff --staged>")`.
+  After a push: `cortex_code_reindex(repo: "__GIT_REPO__", branch: "<branch>")`.
 <!-- cortex-hub:auto-mcp -->
 '@
 
@@ -2546,95 +2803,24 @@ if (-not (Test-Path "lefthook.yml")) {
 # ══════════════════════════════════════════════
 $cortexMarker = "<!-- cortex-hub:auto-mcp -->"
 $claudeMdBody = @'
-## Cortex Hub — MANDATORY (enforced by hooks — violations are BLOCKED)
+## Cortex Hub — MANDATORY (enforced by hooks)
 
-**YOUR FIRST ACTION in every conversation MUST be calling `cortex_session_start`.
-If you skip this, all Edit/Write/file-modifying Bash commands will return exit code 2 (BLOCKED).
-This is not optional — it is enforced by pre-tool hooks.**
+A prompt usually arrives with a "Cortex session … is open" note: the hook already started the
+session with the prompt as the task, and the note holds the recall (knowledge, memory) and the
+first lookup (files, lines and the symbols they fall in). Read those lines next, with no separate
+search first. Without the note, once you know the task: `cortex_session_start(repo: "__GIT_REPO__",
+task: "<the task in a few words>")`, which answers the same. Until one of the two, Edit, Write and
+file-modifying Bash are refused.
 
-```
-cortex_session_start(repo: "__GIT_REPO__", mode: "development", agentId: "claude-code")
-```
-
-Then:
-- If `recentChanges.count > 0` in the response, warn the user and run `git pull`
-
-### Agent Identity (send with session_start if available)
-
-Read `.cortex/agent-identity.json` and pass identity fields:
-```
-cortex_session_start(
-  repo: "__GIT_REPO__",
-  mode: "development",
-  agentId: "claude-code",
-  hostname: "<from agent-identity.json>",
-  os: "<from agent-identity.json>",
-  ide: "claude-code-cli",
-  branch: "<current git branch>",
-  role: "<from agent-identity.json>",
-  capabilities: ["<from agent-identity.json>"]
-)
-```
-This helps Dashboard identify which agent you are across multiple IDEs/machines.
-
-### Finding code fast (MANDATORY — and a fixed ladder is the slow way)
-
-Start from what you already know. Grep and Glob are blocked by a hook until a cortex
-discovery tool has run in this session.
-
-| You already know | Start with | Why |
-|---|---|---|
-| A symbol name | `cortex_code_context(name)` | Exact graph lookup — no ranking to get wrong — and it answers callers, callees and imports in one call |
-| Only the behaviour | `cortex_code_search(query, limit: 10)` | Ranked hybrid search over the index. One call, then read the list |
-| An exact literal (env var, config key, error string) | `rg` / `grep` | Not a ranking problem. Lexical search alone ranks *worse* than vector on questions, but it is right for a string that either appears or does not |
-| A relationship across files | `cortex_cypher` | One graph query instead of N searches |
-
-**Search once, then read the whole set.** Measured on the cortex-hub index (n=15): the target
-file is in the top 10 for 15/15 queries, top 3 for 11/15, rank 1 for only 8/15. So scan all ten
-hits before choosing, and do not re-run a reworded version of the same query — recall@10 is
-already 1.000, so it returns the same set. Ask a different question or switch tool instead.
-
-`cortex_code_impact` before editing something exported or shared — not as a ritual on every file.
-
-**Across repos:** omit `repo:` to search every repo in the organization of this project —
-related repos (the client, server and tools of one product) belong to one, and a cross-repo
-search never leaves it. `cortex_list_repos()` shows exactly which repos that covers. Running sessions in two
-organizations with one API key at once? Pass `org:` — the `project.orgId` returned by `cortex_session_start`.
-
-**Knowledge and memory are for errors and decisions, not for locating code.** Recall them once
-at session start, then whenever something breaks.
-
-### Before editing shared files
-
-Call `cortex_changes` to check if another agent modified the same files.
-
-### When encountering an error or bug
-
-1. **FIRST** search `cortex_knowledge_search` — someone may have solved this already
-2. **THEN** `cortex_memory_search` — you may have seen this before
-3. Fix the error
-4. Non-obvious fixes: **YOU MUST** call `cortex_knowledge_store` to record the solution
-
-### After pushing code
-
-Call `cortex_code_reindex` to update code intelligence:
-```
-repo: "__GIT_REPO__"
-branch: "<current branch>"
-```
-
-### Quality gates (enforced — commit blocked without these)
-
-Every session must end with verification commands from `.cortex/project-profile.json`.
-Call `cortex_quality_report` with results. Call `cortex_session_end` to close the session.
-**Commits are BLOCKED by hooks until quality gates pass.**
-
-### Compliance Enforcement (Automated)
-
-Your tool usage is **automatically tracked and scored**:
-
-1. **Session Compliance Score** — `cortex_session_end` returns a grade (A/B/C/D) based on 5-category tool coverage.
-2. **MCP Response Hints** — Every tool response includes adaptive hints about what to use next.
+- A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`: scan the
+  whole list, the target is not always first. An exact literal → `rg`; in the organization's other repos → `cortex_code_grep`.
+- Read just the lines a hit names (Read with offset/limit), not the whole file.
+- `cortex_code_impact` before changing something exported or shared.
+- Something breaks → `cortex_knowledge_search` and `cortex_memory_search` with the error first;
+  store a non-obvious fix with `cortex_knowledge_store`.
+- Before committing: the verify commands from `.cortex/project-profile.json`, after the last edit
+  (a later write closes the commit gate again), then `cortex_detect_changes(diff: "<git diff --staged>")`.
+  After a push: `cortex_code_reindex(repo: "__GIT_REPO__", branch: "<branch>")`.
 '@
 $claudeMdBody = $claudeMdBody -replace "__GIT_REPO__", $GitRepo
 $claudeMdContent = "$cortexMarker`n$claudeMdBody`n$cortexMarker"

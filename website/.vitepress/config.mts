@@ -58,6 +58,7 @@ function sidebar(p: string, t: Record<string, string>): DefaultTheme.SidebarItem
         { text: t.stack, link: `${p}/architecture/tech-stack` },
         { text: t.adr, link: `${p}/architecture/decisions` },
         { text: t.bench, link: `${p}/architecture/benchmarks` },
+        { text: t.benchPage, link: '/conductor/benchmark.html', target: '_self' },
       ],
     },
   ]
@@ -90,6 +91,7 @@ const en = {
   hooks: 'Hooks', tools: 'MCP tools', config: 'Environment and config', mods: 'Mods: cortex-bar',
   dashboard: 'Dashboard', scripts: 'Scripts', architecture: 'Architecture',
   archOverview: 'Overview', stack: 'Tech stack', adr: 'Decisions (ADRs)', bench: 'Benchmarks',
+  benchPage: 'Benchmark report (charts)',
   navGuide: 'Guide', releases: 'Changelog and releases',
 }
 
@@ -103,6 +105,7 @@ const vi = {
   hooks: 'Hook', tools: 'Công cụ MCP', config: 'Biến môi trường và cấu hình', mods: 'Mod: cortex-bar',
   dashboard: 'Dashboard', scripts: 'Script', architecture: 'Kiến trúc',
   archOverview: 'Tổng quan', stack: 'Công nghệ', adr: 'Quyết định (ADR)', bench: 'Benchmark',
+  benchPage: 'Báo cáo benchmark (biểu đồ)',
   navGuide: 'Hướng dẫn', releases: 'Nhật ký thay đổi',
 }
 

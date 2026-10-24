@@ -2,7 +2,8 @@
 
 Các benchmark nằm trong `benchmarks/` dưới dạng một package riêng, `@cortex/benchmarks`. Số liệu ở
 đây được lấy từ [README](https://github.com/lktiep/cortex-hub/blob/master/benchmarks/README.md) của
-nó, nơi có phương pháp, các cờ và log đầy đủ.
+nó, nơi có phương pháp, các cờ và log đầy đủ. Cùng kết quả đó, kèm biểu đồ, có ở
+[trang báo cáo benchmark](/conductor/benchmark.html){target="_self"}.
 
 ## Tìm kiếm code: vector, BM25 và lai
 

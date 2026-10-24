@@ -69,6 +69,12 @@ case "$TOOL_NAME" in
     # A new hub session is open, so an earlier one's "ended" no longer applies — left in
     # place it made the exit hook skip this session too.
     rm -f "$STATE_DIR/session-ended"
+    # Started with the task, the answer carries the recall and the code lookup. The hub prints
+    # each line only when that part answered, at the start of a line, never after \".
+    if printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)recalled: knowledge\+memory for '; then
+      record knowledge-recalled; record memory-recalled
+    fi
+    printf '%s' "$OUTPUT" | grep -Eq '([^\\]"|\\n)located: code for ' && record discovery-used
     ;;
   *cortex_session_end*)
     record session-ended

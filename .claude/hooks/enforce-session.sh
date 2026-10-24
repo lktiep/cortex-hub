@@ -1,5 +1,5 @@
 #!/bin/bash
-# Cortex Session Enforcement (v6.2) — hold tools back until the cortex workflow is followed.
+# Cortex Session Enforcement (v6.3) — hold tools back until the cortex workflow is followed.
 #
 # What this can and cannot do: the hook shares a filesystem with the agent it gates, so
 # it cannot stop an agent that decides to forge a marker. What it can do is make the
@@ -114,7 +114,7 @@ if [ -f "$STATE_DIR/session-started" ]; then
       exit 0
     fi
     if ! marker_ok knowledge-recalled || ! marker_ok memory-recalled; then
-      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing — they restore what previous sessions already decided and already fixed. Run /cs to do every step at once. $HOW_OUT" >&2
+      echo "BLOCKED: run cortex_knowledge_search and cortex_memory_search before editing, with the words of the task in hand (the feature, the error) — they restore what previous sessions already decided and already fixed. Or pass the task to cortex_session_start (task: \"<the task in a few words>\"): its answer is that recall. $HOW_OUT" >&2
       exit 2
     fi
   fi
@@ -124,28 +124,38 @@ fi
 # ── Session NOT started: block writes and codebase search, allow plain reads ──
 # Until v7.1 of session-init this branch never ran: the init hook created the session-started
 # marker itself, so every session looked started before cortex_session_start was ever called.
+#
+# Searching is reading, and what this gate wants before it is a cortex lookup, not a session.
+# Until v6.3 a search stayed blocked here after cortex_code_search had run, under a message
+# saying that very call unlocks it: an agent asked a quick question looked the code up, was
+# refused grep twice, and read whole files instead — 25k characters where one grep would do.
+SEARCH_HINT="BLOCKED: look it up with cortex_code_search (a behaviour) or cortex_code_context (a symbol name) first. One call unlocks find/grep/rg and Grep/Glob for the rest of the session. $HOW_OUT"
 case "$TOOL_NAME" in
   Edit|Write|NotebookEdit)
-    echo "BLOCKED: call cortex_session_start first (or run /cs). No edits without a session." >&2
+    echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No edits without a session." >&2
     exit 2 ;;
   Grep|Glob)
-    echo "BLOCKED: run /cs first (cortex_session_start + knowledge/memory recall), then search with cortex_code_search. $HOW_OUT" >&2
+    marker_ok discovery-used && exit 0
+    echo "$SEARCH_HINT" >&2
     exit 2 ;;
   Bash)
-    if is_codebase_search "$COMMAND"; then
-      echo "BLOCKED: run /cs first, then search with cortex_code_search. find/grep/rg unlock once a cortex discovery tool has run. $HOW_OUT" >&2
+    if is_codebase_search "$COMMAND" && ! marker_ok discovery-used; then
+      echo "$SEARCH_HINT" >&2
       exit 2
     fi
     # The write check goes before the read allowlist, or `cat > file` passes as a read.
     if is_file_write "$COMMAND" && ! is_gate_off_write "$COMMAND"; then
-      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+      echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No file modifications without a session." >&2
       exit 2
     fi
-    [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|show)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0
-    [[ "$COMMAND" =~ (git\ (add|commit|push|reset)|rm\ |mv\ |cp\ |mkdir\ |touch\ |chmod\ ) ]] && {
-      echo "BLOCKED: call cortex_session_start first (or run /cs). No file modifications without a session." >&2
+    # Where a command starts, and before the read allowlist: unanchored, `cp ` matched the end of
+    # `hub-mcp ` and refused a read-only grep over that directory, while `ls; rm x` passed as a read.
+    MODIFIES='(^|[;&|(])[[:space:]]*(git[[:space:]]+(add|commit|push|reset)|rm|mv|cp|mkdir|touch|chmod)[[:space:]]'
+    [[ "$COMMAND" =~ $MODIFIES ]] && {
+      echo "BLOCKED: call cortex_session_start first, with the task (task: \"<the task in a few words>\"). No file modifications without a session." >&2
       exit 2
     }
+    [[ "$COMMAND" =~ ^(ls|cat|head|tail|pwd|which|echo|git\ (status|log|diff|branch|remote|show)|pnpm\ |npm\ |yarn\ |cargo\ |go\ |python|curl|dotnet\ |node\ ) ]] && exit 0
     exit 0 ;;
 esac
 exit 0

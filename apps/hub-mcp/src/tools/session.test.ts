@@ -27,7 +27,7 @@ function register(endStatus = 200, startReply?: Record<string, unknown>): Record
   }) as unknown as typeof fetch
 
   const tools: Record<string, Handler> = {}
-  const server = { tool: (name: string, _d: string, _s: unknown, handler: Handler) => { tools[name] = handler } }
+  const server = { tool: (name: string, _d: string, _s: unknown, handler: Handler) => { tools[name] = handler; return { update: () => {} } } }
   registerSessionTools(server as unknown as McpServer, { DASHBOARD_API_URL: 'http://api' } as Env)
   return tools
 }
@@ -104,6 +104,21 @@ describe('cortex_session_start', () => {
     const out = JSON.parse((await handler({ repo: 'r' })).content[0]!.text) as Record<string, unknown>
     expect(out.hub_error).toBe('The hub refused the session (HTTP 403): Cortex Hub is disabled for this project.')
     expect(out).not.toHaveProperty('project')
+  })
+
+  it('leaves out the instruction files the agent already has, and each document past its first chunk', async () => {
+    const handler = tool('cortex_session_start')
+    const hit = (documentId: string, title: string) => ({ documentId, title, content: `${title} body` })
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) =>
+      new Response(JSON.stringify(String(input).endsWith('/api/knowledge/search')
+        ? { results: [hit('d1', '[CLAUDE.md] Instructions'), hit('d2', '[apps/web/AGENTS.md] Web'), hit('d3', 'Session summary'), hit('d3', 'Session summary'), hit('d4', 'Auth decision')] }
+        : { sessionId: 'sess-1' }), { status: 200 })) as unknown as typeof fetch
+    const res = await handler({ repo: 'https://github.com/acme/app.git' })
+    const out = JSON.parse(res.content[0]!.text) as { mission_brief: string; relevant_knowledge: Array<{ id: string }> }
+    expect(out.mission_brief).toContain('Session summary')
+    expect(out.relevant_knowledge.map((k) => k.id)).toEqual(['d3', 'd4'])
+    // One line: the indentation was a sixth of the reply
+    expect(res.content[0]!.text).not.toContain('\n  ')
   })
 
   it('says so when the hub does not answer', async () => {

@@ -102,6 +102,25 @@ EOF')")"
 check "gate-off write allowed, no session"  0 "$(run enforce-session.sh "$(bash_payload 'echo why > .cortex/.session-state/gate-off')")"
 teardown
 
+echo "enforce-session.sh — a lookup unlocks search before any session"
+# Searching is reading. A search used to stay blocked here after cortex_code_search had run,
+# under a message saying that call unlocks it, and the agent read whole files instead.
+setup; discovered
+check "Grep allowed after a lookup"         0 "$(run enforce-session.sh "$(tool_payload Grep)")"
+check "Glob allowed after a lookup"         0 "$(run enforce-session.sh "$(tool_payload Glob)")"
+check "rg allowed after a lookup"           0 "$(run enforce-session.sh "$(bash_payload 'rg foo apps/')")"
+check "Edit still needs a session"          2 "$(run enforce-session.sh "$(tool_payload Edit)")"
+check "so does cat > file"                  2 "$(run enforce-session.sh "$(bash_payload 'cat > f.ts << EOF
+x
+EOF')")"
+# `cp ` is the end of `hub-mcp `: matched anywhere, it refused this read as a file modification
+check "grep over hub-mcp is a read"         0 "$(run enforce-session.sh "$(bash_payload 'grep -rn foo apps/hub-mcp --include=*.ts --exclude-dir=node_modules')")"
+check "a write after ls is still a write"   2 "$(run enforce-session.sh "$(bash_payload 'ls; mv a b')")"
+check "and after cd &&"                     2 "$(run enforce-session.sh "$(bash_payload 'cd apps && rm x')")"
+: > "$STATE/discovery-used"
+check "an empty marker unlocks nothing"     2 "$(run enforce-session.sh "$(tool_payload Grep)")"
+teardown
+
 echo "enforce-session.sh — parses without jq"
 setup; touch "$STATE/session-started"
 NOJQ=$(mktemp -d)
@@ -187,22 +206,65 @@ printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/s
 check "startup clears discovery"           0 "$([ ! -f "$STATE/discovery-used" ] && echo 0 || echo 1)"
 teardown
 
-echo "session-init.sh — names the conversation for /cs"
+echo "session-id.sh — names the conversation in cortex_session_start"
 # Two conversations in one checkout send the hub the same key, machine, IDE and branch; the
-# conversation id is the only thing that tells their sessions apart, and only this hook has it.
+# conversation id is the only thing that tells their sessions apart, and only a hook has it.
+# It goes into the call, not the context: a line that differs per conversation that early kept
+# the prompt cache from reusing anything after it.
 setup
 mkdir -p "$STATE/conversations"
 printf 'sess_old\n' > "$STATE/conversations/gone"; touch -t 202001010000 "$STATE/conversations/gone"
 printf 'sess_b\n' > "$STATE/conversations/conv-b"
 OUT=$(printf '{"source":"startup","session_id":"conv-a"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" 2>&1)
-check "startup prints clientSessionId"      0 "$(printf '%s' "$OUT" | grep -q 'clientSessionId is conv-a' && echo 0 || echo 1)"
+check "startup output is the same for every conversation" 1 "$(printf '%s' "$OUT" | grep -q 'conv-a' && echo 0 || echo 1)"
 check "another conversation's record stays" sess_b "$(cat "$STATE/conversations/conv-b" 2>/dev/null)"
 check "a week-old record is dropped"        0 "$([ ! -f "$STATE/conversations/gone" ] && echo 0 || echo 1)"
 OUT=$(printf '{"source":"compact","session_id":"conv-a"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" 2>&1)
-check "and again after compaction"          0 "$(printf '%s' "$OUT" | grep -q 'clientSessionId is conv-a' && echo 0 || echo 1)"
-OUT=$(printf '{"source":"startup","session_id":"../../x y"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" 2>&1)
-check "only file-name-safe characters"      0 "$(printf '%s' "$OUT" | grep -q 'clientSessionId is xy ' && echo 0 || echo 1)"
-check "exits 0 with no id at all"           0 "$(printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-init.sh" >/dev/null 2>&1; echo $?)"
+check "and so is the output after compaction" 1 "$(printf '%s' "$OUT" | grep -q 'conv-a' && echo 0 || echo 1)"
+sid() { printf '%s' "$1" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-id.sh" 2>/dev/null; }
+OUT=$(sid '{"session_id":"conv-a","tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{"repo":"r","mode":"development"}}')
+check "adds the id to the call"             conv-a "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
+check "keeps the agent's other arguments"   r "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.repo')"
+OUT=$(sid '{"session_id":"conv-a","tool_input":{"repo":"r","clientSessionId":"stale"}}')
+check "replaces an id the agent made up"    conv-a "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
+OUT=$(sid '{"session_id":"../../x y","tool_input":{}}')
+check "only file-name-safe characters"      xy "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
+check "leaves the call alone with no id"    "" "$(sid '{"tool_input":{"repo":"r"}}')"
+check "exits 0 on empty input"              0 "$(printf '' | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-id.sh" >/dev/null 2>&1; echo $?)"
+# The identity and the branch used to cost the agent two turns of reading before its first call
+git -C "$SANDBOX" init -q -b feat/x
+printf '{"environment":{"os":"macOS","hostname":"box1"},"role":"","capabilities":["node"]}' > "$SANDBOX/.cortex/agent-identity.json"
+OUT=$(sid '{"session_id":"conv-a","tool_input":{"repo":"r","os":"linux"}}')
+check "fills in the identity file's fields" box1/node "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput | "\(.hostname)/\(.capabilities[0])"')"
+check "and the branch"                      feat/x "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.branch')"
+check "what the agent passed wins"          linux "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.os')"
+check "an empty role is left out"           false "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput | has("role")')"
+# A value of the wrong type fails the tool's schema, and with it the session start
+printf '{"environment":"x","role":5,"capabilities":"node"}' > "$SANDBOX/.cortex/agent-identity.json"
+OUT=$(sid '{"session_id":"conv-a","tool_input":{"repo":"r"}}')
+check "a malformed identity adds nothing"   'branch,clientSessionId,ide,repo' "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput | keys | join(",")')"
+printf 'not json' > "$SANDBOX/.cortex/agent-identity.json"
+check "nor does a broken file"              conv-a "$(sid '{"session_id":"conv-a","tool_input":{}}' | jq -r '.hookSpecificOutput.updatedInput.clientSessionId')"
+# A search that names no repo is about this checkout: without it the hub searched every repo of
+# the organization, and the one being worked on only as one of many.
+git -C "$SANDBOX" remote add origin https://u:tok@example.com/acme/game-client.git
+CS='"tool_name":"mcp__cortex-hub__cortex_code_search"'
+OUT=$(sid "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"login\"}}")
+check "a search with no repo gets this checkout's" https://example.com/acme/game-client.git "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.here')"
+check "and keeps its query"                 login "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.query')"
+check "and gets no session fields"          'here,query' "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput | keys | join(",")')"
+check "a named repo is left alone"          "" "$(sid "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"q\",\"repo\":\"*\"}}")"
+check "so is a named organization"          "" "$(sid "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"q\",\"org\":\"o\"}}")"
+NOJQ=$(mktemp -d)
+for b in bash cat git sed printf python3 pwd; do
+  [ -x "$(command -v $b 2>/dev/null)" ] && ln -sf "$(command -v $b)" "$NOJQ/$b"
+done
+OUT=$(printf '%s' "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"login\"}}" \
+  | PATH="$NOJQ" CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/session-id.sh" 2>/dev/null)
+rm -rf "$NOJQ"
+check "without jq too"                      https://example.com/acme/game-client.git "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.updatedInput.here')"
+git -C "$SANDBOX" remote remove origin
+check "no remote, nothing to add"           "" "$(sid "{\"session_id\":\"conv-a\",$CS,\"tool_input\":{\"query\":\"q\"}}")"
 teardown
 
 echo "session-init.sh — the session gate must not arm itself"
@@ -236,6 +298,23 @@ check "memory_search records the recall"   0 "$(grep -q '^tool=' "$STATE/memory-
 # Recall must not open the discovery gate, or /cs alone unlocks Grep and Glob and the agent
 # never has to ask cortex where the code is.
 check "memory_search is not discovery"     0 "$([ ! -f "$STATE/discovery-used" ] && echo 0 || echo 1)"
+teardown
+
+echo "track-quality.sh — a session started with the task carries its recall and lookup"
+setup
+POST='{"tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{"task":"rotate a key"},"tool_response":[{"type":"text","text":"{\"session_id\":\"sess_9\"}"},{"type":"text","text":"recalled: knowledge+memory for \"rotate a key\"\nKnowledge: nothing stored for this yet.\n\nlocated: code for \"rotate a key\"\n1. src/keys.ts — L1-9 70%"}]}'
+printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "the start's recall counts as knowledge" 0 "$(grep -q '^tool=' "$STATE/knowledge-recalled" 2>/dev/null && echo 0 || echo 1)"
+check "and as memory"                      0 "$(grep -q '^tool=' "$STATE/memory-recalled" 2>/dev/null && echo 0 || echo 1)"
+check "its located files count as discovery" 0 "$(grep -q '^tool=' "$STATE/discovery-used" 2>/dev/null && echo 0 || echo 1)"
+teardown
+
+setup
+# The hub prints a line only for the part that answered; the task's words are not one.
+POST='{"tool_name":"mcp__cortex-hub__cortex_session_start","tool_input":{"task":"recalled: knowledge+memory for x"},"tool_response":[{"type":"text","text":"{\"session_id\":\"sess_9\",\"task\":\"located: code for x\"}"}]}'
+printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$HOOKS_DIR/track-quality.sh" >/dev/null 2>&1
+check "no recall line, no recall"          0 "$([ ! -f "$STATE/knowledge-recalled" ] && [ ! -f "$STATE/memory-recalled" ] && echo 0 || echo 1)"
+check "no located line, no discovery"      0 "$([ ! -f "$STATE/discovery-used" ] && echo 0 || echo 1)"
 teardown
 
 echo "track-quality.sh — session id comes from tool_response"
@@ -299,6 +378,10 @@ class Hub(http.server.BaseHTTPRequestHandler):
                 'src/auth.ts': [{'id': 'k1', 'title': 'Risk: refresh races', 'kind': 'risk', 'note': 'Take the lock first', 'at': '2026-10-20T00:00:00Z'}],
                 'src/lib/': [{'id': 'k2', 'title': 'Lib is shared', 'kind': 'lesson', 'note': 'Both apps import it', 'at': '2026-10-19T00:00:00Z'}],
             }})
+        if mode in ('start', 'start-down'):
+            head = {'session_id': 'sess_7', 'status': 'active'} if mode == 'start' else {'session_id': 'sess_local', 'hub_error': 'down'}
+            result['content'] = [{'type': 'text', 'text': json.dumps(head)}, {'type': 'text', 'text':
+                'recalled: knowledge+memory for "t" — nothing stored is close to it.\n\nlocated: code for "t"\n1. src/auth.ts — L1-9'}]
         if mode == 'error':
             result['isError'] = True
         out = json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': result}).encode()
@@ -554,6 +637,11 @@ setup
 check "write_file denied without session"  deny "$(gdecision enforce-session.sh "$(gpayload write_file)")"
 check "glob denied without session"        deny "$(gdecision enforce-session.sh "$(gpayload glob)")"
 check "ls allowed without session"         allow "$(gdecision enforce-session.sh "$(gpayload run_shell_command 'ls -la')")"
+check "rg denied without a lookup"         deny "$(gdecision enforce-session.sh "$(gpayload run_shell_command 'rg foo apps/')")"
+discovered
+check "glob allowed after a lookup"        allow "$(gdecision enforce-session.sh "$(gpayload glob)")"
+check "rg allowed after a lookup"          allow "$(gdecision enforce-session.sh "$(gpayload run_shell_command 'rg foo apps/')")"
+check "write_file still needs a session"   deny "$(gdecision enforce-session.sh "$(gpayload write_file)")"
 teardown
 
 echo "gemini enforce-commit.sh — a report is not a passing build"
@@ -668,6 +756,13 @@ setup
 POST='{"session_id":"g-uuid","tool_name":"mcp_cortex-hub_cortex_session_start","tool_input":{},"tool_response":{"llmContent":"{\"session_id\":\"sess_77\"}"}}'
 printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
 check "tracker takes the hub id"            sess_77 "$(cat "$STATE/session-id" 2>/dev/null)"
+check "no task, no recall"                  0 "$([ ! -f "$STATE/knowledge-recalled" ] && echo 0 || echo 1)"
+teardown
+setup
+POST='{"session_id":"g-uuid","tool_name":"mcp_cortex-hub_cortex_session_start","tool_input":{"task":"x"},"tool_response":{"llmContent":"{\"session_id\":\"sess_77\"}\nrecalled: knowledge+memory for \"x\"\nlocated: code for \"x\""}}'
+printf '%s' "$POST" | CLAUDE_PROJECT_DIR="$SANDBOX" bash "$GHOOKS/track-quality.sh" >/dev/null 2>&1
+check "a start with the task is the recall" 0 "$(grep -q '^tool=' "$STATE/knowledge-recalled" && grep -q '^tool=' "$STATE/memory-recalled" && echo 0 || echo 1)"
+check "and the discovery"                   0 "$(grep -q '^tool=' "$STATE/discovery-used" 2>/dev/null && echo 0 || echo 1)"
 teardown
 start_stub ok
 armed .gemini/antigravity/mcp_config.json "{\"mcpServers\":{\"cortex-hub\":{\"serverUrl\":\"$STUB_URL/mcp\",\"headers\":{\"Authorization\":\"Bearer gem-key\"}}}}"
@@ -902,6 +997,36 @@ check "lefthook owns .git/hooks/pre-commit" 0 "$(grep -qi lefthook "$PROJ/.git/h
 check "and the gate is reported live"       0 "$(grep -q 'pre-commit gate live' "$OUT" && echo 0 || echo 1)"
 rm -rf "$PROJ"
 
+echo "  a repo's own .claude/settings.json is merged into, not replaced"
+# Onboarding a repo that commits its own settings (permissions, a plugin, a hook of its own)
+# replaced the file and everything in it; the user-level clean-up dropped every user hook.
+# HOME is apart from the repo here: install_in_sandbox's HOME=$PROJ makes the two one file.
+PROJ=$(mktemp -d); mkdir -p "$PROJ/repo/.claude" "$PROJ/home/.claude"
+printf '{\n\t"permissions": {"allow": ["Bash(ls:*)"]},\n\t"hooks": {"PostToolUse": [{"matcher": "Skill", "hooks": [{"type": "command", "command": "node track.mjs"}]}]},\n\t"enabledPlugins": {"x@x": true}\n}\n' > "$PROJ/repo/.claude/settings.json"
+printf '{"model": "m", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}], "PostToolUse": [{"matcher": "", "hooks": [{"type": "command", "command": "bash .claude/hooks/track-quality.sh"}]}]}}\n' > "$PROJ/home/.claude/settings.json"
+install_claude() { (cd "$PROJ/repo" && git init -q . && HOME="$PROJ/home" bash "$INSTALL_SH" --skip-global --tools claude "$@") > "$PROJ/out" 2>&1; }
+in_json() { python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(eval(sys.argv[2]))' "$1" "$2" 2>/dev/null; }
+S="$PROJ/repo/.claude/settings.json"; U="$PROJ/home/.claude/settings.json"
+install_claude; RC=$?
+check "installer exits clean"               0 "$RC"
+check "and says it merged"                  0 "$(grep -q 'merged into the existing .claude/settings.json' "$PROJ/out" && echo 0 || echo 1)"
+check "permissions kept"                    "Bash(ls:*)" "$(in_json "$S" 'd["permissions"]["allow"][0]')"
+check "plugin kept"                         True "$(in_json "$S" 'd["enabledPlugins"]["x@x"]')"
+check "the repo's hook kept, first"         "node track.mjs" "$(in_json "$S" 'd["hooks"]["PostToolUse"][0]["hooks"][0]["command"]')"
+check "ours after it"                       True "$(in_json "$S" '"track-quality.sh" in d["hooks"]["PostToolUse"][1]["hooks"][0]["command"]')"
+check "our other events added"              True "$(in_json "$S" 'all(e in d["hooks"] for e in ("SessionStart", "PreToolUse", "SessionEnd"))')"
+check "its tab indent kept"                 0 "$(grep -q "$(printf '^\t"permissions"')" "$S" && echo 0 || echo 1)"
+install_claude --force
+check "a reinstall does not duplicate ours" 1 "$(in_json "$S" 'sum("track-quality.sh" in json.dumps(e) for e in d["hooks"]["PostToolUse"])')"
+check "nor drop the repo's"                 "node track.mjs" "$(in_json "$S" 'd["hooks"]["PostToolUse"][0]["hooks"][0]["command"]')"
+check "user level: own hook kept"           "say done" "$(in_json "$U" 'd["hooks"]["Stop"][0]["hooks"][0]["command"]')"
+check "user level: stale cortex hook gone"  False "$(in_json "$U" '"PostToolUse" in d["hooks"]')"
+check "user level: other settings kept"     m "$(in_json "$U" 'd["model"]')"
+printf '{ not json' > "$S"; install_claude --force
+check "unreadable settings: still installs" True "$(in_json "$S" '"PreToolUse" in d["hooks"]')"
+check "and keeps the old file aside"        "{ not json" "$(cat "$S.bak" 2>/dev/null)"
+rm -rf "$PROJ"
+
 echo "  this repo must not re-introduce a hooksPath that shadows lefthook"
 # husky was a devDependency whose only effect was `prepare: husky` setting core.hooksPath.
 check "no husky in package.json"            0 "$(grep -q '"husky"' "$REPO/package.json" && echo 1 || echo 0)"
@@ -951,6 +1076,11 @@ rm -rf "$SB"
 # The installer writes settings.json from its own heredoc, so the two must not drift.
 INSTALLED=$(awk "/cat > .claude\/settings.json << 'EOF'/{f=1;next} f&&/^EOF\$/{exit} f" "$REPO/scripts/install.sh")
 check "install.sh writes the same settings.json" 0 "$([ "$INSTALLED" = "$(cat "$REPO/.claude/settings.json")" ] && echo 0 || echo 1)"
+# The gate's Grep and Glob branches never ran: the hook was not registered for those tools
+GATED=$(python3 -c 'import json,sys
+for m in json.load(open(sys.argv[1]))["hooks"]["PreToolUse"]:
+    if any("enforce-session" in h["command"] for h in m["hooks"]): print(m["matcher"])' "$REPO/.claude/settings.json")
+check "the gate sees Grep and Glob"         0 "$(printf '%s' "$GATED" | grep -Eq '(^|\|)Grep(\||$)' && printf '%s' "$GATED" | grep -Eq '(^|\|)Glob(\||$)' && echo 0 || echo 1)"
 
 echo "nudge-lookup.sh — a reminder for a grep cortex could answer, never a block"
 # Prints "nudge", "quiet" or "exit N": the hook must exit 0 whatever it reads.
@@ -1037,6 +1167,65 @@ if command -v node >/dev/null 2>&1; then
   rm -f "$STATE/gate-off"
   check "unreadable input exits 0"                quiet "$(recall 'not json')"
   teardown
+else
+  echo "  skip (no node: the hook does nothing without it)"
+fi
+
+echo
+echo "prompt-start.sh — the session opened from the user's prompt"
+# Prints the context it added, first line only, or "quiet" / "exit N".
+pstart() {  # $1 = payload, $2.. = env
+  local out rc
+  out=$(printf '%s' "$1" | env -u CORTEX_MCP_URL -u HUB_MCP_URL -u HUB_API_KEY -u CORTEX_PROMPT_START HOME="$SANDBOX/home" \
+    CLAUDE_PROJECT_DIR="$SANDBOX" CORTEX_MCP_URL="$STUB_URL/mcp" HUB_API_KEY=k-sekrit "${@:2}" \
+    bash "$HOOKS_DIR/prompt-start.sh" 2>/dev/null); rc=$?
+  if [ "$rc" != 0 ]; then echo "exit $rc"; return; fi
+  [ -z "$out" ] && { echo quiet; return; }
+  printf '%s' "$out" | python3 -c 'import json,sys;print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"].splitlines()[0])'
+}
+prompt() { python3 -c 'import json,sys;print(json.dumps({"session_id":"s1","hook_event_name":"UserPromptSubmit","prompt":sys.argv[1]}))' "$1"; }
+marker() { head -1 "$STATE/$1" 2>/dev/null | cut -d' ' -f1; }
+if command -v node >/dev/null 2>&1; then
+  setup; mkdir -p "$SANDBOX/home"; git -C "$SANDBOX" init -q; git -C "$SANDBOX" remote add origin https://bot:pw@example.com/o/r.git
+  start_stub start
+  check "a prompt opens the session"              "Cortex session sess_7 is open for this prompt: cortex_session_start already ran with it as the task, so do not call it again." \
+    "$(pstart "$(prompt 'Fix the login refresh race; token=abc123xyz is the one I use')")"
+  check "asking cortex_session_start"             "cortex_session_start" "$(got 'r["body"]["params"]["name"]')"
+  check "with the hub's bearer key"               "Bearer k-sekrit"      "$(got 'r["auth"]')"
+  check "the prompt as the task, key removed"     "Fix the login refresh race; token=<redacted> is the one I use" "$(got 'r["body"]["params"]["arguments"]["task"]')"
+  check "for this conversation"                   s1                     "$(got 'r["body"]["params"]["arguments"]["clientSessionId"]')"
+  check "on the repo, without its credentials"    "https://example.com/o/r.git" "$(got 'r["body"]["params"]["arguments"]["repo"]')"
+  check "session-started is evidence"             tool=prompt-start      "$(marker session-started)"
+  check "the recall line arms knowledge"         tool=prompt-start      "$(marker knowledge-recalled)"
+  check "and memory"                              tool=prompt-start      "$(marker memory-recalled)"
+  check "the lookup line arms discovery"          tool=prompt-start      "$(marker discovery-used)"
+  check "filed under the conversation"            sess_7                 "$(cat "$STATE/conversations/s1" 2>/dev/null)"
+  check "so an edit goes through"                 0 "$(run enforce-session.sh '{"tool_name":"Edit","tool_input":{"file_path":"src/a.ts"}}')"
+  check "a short reply sends nothing"             quiet "$(pstart "$(prompt 'ok go on')")"
+  check "nor does a slash command"                quiet "$(pstart "$(prompt '/ce wrap up the session now')")"
+  check "the hub was asked once"                  1 "$(requests)"
+  long=$(python3 -c 'print("refactor the importer " * 40)')
+  pstart "$(prompt "$long")" >/dev/null
+  check "at most 300 characters go"               300 "$(got_at 'len(r["body"]["params"]["arguments"]["task"])' 2)"
+  check "CORTEX_PROMPT_START=off silences it"     quiet "$(pstart "$(prompt 'Fix the login refresh race')" CORTEX_PROMPT_START=off)"
+  printf 'hub down\n' > "$STATE/gate-off"
+  check "gate-off silences it"                    quiet "$(pstart "$(prompt 'Fix the login refresh race')")"
+  rm -f "$STATE/gate-off"
+  check "unreadable input exits 0"                quiet "$(pstart 'not json')"
+  stop_stub; teardown
+
+  setup; mkdir -p "$SANDBOX/home"; git -C "$SANDBOX" init -q; git -C "$SANDBOX" remote add origin https://example.com/o/r.git
+  start_stub start-down
+  check "a hub that could not record it is quiet" quiet "$(pstart "$(prompt 'Fix the login refresh race')")"
+  check "and opens no gate"                       "" "$(marker session-started)"
+  stop_stub; start_stub 500
+  check "a hub error is quiet"                    quiet "$(pstart "$(prompt 'Fix the login refresh race')")"
+  stop_stub; teardown
+
+  setup; mkdir -p "$SANDBOX/home"; start_stub start
+  check "a checkout with no remote is quiet"      quiet "$(pstart "$(prompt 'Fix the login refresh race')")"
+  check "and sends nothing"                       0 "$(requests)"
+  stop_stub; teardown
 else
   echo "  skip (no node: the hook does nothing without it)"
 fi

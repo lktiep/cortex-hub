@@ -58,6 +58,11 @@ if (-not [string]::IsNullOrWhiteSpace($InputData)) {
                     }
                 }
             } catch {}
+            # Started with the task, the answer holds the code lookup too: no separate search to run.
+            $Answer = ($json.tool_response, $json.tool_output | Where-Object { $_ }) | ConvertTo-Json -Depth 8 -Compress
+            if ($Answer -match '([^\\]"|\\n)located: code for ') {
+                New-Item -ItemType File -Path (Join-Path $StateDir "discovery-used") -Force | Out-Null
+            }
         }
         if ($ToolName -match "cortex_session_end")    { New-Item -ItemType File -Path (Join-Path $StateDir "session-ended") -Force | Out-Null }
         if ($ToolName -match "cortex_quality_report") { New-Item -ItemType File -Path (Join-Path $StateDir "quality-gates-passed") -Force | Out-Null }

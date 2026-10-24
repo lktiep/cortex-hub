@@ -17,6 +17,7 @@ import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.j
 import { createEmbedder } from '../lib/embedder-factory.js'
 import { MEMORY_COLLECTION, memoryQdrantUrl } from '../lib/memory-collection.js'
 import { llmEnabledFor } from '../lib/llm-mode.js'
+import { projectOfActiveSession } from '../lib/session-project.js'
 
 export const mem9ProxyRouter = new Hono()
 
@@ -101,6 +102,22 @@ function getEmbedder(): Embedder {
 }
 
 /**
+ * The scope a memory is written to and read from. hub-mcp falls back to the agent's id, or
+ * "default", when the caller names no project: one bucket every organization shared, so a recall
+ * in one project read what agents had stored for another. A caller with a session has declared
+ * its project; an unscoped store or search goes there.
+ */
+export function memoryScope(userId: string, apiKeyOwner: string | undefined): { userId: string; projectId?: string } {
+  const normalized = normalizeMemoryUserId(userId)
+  if (normalized.startsWith('project-')) return { userId: normalized }
+  const project = projectOfActiveSession(apiKeyOwner)
+  return project ? { userId: `project-${project.id}`, projectId: project.id } : { userId: normalized }
+}
+
+/** How long a store waits for the memory to be written before it answers. */
+export const STORE_WAIT_MS = 3000
+
+/**
  * POST /store — Store a memory
  * Body: { messages, userId, agentId?, metadata? }
  */
@@ -113,25 +130,40 @@ mem9ProxyRouter.post('/store', async (c) => {
       return c.json({ error: 'messages and userId are required' }, 400)
     }
 
-    const normalizedUserId = normalizeMemoryUserId(userId)
+    const scope = memoryScope(userId, c.req.header('X-API-Key-Owner'))
+    const normalizedUserId = scope.userId
     const normalizedMetadata = { ...(metadata ?? {}) }
     if (normalizedMetadata.project_id) {
       normalizedMetadata.project_id = normalizeProjectId(normalizedMetadata.project_id)
+    } else if (scope.projectId) {
+      normalizedMetadata.project_id = scope.projectId
     }
 
     const mem9 = getMem9()
-    const result = await mem9.add({
+    const adding = mem9.add({
       messages,
       userId: normalizedUserId,
       agentId: agentId ?? 'default',
       metadata: normalizedMetadata,
     })
+    // With an LLM, a store is two chat calls in a row, 16 s on average, and the agent waits
+    // on it with nothing to do: what it stored does not change what it does next. So the
+    // answer goes after STORE_WAIT_MS and the write finishes on its own. A failure that
+    // early is still the caller's to see.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const waited = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), STORE_WAIT_MS) })
+    const result = await Promise.race([adding, waited]).finally(() => clearTimeout(timer))
+    if (!result) {
+      adding.catch((error: unknown) => console.error('[mem9-proxy] background store error:', error))
+      return c.json({ success: true, pending: true, userId: normalizedUserId, events: [] }, 202)
+    }
 
     c.header('X-Cortex-Compute-Tokens', String(result.tokensUsed || 0))
     if (result.tokensUsed) c.header('X-Cortex-Compute-Model', resolveLlmModel())
 
     return c.json({
       success: true,
+      userId: normalizedUserId,
       events: result.events,
       tokensUsed: result.tokensUsed,
     })
@@ -154,7 +186,7 @@ mem9ProxyRouter.post('/search', async (c) => {
       return c.json({ error: 'query and userId are required' }, 400)
     }
 
-    const normalizedUserId = normalizeMemoryUserId(userId)
+    const normalizedUserId = memoryScope(userId, c.req.header('X-API-Key-Owner')).userId
     const mem9 = getMem9()
     const result = await mem9.search({
       query,

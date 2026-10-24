@@ -52,6 +52,32 @@ function refusal(c: Context, r: { status: 400 | 403 | 404 | 409; error: string; 
   return c.json(r.cycle === undefined ? { error: r.error } : { error: r.error, cycle: r.cycle }, r.status)
 }
 
+/**
+ * The `count` most recently active task trees, each whole: a top-level task (or one whose parent
+ * is gone) and everything below it. Paging plain rows cuts a big tree's root off, and its subtasks
+ * then show up as unrelated top-level tasks. Rows come root by root, parents before children, so a
+ * `limit` that cuts the last tree short never leaves a child without its parent.
+ */
+function listTrees(count: number, limit: number, projectId: string | undefined): TaskRow[] {
+  return db.prepare(`WITH RECURSIVE tree(id, root, depth) AS (
+      SELECT id, id, 0 FROM conductor_tasks
+      WHERE (parent_task_id IS NULL OR parent_task_id NOT IN (SELECT id FROM conductor_tasks))
+        AND (? IS NULL OR project_id = ?)
+      UNION ALL
+      SELECT t.id, tree.root, tree.depth + 1 FROM conductor_tasks t JOIN tree ON t.parent_task_id = tree.id
+      WHERE tree.depth < 64
+    ),
+    ranked AS (
+      SELECT tree.root, MAX(MAX(t.created_at, COALESCE(t.assigned_at, ''), COALESCE(t.accepted_at, ''),
+        COALESCE(t.completed_at, ''))) AS active
+      FROM tree JOIN conductor_tasks t ON t.id = tree.id
+      GROUP BY tree.root ORDER BY active DESC LIMIT ?
+    )
+    SELECT t.* FROM tree JOIN ranked r ON r.root = tree.root JOIN conductor_tasks t ON t.id = tree.id
+    ORDER BY r.active DESC, tree.root, tree.depth, t.created_at
+    LIMIT ?`).all(projectId ?? null, projectId ?? null, count, limit) as TaskRow[]
+}
+
 function isActiveStatus(status: string): boolean {
   return (ACTIVE_STATUSES as readonly string[]).includes(status)
 }
@@ -272,6 +298,16 @@ conductorRouter.get('/', (c) => {
     const assignedTo = c.req.query('assigned_to')
     const parentTaskId = c.req.query('parent_task_id')
     const projectId = c.req.query('projectId')
+
+    const rawTrees = c.req.query('trees')
+    if (rawTrees !== undefined) {
+      const n = Number(rawTrees)
+      if (!Number.isInteger(n) || n < 1) return c.json({ error: 'trees must be a positive integer' }, 400)
+      if (root || status || assignedTo || parentTaskId) {
+        return c.json({ error: 'trees only combines with projectId and limit' }, 400)
+      }
+      return c.json({ tasks: listTrees(Math.min(n, LIST_LIMIT_MAX), rawLimit === undefined ? LIST_LIMIT_MAX : limit, projectId) })
+    }
 
     let query = 'SELECT * FROM conductor_tasks'
     const conditions: string[] = []

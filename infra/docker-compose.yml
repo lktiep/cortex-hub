@@ -186,6 +186,8 @@ services:
       # analyze's heap and parse workers, kept within what eval-server leaves.
       GITNEXUS_ANALYZE_HEAP_MB: ${GITNEXUS_ANALYZE_HEAP_MB:-3072}
       GITNEXUS_ANALYZE_WORKERS: ${GITNEXUS_ANALYZE_WORKERS:-2}
+      # 1 analyses incrementally. Off: GitNexus 1.6.12 leaves kept symbols unreadable.
+      GITNEXUS_ANALYZE_INCREMENTAL: ${GITNEXUS_ANALYZE_INCREMENTAL:-0}
     deploy:
       resources:
         limits:

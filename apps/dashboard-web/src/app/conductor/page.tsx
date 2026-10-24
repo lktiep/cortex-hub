@@ -41,6 +41,7 @@ import {
 import { SkeletonCircle } from '@/components/ui/Skeleton'
 import { NumberTransition } from '@/components/ui/NumberTransition'
 import { agentsOnline } from '@/lib/conductor-plan/summary'
+import { pipelineTasks } from '@/lib/conductor-plan/pipelines'
 import { PlanView } from './plan/PlanView'
 import styles from './page.module.css'
 
@@ -382,7 +383,7 @@ function PipelineGrid({
 
 // ── Main Page ──
 export default function ConductorPage() {
-  const { data, error, isLoading, mutate } = useSWR('conductor-tasks', () => getConductorTasks({ limit: 200 }), {
+  const { data, error, isLoading, mutate } = useSWR('conductor-tasks', () => getConductorTasks({ trees: 50 }), {
     refreshInterval: 10000,
   })
   const { data: agentsData } = useSWR('conductor-agents', getConductorAgents, {
@@ -405,7 +406,7 @@ export default function ConductorPage() {
   const [agentsCollapsed, setAgentsCollapsed] = useState(false)
 
   const filteredTasks = useMemo(() => {
-    return statusFilter === 'all' ? allTasks : allTasks.filter((t) => t.status === statusFilter)
+    return statusFilter === 'all' ? allTasks : pipelineTasks(allTasks, (t) => t.status === statusFilter)
   }, [allTasks, statusFilter])
 
   const counts = useMemo(() => ({

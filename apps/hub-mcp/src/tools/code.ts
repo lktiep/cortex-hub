@@ -3,6 +3,13 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
+import {
+  formatCodeMatches, formatOtherRepos, OTHER_REPOS, FILES_PER_OTHER_REPO, type CodeMatch,
+  outlineFiles, fetchOutline, type OutlineSymbol,
+} from './code-matches.js'
+import { formatDiffImpact } from './diff-impact.js'
+import { formatGrep, type GrepData } from './code-grep.js'
+import { LOAD_UP_FRONT } from './load-up-front.js'
 
 /**
  * Register code intelligence tools.
@@ -15,9 +22,10 @@ import { apiCall } from '../api-call.js'
 // Projects are isolated per organization. Every code tool takes the same optional `org`,
 // and the hub falls back to the organization of the caller's active session, so the common
 // case — no repo, no org — searches this product's repos and stops at the org boundary.
-const ORG_DESC =
-  "Organization ID to scope this call to. Omit it and the hub infers the organization from " +
-  "your active session; a cross-repo search never leaves it."
+const ORG_DESC = "Organization ID. Omit it for your session's organization."
+/** Lines cortex_code_read returns when no end is given. */
+const READ_LINES = 200
+
 
 export function registerCodeTools(server: McpServer, env: Env) {
 
@@ -68,161 +76,183 @@ export function registerCodeTools(server: McpServer, env: Env) {
   }
 
   // ── code_search — query codebase concepts and workflows ──
+
+  /** The graph's flows for one repo, with a symbol lookup when it found no flow. */
+  async function searchRepo(query: string, project: string, org: string | undefined, branch: string | undefined, limit: number): Promise<string> {
+    const data = (await callIntel('search', { query, projectId: project, orgId: org, branch, limit })) as {
+      data?: { formatted?: string }
+    }
+    let formatted = data?.data?.formatted ?? ''
+
+    // ── Auto-fallback: when execution flows are empty, search symbols via cypher ──
+    const isEmpty = formatted && (
+      formatted.includes('No matching execution flows') ||
+      formatted.includes('No matching results found')
+    )
+
+    if (isEmpty) {
+      // Extract meaningful search terms from query (split on spaces, underscores, hyphens)
+      const searchTerms = query
+        .split(/[\s_\-]+/)
+        .filter(w => w.length > 2 && !/^(the|and|for|with|from|that|this|how|does|what|where|create|get|set|use)$/i.test(w))
+        .slice(0, 4)
+
+      // Search each symbol type separately (Kuzu doesn't support multi-label WHERE)
+      const allSymbols: Array<{ name: string; type: string }> = []
+      for (const symbolType of ['Function', 'Method', 'Class', 'Interface']) {
+        const conditions = searchTerms
+          .map(t => `lower(n.name) CONTAINS "${t.toLowerCase().replace(/"/g, '')}"`)
+          .join(' OR ')
+        if (!conditions) continue
+
+        try {
+          const cypherRes = await callIntel('cypher', {
+            query: `MATCH (n:${symbolType}) WHERE ${conditions} RETURN DISTINCT n.name AS name LIMIT 10`,
+            projectId: project,
+            orgId: org,
+          })
+          // Response shape: { success, data: { raw: "| name |\n| --- |\n| … |\n(N rows)\n---\n..." } },
+          // or from a hub before the table was unwrapped, raw opens with { "markdown", "row_count" }.
+          const wrapper = cypherRes as { data?: { raw?: string; formatted?: string; row_count?: number } }
+          let md = ''
+          let rows = 0
+
+          if (wrapper?.data?.raw) {
+            // Parse the JSON portion from raw (before "---" separator)
+            const jsonPart = wrapper.data.raw.split('\n---')[0] ?? ''
+            try {
+              const parsed = JSON.parse(jsonPart) as { markdown?: string; row_count?: number }
+              md = parsed.markdown ?? ''
+              rows = parsed.row_count ?? 0
+            } catch {
+              // raw might be plain text, try extracting table directly
+              md = wrapper.data.raw
+              rows = md.split('\n').filter(l => l.startsWith('|')).length - 2 // table lines minus header and rule
+            }
+          } else if (wrapper?.data?.formatted) {
+            md = wrapper.data.formatted
+            rows = wrapper.data.row_count ?? 0
+          }
+
+          if (rows > 0 && md) {
+            const lines = md.split('\n').filter(l => l.startsWith('| ') && !l.includes('---') && !l.includes('n.name') && !l.includes('name |'))
+            for (const line of lines) {
+              const name = line.replace(/\|/g, '').trim()
+              if (name && name !== 'name') allSymbols.push({ name, type: symbolType })
+            }
+          }
+        } catch { /* best-effort per type */ }
+      }
+
+      if (allSymbols.length > 0) {
+        formatted = `Search: "${query}"\n\n`
+        formatted += `Found ${allSymbols.length} symbol(s):\n\n`
+        formatted += '| Symbol | Type |\n| --- | --- |\n'
+        for (const s of allSymbols.slice(0, 20)) {
+          formatted += `| ${s.name} | ${s.type} |\n`
+        }
+        formatted += '\n---'
+        formatted += '\nNext: Run cortex_code_context "<name>" on any symbol to see callers, callees, and full context.'
+      } else {
+        formatted += '\n\n---'
+        formatted += '\nNo execution flows or symbols found for this query.'
+        formatted += `\nTry: cortex_cypher 'MATCH (n:Function) RETURN n.name LIMIT 30' to browse available symbols.`
+      }
+    }
+    return formatted
+  }
+
+  /** The semantic arm: one repo's collection, or with no project every repo of the organization. */
+  async function searchCode(params: Record<string, unknown>): Promise<CodeMatch[]> {
+    try {
+      const codeRes = await apiCall(env, '/api/intel/code-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(15000),
+      })
+      if (!codeRes.ok) return []
+      const codeData = (await codeRes.json()) as { data?: { results?: CodeMatch[] } }
+      return codeData?.data?.results ?? []
+    } catch {
+      // Qdrant search is best-effort
+      return []
+    }
+  }
+
+  /** The symbols of a few files with their lines; none when the graph has none or does not answer. */
+  function outlineOf(project: string, org: string | undefined, files: string[]): Promise<OutlineSymbol[]> {
+    return fetchOutline(files, async (query) => {
+      const res = (await callIntel('cypher', { query, projectId: project, orgId: org }, 5000)) as { data?: { raw?: string } }
+      return res?.data?.raw ?? ''
+    })
+  }
+
   server.tool(
     'cortex_code_search',
-    'Query the codebase for architecture concepts, execution flows, and file matches using GitNexus hybrid vector/AST search. Accepts repo name (e.g. "cortex-hub"), git URL, or projectId. OMIT repo to search every indexed repo in your ORGANIZATION in parallel and get ranked hints — that is the way to answer a question that spans repos (client + server + tools of one product). Projects are isolated per organization, so a cross-repo search never reaches another organization\'s code.',
+    'Ranked files, with the lines that match and the symbols they fall in, for a question about the code. ' +
+    'Without repo: the repo you are in, plus what the other repos of your organization hold. repo: "*" searches every ' +
+    'repo of the organization; a search never leaves it.',
     {
       query: z.string().describe('Natural language or code query to search for'),
-      repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL. Preferred over projectId. Omit to search the whole organization.'),
-      projectId: z.string().optional().describe('Project ID (e.g. "proj-704127e3"). Use repo name instead if possible.'),
+      repo: z.string().optional().describe('Repository name or git URL, or "*"'),
+      projectId: z.string().optional().describe('Use repo instead if you can'),
       org: z.string().optional().describe(ORG_DESC),
       branch: z.string().optional().describe('Git branch to search'),
-      limit: z.number().optional().describe('Maximum flows to return (default: 5)'),
+      limit: z.number().optional(),
+      here: z.string().optional().describe('Filled in by the client. Leave it out.'),
     },
-    async ({ query, repo, projectId, org, branch, limit }) => {
+    async ({ query, repo, projectId, org, branch, limit, here }) => {
       try {
-        const resolvedProject = await resolveRepo(repo, projectId)
-        const data = (await callIntel('search', {
-          query,
-          projectId: resolvedProject,
-          orgId: org,
-          branch,
-          limit: limit ?? 5,
-        })) as { data?: { formatted?: string }; success?: boolean }
+        // No repo means the repo the agent is in, when its client says which: half of all
+        // searches named none, and the organization-wide answer they got was graph flows only —
+        // no ranked files, no line numbers — from every repo but the one being worked on.
+        const wide = repo === '*'
+        const scopeRepo = here ? await resolveRepo(here) : undefined
+        const named = wide ? undefined : await resolveRepo(repo, projectId)
+        const current = named || wide || org ? undefined : scopeRepo
+        const flowLimit = limit ?? 5
 
-        let formatted = data?.data?.formatted ?? ''
-
-        // ── Auto-fallback: when execution flows are empty, search symbols via cypher ──
-        const isEmpty = formatted && (
-          formatted.includes('No matching execution flows') ||
-          formatted.includes('No matching results found')
-        )
-
-        if (isEmpty && resolvedProject) {
-          // Extract meaningful search terms from query (split on spaces, underscores, hyphens)
-          const searchTerms = query
-            .split(/[\s_\-]+/)
-            .filter(w => w.length > 2 && !/^(the|and|for|with|from|that|this|how|does|what|where|create|get|set|use)$/i.test(w))
-            .slice(0, 4)
-
-          // Search each symbol type separately (Kuzu doesn't support multi-label WHERE)
-          const allSymbols: Array<{ name: string; type: string }> = []
-          for (const symbolType of ['Function', 'Method', 'Class', 'Interface']) {
-            const conditions = searchTerms
-              .map(t => `lower(n.name) CONTAINS "${t.toLowerCase().replace(/"/g, '')}"`)
-              .join(' OR ')
-            if (!conditions) continue
-
-            try {
-              const cypherRes = await callIntel('cypher', {
-                query: `MATCH (n:${symbolType}) WHERE ${conditions} RETURN DISTINCT n.name AS name LIMIT 10`,
-                projectId: resolvedProject,
-                orgId: org,
+        if (named ?? current) {
+          const project = (named ?? current)!
+          // The other repos of the organization are asked alongside, not after, each on its own
+          // default branch: the branch named here is this repo's, and another repo rarely has it.
+          const others = current
+            ? searchCode({
+                query, orgId: org, scopeRepo, exclude: current,
+                perRepo: FILES_PER_OTHER_REPO, limit: OTHER_REPOS * FILES_PER_OTHER_REPO,
               })
-              // Response shape: { success, data: { raw: "{ \"markdown\": \"...\", \"row_count\": N }\n---\n..." } }
-              const wrapper = cypherRes as { data?: { raw?: string; formatted?: string; row_count?: number } }
-              let md = ''
-              let rows = 0
-
-              if (wrapper?.data?.raw) {
-                // Parse the JSON portion from raw (before "---" separator)
-                const jsonPart = wrapper.data.raw.split('\n---')[0] ?? ''
-                try {
-                  const parsed = JSON.parse(jsonPart) as { markdown?: string; row_count?: number }
-                  md = parsed.markdown ?? ''
-                  rows = parsed.row_count ?? 0
-                } catch {
-                  // raw might be plain text, try extracting table directly
-                  md = wrapper.data.raw
-                  rows = (md.match(/\| /g) ?? []).length - 2 // rough count minus headers
-                }
-              } else if (wrapper?.data?.formatted) {
-                md = wrapper.data.formatted
-                rows = wrapper.data.row_count ?? 0
-              }
-
-              if (rows > 0 && md) {
-                const lines = md.split('\n').filter(l => l.startsWith('| ') && !l.includes('---') && !l.includes('n.name') && !l.includes('name |'))
-                for (const line of lines) {
-                  const name = line.replace(/\|/g, '').trim()
-                  if (name && name !== 'name') allSymbols.push({ name, type: symbolType })
-                }
-              }
-            } catch { /* best-effort per type */ }
-          }
-
-          if (allSymbols.length > 0) {
-            formatted = `Search: "${query}"\n\n`
-            formatted += `Found ${allSymbols.length} symbol(s):\n\n`
-            formatted += '| Symbol | Type |\n| --- | --- |\n'
-            for (const s of allSymbols.slice(0, 20)) {
-              formatted += `| ${s.name} | ${s.type} |\n`
-            }
-            formatted += '\n---'
-            formatted += '\nNext: Run cortex_code_context "<name>" on any symbol to see callers, callees, and full context.'
-          } else {
-            formatted += '\n\n---'
-            formatted += '\nNo execution flows or symbols found for this query.'
-            formatted += `\nTry: cortex_cypher 'MATCH (n:Function) RETURN n.name LIMIT 30' to browse available symbols.`
+            : Promise.resolve([])
+          const [flows, matches] = await Promise.all([
+            searchRepo(query, project, org, branch, flowLimit)
+              // A branch the graph never indexed — a feature branch not pushed yet — has no graph
+              // of its own; the default branch's is the closest there is.
+              .catch((error: unknown) => (branch ? searchRepo(query, project, org, undefined, flowLimit) : Promise.reject(error)))
+              .catch((error: unknown) => {
+                // A checkout the hub does not hold: search the organization instead.
+                if (current) return undefined
+                throw error
+              }),
+            // Paths are cheap and snippets are capped, so ask for more than the flow limit.
+            searchCode({ query, projectId: project, orgId: org, branch, limit: Math.max(flowLimit, 8) }),
+          ])
+          if (flows !== undefined) {
+            // With ranked files in hand, the symbols their hits fall in say where to read; the flows
+            // are kept for a search the semantic arm found nothing for.
+            const symbols = await outlineOf(project, org, outlineFiles(matches))
+            const sections = [formatCodeMatches(matches, undefined, symbols), matches.length ? '' : flows, formatOtherRepos(await others)].filter(Boolean)
+            return { content: [{ type: 'text' as const, text: sections.join('\n\n---\n') || 'No results.' }] }
           }
         }
 
-        // ── Qdrant semantic code search: supplement with actual source code ──
-        const resolvedForCodeSearch = resolvedProject
-        if (resolvedForCodeSearch) {
-          try {
-            const codeRes = await apiCall(env, '/api/intel/code-search', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ query, projectId: resolvedForCodeSearch, orgId: org, branch, limit: limit ?? 5 }),
-              signal: AbortSignal.timeout(15000),
-            })
-
-            if (codeRes.ok) {
-              const codeData = (await codeRes.json()) as {
-                success?: boolean
-                data?: {
-                  results?: Array<{
-                    score: number
-                    filePath?: string
-                    content?: string
-                    chunkIndex?: number
-                  }>
-                  message?: string
-                }
-              }
-
-              const codeResults = codeData?.data?.results ?? []
-              if (codeResults.length > 0) {
-                const codeLines: string[] = ['\n\n---\n**Source Code Matches** (semantic search)\n']
-                for (const hit of codeResults.slice(0, 5)) {
-                  const score = (hit.score * 100).toFixed(1)
-                  codeLines.push(`### ${hit.filePath ?? 'unknown'} (${score}% match)`)
-                  if (hit.content) {
-                    const ext = hit.filePath?.split('.').pop() ?? ''
-                    const lang = { ts: 'typescript', js: 'javascript', cs: 'csharp', py: 'python', go: 'go', rs: 'rust', java: 'java' }[ext] ?? ext
-                    codeLines.push(`\`\`\`${lang}`)
-                    codeLines.push(hit.content.slice(0, 2000))
-                    codeLines.push('```')
-                  }
-                  codeLines.push('')
-                }
-                formatted += codeLines.join('\n')
-              }
-            }
-          } catch {
-            // Qdrant search is best-effort
-          }
-        }
-
-        if (formatted) {
-          return {
-            content: [{ type: 'text' as const, text: formatted }],
-          }
-        }
-
+        // ── Every repo of the organization: ranked files across them, then the graph's flows ──
+        const [matches, fanOut] = await Promise.all([
+          searchCode({ query, orgId: org, scopeRepo, branch, limit: Math.max(flowLimit, 8) }),
+          callIntel('search', { query, orgId: org, scopeRepo, branch, limit: flowLimit }) as Promise<{ data?: { formatted?: string } }>,
+        ])
+        const sections = [formatCodeMatches(matches), fanOut?.data?.formatted ?? ''].filter(Boolean)
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text' as const, text: sections.join('\n\n---\n') || JSON.stringify(fanOut, null, 2) }],
         }
       } catch (error) {
         return {
@@ -230,6 +260,71 @@ export function registerCodeTools(server: McpServer, env: Env) {
             type: 'text' as const,
             text: `Code search error: ${error instanceof Error ? error.message : 'Unknown'}`,
           }],
+          isError: true,
+        }
+      }
+    }
+  ).update(LOAD_UP_FRONT)
+
+  // ── code_grep — an exact string across the organization's repos ──
+  server.tool(
+    'cortex_code_grep',
+    'git grep over the hub\'s checkout of every repo of your organization (default branch), for an exact ' +
+    'string the ranked search does not find: a constant, an opcode, an error text, a symbol. Searches the repos ' +
+    'that are not on disk here; grep your own checkout locally. With files: true it names each matching file ' +
+    'with a count, as grep -l does: the way to sweep for a concept (encrypt|decrypt|cipher) before reading.',
+    {
+      pattern: z.string().describe('Perl-style regex, or a plain string with fixed: true'),
+      repo: z.string().optional().describe('One repo (name or git URL); omit for every repo of the organization'),
+      path: z.string().optional().describe('Git pathspec to narrow to, e.g. "*.cs" or "src/net/"'),
+      ignoreCase: z.boolean().optional(),
+      fixed: z.boolean().optional().describe('Match the pattern as a plain string'),
+      files: z.boolean().optional().describe('List matching files with a count each instead of lines'),
+      limit: z.number().optional().describe('Lines to list across all repos (default 60, max 200); files: default 150, max 400'),
+      org: z.string().optional().describe(ORG_DESC),
+    },
+    async ({ pattern, repo, path, ignoreCase, fixed, files, limit, org }) => {
+      try {
+        const res = (await callIntel('grep', {
+          pattern, projectId: await resolveRepo(repo), path, ignoreCase, fixed, files, limit, orgId: org,
+        }, 30000)) as { data?: GrepData }
+        return { content: [{ type: 'text' as const, text: formatGrep(res.data ?? { pattern }) }] }
+      } catch (error) {
+        return {
+          content: [{ type: 'text' as const, text: `Code grep error: ${error instanceof Error ? error.message : 'Unknown'}` }],
+          isError: true,
+        }
+      }
+    }
+  )
+
+  // ── code_read — lines of a file in another repo of the organization ──
+  server.tool(
+    'cortex_code_read',
+    'Read lines of a file from the hub\'s checkout of a repo of your organization (default branch): the repos ' +
+    'cortex_code_search and cortex_code_grep point into that are not on disk here.',
+    {
+      repo: z.string().describe('Repository name or git URL'),
+      file: z.string().describe('Path inside the repo, as search or grep printed it'),
+      startLine: z.number().optional(),
+      endLine: z.number().optional().describe(`Default: startLine + ${READ_LINES - 1}`),
+      org: z.string().optional().describe(ORG_DESC),
+    },
+    async ({ repo, file, startLine, endLine, org }) => {
+      try {
+        const start = Math.max(1, startLine ?? 1)
+        const end = Math.max(start, endLine ?? start + READ_LINES - 1)
+        const res = (await callIntel('file-content', {
+          projectId: await resolveRepo(repo), file, startLine: start, endLine: end, orgId: org,
+        })) as { data?: { file: string; totalLines: number; startLine: number; endLine: number; content: string } }
+        const d = res.data
+        if (!d) return { content: [{ type: 'text' as const, text: 'No content.' }] }
+        const numbered = d.content.split('\n').map((l, i) => `${d.startLine + i}\t${l}`).join('\n')
+        const rest = d.endLine < d.totalLines ? `\n… lines ${d.endLine + 1}-${d.totalLines} not shown` : ''
+        return { content: [{ type: 'text' as const, text: `${repo}/${d.file} (${d.totalLines} lines)\n${numbered}${rest}` }] }
+      } catch (error) {
+        return {
+          content: [{ type: 'text' as const, text: `Code read error: ${error instanceof Error ? error.message : 'Unknown'}` }],
           isError: true,
         }
       }
@@ -270,7 +365,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
             // First attempt: context lookup without file
             const contextData = await callIntel('context', {
               name: target,
-              projectId,
+              projectId: resolvedProject,
               orgId: org,
             }) as { data?: { results?: { raw?: string } } }
 
@@ -288,7 +383,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
                     const retryData = await callIntel('context', {
                       name: target,
                       file: filePath,
-                      projectId,
+                      projectId: resolvedProject,
                       orgId: org,
                     }) as { data?: { results?: { raw?: string } } }
                     contextRaw = retryData?.data?.results?.raw ?? contextRaw
@@ -297,9 +392,9 @@ export function registerCodeTools(server: McpServer, env: Env) {
               }
             }
 
-            // Extract method names from context output
-            // Pattern 1: [has_method] undefined MethodName
-            const methodMatches = contextRaw.match(/\[has_method\]\s+\w+\s+\w+/g)
+            // Extract method names from context output: "[has_method] MethodName", or from a hub
+            // older than the one that drops the missing kind, "[has_method] undefined MethodName".
+            const methodMatches = contextRaw.match(/\[has_method\]\s+(?:undefined\s+)?\w+/g)
 
             if (methodMatches && methodMatches.length > 0) {
               const methods = methodMatches
@@ -320,7 +415,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
                 try {
                   const methodImpact = await callIntel('impact', {
                     target: methods[0],
-                    projectId,
+                    projectId: resolvedProject,
                     orgId: org,
                     direction: direction ?? 'downstream',
                   }) as { data?: { results?: { raw?: string } } }
@@ -357,8 +452,9 @@ export function registerCodeTools(server: McpServer, env: Env) {
           } catch { /* ignore context failure, return original result */ }
         }
 
+        // The report is text with line breaks: inside JSON every one reads as a literal \n.
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text' as const, text: raw || JSON.stringify(data, null, 2) }],
         }
       } catch (error) {
         return {
@@ -375,13 +471,13 @@ export function registerCodeTools(server: McpServer, env: Env) {
   // ── code_context — 360° symbol view (callers, callees, methods) ──
   server.tool(
     'cortex_code_context',
-    'Get a 360° view of a code symbol: its methods, callers, callees, and related execution flows. Essential for exploring class hierarchies and understanding how a symbol is used across the codebase.',
+    'A symbol by name: where it is, its methods, callers, callees and flows.',
     {
-      name: z.string().describe('The name of the function, class, or symbol to explore'),
-      repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL'),
-      projectId: z.string().optional().describe('Project ID. Use repo name instead if possible.'),
+      name: z.string().describe('Function, class or other symbol name'),
+      repo: z.string().optional().describe('Repository name or git URL'),
+      projectId: z.string().optional().describe('Use repo instead if you can'),
       org: z.string().optional().describe(ORG_DESC),
-      file: z.string().optional().describe('File path to disambiguate when multiple symbols share the same name'),
+      file: z.string().optional().describe('Its file, when several symbols share the name'),
     },
     async ({ name, repo, projectId, org, file }) => {
       try {
@@ -405,7 +501,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
         }
       }
     }
-  )
+  ).update(LOAD_UP_FRONT)
 
   // ── detect_changes — pre-commit risk analysis ──
   // The hub cannot see the caller's working tree, so the caller sends its diff. Asking the
@@ -434,7 +530,7 @@ export function registerCodeTools(server: McpServer, env: Env) {
           60000,
         )
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text' as const, text: formatDiffImpact(data) }],
         }
       } catch (error) {
         return {
@@ -448,7 +544,10 @@ export function registerCodeTools(server: McpServer, env: Env) {
   // ── cypher — direct graph queries ──
   server.tool(
     'cortex_cypher',
-    'Run Cypher queries directly against the GitNexus knowledge graph. Supports MATCH, RETURN, WHERE, ORDER BY for exploring code relationships.\n\nAvailable node properties: id, name, filePath, startLine, endLine. Use labels(n) for type, and alias it (labels(n) AS type) for a readable column.\nExample: MATCH (n) WHERE n.name CONTAINS "Attack" RETURN n.name, labels(n) LIMIT 20',
+    'Run Cypher queries directly against the GitNexus knowledge graph. Supports MATCH, RETURN, WHERE, ORDER BY for exploring code relationships.\n\n' +
+    'Node labels: Function, Method, Class, Interface, TypeAlias, Const, Property, File, Folder, Route. Node properties: id, name, filePath, startLine, endLine. Use labels(n) AS type for the type.\n' +
+    'Every edge is ONE table, CodeRelation, with its kind in r.type: CALLS, IMPORTS, DEFINES, HAS_METHOD, EXTENDS, IMPLEMENTS, ACCESSES, HANDLES_ROUTE. [:CALLS] does not exist.\n' +
+    'Example: MATCH (a)-[r:CodeRelation {type: \'CALLS\'}]->(b:Function {name: \'X\'}) RETURN a.name, labels(a) AS type, a.filePath LIMIT 20',
     {
       query: z.string().describe('Cypher query to run (e.g., MATCH (n:Function) RETURN n.name LIMIT 10)'),
       repo: z.string().optional().describe('Repository name (e.g. "cortex-hub") or git URL'),
@@ -458,9 +557,17 @@ export function registerCodeTools(server: McpServer, env: Env) {
     async ({ query, repo, projectId, org }) => {
       try {
         const resolvedProject = await resolveRepo(repo, projectId)
-        const data = await callIntel('cypher', { query, projectId: resolvedProject, orgId: org })
+        const data = await callIntel('cypher', { query, projectId: resolvedProject, orgId: org }) as {
+          data?: { raw?: unknown }
+        }
+        const raw = data?.data?.raw
+        if (typeof raw !== 'string') {
+          return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] }
+        }
+        // The graph answers a failed query with an "Error:" body on a successful response.
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+          content: [{ type: 'text' as const, text: raw }],
+          ...(/^Error:/.test(raw) ? { isError: true } : {}),
         }
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : 'Unknown'
