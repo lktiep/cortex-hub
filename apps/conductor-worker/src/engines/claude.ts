@@ -1,9 +1,11 @@
 import { RAW_MAX, SUMMARY_MAX, cliPlumbing, errorMessage, item, resultHead, tail, tailSummary } from './common.js';
 import type { CliAdapterOpts } from './common.js';
+import { parseResetsAt } from './quota.js';
 import type { Classification, EngineAdapter, ProgressItem } from './types.js';
 
-const RESULT_QUOTA = /usage limit|rate limit|hit your limit/i;
-const STDERR_QUOTA = /usage limit|hit your limit/i;
+// 'You've hit your limit', 'You've hit your weekly limit · resets Oct 26, 12am (Asia/Bangkok)'
+const RESULT_QUOTA = /usage limit|rate limit|hit your (?:\w+ )?limit/i;
+const STDERR_QUOTA = /usage limit|hit your (?:\w+ )?limit/i;
 const EPOCH_SUFFIX = /\|(\d{10})(?!\d)/;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -128,7 +130,8 @@ export function createClaudeAdapter(opts: CliAdapterOpts = {}): EngineAdapter {
       if (hit !== undefined) {
         const q: Classification = { kind: 'quota', raw: sources.join('\n').slice(0, RAW_MAX) };
         const epoch = EPOCH_SUFFIX.exec(hit)?.[1];
-        if (epoch !== undefined) q.resetAt = new Date(Number(epoch) * 1000).toISOString();
+        const resetAt = epoch !== undefined ? new Date(Number(epoch) * 1000).toISOString() : parseResetsAt(hit, new Date());
+        if (resetAt !== undefined) q.resetAt = resetAt;
         return q;
       }
       const message =
