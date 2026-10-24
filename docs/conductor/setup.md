@@ -526,6 +526,18 @@ section 5, with `<lead-api-key>`). Start a Claude Code session in the project an
 
 > Read `scripts/orchestrator-prompt.md` and act as the conductor lead.
 
+**Planning from another model.** Codex, Antigravity, Gemini or any client without the repo's
+skills gets the same planning guide from the hub. Paste this, with your request on the first line:
+
+> Plan this as a Conductor task tree: <what you want done>.
+> First call `cortex_task_tree_create` with `guide: true` and follow the guide. Fill its plan brief,
+> call `cortex_agents` and route each task to a machine that can run it. Check the plan with
+> `dryRun: true`, fix every problem it reports, and show me the tree with the machine for each
+> task before you create it.
+
+Claude Code users can copy `templates/skills/plan/` to `~/.claude/skills/cortex-plan/` and ask
+for `/cortex-plan` instead.
+
 Gates that need the user are approved in `/conductor` on the dashboard. The lead cannot close
 them through MCP.
 

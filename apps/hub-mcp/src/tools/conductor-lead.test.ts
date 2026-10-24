@@ -35,7 +35,24 @@ describe('cortex_task_tree_create', () => {
     const res = await tool('cortex_task_tree_create', 201, { ids: { B: 'id-b', A: 'id-a' }, rootIds: ['id-a'], ready: 1 })({ projectId: 'p', tasks })
     expect(calls).toEqual([{ url: 'http://api/api/conductor/tree', method: 'POST', body: { projectId: 'p', tasks } }])
     expect(res.isError).toBeUndefined()
-    expect(res.content[0]!.text.split('\n')).toEqual(['**Plan created** — 2 tasks, 1 ready now', '- A → id-a', '- B → id-b'])
+    expect(res.content[0]!.text.split('\n').slice(0, 3)).toEqual(['**Plan created** — 2 tasks, 1 ready now', '- A → id-a', '- B → id-b'])
+    // two one-line tasks in a row: created, with what is wrong with them
+    expect(res.content[0]!.text).toContain('Only 2 work task(s)')
+  })
+
+  it('answers guide: true with the planning guide, and calls nothing', async () => {
+    const res = await tool('cortex_task_tree_create', 500, {})({ guide: true })
+    expect(calls).toEqual([])
+    expect(res.content[0]!.text).toMatch(/^# Planning a Conductor task tree/)
+  })
+
+  it('checks a plan with dryRun: true without creating it', async () => {
+    const res = await tool('cortex_task_tree_create', 500, {})({ tasks, dryRun: true })
+    expect(calls).toEqual([])
+    expect(res.isError).toBeUndefined()
+    const text = res.content[0]!.text
+    expect(text.split('\n')[0]).toBe('**Plan check** — 2 work task(s), 0 gate(s) · longest chain 2 · widest level 1')
+    expect(text).toMatch(/Nothing was created\.$/)
   })
 
   it('shows the cycle on 400', async () => {
@@ -69,7 +86,7 @@ describe('cortex_task_tree_create', () => {
     }
     const neither = await tool('cortex_task_tree_create', 201, {})({})
     expect(neither.isError).toBe(true)
-    expect(neither.content[0]!.text).toBe('Give tasks, or upload: true to import the plan from a JSON file.')
+    expect(neither.content[0]!.text).toBe('Give tasks, or upload: true to import the plan from a JSON file, or guide: true for the planning guide.')
     expect(calls).toEqual([])
   })
 })
@@ -79,7 +96,7 @@ describe('cortex_agents', () => {
     const res = await tool('cortex_agents', 200, {
       online: 1,
       agents: [{
-        agentId: 'w1', hostname: 'box', os: 'linux', status: 'busy', currentTaskId: 't9',
+        agentId: 'w1', hostname: 'box', os: 'linux', status: 'busy', currentTaskId: 't9', capabilities: ['gpu', 'linux'], projectId: 'p1',
         engines: [{ executor: 'claude', models: ['opus', 'sonnet'], defaultModel: 'opus' }, { executor: 'codex', models: ['*'], defaultModel: null }, { executor: 'gemini', models: [], defaultModel: null }],
         quota: [{ executor: 'claude', model: 'opus', exhaustedUntil: '2026-10-16T12:00:00Z', reason: null }],
       }],
@@ -88,7 +105,7 @@ describe('cortex_agents', () => {
     expect(calls[0]).toMatchObject({ url: 'http://api/api/conductor/agents' })
     expect(res.content[0]!.text.split('\n')).toEqual([
       '**Workers (1 online)**',
-      '- w1 @ box (linux) · busy · on t9 · engines: claude[opus,sonnet], codex[*], gemini · quota: claude/opus until 2026-10-16T12:00:00Z',
+      '- w1 @ box (linux) · busy · on t9 · engines: claude[opus,sonnet], codex[*], gemini · capabilities: gpu, linux · project: p1 · quota: claude/opus until 2026-10-16T12:00:00Z',
       '**MCP sessions**',
       '- s1 · cursor · main · 2026-10-16T11:00:00Z',
     ])

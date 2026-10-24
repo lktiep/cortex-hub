@@ -161,6 +161,9 @@ jobs:
       - name: Installers match the hooks they ship
         run: bash scripts/sync-install-templates.sh --check
 
+      - name: The served planning guide matches its skill
+        run: node scripts/sync-plan-guide.mjs --check
+
   # ── Python CI (flake8/ruff — only on *.py files) ───────────────────────────
   ci-python:
     name: "Python: Lint & Test"

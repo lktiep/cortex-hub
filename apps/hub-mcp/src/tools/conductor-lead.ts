@@ -5,6 +5,8 @@ import type { Executor, TreeCreateResponse, WorkerView, SessionView } from '@cor
 import type { Env } from '../types.js'
 import { apiCall } from '../api-call.js'
 import { issueTreeUpload } from '../tree-upload.js'
+import { PLAN_GUIDE } from './plan-guide.js'
+import { checkPlan } from './plan-shape.js'
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
 
@@ -78,6 +80,9 @@ export async function createPlan(env: Env, plan: TreePlan): Promise<{ ok: boolea
   const data = (await res.json()) as TreeCreateResponse
   const lines = [`**Plan created** — ${tasks.length} tasks, ${data.ready} ready now`]
   for (const t of tasks) lines.push(`- ${t.key} → ${data.ids[t.key]}`)
+  // Created anyway: the lead can still reroute or replace a task, and sees why it should.
+  const check = checkPlan(plan)
+  if (check.problems > 0) lines.push('', check.text)
   return { ok: true, status: res.status, text: lines.join('\n') }
 }
 
@@ -100,6 +105,9 @@ function workerLine(w: WorkerView): string {
     w.status + (w.currentTaskId ? ` · on ${w.currentTaskId}` : ''),
     `engines: ${w.engines.map((e) => e.executor + (e.models.length ? `[${e.models.join(',')}]` : '')).join(', ')}`,
   ]
+  // What a plan routes on: requiredCapabilities match these, and a scoped worker takes only its project's tasks.
+  if (w.capabilities?.length) parts.push(`capabilities: ${w.capabilities.join(', ')}`)
+  if (w.projectId) parts.push(`project: ${w.projectId}`)
   if (w.quota.length) parts.push(`quota: ${w.quota.map((q) => `${q.executor}/${q.model} until ${q.exhaustedUntil}`).join(' ')}`)
   return `- ${parts.join(' · ')}`
 }
@@ -108,18 +116,22 @@ function workerLine(w: WorkerView): string {
 export function registerConductorLeadTools(server: McpServer, env: Env): void {
   server.tool(
     'cortex_task_tree_create',
-    'Create a whole plan as a tree of tasks in one call. Use this for multi-step plans instead of many cortex_task_create calls. Tasks reference each other by key (parentKey, dependsOn); the hub rejects cycles. Put the whole plan under ONE root task with kind group and set the key of that root as the parentKey of every top-level item, or the dashboard shows a flat plan as N one-task plans. Give `files` on work tasks so parallel tasks do not collide (lock safety). reviewRequired defaults to true for work tasks. For a big plan (more than about 15 tasks, or long descriptions) do not type it into this call or split it into batches: write it to a JSON file and call this with only upload: true. You get a one-time curl command that imports the whole file in one request.',
+    'Create a whole plan as a tree of tasks in one call. Before your first plan, call this with guide: true and follow the guide: it says how to cut the work, draw dependencies and route tasks to the machines cortex_agents lists. Check a plan with dryRun: true before creating it. Use this for multi-step plans instead of many cortex_task_create calls. Tasks reference each other by key (parentKey, dependsOn); the hub rejects cycles. Put the whole plan under ONE root task with kind group and set the key of that root as the parentKey of every top-level item, or the dashboard shows a flat plan as N one-task plans. Give `files` on work tasks so parallel tasks do not collide (lock safety). reviewRequired defaults to true for work tasks. For a big plan (more than about 15 tasks, or long descriptions) do not type it into this call or split it into batches: write it to a JSON file and call this with only upload: true. You get a one-time curl command that imports the whole file in one request.',
     {
       ...treePlan.shape,
       tasks: treeTasks.optional().describe('Tasks of the plan. Leave out with upload: true'),
       upload: z.boolean().optional().describe('Import the plan from a JSON file instead: returns a one-time curl command for the file'),
+      guide: z.boolean().optional().describe('Return the planning guide instead of creating anything. Read it before your first plan'),
+      dryRun: z.boolean().optional().describe("Check the plan's shape (chains, missing files, thin descriptions, files shared by parallel tasks) without creating it"),
     },
-    async ({ parentId, projectId, tasks, upload }) => {
+    async ({ parentId, projectId, tasks, upload, guide, dryRun }) => {
+      if (guide) return ok(PLAN_GUIDE)
       if (upload) {
         if (tasks || parentId || projectId) return fail('With upload: true, put parentId, projectId and tasks in the file, not in this call.')
         return ok(uploadInstructions(env))
       }
-      if (!tasks) return fail('Give tasks, or upload: true to import the plan from a JSON file.')
+      if (!tasks) return fail('Give tasks, or upload: true to import the plan from a JSON file, or guide: true for the planning guide.')
+      if (dryRun) return ok(`${checkPlan({ parentId, tasks }).text}\nNothing was created.`)
       try {
         const created = await createPlan(env, { parentId, projectId, tasks })
         return created.ok ? ok(created.text) : fail(created.text)
