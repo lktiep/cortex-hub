@@ -24,7 +24,7 @@ with the task once you have it.
 
 ## 3. While working
 - A symbol name → `cortex_code_context(name)`. A behaviour → `cortex_code_search(query)`.
-  An exact literal → `rg`; in the organization's other repos → `cortex_code_grep`. Read the lines a hit names, not the whole file.
+  An exact literal → `rg`; in other repos of the organization → `cortex_code_grep`. Read the lines a hit names, not the whole file.
 - Something breaks → `cortex_knowledge_search` and `cortex_memory_search` with the error; a
   non-obvious fix → `cortex_knowledge_store`.
 - Before committing → build, typecheck and lint last, then `cortex_detect_changes(diff)`; after

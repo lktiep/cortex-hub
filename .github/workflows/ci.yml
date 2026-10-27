@@ -150,6 +150,26 @@ jobs:
       - name: Enforcement hook tests
         run: bash scripts/test-hooks.sh
 
+  # ── macOS runs installers with /bin/bash 3.2, whose parser differs from the bash 5 above ──
+  # An apostrophe in a heredoc inside $(...) parses under bash 5 and is an unterminated quote
+  # under 3.2, so `curl | bash` died halfway through on every Mac.
+  ci-shell-macos:
+    name: "Hooks: shell syntax under macOS bash 3.2"
+    runs-on: macos-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Shell syntax (/bin/bash 3.2)
+        run: |
+          /bin/bash --version | head -1
+          for f in scripts/install.sh scripts/onboard.sh scripts/bootstrap.sh \
+                   scripts/run-agent.sh .claude/hooks/*.sh .gemini/hooks/*.sh; do
+            /bin/bash -n "$f"
+          done
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
