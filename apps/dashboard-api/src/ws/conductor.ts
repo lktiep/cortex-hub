@@ -18,6 +18,7 @@ import {
 import { db } from '../db/client.js'
 import { baseBranchFor } from '../conductor/config.js'
 import { dispatch } from '../conductor/dispatcher.js'
+import { connGrant, grantTaskCondition, taskInGrant } from '../conductor/grant.js'
 import {
   acceptTask, completeTask, declineTask, failAttempt, onCompleted, quotaExhausted, recordProgress, returnTask,
   type Outcome,
@@ -28,6 +29,7 @@ import {
   rekeyConnection, removeConnection, sendTo, setStatus, touch, updateConnection, type WorkerConn,
 } from '../conductor/registry.js'
 import { ACTIVE_STATUSES, getTask, isoSeconds, type TaskRow } from '../conductor/rows.js'
+import { grantOfKey, grantOrgFilter, keyBindingMode, warnUnbound } from '../lib/key-grant.js'
 import { findProjectByRepo } from '../lib/project-match.js'
 import { appVersion } from '../version.js'
 
@@ -228,12 +230,23 @@ export function setupConductorWebSocket(server: Server): WebSocketServer {
     // Validate API key against stored keys (hash the raw key first)
     const keyHash = createHash('sha256').update(apiKey).digest('hex')
     const keyRow = db
-      .prepare('SELECT name, project_id FROM api_keys WHERE key_hash = ?')
-      .get(keyHash) as { name: string; project_id: string | null } | undefined
+      .prepare('SELECT id, name, project_id FROM api_keys WHERE key_hash = ?')
+      .get(keyHash) as { id: string; name: string; project_id: string | null } | undefined
     if (!keyRow) {
       ws.close(CLOSE_CODES.badKey, 'Invalid apiKey')
       return
     }
+    // the organizations the key is bound to hold its worker as they hold its HTTP calls (key-grant.ts)
+    const grant = grantOfKey(keyRow.id)
+    if (!grant?.orgs && keyBindingMode() === 'required') {
+      ws.close(CLOSE_CODES.badKey, 'API key is not bound to an organization')
+      return
+    }
+    if (grant?.orgs?.size === 0) {
+      ws.close(CLOSE_CODES.badKey, 'API key is bound only to deleted organizations')
+      return
+    }
+    if (grant && !grant.orgs && keyBindingMode() === 'warn') warnUnbound(grant.keyId, grant.keyName)
 
     // no agent id (a legacy script names itself in agent.register): a placeholder until then
     const queryAgentId = str(url.searchParams.get('agentId'))
@@ -243,6 +256,7 @@ export function setupConductorWebSocket(server: Server): WebSocketServer {
       agentId: named ? queryAgentId : placeholderAgentId(),
       apiKeyOwner: keyRow.name,
       apiKeyProjectId: keyRow.project_id,
+      apiKeyOrgs: grant?.orgs ?? null,
       hostname: url.searchParams.get('hostname') || '',
       ide: url.searchParams.get('ide') || null,
       platform: url.searchParams.get('platform') || null,
@@ -341,7 +355,7 @@ function onWorkerRegister(agent: WorkerConn, msg: Record<string, unknown>): void
     refuse(agent, CLOSE_CODES.missingKey, 'agentId required')
     return
   }
-  const matched = findProjectByRepo(str(msg['repo']) ?? '')?.id ?? null
+  const matched = findProjectByRepo(str(msg['repo']) ?? '', agent.apiKeyOrgs ?? undefined)?.id ?? null
   if (matched !== null && agent.apiKeyProjectId !== null && matched !== agent.apiKeyProjectId) {
     console.warn(`[ws] ${agent.agentId}: repo is project ${matched}, its key is scoped to ${agent.apiKeyProjectId}`)
     refuse(agent, CLOSE_CODES.badKey, 'key is scoped to another project')
@@ -439,6 +453,17 @@ function onAgentRegister(agent: WorkerConn, msg: Record<string, unknown>): void 
 
 function handleMessage(agent: WorkerConn, msg: Record<string, unknown>) {
   const type = msg['type'] as string | undefined
+  // a worker on an org-bound key acts only on the tasks it may see, as its HTTP calls do
+  const grant = connGrant(agent)
+  if (grant) {
+    for (const id of [str(msg['taskId']), str(msg['parentTaskId'])]) {
+      const task = id === null ? undefined : getTask(id)
+      if (task && !taskInGrant(task, grant)) {
+        reply(agent, { type: 'error', message: `Task ${id} not found` })
+        return
+      }
+    }
+  }
 
   switch (type) {
     case 'worker.register':
@@ -549,18 +574,23 @@ function handleMessage(agent: WorkerConn, msg: Record<string, unknown>) {
       // Extension requests project data via WS (no HTTP needed). A key scoped to a project sees
       // the tasks dispatch could give it (its project's and project-less ones) and only its
       // project's sessions and quality reports; a key scoped to no project sees every project.
+      // A key bound to organizations sees only theirs, besides.
       const scope = agent.apiKeyProjectId
+      const taskGrant = grantTaskCondition('', grant)
       const tasks = db.prepare(
-        'SELECT * FROM conductor_tasks WHERE (? IS NULL OR project_id IS NULL OR project_id = ?) ORDER BY created_at DESC LIMIT 30'
-      ).all(scope, scope) as Record<string, unknown>[]
+        'SELECT * FROM conductor_tasks WHERE (? IS NULL OR project_id IS NULL OR project_id = ?)' +
+        `${taskGrant ? ` AND ${taskGrant.sql}` : ''} ORDER BY created_at DESC LIMIT 30`
+      ).all(scope, scope, ...(taskGrant?.params ?? [])) as Record<string, unknown>[]
 
+      const projects = grantOrgFilter('org_id', grant)
+      const inGrant = grant ? ` AND project_id IN (SELECT id FROM projects WHERE 1${projects.sql})` : ''
       const sessions = db.prepare(
-        'SELECT * FROM session_handoffs WHERE (? IS NULL OR project_id = ?) ORDER BY created_at DESC LIMIT 10'
-      ).all(scope, scope) as Record<string, unknown>[]
+        `SELECT * FROM session_handoffs WHERE (? IS NULL OR project_id = ?)${inGrant} ORDER BY created_at DESC LIMIT 10`
+      ).all(scope, scope, ...projects.params) as Record<string, unknown>[]
 
       const qualitySummary = db.prepare(
-        "SELECT COUNT(*) as total, AVG(score_total) as avgScore FROM quality_reports WHERE (? IS NULL OR project_id = ?) AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')"
-      ).get(scope, scope) as { total: number; avgScore: number | null } | undefined
+        `SELECT COUNT(*) as total, AVG(score_total) as avgScore FROM quality_reports WHERE (? IS NULL OR project_id = ?)${inGrant} AND created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-7 days')`
+      ).get(scope, scope, ...projects.params) as { total: number; avgScore: number | null } | undefined
 
       const taskStats = {
         total: tasks.length,

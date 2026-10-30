@@ -9,6 +9,7 @@ import { hasSparseVector, buildHybridQuery, HYBRID_FETCH_FLOOR } from '../lib/hy
 import { gitnexusUrl as GITNEXUS_URL, gitnexusHeaders } from '../lib/gitnexus.js'
 import { analyzeDiff, parseCypherTable, MAX_DIFF_CHARS, type RunCypher } from '../lib/diff-symbols.js'
 import { PERSONAL_ORG, projectOfActiveSession } from '../lib/session-project.js'
+import { allowedOrgs, currentGrant, grantOrgFilter } from '../lib/key-grant.js'
 import { grepCheckout, type GrepFile, type GrepHit } from '../lib/code-grep.js'
 
 const logger = createLogger('intel')
@@ -75,6 +76,10 @@ async function callGitNexus(
 //   3. the caller's own latest session (X-API-Key-Owner -> session_handoffs.project_id)
 //   4. the only organization that owns indexed projects, when there is exactly one
 //
+// A request made with an API key bound to organizations never leaves them: projects are looked
+// up among theirs alone, and the key's own organization stands in for "the only one" (see
+// lib/key-grant.ts).
+//
 // If none of those resolve while several organizations exist, the fan-out is refused
 // rather than widened: an agent that cannot say where it is does not get to read
 // everywhere. A caller that names one project is a different question — see
@@ -89,18 +94,19 @@ type ProjectRef = { id: string; slug: string; name: string; git_repo_url: string
  * one: "server" must not resolve to "Yulgang Server Tools" when "Server" exists.
  */
 function findProject(ref: string, orgId?: string): ProjectRef | undefined {
+  const granted = grantOrgFilter('org_id')
   return db.prepare(
     `SELECT id, slug, name, git_repo_url, org_id FROM projects
       WHERE (id = ?
          OR slug = ? COLLATE NOCASE
          OR name = ? COLLATE NOCASE
          OR name LIKE ? COLLATE NOCASE)
-        AND (? IS NULL OR org_id = ?)
+        AND (? IS NULL OR org_id = ?)${granted.sql}
       ORDER BY (id = ?) DESC,
                (slug = ? COLLATE NOCASE) DESC,
                (name = ? COLLATE NOCASE) DESC
       LIMIT 1`
-  ).get(ref, ref, ref, `%${ref}%`, orgId ?? null, orgId ?? null, ref, ref, ref) as ProjectRef | undefined
+  ).get(ref, ref, ref, `%${ref}%`, orgId ?? null, orgId ?? null, ...granted.params, ref, ref, ref) as ProjectRef | undefined
 }
 
 /** The branch a project's remote HEAD names, once the indexer has resolved it. */
@@ -144,7 +150,7 @@ function orgOfActiveSession(apiKeyOwner: string | null | undefined): string | un
 type OrgScope = {
   orgId?: string
   /** Where the scope came from — logged, and reported when a fan-out is refused. */
-  source: 'explicit' | 'project' | 'session' | 'only-org' | 'unresolved'
+  source: 'explicit' | 'project' | 'session' | 'only-org' | 'key' | 'unresolved'
   /** Populated when source is 'unresolved' and more than one organization has code. */
   candidates?: OrgRow[]
 }
@@ -171,6 +177,13 @@ function resolveOrgScope(hints: {
   }
 
   if (session) return { orgId: session, source: 'session' }
+
+  const granted = allowedOrgs(currentGrant())
+  if (granted) {
+    const mine = orgsWithIndexedProjects().filter((o) => granted.has(o.id))
+    const only = granted.size === 1 ? [...granted][0] : mine.length === 1 ? mine[0]!.id : undefined
+    return only ? { orgId: only, source: 'key' } : { source: 'unresolved', candidates: mine }
+  }
 
   const orgs = orgsWithIndexedProjects()
   if (orgs.length === 1 && orgs[0]) return { orgId: orgs[0].id, source: 'only-org' }
@@ -334,6 +347,9 @@ function resolveRepoNames(projectId: string, orgId?: string): string[] {
   // construction, so ask by path and let the names stay a fallback.
   if (project?.id) {
     candidates.push(join(REPOS_DIR, project.id))
+  } else if (allowedOrgs(currentGrant())) {
+    // A name that is no project of the key's organizations may still be a clone of another's.
+    return []
   } else if (projectId.startsWith('proj-')) {
     // Unknown to the DB but shaped like an id: the directory is still the best guess.
     candidates.push(join(REPOS_DIR, projectId))
@@ -410,7 +426,9 @@ async function callGitNexusWithFallback(
     }
   }
 
-  // Final fallback: try without repo filter
+  // Final fallback: try without repo filter. GitNexus then picks among every repo it holds,
+  // which a key bound to organizations may not ask.
+  if (allowedOrgs(currentGrant())) throw lastError ?? new Error(`Project "${projectId}" not found.`)
   try {
     logger.info(`GitNexus fallback: all candidates failed, trying ${tool} without repo filter`)
     return await callGitNexus(tool, params)
@@ -437,6 +455,11 @@ function foundNothing(result: unknown): boolean {
  * found something are kept, under the project's name when there are several.
  */
 async function callGitNexusAcrossOrg(tool: string, params: Record<string, unknown>, orgId?: string): Promise<unknown> {
+  // Asked without a repo, GitNexus answers from every repo it holds.
+  const bound = allowedOrgs(currentGrant()) !== undefined
+  if (bound && (!orgId || indexedProjectsOf(orgId).length === 0)) {
+    throw new Error(orgId ? 'This organization has no indexed code yet.' : 'Name the repo, or pass org.')
+  }
   if (!orgId) {
     if (orgsWithIndexedProjects().length > 1) {
       throw new Error('Several organizations hold indexed code: name the repo, or pass org.')
@@ -590,8 +613,9 @@ function graphCheckout(raw: string, projectId: string | undefined, orgId: string
     }
     const definedIn = raw.match(/^\S+ \S+ → (\S+?):\d/m)?.[1] ?? raw.match(/→ (\S+) \[CALLS\]/)?.[1]
     if (!definedIn) return undefined
-    const projects = db.prepare('SELECT id FROM projects WHERE (? IS NULL OR org_id = ?)')
-      .all(orgId ?? null, orgId ?? null) as Array<{ id: string }>
+    const granted = grantOrgFilter('org_id')
+    const projects = db.prepare(`SELECT id FROM projects WHERE (? IS NULL OR org_id = ?)${granted.sql}`)
+      .all(orgId ?? null, orgId ?? null, ...granted.params) as Array<{ id: string }>
     return projects.map((p) => join(REPOS_DIR, p.id)).find((dir) => existsSync(join(dir, definedIn)))
   } catch {
     return undefined
@@ -1301,6 +1325,13 @@ export async function getGitNexusRepos(scope: { orgId?: string; keepUnattributed
     })
   }
 
+  // A bound key never sees an unattributed clone: it cannot be shown to be one of its organizations'.
+  const granted = allowedOrgs(currentGrant())
+  if (granted) {
+    return repos.filter(r => r.projectId
+      && granted.has(orgOfProjectId.get(r.projectId) ?? '')
+      && (!scope.orgId || orgOfProjectId.get(r.projectId) === scope.orgId))
+  }
   if (!scope.orgId) return repos
   return repos.filter(r => r.projectId
     ? orgOfProjectId.get(r.projectId) === scope.orgId

@@ -6,7 +6,9 @@
 //   - through Cloudflare Access, whose signed Cf-Access-Jwt-Assertion is checked here, or
 //   - with a valid API key as a Bearer token (the editor extension, scripts).
 // X-API-Key-Owner is believed only from the first two; any other caller naming an owner is
-// refused, since the owner decides whose sessions and projects a request acts on.
+// refused, since the owner decides whose sessions and projects a request acts on. The same
+// holds for X-Cortex-Key-Id, the key hub-mcp calls for, which decides the organizations a
+// request may reach (lib/key-scope.ts): a Bearer request is its own key's, and no other.
 import { createHash, createPublicKey, timingSafeEqual, verify, type JsonWebKey, type KeyObject } from 'crypto'
 import type { Context, MiddlewareHandler } from 'hono'
 import { createLogger } from '@cortex/shared-utils'
@@ -55,6 +57,13 @@ export function lookupApiKey(token: string): { key: ApiKeyRecord } | { error: st
 
 export function isLoopback(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+}
+
+const requestKeys = new WeakMap<Request, string>()
+
+/** The id of the API key a request presented as its Bearer token, once apiAuth has checked it. */
+export function authenticatedKeyId(c: Context): string | undefined {
+  return requestKeys.get(c.req.raw)
 }
 
 function sameSecret(given: string | undefined, secret: string): boolean {
@@ -165,6 +174,9 @@ export function apiAuth(opts: ApiAuthOptions): MiddlewareHandler {
       const found = lookupApiKey(bearer)
       if ('error' in found) return deny(401, found.error)
       if (owner !== undefined && owner !== found.key.name) return deny(403, 'X-API-Key-Owner does not match the API key')
+      const keyId = c.req.header('X-Cortex-Key-Id')
+      if (keyId !== undefined && keyId !== found.key.id) return deny(403, 'X-Cortex-Key-Id does not match the API key')
+      requestKeys.set(c.req.raw, found.key.id)
       return next()
     }
 
@@ -179,6 +191,7 @@ export function apiAuth(opts: ApiAuthOptions): MiddlewareHandler {
       }
       if (who === null) return deny(401, 'Invalid Cloudflare Access token')
       if (owner !== undefined) return deny(403, 'X-API-Key-Owner is set by the MCP gateway only')
+      if (c.req.header('X-Cortex-Key-Id') !== undefined) return deny(403, 'X-Cortex-Key-Id is set by the MCP gateway only')
       return next()
     }
 

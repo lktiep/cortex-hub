@@ -402,6 +402,16 @@ describe('servesProject', () => {
     expect(servesProject({ protocol: 2, projectId: null }, { projectId: null })).toBe(true)
     expect(servesProject({ protocol: 2, projectId: 'p1' }, { projectId: 'p1' })).toBe(true)
   })
+
+  it('a worker on an org-bound key serves its organizations\' tasks and the project-less ones its key created', () => {
+    const bound = { protocol: 1 as const, projectId: null, apiKeyOrgs: new Set(['org-a']), apiKeyOwner: 'key-a' }
+    expect(servesProject(bound, { projectId: 'p1', orgId: 'org-a' })).toBe(true)
+    expect(servesProject(bound, { projectId: 'p2', orgId: 'org-b' })).toBe(false)
+    expect(servesProject(bound, { projectId: 'p3' })).toBe(false)
+    expect(servesProject(bound, { projectId: null, apiKeyOwner: 'key-a' })).toBe(true)
+    expect(servesProject(bound, { projectId: null, apiKeyOwner: 'key-b' })).toBe(false)
+    expect(servesProject(bound, { projectId: null })).toBe(false)
+  })
 })
 
 describe('routeOrder', () => {

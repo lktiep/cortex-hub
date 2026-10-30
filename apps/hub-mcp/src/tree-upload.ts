@@ -18,6 +18,8 @@ export const MAX_TREE_UPLOAD_BYTES = 5 * 1024 * 1024
 
 interface Grant {
   owner: string | undefined
+  /** The key that asked for the link; the upload acts with that key's organizations. */
+  keyId?: string
   expiresAt: number
   /** An upload with this link is being created right now. */
   busy: boolean
@@ -26,17 +28,17 @@ interface Grant {
 const grants = new Map<string, Grant>()
 
 export type TreeUploadClaim =
-  | { ok: true; owner: string | undefined }
+  | { ok: true; owner: string | undefined; keyId?: string }
   | { ok: false; status: 404 | 409; error: string }
 
-export function issueTreeUpload(owner: string | undefined, now = Date.now()): { token: string; expiresAt: number } {
+export function issueTreeUpload(owner: string | undefined, now = Date.now(), keyId?: string): { token: string; expiresAt: number } {
   for (const [token, g] of grants) {
     if (g.expiresAt <= now) grants.delete(token)
   }
   const bytes = crypto.getRandomValues(new Uint8Array(24))
   const token = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
   const expiresAt = now + TREE_UPLOAD_TTL_MS
-  grants.set(token, { owner, expiresAt, busy: false })
+  grants.set(token, { owner, keyId, expiresAt, busy: false })
   return { token, expiresAt }
 }
 
@@ -48,7 +50,7 @@ export function claimTreeUpload(token: string, now = Date.now()): TreeUploadClai
   }
   if (g.busy) return { ok: false, status: 409, error: 'A plan is already being uploaded with this link. Wait for it to finish.' }
   g.busy = true
-  return { ok: true, owner: g.owner }
+  return { ok: true, owner: g.owner, keyId: g.keyId }
 }
 
 /** End an upload: a created tree spends the link, anything else leaves it for another try. */

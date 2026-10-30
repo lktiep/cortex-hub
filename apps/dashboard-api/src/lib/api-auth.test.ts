@@ -7,7 +7,7 @@ import { createTestDb } from '../conductor/testing.js'
 let testDb: Database.Database
 vi.mock('../db/client.js', () => ({ get db() { return testDb } }))
 
-import { accessVerifier, apiAuth, apiAuthFromEnv, describeApiAuth, isLoopback, type ApiAuthOptions } from './api-auth.js'
+import { accessVerifier, apiAuth, apiAuthFromEnv, authenticatedKeyId, describeApiAuth, isLoopback, type ApiAuthOptions } from './api-auth.js'
 
 const TEAM = 'demo.cloudflareaccess.invalid'
 const AUD = 'aud-1'
@@ -74,6 +74,16 @@ describe('apiAuth', () => {
     expect(await status(app, { Authorization: 'Bearer sk-good', 'X-API-Key-Owner': 'agent-b' })).toBe(403)
     expect(await status(app, { Authorization: 'Bearer sk-old' })).toBe(401)
     expect(await status(app, { Authorization: 'Bearer nope' })).toBe(401)
+  })
+
+  it('takes a key id with an API key only when it is that key\'s, and records the key', async () => {
+    const app = appWith({})
+    app.get('/api/key', (c) => c.json({ keyId: authenticatedKeyId(c) ?? null }))
+    expect(await status(app, { Authorization: 'Bearer sk-good', 'X-Cortex-Key-Id': 'k1' })).toBe(200)
+    expect(await status(app, { Authorization: 'Bearer sk-good', 'X-Cortex-Key-Id': 'k2' })).toBe(403)
+    expect(await (await app.request('/api/key', { headers: { Authorization: 'Bearer sk-good' } })).json()).toEqual({ keyId: 'k1' })
+    expect(await (await appWith({}, '127.0.0.1').request('/api/who', { headers: { 'X-Cortex-Key-Id': 'k2' } })).status).toBe(200)
+    expect(await status(app, { 'Cf-Access-Jwt-Assertion': accessToken(), 'X-Cortex-Key-Id': 'k1' })).toBe(403)
   })
 
   it('takes a valid Cloudflare Access token, without an owner', async () => {

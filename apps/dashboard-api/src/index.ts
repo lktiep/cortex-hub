@@ -32,6 +32,8 @@ import { captureTaskRisks } from './services/task-risks.js'
 import { onTaskSettled } from './conductor/lifecycle.js'
 import { scheduleConductor } from './conductor/scheduler.js'
 import { apiAuth, apiAuthFromEnv, describeApiAuth } from './lib/api-auth.js'
+import { keyScope } from './lib/key-scope.js'
+import { describeKeyBinding, keyBindingMode } from './lib/key-grant.js'
 
 const app = new Hono()
 const logger = createLogger('dashboard-api')
@@ -54,6 +56,9 @@ app.use('*', honoLogger())
 // ── Who may call /api (API_AUTH=required) ──
 const apiAuthOptions = apiAuthFromEnv()
 app.use('/api/*', apiAuth(apiAuthOptions))
+
+// ── The organizations an API key is bound to (API_KEY_BINDING) ──
+app.use('/api/*', keyScope)
 
 // ── Project Enabled Guard Middleware ──
 app.use('/api/*', projectGuard)
@@ -290,6 +295,7 @@ scheduleConductor()
 const server = serve({ fetch: app.fetch, port }, () => {
   logger.info(`Dashboard API listening on http://localhost:${port}`)
   logger.info(describeApiAuth(apiAuthOptions))
+  logger.info(`API_KEY_BINDING=${keyBindingMode()}: ${describeKeyBinding(keyBindingMode())}`)
   if (apiAuthOptions.required && !apiAuthOptions.internalSecret) {
     logger.error('API_AUTH=required without INTERNAL_API_SECRET: the MCP gateway cannot reach /api, so every MCP tool will fail')
   }

@@ -7,17 +7,57 @@ import styles from './page.module.css'
 import { parseDateSafe } from '@/lib/date'
 
 import useSWR from 'swr'
-import { listApiKeys, createApiKey, revokeApiKey, updateApiKey } from '@/lib/api'
-import type { ApiKey } from '@/lib/api'
+import { listApiKeys, createApiKey, revokeApiKey, updateApiKey, getOrganizations } from '@/lib/api'
+import type { ApiKey, KeyBindingMode, Organization } from '@/lib/api'
 import { KeyRound, ClipboardList, AlertTriangle, XCircle, ICON_INLINE } from '@/lib/icons'
 import { copyToClipboard } from '@/lib/clipboard'
 import KeyQuickStart from '@/components/KeyQuickStart'
 import { MCP_TOOL_PERMISSIONS } from '@cortex/shared-types'
 import { permissionsToSave, tickedPermissions } from '@/lib/key-permissions'
 
+const BINDING_NOTE: Record<KeyBindingMode, string> = {
+  off: 'A key bound to no organization reaches all of them.',
+  warn: 'A key bound to no organization still reaches all of them, and the hub logs a warning for it.',
+  required: 'A key bound to no organization is refused (API_KEY_BINDING=required).',
+}
+
+/** Organization checkboxes: the key reaches only the ticked ones; none ticked leaves it unbound. */
+function OrgPicker({ orgs, selected, onToggle, binding }: {
+  orgs: Organization[]
+  selected: string[]
+  onToggle: (id: string) => void
+  binding: KeyBindingMode
+}) {
+  return (
+    <>
+      <p className={styles.permHint}>
+        The key reaches only the projects of the ticked organizations. {selected.length === 0 && BINDING_NOTE[binding]}
+      </p>
+      <div className={styles.permGrid}>
+        {orgs.map((o) => (
+          <label key={o.id} className={styles.permItem}>
+            <input
+              type="checkbox"
+              checked={selected.includes(o.id)}
+              onChange={() => onToggle(o.id)}
+              style={{ accentColor: 'var(--accent-primary)' }}
+            />
+            <span>{o.name}</span>
+            <span className={styles.permGroup}>{o.project_count} projects</span>
+          </label>
+        ))}
+      </div>
+    </>
+  )
+}
+
 export default function KeysPage() {
   const { data, mutate } = useSWR('api_keys', listApiKeys)
   const keys = data?.keys ?? []
+  const binding = data?.binding ?? 'warn'
+  const { data: orgData } = useSWR('organizations', getOrganizations)
+  const orgs = orgData?.organizations ?? []
+  const orgName = (id: string) => orgs.find((o) => o.id === id)?.name ?? id
   const [showCreate, setShowCreate] = useState(false)
   const [newKeyResult, setNewKeyResult] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
@@ -27,6 +67,7 @@ export default function KeysPage() {
   const [keyScope, setKeyScope] = useState('all')
   const [keyPerms, setKeyPerms] = useState<string[]>(MCP_TOOL_PERMISSIONS.map((p) => p.id))
   const [keyExpiry, setKeyExpiry] = useState('never')
+  const [keyOrgs, setKeyOrgs] = useState<string[]>([])
 
   // Edit key form state
   const [showEdit, setShowEdit] = useState(false)
@@ -34,6 +75,7 @@ export default function KeysPage() {
   const [editName, setEditName] = useState('')
   const [editScope, setEditScope] = useState('all')
   const [editPerms, setEditPerms] = useState<string[]>([])
+  const [editOrgs, setEditOrgs] = useState<string[]>([])
   const [isUpdating, setIsUpdating] = useState(false)
 
   // Portaling and premium modals state
@@ -45,6 +87,8 @@ export default function KeysPage() {
     setMounted(true)
   }, [])
 
+  const toggle = (id: string) => (prev: string[]) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+
   function togglePerm(id: string) {
     setKeyPerms((prev) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id])
   }
@@ -54,6 +98,7 @@ export default function KeysPage() {
     setEditName(key.name)
     setEditScope(key.scope)
     setEditPerms(tickedPermissions(key.permissions))
+    setEditOrgs(key.orgs ?? [])
     setShowEdit(true)
   }
 
@@ -69,6 +114,7 @@ export default function KeysPage() {
         name: editName,
         scope: editScope,
         permissions: permissionsToSave(editPerms),
+        orgs: editOrgs,
       })
       setShowEdit(false)
       setEditTarget(null)
@@ -88,11 +134,13 @@ export default function KeysPage() {
         scope: keyScope,
         permissions: permissionsToSave(keyPerms),
         expiresInDays: keyExpiry === 'never' ? undefined : parseInt(keyExpiry),
+        orgs: keyOrgs,
       })
 
       setNewKeyResult(result.key)
       setShowCreate(false)
       setKeyName('')
+      setKeyOrgs([])
       mutate() // Refresh list
     } catch (err) {
       setErrorMessage(`Failed to create key: ${err instanceof Error ? err.message : String(err)}`)
@@ -132,6 +180,7 @@ export default function KeysPage() {
               <th>Name</th>
               <th>Key</th>
               <th>Scope</th>
+              <th>Organizations</th>
               <th>Created</th>
               <th>Expires</th>
               <th></th>
@@ -143,6 +192,11 @@ export default function KeysPage() {
                 <td className={styles.keyName}>{key.name}</td>
                 <td><code className={styles.keyPrefix}>{key.prefix}</code></td>
                 <td>{key.scope}</td>
+                <td className={(key.orgs ?? []).length ? undefined : styles.cellMuted}>
+                  {(key.orgs ?? []).length
+                    ? key.orgs.map(orgName).join(', ')
+                    : binding === 'required' ? 'Unbound (refused)' : 'All (unbound)'}
+                </td>
                 <td className={styles.cellMuted}>
                   {key.createdAt ? parseDateSafe(key.createdAt).toLocaleString() : '—'}
                 </td>
@@ -169,7 +223,7 @@ export default function KeysPage() {
             ))}
             {keys.length === 0 && (
               <tr>
-                <td colSpan={6} className={styles.emptyState}>
+                <td colSpan={7} className={styles.emptyState}>
                   No API keys. Create one to connect your AI agent.
                 </td>
               </tr>
@@ -236,6 +290,9 @@ export default function KeysPage() {
               <option value="org:default">Organization: Default/*</option>
               <option value="org:personal">Organization: Personal/*</option>
             </select>
+
+            <label className={styles.fieldLabel} style={{ marginTop: 'var(--space-5)' }}>Organizations</label>
+            <OrgPicker orgs={orgs} selected={keyOrgs} onToggle={(id) => setKeyOrgs(toggle(id))} binding={binding} />
 
             <label className={styles.fieldLabel} style={{ marginTop: 'var(--space-5)' }}>Permissions</label>
             <p className={styles.permHint}>With every box ticked the key also gets tools added in later versions.</p>
@@ -306,6 +363,9 @@ export default function KeysPage() {
               <option value="org:default">Organization: Default/*</option>
               <option value="org:personal">Organization: Personal/*</option>
             </select>
+
+            <label className={styles.fieldLabel} style={{ marginTop: 'var(--space-5)' }}>Organizations</label>
+            <OrgPicker orgs={orgs} selected={editOrgs} onToggle={(id) => setEditOrgs(toggle(id))} binding={binding} />
 
             <label className={styles.fieldLabel} style={{ marginTop: 'var(--space-5)' }}>Permissions</label>
             <p className={styles.permHint}>With every box ticked the key also gets tools added in later versions.</p>

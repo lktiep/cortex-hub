@@ -1,15 +1,18 @@
 import { db } from './client.js'
+import { grantOrgFilter } from '../lib/key-grant.js'
 
 export function normalizeProjectId(projectId: string | null | undefined): string | null {
   if (!projectId) return null
   try {
-    // Resolve project ID, slug, name, or git URL to the canonical UUID
+    // Resolve project ID, slug, name, or git URL to the canonical UUID, among the projects
+    // the request's API key may use: two organizations may each have a "server".
+    const granted = grantOrgFilter('org_id')
     const project = db.prepare(
       `SELECT id FROM projects
-       WHERE id = ?
+       WHERE (id = ?
           OR slug = ? COLLATE NOCASE
-          OR name = ? COLLATE NOCASE`
-    ).get(projectId, projectId, projectId) as { id: string } | undefined
+          OR name = ? COLLATE NOCASE)${granted.sql}`
+    ).get(projectId, projectId, projectId, ...granted.params) as { id: string } | undefined
 
     if (project?.id) {
       return project.id

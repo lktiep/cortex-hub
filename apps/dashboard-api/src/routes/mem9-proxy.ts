@@ -14,6 +14,7 @@ import { Mem9, blendRecency, byScore } from '@cortex/shared-mem9'
 import type { Embedder, Mem9Config, MemoryItem } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
+import { currentGrant, projectAllowed } from '../lib/key-grant.js'
 import { createEmbedder } from '../lib/embedder-factory.js'
 import { MEMORY_COLLECTION, memoryQdrantUrl } from '../lib/memory-collection.js'
 import { llmEnabledFor } from '../lib/llm-mode.js'
@@ -105,13 +106,25 @@ function getEmbedder(): Embedder {
  * The scope a memory is written to and read from. hub-mcp falls back to the agent's id, or
  * "default", when the caller names no project: one bucket every organization shared, so a recall
  * in one project read what agents had stored for another. A caller with a session has declared
- * its project; an unscoped store or search goes there.
+ * its project; an unscoped store or search goes there. A key bound to organizations without
+ * one gets a bucket of its own: the shared one may hold any organization's memories.
  */
 export function memoryScope(userId: string, apiKeyOwner: string | undefined): { userId: string; projectId?: string } {
   const normalized = normalizeMemoryUserId(userId)
   if (normalized.startsWith('project-')) return { userId: normalized }
   const project = projectOfActiveSession(apiKeyOwner)
-  return project ? { userId: `project-${project.id}`, projectId: project.id } : { userId: normalized }
+  if (project) return { userId: `project-${project.id}`, projectId: project.id }
+  const grant = currentGrant()
+  return grant?.orgs ? { userId: `key-${grant.keyId}` } : { userId: normalized }
+}
+
+/** True when the request may touch a memory stored under userId (see memoryScope). */
+function memoryAllowed(userId: string | undefined): boolean {
+  const grant = currentGrant()
+  if (!grant?.orgs) return true
+  if (userId === `key-${grant.keyId}`) return true
+  if (!userId?.startsWith('project-')) return false
+  return projectAllowed(grant, userId.slice('project-'.length).split(':branch-')[0])
 }
 
 /** How long a store waits for the memory to be written before it answers. */
@@ -275,6 +288,10 @@ mem9ProxyRouter.delete('/:id', async (c) => {
   try {
     const id = c.req.param('id')
     const mem9 = getMem9()
+    if (currentGrant()?.orgs) {
+      const memory = await mem9.get(id)
+      if (memory && !memoryAllowed(memory.userId)) return c.json({ error: 'Memory not found' }, 404)
+    }
     await mem9.delete(id)
     return c.json({ success: true, id })
   } catch (error) {

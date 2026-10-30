@@ -16,6 +16,15 @@ CREATE TABLE IF NOT EXISTS api_keys (
     last_used_at TEXT
 );
 
+-- The organizations a key may use. A key with no row is unbound: it reaches every
+-- organization, as all keys did before binding existed (see lib/key-grant.ts).
+CREATE TABLE IF NOT EXISTS api_key_orgs (
+    key_id TEXT NOT NULL,
+    org_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (key_id, org_id)
+);
+
 CREATE TABLE IF NOT EXISTS query_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id TEXT NOT NULL,

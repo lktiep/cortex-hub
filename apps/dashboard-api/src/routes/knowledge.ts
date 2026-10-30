@@ -11,7 +11,8 @@ import { VectorStore } from '@cortex/shared-mem9'
 import type { VectorStoreConfig, Embedder } from '@cortex/shared-mem9'
 import { db } from '../db/client.js'
 import { normalizeProjectId } from '../db/project-utils.js'
-import { recallProjects } from '../lib/session-project.js'
+import { projectOfActiveSession, recallProjects } from '../lib/session-project.js'
+import { currentGrant, grantProjectIds } from '../lib/key-grant.js'
 import { createLogger } from '@cortex/shared-utils'
 import { createEmbedder } from '../lib/embedder-factory.js'
 import { linkablePaths, linkFiles, linksOf, notesFor, notesProject, unlinkDocument } from '../services/file-notes.js'
@@ -300,8 +301,16 @@ knowledgeRouter.post('/', async (c) => {
 
     // Normalize project_id: resolve to canonical lowercase slug. A note linked to files with no
     // project named belongs to the caller's session project: links are looked up per project.
-    const normalizedProjectId = normalizeProjectId(projectId)
+    let normalizedProjectId = normalizeProjectId(projectId)
       ?? (Array.isArray(files) && files.length > 0 ? notesProject({ apiKeyOwner: c.req.header('X-API-Key-Owner') }) ?? null : null)
+    // A document of no project is read by every key on the hub. A key bound to organizations
+    // writes into its session's project instead, so that what it stores stays inside them.
+    if (!normalizedProjectId && currentGrant()?.orgs) {
+      normalizedProjectId = projectOfActiveSession(c.req.header('X-API-Key-Owner'))?.id ?? null
+      if (!normalizedProjectId) {
+        return c.json({ error: 'Name the projectId, or start a session first: this API key is bound to organizations and cannot store hub-wide knowledge.' }, 400)
+      }
+    }
 
     // Chunk content
     const chunks = chunkText(content)
@@ -701,11 +710,14 @@ knowledgeRouter.post('/search', async (c) => {
     const must: Array<Record<string, unknown>> = []
     if (normalizedProjectId) {
       must.push({ key: 'project_id', match: { value: normalizedProjectId } })
-    } else if (!allProjects) {
+    } else {
       // No project named: the caller's own work and the hub-wide notes, not every project on
       // the hub. Unscoped, a cortex-hub session's recall was other repos' docs, three of four
       // hits, ~2k characters an agent read for nothing. Hub-wide notes carry no project ('').
-      const scoped = recallProjects(c.req.header('X-API-Key-Owner'))
+      // allProjects widens that to every project the API key may use: all of them, unless the
+      // key is bound to organizations.
+      const granted = grantProjectIds()
+      const scoped = allProjects ? granted : recallProjects(c.req.header('X-API-Key-Owner')) ?? granted
       if (scoped) {
         must.push({ should: [{ key: 'project_id', match: { any: [...scoped, ''] } }, { is_empty: { key: 'project_id' } }] })
       }
