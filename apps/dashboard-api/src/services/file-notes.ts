@@ -2,6 +2,7 @@
 // about, so an agent is shown it when it reaches those files instead of having to search for it.
 import { db } from '../db/client.js'
 import { normalizeProjectId } from '../db/project-utils.js'
+import { allowedOrgs, currentGrant } from '../lib/key-grant.js'
 import { normalizePath } from '../conductor/files.js'
 import { findProjectByRepo } from '../lib/project-match.js'
 import { projectOfActiveSession } from '../lib/session-project.js'
@@ -142,7 +143,7 @@ export function notesFor(projectId: string, select: { files?: string[]; text?: s
 export function notesProject(hints: { repo?: string; projectId?: string; apiKeyOwner?: string | null }): string | undefined {
   // A repo or project that is named but unknown answers nothing: falling back to the session
   // would hand back another project's notes.
-  if (hints.repo) return findProjectByRepo(hints.repo)?.id
+  if (hints.repo) return findProjectByRepo(hints.repo, allowedOrgs(currentGrant()))?.id
   if (hints.projectId) {
     const id = normalizeProjectId(hints.projectId)
     const known = id ? db.prepare('SELECT id FROM projects WHERE id = ?').get(id) as { id: string } | undefined : undefined

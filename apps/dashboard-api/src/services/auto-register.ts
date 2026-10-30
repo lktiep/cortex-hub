@@ -51,14 +51,22 @@ function pickOrg(ref: RepoRef, tokenProjectId: string): string {
  * `indexRegisteredProject`'s job.
  *
  * The caller has already looked the repo up and found nothing.
+ *
+ * `withinOrgs` holds a caller whose API key is bound to organizations to them: the token must
+ * have been saved in one of them, and the project lands in one of them.
  */
-export function autoRegisterProject(repo: string): AutoRegistration | null {
+export function autoRegisterProject(repo: string, withinOrgs?: ReadonlySet<string>): AutoRegistration | null {
   const ref = parseRepoUrl(repo)
   if (!ref) return null
   const saved = savedTokenFor(ref.host, ref.owner)
   if (!saved) return null
 
-  const orgId = pickOrg(ref, saved.projectId)
+  let orgId = pickOrg(ref, saved.projectId)
+  if (withinOrgs) {
+    const tokenOrg = (db.prepare('SELECT org_id FROM projects WHERE id = ?').get(saved.projectId) as { org_id: string }).org_id
+    if (!withinOrgs.has(tokenOrg)) return null
+    if (!withinOrgs.has(orgId)) orgId = tokenOrg
+  }
   const orgName = (db.prepare('SELECT name FROM organizations WHERE id = ?').get(orgId) as { name: string }).name
   const repoUrl = httpsRepoUrl(ref)
   const insert = db.prepare(

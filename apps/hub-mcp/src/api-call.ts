@@ -11,7 +11,9 @@ export const telemetryStorage = new AsyncLocalStorage<{ computeTokens: number; c
  *
  * When env.API_KEY_OWNER is set (resolved during auth), it's
  * forwarded as X-API-Key-Owner header so dashboard-api can
- * use the authoritative identity from the API key.
+ * use the authoritative identity from the API key. The key's id
+ * goes as X-Cortex-Key-Id: dashboard-api limits the request to the
+ * organizations that key is bound to.
  */
 export async function apiCall(
   env: Env,
@@ -25,6 +27,9 @@ export async function apiCall(
   if (env.API_KEY_OWNER && !headers.has('X-API-Key-Owner')) {
     headers.set('X-API-Key-Owner', env.API_KEY_OWNER)
   }
+  // Always the authenticated key's: no tool may speak for another key.
+  headers.delete('X-Cortex-Key-Id')
+  if (env.API_KEY_ID) headers.set('X-Cortex-Key-Id', env.API_KEY_ID)
 
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,

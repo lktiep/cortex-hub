@@ -266,6 +266,9 @@ services:
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-}
       CF_ACCESS_TEAM_DOMAIN: ${CF_ACCESS_TEAM_DOMAIN:-}
       CF_ACCESS_AUD: ${CF_ACCESS_AUD:-}
+      # What an API key bound to no organization may do (lib/key-grant.ts): warn lets it reach
+      # every organization and logs it once, required refuses it, off says nothing.
+      API_KEY_BINDING: ${API_KEY_BINDING:-warn}
       # mem9 Configuration
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       MEM9_LLM_MODEL: ${MEM9_LLM_MODEL:-}

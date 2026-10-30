@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { randomUUID } from 'crypto'
 import { db } from '../db/client.js'
+import { grantOrgFilter } from '../lib/key-grant.js'
 import { requestIndexing } from '../services/indexer.js'
 import { createLogger } from '@cortex/shared-utils'
 
@@ -36,10 +37,11 @@ webhooksRouter.post('/push', async (c) => {
       return c.json({ error: 'repo and branch are required' }, 400)
     }
 
-    // Look up project
+    // Look up project (an org-bound key's push lands only in its organizations)
+    const granted = grantOrgFilter('org_id')
     const project = db.prepare(
-      `SELECT id FROM projects WHERE git_repo_url = ? OR git_repo_url = ?`
-    ).get(repo, repo.replace(/\.git$/, '')) as { id: string } | undefined
+      `SELECT id FROM projects WHERE (git_repo_url = ? OR git_repo_url = ?)${granted.sql}`
+    ).get(repo, repo.replace(/\.git$/, ''), ...granted.params) as { id: string } | undefined
 
     if (!project) {
       return c.json({ ignored: true, reason: 'No matching project found' })

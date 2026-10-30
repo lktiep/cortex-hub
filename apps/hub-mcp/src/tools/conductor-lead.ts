@@ -88,7 +88,7 @@ export async function createPlan(env: Env, plan: TreePlan): Promise<{ ok: boolea
 
 /** A one-time link for the plan file, and the command that sends it. */
 function uploadInstructions(env: Env): string {
-  const { token, expiresAt } = issueTreeUpload(env.API_KEY_OWNER)
+  const { token, expiresAt } = issueTreeUpload(env.API_KEY_OWNER, Date.now(), env.API_KEY_ID)
   return [
     `**Upload link ready** — one plan, valid until ${new Date(expiresAt).toISOString()}`,
     '1. Write the whole plan to a JSON file: {"parentId"?, "projectId"?, "tasks": [...]}, with the same task fields as this tool.',

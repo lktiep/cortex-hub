@@ -5,8 +5,9 @@ import type {
 } from '@cortex/shared-types'
 import { db } from '../db/client.js'
 import { getAllConnectedAgents, notifyAgents } from '../ws/conductor.js'
-import { dispatch, pickForPull, servesProject } from '../conductor/dispatcher.js'
+import { dispatch, pickForPull, projectOrgs, servesProject } from '../conductor/dispatcher.js'
 import { normalizeFiles } from '../conductor/files.js'
+import { grantTaskCondition, taskInGrant } from '../conductor/grant.js'
 import {
   acceptTask, cancelTask, completeTask, onCompleted, recordProgress, rerouteTask, reviewTask, revokeTask, type Outcome,
 } from '../conductor/lifecycle.js'
@@ -16,6 +17,7 @@ import {
   toTaskResult, type TaskRow,
 } from '../conductor/rows.js'
 import { createTree, fallbackProblem, knownExecutor, priorityValue, stringListProblem } from '../conductor/tree.js'
+import { currentGrant, projectAllowed } from '../lib/key-grant.js'
 
 export const conductorRouter = new Hono()
 
@@ -59,10 +61,13 @@ function refusal(c: Context, r: { status: 400 | 403 | 404 | 409; error: string; 
  * `limit` that cuts the last tree short never leaves a child without its parent.
  */
 function listTrees(count: number, limit: number, projectId: string | undefined): TaskRow[] {
+  const grant = grantTaskCondition()
+  const rootGrant = grant ? ` AND ${grant.sql}` : ''
+  const rowGrant = grant ? ` WHERE ${grantTaskCondition('t.')!.sql}` : ''
   return db.prepare(`WITH RECURSIVE tree(id, root, depth) AS (
       SELECT id, id, 0 FROM conductor_tasks
       WHERE (parent_task_id IS NULL OR parent_task_id NOT IN (SELECT id FROM conductor_tasks))
-        AND (? IS NULL OR project_id = ?)
+        AND (? IS NULL OR project_id = ?)${rootGrant}
       UNION ALL
       SELECT t.id, tree.root, tree.depth + 1 FROM conductor_tasks t JOIN tree ON t.parent_task_id = tree.id
       WHERE tree.depth < 64
@@ -73,37 +78,58 @@ function listTrees(count: number, limit: number, projectId: string | undefined):
       FROM tree JOIN conductor_tasks t ON t.id = tree.id
       GROUP BY tree.root ORDER BY active DESC LIMIT ?
     )
-    SELECT t.* FROM tree JOIN ranked r ON r.root = tree.root JOIN conductor_tasks t ON t.id = tree.id
+    SELECT t.* FROM tree JOIN ranked r ON r.root = tree.root JOIN conductor_tasks t ON t.id = tree.id${rowGrant}
     ORDER BY r.active DESC, tree.root, tree.depth, t.created_at
-    LIMIT ?`).all(projectId ?? null, projectId ?? null, count, limit) as TaskRow[]
+    LIMIT ?`).all(
+    projectId ?? null, projectId ?? null, ...(grant?.params ?? []), count, ...(grant?.params ?? []), limit,
+  ) as TaskRow[]
 }
 
 function isActiveStatus(status: string): boolean {
   return (ACTIVE_STATUSES as readonly string[]).includes(status)
 }
 
+/** The connected workers; a bound key sees those of its organizations' projects and its own. */
+function visibleAgents(): ReturnType<typeof getAllConnectedAgents> {
+  const grant = currentGrant()
+  const all = getAllConnectedAgents()
+  if (!grant?.orgs) return all
+  return all.filter((a) => a.apiKeyOwner === grant.keyName || (!!a.projectId && projectAllowed(grant, a.projectId)))
+}
+
+/** For a bound key, the sessions of its organizations' projects and the project-less ones its key opened. */
+function grantSessionCondition(): { sql: string; params: string[] } {
+  const grant = currentGrant()
+  if (!grant?.orgs) return { sql: '', params: [] }
+  const tasks = grantTaskCondition('', grant)!
+  // the task condition, on session_handoffs' own owner column
+  return { sql: ` AND ${tasks.sql.replace('api_key_owner', 'api_key_name')}`, params: tasks.params }
+}
+
 /** Active sessions, the most recently active first. */
 function activeSessions(): SessionView[] {
+  const sessionGrant = grantSessionCondition()
   return db.prepare(`
     SELECT id AS sessionId, from_agent AS agentId, hostname, ide, branch, project_id AS projectId,
            api_key_name AS apiKeyName, COALESCE(last_activity, created_at) AS lastActivity
     FROM session_handoffs
-    WHERE status = 'active'
+    WHERE status = 'active'${sessionGrant.sql}
     ORDER BY lastActivity DESC
     LIMIT ?
-  `).all(SESSION_LIMIT) as SessionView[]
+  `).all(...sessionGrant.params, SESSION_LIMIT) as SessionView[]
 }
 
 /** Closed sessions, the most recently active first. */
 function closedSessions(): ClosedSessionView[] {
+  const sessionGrant = grantSessionCondition()
   return db.prepare(`
     SELECT id AS sessionId, from_agent AS agentId, hostname, ide, branch, project_id AS projectId,
            api_key_name AS apiKeyName, COALESCE(last_activity, created_at) AS lastActivity, status
     FROM session_handoffs
-    WHERE status IN ('completed', 'abandoned', 'expired')
+    WHERE status IN ('completed', 'abandoned', 'expired')${sessionGrant.sql}
     ORDER BY lastActivity DESC
     LIMIT ?
-  `).all(SESSION_LIMIT) as ClosedSessionView[]
+  `).all(...sessionGrant.params, SESSION_LIMIT) as ClosedSessionView[]
 }
 
 function allCompleted(ids: string[]): boolean {
@@ -118,7 +144,7 @@ function allCompleted(ids: string[]): boolean {
 // ── Connected agents (real-time from WebSocket) and active sessions ──
 conductorRouter.get('/agents', (c) => {
   try {
-    const connected = getAllConnectedAgents()
+    const connected = visibleAgents()
     return c.json({
       agents: connected,
       online: connected.length,
@@ -333,6 +359,11 @@ conductorRouter.get('/', (c) => {
       conditions.push('project_id = ?')
       params.push(projectId)
     }
+    const grant = grantTaskCondition()
+    if (grant) {
+      conditions.push(grant.sql)
+      params.push(...grant.params)
+    }
     if (parentTaskId === 'none') {
       conditions.push('parent_task_id IS NULL')
     } else if (parentTaskId) {
@@ -363,6 +394,10 @@ conductorRouter.post('/tree', async (c) => {
         return c.json({ error: `${field} must be a string` }, 400)
       }
     }
+    if (typeof body['parentId'] === 'string') {
+      const parent = getTask(body['parentId'])
+      if (parent && !taskInGrant(parent)) return c.json({ error: `parentId ${body['parentId']} not found` }, 400)
+    }
     // createTree validates the tasks themselves
     const created = createTree(body as unknown as TreeCreateRequest, headerOwner(c) ?? null)
     if (!created.ok) return c.json(created.err, 400)
@@ -379,17 +414,22 @@ conductorRouter.get('/:id/tree', (c) => {
     const root = getTask(id)
     if (!root) return c.json({ error: 'Task not found' }, 404)
 
-    const tasks = db.prepare(`
+    const subtree = db.prepare(`
       WITH RECURSIVE subtree(id) AS (
         SELECT id FROM conductor_tasks WHERE parent_task_id = ?
         UNION SELECT t.id FROM conductor_tasks t JOIN subtree s ON t.parent_task_id = s.id
       )
       SELECT * FROM conductor_tasks WHERE id IN (SELECT id FROM subtree) ORDER BY created_at ASC, rowid ASC
     `).all(id) as TaskRow[]
+    const tasks = subtree.filter((t) => taskInGrant(t))
     // the workers the dispatcher would give the root's project to
-    const workers = getAllConnectedAgents().filter((w) => {
+    const workers = visibleAgents().filter((w) => {
       const conn = getByAgent(w.agentId)
-      return conn !== undefined && servesProject(conn, { projectId: root.project_id })
+      return conn !== undefined && servesProject(conn, {
+        projectId: root.project_id,
+        orgId: root.project_id === null ? null : projectOrgs().get(root.project_id) ?? null,
+        apiKeyOwner: root.api_key_owner,
+      })
     })
 
     return c.json({ root, tasks, workers })
@@ -428,9 +468,9 @@ conductorRouter.get('/:id', (c) => {
     if (!task) return c.json({ error: 'Task not found' }, 404)
 
     // Include subtasks if this task has children
-    const subtasks = db.prepare(
+    const subtasks = (db.prepare(
       'SELECT * FROM conductor_tasks WHERE parent_task_id = ? ORDER BY priority ASC, created_at ASC'
-    ).all(id) as TaskRow[]
+    ).all(id) as TaskRow[]).filter((t) => taskInGrant(t))
 
     // Include recent progress logs
     const logs = db.prepare(
@@ -521,13 +561,13 @@ conductorRouter.post('/', async (c) => {
 
     // Validate parent exists if specified
     if (parentTaskId) {
-      const parent = db.prepare('SELECT id FROM conductor_tasks WHERE id = ?').get(parentTaskId)
-      if (!parent) return c.json({ error: 'Parent task not found' }, 404)
+      const parent = getTask(parentTaskId)
+      if (!parent || !taskInGrant(parent)) return c.json({ error: 'Parent task not found' }, 404)
     }
 
     // Validate dependency task IDs exist
     const deps = [...new Set(b.dependsOn ?? [])]
-    if (missingTasks(deps).length > 0) {
+    if (missingTasks(deps).length > 0 || deps.some((d) => !taskInGrant(getTask(d)!))) {
       return c.json({ error: 'One or more dependency task IDs not found' }, 400)
     }
 
@@ -536,9 +576,11 @@ conductorRouter.post('/', async (c) => {
 
     // Auto-link: if an agent creates a task without parentTaskId, link to their active task
     if (!parentTaskId && createdByAgent !== 'dashboard' && createdByAgent !== 'dashboard-ui') {
+      const grant = grantTaskCondition()
       const activeTask = db.prepare(
-        "SELECT id FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'in_progress') ORDER BY accepted_at DESC LIMIT 1"
-      ).get(createdByAgent) as { id: string } | undefined
+        "SELECT id FROM conductor_tasks WHERE assigned_to_agent = ? AND status IN ('accepted', 'in_progress')" +
+        `${grant ? ` AND ${grant.sql}` : ''} ORDER BY accepted_at DESC LIMIT 1`
+      ).get(createdByAgent, ...(grant?.params ?? [])) as { id: string } | undefined
       if (activeTask) {
         parentTaskId = activeTask.id
       }
@@ -592,12 +634,15 @@ conductorRouter.post('/', async (c) => {
 conductorRouter.post('/pickup', async (c) => {
   try {
     const body = (await readObject(c)) ?? {}
-    const { agentId, apiKeyOwner = headerOwner(c), sessionAgent, projectId } = body as {
+    const { agentId, sessionAgent, projectId, ...named } = body as {
       agentId?: string
       apiKeyOwner?: string
       sessionAgent?: string
       projectId?: string | null
     }
+    // a bound key picks up as itself
+    const keyName = currentGrant()?.orgs ? currentGrant()?.keyName : undefined
+    const apiKeyOwner = keyName ?? named.apiKeyOwner ?? headerOwner(c)
 
     if (!agentId && !apiKeyOwner && !sessionAgent) {
       return c.json({ error: 'At least one identity field required (agentId, apiKeyOwner, or sessionAgent)' }, 400)

@@ -13,9 +13,13 @@ export interface WorkerConn {
   projectId: string | null; status: 'idle' | 'busy'; connectedAt: string; lastPing: string; idleSince: number
   /** false until the socket has registered (worker.register / agent.register) */
   ready: boolean
+  /** The organizations the socket's API key is bound to; null or absent when it is unbound (key-grant.ts). */
+  apiKeyOrgs?: ReadonlySet<string> | null
 }
 
-export type ConnInit = Pick<WorkerConn, 'ws' | 'agentId' | 'apiKeyOwner' | 'apiKeyProjectId' | 'hostname' | 'ide' | 'platform' | 'capabilities'>
+export type ConnInit = Pick<
+  WorkerConn, 'ws' | 'agentId' | 'apiKeyOwner' | 'apiKeyProjectId' | 'apiKeyOrgs' | 'hostname' | 'ide' | 'platform' | 'capabilities'
+>
 
 export type AddResult = { ok: true; conn: WorkerConn; replaced: boolean } | { ok: false; code: 4009; reason: string }
 

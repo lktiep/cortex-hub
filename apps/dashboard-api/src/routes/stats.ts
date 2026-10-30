@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { db } from '../db/client.js'
 import { takeNotifications } from '../conductor/notify.js'
+import { currentGrant, grantOrgFilter } from '../lib/key-grant.js'
 
 export const statsRouter = new Hono()
 
@@ -61,8 +62,40 @@ statsRouter.get('/overview', async (c) => {
 // ── Enriched Overview (v2) — single call for dashboard ──
 import { getGitNexusRepos } from './intel.js'
 
+/**
+ * For an org-bound key, the rows of its organizations' projects and, with no project, its own
+ * (`ownerColumn` holds the key's name); undefined when the request is not limited.
+ */
+function grantRowCondition(ownerColumn: string): { sql: string; params: string[] } | undefined {
+  const grant = currentGrant()
+  if (!grant?.orgs) return undefined
+  const orgs = grantOrgFilter('org_id', grant)
+  return {
+    sql: `(project_id IN (SELECT id FROM projects WHERE 1${orgs.sql}) OR (project_id IS NULL AND ${ownerColumn} = ?))`,
+    params: [...orgs.params, grant.keyName],
+  }
+}
+
 statsRouter.get('/overview-v2', async (c) => {
   try {
+    // An org-bound key's overview covers its organizations: their projects, and the calls,
+    // sessions and reports made in them or, with no project, by the key itself.
+    const grant = currentGrant()
+    const bound = grant?.orgs ? grant : undefined
+    const all = { sql: '1', params: [] as string[] }
+    const logs = grantRowCondition('agent_id') ?? all
+    const sessions = grantRowCondition('api_key_name') ?? all
+    const reports = grantRowCondition('agent_id') ?? all
+    const projectOrgs = grantOrgFilter('p.org_id')
+    const docOrgs = grantOrgFilter('org_id')
+    const docs = bound
+      ? {
+          // A document of no project is the hub's own, which every key reads.
+          sql: `(project_id IS NULL OR project_id IN (SELECT id FROM projects WHERE 1${docOrgs.sql}) OR project_id IN (SELECT LOWER(slug) FROM projects WHERE 1${docOrgs.sql}))`,
+          params: [...docOrgs.params, ...docOrgs.params],
+        }
+      : all
+
     // ── Pre-fetch GitNexus native repos ──
     let gitNexusRepos: Array<{ projectId: string; symbols: number | string }> = []
     try {
@@ -72,19 +105,20 @@ statsRouter.get('/overview-v2', async (c) => {
     }
 
     // ── Basic counts ──
-    const keyCount = (db.prepare('SELECT COUNT(*) as count FROM api_keys').get() as { count: number }).count
-    const agentCount = (db.prepare("SELECT COUNT(DISTINCT from_agent) as count FROM session_handoffs WHERE status = 'active'").get() as { count: number }).count
-    const totalQueries = (db.prepare('SELECT COUNT(*) as count FROM query_logs').get() as { count: number }).count
-    const totalSessions = (db.prepare('SELECT COUNT(*) as count FROM session_handoffs').get() as { count: number }).count
-    const orgCount = (db.prepare('SELECT COUNT(*) as count FROM organizations').get() as { count: number }).count
+    const keyCount = bound ? 1 : (db.prepare('SELECT COUNT(*) as count FROM api_keys').get() as { count: number }).count
+    const agentCount = (db.prepare(`SELECT COUNT(DISTINCT from_agent) as count FROM session_handoffs WHERE status = 'active' AND ${sessions.sql}`).get(...sessions.params) as { count: number }).count
+    const totalQueries = (db.prepare(`SELECT COUNT(*) as count FROM query_logs WHERE ${logs.sql}`).get(...logs.params) as { count: number }).count
+    const totalSessions = (db.prepare(`SELECT COUNT(*) as count FROM session_handoffs WHERE ${sessions.sql}`).get(...sessions.params) as { count: number }).count
+    const orgCount = bound?.orgs?.size ?? (db.prepare('SELECT COUNT(*) as count FROM organizations').get() as { count: number }).count
     const today = new Date().toISOString().split('T')[0]
     const todayStart = `${today} 00:00:00`  // SQLite uses space, not T
-    const todayQueries = (db.prepare("SELECT COUNT(*) as count FROM query_logs WHERE created_at >= ?").get(todayStart) as { count: number }).count
-    const todayTokens = (db.prepare("SELECT COALESCE(SUM(total_tokens), 0) as total FROM usage_logs WHERE created_at >= ?").get(todayStart) as { total: number }).total
+    const todayQueries = (db.prepare(`SELECT COUNT(*) as count FROM query_logs WHERE created_at >= ? AND ${logs.sql}`).get(todayStart, ...logs.params) as { count: number }).count
+    const todayTokens = (db.prepare(`SELECT COALESCE(SUM(total_tokens), 0) as total FROM usage_logs WHERE created_at >= ? AND ${logs.sql}`).get(todayStart, ...logs.params) as { total: number }).total
 
     // ── Memory nodes from Qdrant ──
+    // Collections count across every organization, so a bound key's overview leaves them out.
     let memoryNodes = 0
-    try {
+    if (!bound) try {
       const res = await fetch(`${QDRANT_URL()}/collections`, { signal: AbortSignal.timeout(3000) })
       if (res.ok) {
         const data = (await res.json()) as { result?: { collections?: { name: string }[] } }
@@ -105,8 +139,8 @@ statsRouter.get('/overview-v2', async (c) => {
     const projects = db.prepare(`
       SELECT p.id, p.name, p.slug, p.git_provider, p.git_repo_url,
              p.indexed_symbols, p.indexed_at, p.created_at
-      FROM projects p ORDER BY p.created_at DESC
-    `).all() as Array<{
+      FROM projects p WHERE 1${projectOrgs.sql} ORDER BY p.created_at DESC
+    `).all(...projectOrgs.params) as Array<{
       id: string; name: string; slug: string; git_provider: string | null
       git_repo_url: string | null; indexed_symbols: number | null
       indexed_at: string | null; created_at: string
@@ -195,23 +229,23 @@ statsRouter.get('/overview-v2', async (c) => {
 
     // ── Quality summary ──
     const lastReport = db.prepare(
-      'SELECT grade, score_total, created_at FROM quality_reports ORDER BY created_at DESC LIMIT 1'
-    ).get() as { grade: string; score_total: number; created_at: string } | undefined
+      `SELECT grade, score_total, created_at FROM quality_reports WHERE ${reports.sql} ORDER BY created_at DESC LIMIT 1`
+    ).get(...reports.params) as { grade: string; score_total: number; created_at: string } | undefined
 
     const reportsToday = (db.prepare(
-      "SELECT COUNT(*) as count FROM quality_reports WHERE created_at >= ?"
-    ).get(todayStart) as { count: number }).count
+      `SELECT COUNT(*) as count FROM quality_reports WHERE created_at >= ? AND ${reports.sql}`
+    ).get(todayStart, ...reports.params) as { count: number }).count
 
     const avgScore = (db.prepare(
-      'SELECT AVG(score_total) as avg FROM quality_reports'
-    ).get() as { avg: number | null }).avg ?? 0
+      `SELECT AVG(score_total) as avg FROM quality_reports WHERE ${reports.sql}`
+    ).get(...reports.params) as { avg: number | null }).avg ?? 0
 
     // ── Knowledge stats ──
     let knowledgeStats = { totalDocs: 0, totalChunks: 0, totalHits: 0 }
     try {
-      const kDocs = (db.prepare('SELECT COUNT(*) as count FROM knowledge_documents').get() as { count: number }).count
-      const kChunks = (db.prepare('SELECT COALESCE(SUM(chunk_count), 0) as total FROM knowledge_documents').get() as { total: number }).total
-      const kHits = (db.prepare('SELECT COALESCE(SUM(hit_count), 0) as total FROM knowledge_documents').get() as { total: number }).total
+      const kDocs = (db.prepare(`SELECT COUNT(*) as count FROM knowledge_documents WHERE ${docs.sql}`).get(...docs.params) as { count: number }).count
+      const kChunks = (db.prepare(`SELECT COALESCE(SUM(chunk_count), 0) as total FROM knowledge_documents WHERE ${docs.sql}`).get(...docs.params) as { total: number }).total
+      const kHits = (db.prepare(`SELECT COALESCE(SUM(hit_count), 0) as total FROM knowledge_documents WHERE ${docs.sql}`).get(...docs.params) as { total: number }).total
       knowledgeStats = { totalDocs: kDocs, totalChunks: kChunks, totalHits: kHits }
     } catch (e) { console.warn('[overview-v2] knowledge stats error:', e) }
 
@@ -239,21 +273,21 @@ statsRouter.get('/overview-v2', async (c) => {
         SELECT COUNT(*) as total_calls,
                COALESCE(SUM(output_size), 0) as total_output_bytes,
                COALESCE(SUM(input_size), 0) + COALESCE(SUM(output_size), 0) as total_data_bytes
-        FROM query_logs WHERE status = 'ok'
-      `).get() as { total_calls: number; total_output_bytes: number; total_data_bytes: number }
+        FROM query_logs WHERE status = 'ok' AND ${logs.sql}
+      `).get(...logs.params) as { total_calls: number; total_output_bytes: number; total_data_bytes: number }
 
       const topTools = db.prepare(`
         SELECT tool, COUNT(*) as calls, COALESCE(SUM(output_size), 0) as output_bytes, COALESCE(SUM(compute_tokens), 0) as compute_tokens
-        FROM query_logs WHERE status = 'ok'
+        FROM query_logs WHERE status = 'ok' AND ${logs.sql}
         GROUP BY tool ORDER BY output_bytes DESC LIMIT 5
-      `).all() as Array<{ tool: string; calls: number; output_bytes: number; compute_tokens: number }>
+      `).all(...logs.params) as Array<{ tool: string; calls: number; output_bytes: number; compute_tokens: number }>
 
       // Calculate per-tool savings using baseline model
       const allTools = db.prepare(`
         SELECT tool, COUNT(*) as calls, COALESCE(SUM(output_size), 0) as output_bytes
-        FROM query_logs WHERE status = 'ok'
+        FROM query_logs WHERE status = 'ok' AND ${logs.sql}
         GROUP BY tool
-      `).all() as Array<{ tool: string; calls: number; output_bytes: number }>
+      `).all(...logs.params) as Array<{ tool: string; calls: number; output_bytes: number }>
 
       let totalTokensSaved = 0
       for (const t of allTools) {
@@ -423,14 +457,17 @@ statsRouter.post('/admin/restart/:service', async (c) => {
 statsRouter.post('/query-log', async (c) => {
   try {
     const { agentId, tool, params, status, latencyMs, error, projectId, inputSize, outputSize, computeTokens, computeModel } = await c.req.json()
-    const resolvedAgent = agentId || 'unknown'
+    // a call made with an org-bound key is logged as that key, in its organizations
+    const grant = currentGrant()
+    const resolvedAgent = (grant?.orgs ? grant.keyName : agentId) || 'unknown'
     
     // Resolve project slug/name to actual internal UUID (e.g. "Do_An" -> "proj-12224eee")
     let resolvedProjectId = projectId || null
     if (resolvedProjectId && !resolvedProjectId.startsWith('proj-')) {
+      const granted = grantOrgFilter('org_id', grant)
       const projRecord = db.prepare(
-        "SELECT id FROM projects WHERE slug = ? COLLATE NOCASE OR name = ? COLLATE NOCASE OR slug LIKE ? COLLATE NOCASE"
-      ).get(resolvedProjectId, resolvedProjectId, `%${resolvedProjectId}%`) as { id: string } | undefined
+        `SELECT id FROM projects WHERE (slug = ? COLLATE NOCASE OR name = ? COLLATE NOCASE OR slug LIKE ? COLLATE NOCASE)${granted.sql}`
+      ).get(resolvedProjectId, resolvedProjectId, `%${resolvedProjectId}%`, ...granted.params) as { id: string } | undefined
       if (projRecord) {
         resolvedProjectId = projRecord.id
       }
@@ -483,7 +520,7 @@ statsRouter.post('/query-log', async (c) => {
     // Bridge backend LLM cost to the unified billing table
     if (computeTokens && computeTokens > 0 && computeModel) {
       const usageStmt = db.prepare('INSERT INTO usage_logs (agent_id, model, total_tokens, request_type, project_id) VALUES (?, ?, ?, ?, ?)')
-      usageStmt.run(agentId || 'unknown', computeModel, computeTokens, 'tool', resolvedProjectId)
+      usageStmt.run(resolvedAgent, computeModel, computeTokens, 'tool', resolvedProjectId)
     }
 
     return c.json({ success: true })
@@ -547,6 +584,8 @@ statsRouter.get('/tool-analytics', (c) => {
     const params: unknown[] = [since]
     if (agentId) { conditions.push('agent_id = ?'); params.push(agentId) }
     if (projectId) { conditions.push('project_id = ?'); params.push(projectId) }
+    const granted = grantRowCondition('agent_id')
+    if (granted) { conditions.push(granted.sql); params.push(...granted.params) }
     const where = conditions.join(' AND ')
 
     // Per-tool breakdown
@@ -614,11 +653,13 @@ statsRouter.get('/tool-analytics', (c) => {
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date(); d.setDate(d.getDate() - i)
       const day = d.toISOString().split('T')[0] as string
-      const dayConditions = [`created_at >= '${day} 00:00:00'`, `created_at < date('${day}', '+1 day')`]
-      if (agentId) dayConditions.push(`agent_id = '${agentId}'`)
-      if (projectId) dayConditions.push(`project_id = '${projectId}'`)
+      const dayConditions = ['created_at >= ?', "created_at < date(?, '+1 day')"]
+      const dayParams: unknown[] = [`${day} 00:00:00`, day]
+      if (agentId) { dayConditions.push('agent_id = ?'); dayParams.push(agentId) }
+      if (projectId) { dayConditions.push('project_id = ?'); dayParams.push(projectId) }
+      if (granted) { dayConditions.push(granted.sql); dayParams.push(...granted.params) }
       const dayWhere = dayConditions.join(' AND ')
-      const dayStat = db.prepare(`SELECT COUNT(*) as calls, SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors FROM query_logs WHERE ${dayWhere}`).get() as { calls: number; errors: number }
+      const dayStat = db.prepare(`SELECT COUNT(*) as calls, SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors FROM query_logs WHERE ${dayWhere}`).get(...dayParams) as { calls: number; errors: number }
       trend.push({ day, calls: dayStat.calls, errors: dayStat.errors ?? 0 })
     }
 
@@ -836,6 +877,9 @@ statsRouter.get('/session-compliance/:sessionId', (c) => {
 statsRouter.get('/hints/:agentId', (c) => {
   const agentId = c.req.param('agentId')
   const currentTool = c.req.query('currentTool') ?? ''
+  // an org-bound key reads (and takes the notices of) its own agent id only
+  const grant = currentGrant()
+  if (grant?.orgs && agentId !== grant.keyName) return c.json({ error: 'Not found' }, 404)
 
   try {
     const calls = db.prepare(`

@@ -4,6 +4,7 @@ import { findProjectByRepo, normalizeRepo } from '../lib/project-match.js'
 import { normalizeProjectId, normalizeMemoryUserId } from '../db/project-utils.js'
 import { getMem9 } from './mem9-proxy.js'
 import { PERSONAL_ORG } from '../lib/session-project.js'
+import { allowedOrgs, currentGrant, grantOrgFilter } from '../lib/key-grant.js'
 import { autoRegisterProject, indexRegisteredProject } from '../services/auto-register.js'
 import {
   calculateFromVerificationResults,
@@ -351,10 +352,12 @@ sessionsRouter.post('/start', async (c) => {
 
     // Shared with worker registration: git URL match, then slug/name/LIKE fallback.
     // The response below reads more columns than ProjectMatch carries, so load the row.
-    const match = repo ? findProjectByRepo(repo as string) : null
+    // A key bound to organizations finds, and registers, repos in them alone.
+    const granted = allowedOrgs(currentGrant())
+    const match = repo ? findProjectByRepo(repo as string, granted) : null
     // A repo nobody registered yet, owned by an account whose token the hub
     // already holds, is registered now and indexed in the background.
-    const registered = !match && repo ? autoRegisterProject(repo) : null
+    const registered = !match && repo ? autoRegisterProject(repo, granted) : null
     if (registered) {
       indexRegisteredProject(registered.projectId).catch((err: unknown) => {
         console.error(`[sessions] indexing auto-registered ${registered.projectId} failed:`, err)
@@ -424,14 +427,25 @@ sessionsRouter.post('/start', async (c) => {
       sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
     }
 
-    // Recent quality — now reads from quality_reports first, falls back to query_logs
-    let recentQuality = db.prepare(
-      'SELECT gate_name as tool, grade, score_total, passed, created_at FROM quality_reports ORDER BY created_at DESC LIMIT 5'
-    ).all()
+    // Recent quality — now reads from quality_reports first, falls back to query_logs. A key
+    // bound to organizations sees its organizations' alone.
+    const inGrant = grantOrgFilter('org_id')
+    const grantProjects = `project_id IN (SELECT id FROM projects WHERE 1${inGrant.sql})`
+    let recentQuality = granted
+      ? db.prepare(
+          `SELECT gate_name as tool, grade, score_total, passed, created_at FROM quality_reports WHERE ${grantProjects} ORDER BY created_at DESC LIMIT 5`
+        ).all(...inGrant.params)
+      : db.prepare(
+          'SELECT gate_name as tool, grade, score_total, passed, created_at FROM quality_reports ORDER BY created_at DESC LIMIT 5'
+        ).all()
     if (recentQuality.length === 0) {
-      recentQuality = db.prepare(
-        'SELECT tool, status, created_at FROM query_logs ORDER BY created_at DESC LIMIT 5'
-      ).all()
+      recentQuality = granted
+        ? db.prepare(
+            `SELECT tool, status, created_at FROM query_logs WHERE ${grantProjects} ORDER BY created_at DESC LIMIT 5`
+          ).all(...inGrant.params)
+        : db.prepare(
+            'SELECT tool, status, created_at FROM query_logs ORDER BY created_at DESC LIMIT 5'
+          ).all()
     }
 
     // Scope recentSessions to the resolved project when available, so /cs init
@@ -441,8 +455,8 @@ sessionsRouter.post('/start', async (c) => {
           'SELECT id, task_summary, created_at FROM session_handoffs WHERE project_id = ? ORDER BY created_at DESC LIMIT 3'
         ).all((project as Record<string, unknown>).id)
       : db.prepare(
-          'SELECT id, task_summary, created_at FROM session_handoffs ORDER BY created_at DESC LIMIT 3'
-        ).all()
+          `SELECT id, task_summary, created_at FROM session_handoffs${granted ? ` WHERE ${grantProjects}` : ''} ORDER BY created_at DESC LIMIT 3`
+        ).all(...(granted ? inGrant.params : []))
 
     if (!existingSession) {
       const insertStmt = db.prepare(
@@ -523,10 +537,12 @@ sessionsRouter.get('/all', (c) => {
 
     const limit = Number(c.req.query('limit') || '50')
     const status = c.req.query('status')
-    const stmt = status
-      ? db.prepare('SELECT * FROM session_handoffs WHERE status = ? ORDER BY created_at DESC LIMIT ?')
-      : db.prepare('SELECT * FROM session_handoffs ORDER BY created_at DESC LIMIT ?')
-    const rawSessions = (status ? stmt.all(status, limit) : stmt.all(limit)) as Array<Record<string, unknown>>
+    // A key bound to organizations lists their sessions alone.
+    const inGrant = grantOrgFilter('org_id')
+    const granted = inGrant.sql ? ` AND project_id IN (SELECT id FROM projects WHERE 1${inGrant.sql})` : ''
+    const rawSessions = db.prepare(
+      `SELECT * FROM session_handoffs WHERE (? IS NULL OR status = ?)${granted} ORDER BY created_at DESC LIMIT ?`
+    ).all(status ?? null, status ?? null, ...inGrant.params, limit) as Array<Record<string, unknown>>
 
     // Enrich each session with token savings from query_logs
     const sessionsWithSavings = rawSessions.map((session) => {

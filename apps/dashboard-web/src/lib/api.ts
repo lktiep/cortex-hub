@@ -58,10 +58,15 @@ export interface ApiKey {
   createdAt: string
   expiresAt: string | null
   lastUsed: string | null
+  /** The organizations the key is bound to; empty when it is unbound and reaches all of them. */
+  orgs: string[]
 }
 
+/** What the hub lets an unbound key do (API_KEY_BINDING). */
+export type KeyBindingMode = 'off' | 'warn' | 'required'
+
 export async function listApiKeys() {
-  return apiFetch<{ keys: ApiKey[] }>('/api/keys')
+  return apiFetch<{ keys: ApiKey[]; binding?: KeyBindingMode }>('/api/keys')
 }
 
 export async function createApiKey(data: {
@@ -69,6 +74,7 @@ export async function createApiKey(data: {
   scope: string
   permissions: string[]
   expiresInDays?: number
+  orgs?: string[]
 }) {
   return apiFetch<{ key: string; prefix: string; id: string }>('/api/keys', {
     method: 'POST',
@@ -84,8 +90,9 @@ export async function updateApiKey(id: string, data: {
   name: string
   scope: string
   permissions: string[]
+  orgs?: string[]
 }) {
-  return apiFetch<{ success: boolean; id: string; name: string; scope: string; permissions: string[] }>(`/api/keys/${id}`, {
+  return apiFetch<{ success: boolean; id: string; name: string; scope: string; permissions: string[]; orgs: string[] }>(`/api/keys/${id}`, {
     method: 'PUT',
     body: data,
   })

@@ -123,6 +123,26 @@ With `API_AUTH=required`, `/api` accepts only:
 
 `INTERNAL_API_SECRET` also lets a revoked key be dropped from the MCP gateway's cache at once.
 
+#### Organization-bound API keys
+
+An API key can be bound to one or more organizations in **Dashboard → API Keys**. A bound key
+reaches only the projects of those organizations: searches, memories, knowledge, sessions,
+conductor tasks and workers stay inside them. A project of another organization answers
+`404`, as one that does not exist would, and naming another organization answers `403`.
+Routes that manage the hub (keys, settings, organizations) refuse a bound key.
+
+A key bound to no organization reaches all of them, as every key did before. `API_KEY_BINDING`
+decides what it may still do:
+
+| Value | Unbound key |
+|---|---|
+| `warn` (default) | works, and `cortex-api` logs once per key that it should be bound |
+| `required` | refused with `401` |
+| `off` | works, nothing logged |
+
+To move a hub over: bind each key, watch the `cortex-api` log until no unbound-key warning
+appears, then set `API_KEY_BINDING=required` and recreate `cortex-api`.
+
 **Verification:**
 - [ ] The `cortex-api` log shows `API_AUTH=required: /api accepts …` listing Cloudflare Access and the internal secret
 - [ ] `curl -s -o /dev/null -w '%{http_code}' http://<server>:4000/api/keys` returns `401` from another machine

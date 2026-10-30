@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { db } from '../db/client.js'
 import { randomUUID } from 'crypto'
 import { getMem9 } from './mem9-proxy.js'
+import { grantOrgFilter } from '../lib/key-grant.js'
 import { parseRepoUrl, savedTokenFor, listGitAccounts } from '../lib/git-credentials.js'
 
 export const orgsRouter = new Hono()
@@ -233,18 +234,19 @@ projectsRouter.get('/lookup', (c) => {
     // git_repo_url made this report a registered project as unregistered.
     const cleanRepo = repo.replace(/\.git$/, '').replace(/\/+$/, '')
     const basename = cleanRepo.split('/').pop() ?? cleanRepo
+    const granted = grantOrgFilter('org_id')
     const project = db
       .prepare(
         `SELECT id, name, git_repo_url, indexed_at, indexed_symbols
          FROM projects
-         WHERE git_repo_url = ?
+         WHERE (git_repo_url = ?
             OR RTRIM(REPLACE(git_repo_url, '.git', ''), '/') = ?
             OR id = ?
             OR slug = ? COLLATE NOCASE
-            OR name = ? COLLATE NOCASE
+            OR name = ? COLLATE NOCASE)${granted.sql}
          LIMIT 1`
       )
-      .get(repo, cleanRepo, repo, basename, basename) as Record<string, unknown> | undefined
+      .get(repo, cleanRepo, repo, basename, basename, ...granted.params) as Record<string, unknown> | undefined
 
     if (!project) return c.json({ error: 'Project not found' }, 404)
     return c.json(project)
@@ -429,14 +431,17 @@ projectsRouter.delete('/:id', (c) => {
 // ── List all projects (flat) ──
 projectsRouter.get('/', (c) => {
   try {
+    // an org-bound key lists its organizations' projects
+    const granted = grantOrgFilter('p.org_id')
     const projects = db
       .prepare(
         `SELECT p.*, o.name as org_name, o.slug as org_slug
          FROM projects p
          JOIN organizations o ON o.id = p.org_id
+         WHERE 1${granted.sql}
          ORDER BY p.created_at DESC`
       )
-      .all() as Array<Record<string, unknown>>
+      .all(...granted.params) as Array<Record<string, unknown>>
     return c.json({ projects: projects.map(redactProject) })
   } catch (error) {
     return c.json({ error: String(error) }, 500)

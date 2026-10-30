@@ -7,6 +7,7 @@ import type { EngineInfo, Executor, RouteSpec, WaitReason } from '@cortex/shared
 import { db } from '../db/client.js'
 import { baseBranchFor, getConductorConfig, type ConductorConfig } from './config.js'
 import { pathsConflict } from './files.js'
+import { taskInGrant } from './grant.js'
 import { returnTask } from './lifecycle.js'
 import { assignedMsg, branchFor } from './messages.js'
 import { formatNotification, notifyLead } from './notify.js'
@@ -24,12 +25,18 @@ export interface CandidateTask {
   inPlan: boolean
   /** `routeKey`s of routes whose attempt failed, oldest first (`context.failedRoutes`). */
   failedRoutes?: string[]
+  /** The organization of the task's project, and the key that created it: what an org-bound worker is held to. */
+  orgId?: string | null
+  apiKeyOwner?: string | null
 }
 export interface CandidateWorker {
   agentId: string; host: string; projectId: string | null; protocol: 1 | 2
   capabilities: string[]; engines: EngineInfo[]; busy: boolean; idleSince: number
   /** The executor the worker runs a route without one on (`worker.register.defaultExecutor`). */
   defaultExecutor: Executor | null
+  /** The organizations the worker's API key is bound to; null or absent when it is unbound. */
+  apiKeyOrgs?: ReadonlySet<string> | null
+  apiKeyOwner?: string
 }
 export interface QuotaRow { host: string; executor: string; model: string; exhaustedUntil: string }
 export interface SelectionInput {
@@ -79,11 +86,20 @@ function compareText(a: string, b: string): number {
 /**
  * A legacy (protocol 1) worker on a key scoped to no project takes any
  * project; any other worker (protocol 2, or a key scoped to a project) takes
- * its own project's tasks and project-less ones. Also the `GET /:id/tree` worker filter.
+ * its own project's tasks and project-less ones. A worker whose key is bound to
+ * organizations takes, within that, only their projects' tasks and the
+ * project-less tasks its own key created. Also the `GET /:id/tree` worker filter.
  */
 export function servesProject(
-  worker: Pick<CandidateWorker, 'protocol' | 'projectId'>, task: Pick<CandidateTask, 'projectId'>,
+  worker: Pick<CandidateWorker, 'protocol' | 'projectId' | 'apiKeyOrgs' | 'apiKeyOwner'>,
+  task: Pick<CandidateTask, 'projectId' | 'orgId' | 'apiKeyOwner'>,
 ): boolean {
+  if (worker.apiKeyOrgs) {
+    const inGrant = task.projectId === null
+      ? !!task.apiKeyOwner && task.apiKeyOwner === worker.apiKeyOwner
+      : !!task.orgId && worker.apiKeyOrgs.has(task.orgId)
+    if (!inGrant) return false
+  }
   if (worker.protocol === 1 && worker.projectId === null) return true
   return task.projectId === null || task.projectId === worker.projectId
 }
@@ -317,23 +333,32 @@ function loadWorkers(): CandidateWorker[] {
       agentId: c.agentId, host: c.hostname, projectId: c.projectId, protocol: c.protocol,
       capabilities: c.capabilities, engines: c.engines, defaultExecutor: c.defaultExecutor,
       busy: c.status === 'busy' || active.has(c.agentId), idleSince: c.idleSince,
+      apiKeyOrgs: c.apiKeyOrgs ?? null, apiKeyOwner: c.apiKeyOwner,
     }))
 }
 
-function toCandidate(row: TaskRow, defaultFallback: RouteSpec[]): CandidateTask {
+/** Each project's organization. */
+export function projectOrgs(): Map<string, string> {
+  const rows = db.prepare('SELECT id, org_id FROM projects').all() as { id: string; org_id: string }[]
+  return new Map(rows.map((r) => [r.id, r.org_id]))
+}
+
+function toCandidate(row: TaskRow, defaultFallback: RouteSpec[], orgOf: Map<string, string>): CandidateTask {
   return {
     id: row.id, projectId: row.project_id, priority: row.priority, createdAt: row.created_at,
     dependsOn: stringList(row.depends_on), requiredCapabilities: stringList(row.required_capabilities),
     files: stringList(row.files), routes: routesOf(row, defaultFallback),
     pinnedAgent: row.pinned_agent || null, declined: declinedBy(row), lastAgent: row.last_agent,
     inPlan: row.task_key !== null, failedRoutes: failedRoutesOf(row),
+    orgId: row.project_id === null ? null : orgOf.get(row.project_id) ?? null, apiKeyOwner: row.api_key_owner,
   }
 }
 
 function loadState(now: number, cfg: ConductorConfig): { input: SelectionInput; rows: Map<string, TaskRow> } {
   const nowIso = isoSeconds(now)
   const rows = pendingWork()
-  const pending = rows.map((r) => toCandidate(r, cfg.defaultFallback))
+  const orgOf = projectOrgs()
+  const pending = rows.map((r) => toCandidate(r, cfg.defaultFallback, orgOf))
   const quota = db.prepare(
     'SELECT host, executor, model, exhausted_until AS exhaustedUntil FROM conductor_quota WHERE exhausted_until > ?',
   ).all(nowIso) as QuotaRow[]
@@ -457,7 +482,8 @@ export function dispatch(now: number = Date.now()): Assignment[] {
  * (no substring match); an empty pin means unpinned. With `projectId` given,
  * only that project's tasks and project-less ones are eligible; without it
  * there is no project filter, as for a protocol-1 worker. With `taskId` given,
- * only that task is considered (claiming one task by id).
+ * only that task is considered (claiming one task by id). A request made with an
+ * org-bound key considers only the tasks it may see (grant.ts).
  */
 export function pickForPull(
   identity: { agentId?: string; apiKeyOwner?: string; sessionAgent?: string; projectId?: string | null; taskId?: string },
@@ -477,6 +503,7 @@ export function pickForPull(
     for (const row of rows) {
       if (taskId !== undefined && row.id !== taskId) continue
       if (projectId !== undefined && row.project_id !== null && row.project_id !== projectId) continue
+      if (!taskInGrant(row)) continue
       const pinned = row.pinned_agent || null
       const takes = pinned !== null
         ? callerIds.includes(normalizeIdentity(pinned))

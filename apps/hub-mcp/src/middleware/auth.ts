@@ -4,6 +4,7 @@ import type { Env } from '../types.js'
 interface CachedAuth {
   valid: boolean;
   agentId?: string;
+  keyId?: string;
   scope?: string;
   permissions?: string[];
   error?: string;
@@ -24,6 +25,8 @@ export interface AuthResult {
   valid: boolean;
   error?: string;
   agentId?: string;
+  /** The key's id (api_keys.id). dashboard-api decides from it which organizations the key may use. */
+  keyId?: string;
   scope?: string;
   permissions?: string[];
   /** The key was not judged: the dashboard API did not answer (it restarts with the hub). */
@@ -57,7 +60,7 @@ export async function validateApiKey(
   const cached = tokenCache.get(token)
   if (cached && cached.expiresAt > now) {
     if (cached.valid) {
-      return { valid: true, agentId: cached.agentId, scope: cached.scope, permissions: cached.permissions }
+      return { valid: true, agentId: cached.agentId, keyId: cached.keyId, scope: cached.scope, permissions: cached.permissions }
     } else {
       return { valid: false, error: cached.error }
     }
@@ -96,10 +99,10 @@ export async function validateApiKey(
       return { valid: false, unavailable: true, error: `Authentication service returned ${res.status}` }
     }
 
-    const data = await res.json() as { valid: boolean; agentId?: string; scope?: string; permissions?: string[]; error?: string }
+    const data = await res.json() as { valid: boolean; agentId?: string; keyId?: string; scope?: string; permissions?: string[]; error?: string }
 
     if (data.valid) {
-      const result = { valid: true, agentId: data.agentId, scope: data.scope, permissions: data.permissions }
+      const result = { valid: true, agentId: data.agentId, keyId: data.keyId, scope: data.scope, permissions: data.permissions }
       // Cache valid key for 2 minutes
       tokenCache.set(token, { ...result, expiresAt: now + CACHE_TTL_MS })
       return result

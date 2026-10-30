@@ -256,6 +256,9 @@ app.all('/mcp', async (c) => {
     if (authResult.agentId) {
       envWithOwner.API_KEY_OWNER = authResult.agentId
     }
+    if (authResult.keyId) {
+      envWithOwner.API_KEY_ID = authResult.keyId
+    }
     if (authResult.permissions) {
       permissions = authResult.permissions
     }
@@ -356,7 +359,7 @@ app.all('/mcp', async (c) => {
       if (toolName !== 'unknown') {
         fetch(`${apiUrl}/api/metrics/query-log`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...keyIdHeader(envWithOwner.API_KEY_ID) },
           body: JSON.stringify({
             agentId,
             tool: toolName,
@@ -392,12 +395,12 @@ app.all('/mcp', async (c) => {
             const [hintsData, notes] = await Promise.all([
               fetch(
                 `${apiUrl}/api/metrics/hints/${encodeURIComponent(agentId)}?${hintQuery}`,
-                { signal: AbortSignal.timeout(2000) }
+                { headers: keyIdHeader(envWithOwner.API_KEY_ID), signal: AbortSignal.timeout(2000) }
               )
                 .then(async (r) => (r.ok ? ((await r.json()) as { hints?: string[]; conductor?: string[] }) : {}))
                 .catch(() => ({} as { hints?: string[]; conductor?: string[] })),
               NOTE_TOOLS.has(toolName)
-                ? fileNotesNamedIn(apiUrl, agentId, argsObj, parsed.result.content.map((i) => (typeof i.text === 'string' ? i.text : '')).join('\n'))
+                ? fileNotesNamedIn(apiUrl, agentId, envWithOwner.API_KEY_ID, argsObj, parsed.result.content.map((i) => (typeof i.text === 'string' ? i.text : '')).join('\n'))
                 : Promise.resolve([]),
             ])
             const hints = hintsData.hints ?? []
@@ -426,7 +429,7 @@ app.all('/mcp', async (c) => {
       const apiUrl = (c.env.DASHBOARD_API_URL || 'http://localhost:4000').replace(/\/$/, '')
       fetch(`${apiUrl}/api/metrics/query-log`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...keyIdHeader(envWithOwner.API_KEY_ID) },
         body: JSON.stringify({
           agentId: envWithOwner.API_KEY_OWNER || 'unknown',
           tool: toolName,
@@ -476,7 +479,7 @@ app.post('/tree-upload/:token', bodyLimit({ maxSize: MAX_TREE_UPLOAD_BYTES, onEr
       return c.text(['The file does not match the plan schema:', ...issues].join('\n'), 400)
     }
 
-    const result = await createPlan({ ...c.env, API_KEY_OWNER: claim.owner }, parsed.data)
+    const result = await createPlan({ ...c.env, API_KEY_OWNER: claim.owner, API_KEY_ID: claim.keyId }, parsed.data)
     created = result.ok
     // A 5xx is the hub failing, not this gateway: report it as a bad gateway
     const status = (result.ok ? 201 : result.status >= 500 ? 502 : result.status) as ContentfulStatusCode
@@ -492,12 +495,12 @@ app.post('/tree-upload/:token', bodyLimit({ maxSize: MAX_TREE_UPLOAD_BYTES, onEr
 const NOTE_TOOLS = new Set(['cortex_code_search', 'cortex_code_context', 'cortex_code_impact', 'cortex_detect_changes'])
 
 /** Note lines for the linked files a tool answer names; none when the hub is slow or has none. */
-async function fileNotesNamedIn(apiUrl: string, owner: string, args: unknown, text: string): Promise<string[]> {
+async function fileNotesNamedIn(apiUrl: string, owner: string, keyId: string | undefined, args: unknown, text: string): Promise<string[]> {
   const a = (args ?? {}) as { repo?: unknown; projectId?: unknown }
   try {
     const res = await fetch(`${apiUrl}/api/knowledge/file-notes`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key-Owner': owner },
+      headers: { 'Content-Type': 'application/json', 'X-API-Key-Owner': owner, ...keyIdHeader(keyId) },
       body: JSON.stringify({
         repo: typeof a.repo === 'string' ? a.repo : undefined,
         projectId: typeof a.projectId === 'string' ? a.projectId : undefined,
@@ -511,6 +514,11 @@ async function fileNotesNamedIn(apiUrl: string, owner: string, args: unknown, te
   } catch {
     return []
   }
+}
+
+/** The header that tells dashboard-api which key a request acts for (see api-call.ts). */
+function keyIdHeader(keyId: string | undefined): Record<string, string> {
+  return keyId ? { 'X-Cortex-Key-Id': keyId } : {}
 }
 
 export default app

@@ -21,6 +21,10 @@ export interface Env {
   // This is the authoritative identity of the caller (api_keys.name)
   API_KEY_OWNER?: string
 
+  // Resolved at runtime with API_KEY_OWNER: the key's id (api_keys.id), forwarded as
+  // X-Cortex-Key-Id so dashboard-api limits the request to the key's organizations
+  API_KEY_ID?: string
+
   // Resolved per request: the origin the caller dialled, for links a tool hands out
   PUBLIC_ORIGIN?: string
 }
