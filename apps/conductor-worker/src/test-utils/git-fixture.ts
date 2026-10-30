@@ -71,10 +71,16 @@ export function isolateGitConfig(
   const body =
     identity === null ? '' : `[user]\n\tname = ${identity.name}\n\temail = ${identity.email}\n`;
   writeFileSync(file, body);
-  const keys = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM'] as const;
+  const keys = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'HOME'] as const;
   const previous = keys.map((k) => process.env[k]);
   process.env.GIT_CONFIG_GLOBAL = file;
   process.env.GIT_CONFIG_NOSYSTEM = '1';
+  if (process.platform === 'win32') {
+    // Git for Windows only honours GIT_CONFIG_GLOBAL from 2.32; before that it reads ~/.gitconfig,
+    // and on Windows git finds ~ through HOME (node's homedir() does not, so only git sees this).
+    writeFileSync(path.join(dir, '.gitconfig'), body);
+    process.env.HOME = dir;
+  }
   return () => {
     keys.forEach((k, i) => {
       const v = previous[i];

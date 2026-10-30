@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// The first request loads the whole app, which takes longer than 5 s when the suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000 })
+
 /**
  * The GET /mcp stream must reach the client.
  *

@@ -3,10 +3,14 @@ import Database from 'better-sqlite3'
 import { execFileSync } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
+
+// Real git repositories: a few seconds a test on Windows, more when the suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
 const root = vi.hoisted(() => {
-  const dir = `${process.env.TMPDIR ?? '/tmp'}/indexer-queue-test-${process.pid}`
+  // Windows has no TMPDIR; its temp directory is TEMP.
+  const dir = `${process.env.TMPDIR ?? process.env.TEMP ?? '/tmp'}/indexer-queue-test-${process.pid}`
   process.env.REPOS_DIR = `${dir}/repos`
   // Every git here, the indexer's included, runs without the machine's own
   // config: no signing, no hooks, no rewritten URLs.
@@ -61,6 +65,8 @@ import { requestIndexing, indexQueueIdle, cancelJob, recoverInterruptedJobs } fr
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PROJECT = 'proj-queue'
 const remote = join(root, 'remote.git')
+// `file://` + a Windows path (C:\...) is not a URL.
+const remoteUrl = pathToFileURL(remote).href
 const work = join(root, 'work')
 const defaultCheckout = join(root, 'repos', PROJECT)
 const branchCheckout = join(root, 'repos', '.branches', PROJECT)
@@ -114,13 +120,13 @@ beforeEach(() => {
   mkdirSync(work, { recursive: true })
   git(root, 'init', '--bare', '-b', 'main', remote)
   git(work, 'init', '-b', 'main')
-  git(work, 'remote', 'add', 'origin', `file://${remote}`)
+  git(work, 'remote', 'add', 'origin', remoteUrl)
 
   testDb = createTestDb()
   testDb.exec(`
     INSERT INTO organizations (id, name, slug) VALUES ('org-1', 'Org', 'org');
     INSERT INTO projects (id, org_id, name, slug, git_repo_url, default_branch)
-      VALUES ('${PROJECT}', 'org-1', 'Queue', 'queue', 'file://${remote}', 'main');
+      VALUES ('${PROJECT}', 'org-1', 'Queue', 'queue', '${remoteUrl}', 'main');
   `)
 
   embedding.branches = []

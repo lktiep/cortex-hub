@@ -12,7 +12,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'fs'
-import { join, extname, relative } from 'path'
+import { join, extname, relative, sep } from 'path'
 import { createHash } from 'crypto'
 import {
   Embedder,
@@ -207,7 +207,8 @@ function collectSourceFiles(dir: string): Array<{ path: string; relativePath: st
 
         files.push({
           path: fullPath,
-          relativePath: relative(dir, fullPath),
+          // Stored and searched as a POSIX path, whatever the host's separator.
+          relativePath: relative(dir, fullPath).split(sep).join('/'),
         })
       }
     }

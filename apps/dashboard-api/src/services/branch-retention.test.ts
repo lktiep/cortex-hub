@@ -3,10 +3,14 @@ import Database from 'better-sqlite3'
 import { execFileSync } from 'child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
+
+// Real git repositories: a few seconds a test on Windows, more when the suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 })
 
 const root = vi.hoisted(() => {
-  const dir = `${process.env.TMPDIR ?? '/tmp'}/branch-retention-test-${process.pid}`
+  // Windows has no TMPDIR; its temp directory is TEMP.
+  const dir = `${process.env.TMPDIR ?? process.env.TEMP ?? '/tmp'}/branch-retention-test-${process.pid}`
   process.env.REPOS_DIR = `${dir}/repos`
   Object.assign(process.env, {
     GIT_CONFIG_GLOBAL: '/dev/null',
@@ -79,6 +83,8 @@ const NOW = Date.parse('2026-10-09T00:00:00Z')
 const RECENT = '2026-10-08T00:00:00Z'
 const OLD = '2026-09-01T00:00:00Z'
 const remote = join(root, 'remote.git')
+// `file://` + a Windows path (C:\...) is not a URL.
+const remoteUrl = pathToFileURL(remote).href
 const work = join(root, 'work')
 const defaultCheckout = join(root, 'repos', PROJECT)
 const branchCheckout = join(root, 'repos', '.branches', PROJECT)
@@ -134,14 +140,14 @@ beforeEach(() => {
   mkdirSync(work, { recursive: true })
   git(root, 'init', '--bare', '-b', 'main', remote)
   git(work, 'init', '-b', 'main')
-  git(work, 'remote', 'add', 'origin', `file://${remote}`)
+  git(work, 'remote', 'add', 'origin', remoteUrl)
   for (const branch of ['main', 'feat-live', 'feat-old']) push(branch)
 
   testDb = createTestDb()
   testDb.exec(`
     INSERT INTO organizations (id, name, slug) VALUES ('org-1', 'Org', 'org');
     INSERT INTO projects (id, org_id, name, slug, git_repo_url, default_branch)
-      VALUES ('${PROJECT}', 'org-1', 'Retention', 'retention', 'file://${remote}', 'main');
+      VALUES ('${PROJECT}', 'org-1', 'Retention', 'retention', '${remoteUrl}', 'main');
   `)
 
   qdrant.points = []
@@ -299,13 +305,18 @@ describe('sweepProjectBranches', () => {
     })
 
     it('goes by absence and age alone when the history cannot be fetched', async () => {
-      const tmp = process.env.TMPDIR
-      process.env.TMPDIR = join(root, 'no-such-dir')
+      // os.tmpdir() reads TMPDIR on POSIX and TEMP, then TMP, on Windows.
+      const names = ['TMPDIR', 'TEMP', 'TMP'] as const
+      const saved = names.map((name) => process.env[name])
+      for (const name of names) process.env[name] = join(root, 'no-such-dir')
       try {
         const result = await sweepProjectBranches(PROJECT, { now: NOW })
         expect(result.pruned.map((p) => [p.branch, p.reason])).toEqual([['feat-gone', 'deleted'], ['feat-old', 'stale']])
       } finally {
-        process.env.TMPDIR = tmp
+        names.forEach((name, i) => {
+          if (saved[i] === undefined) delete process.env[name]
+          else process.env[name] = saved[i]
+        })
       }
     })
   })

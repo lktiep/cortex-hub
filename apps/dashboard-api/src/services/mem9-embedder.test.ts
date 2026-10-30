@@ -4,7 +4,7 @@ import { join } from 'path'
 import type * as SharedMem9 from '@cortex/shared-mem9'
 
 const reposDir = vi.hoisted(() => {
-  const dir = `${process.env.TMPDIR ?? '/tmp'}/mem9-embedder-test-${process.pid}`
+  const dir = `${process.env.TMPDIR ?? process.env.TEMP ?? '/tmp'}/mem9-embedder-test-${process.pid}`
   process.env.REPOS_DIR = dir
   return dir
 })

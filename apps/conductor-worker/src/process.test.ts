@@ -66,7 +66,10 @@ describe('resolveCommand', () => {
     writeFileSync(path.join(second, 'tool'), '#!/bin/sh\n', { mode: 0o755 });
     writeFileSync(path.join(second, 'wtool.EXE'), '');
     const first = path.join(dir, 'a');
-    expect(resolveCommand('tool', 'linux', { PATH: `${first}:${second}` })).toBe(path.join(second, 'tool'));
+    // A ':'-delimited PATH cannot hold a Windows drive letter (C:\…), so this half needs a POSIX host.
+    if (process.platform !== 'win32') {
+      expect(resolveCommand('tool', 'linux', { PATH: `${first}:${second}` })).toBe(path.join(second, 'tool'));
+    }
     expect(resolveCommand('wtool', 'win32', { PATH: `${first};${second}`, PATHEXT: '.EXE' })).toBe(
       path.join(second, 'wtool.EXE'),
     );

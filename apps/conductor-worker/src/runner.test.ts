@@ -15,6 +15,9 @@ import type { RunOutcome, RunnerDeps } from './runner.js';
 import { FIXTURE_GIT_IDENTITY, createGitFixture, isolateGitConfig } from './test-utils/git-fixture.js';
 import type { GitFixture } from './test-utils/git-fixture.js';
 
+// Real git repositories: a few seconds a test on Windows, more when the suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
+
 const TASK_ID = 'task_0123456789abcdef';
 const BRANCH = 'task/k-1';
 const PR_URL = 'https://github.com/o/r/pull/7';

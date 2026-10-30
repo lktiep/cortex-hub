@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs'
-import { join, relative } from 'path'
+import { join, relative, sep } from 'path'
 import { createLogger } from '@cortex/shared-utils'
 import { db } from '../db/client.js'
 import { createEmbedder } from '../lib/embedder-factory.js'
@@ -600,7 +600,7 @@ function graphCheckout(raw: string, projectId: string | undefined, orgId: string
 
 function readCheckoutFile(repoDir: string, path: string): string | undefined {
   const fullPath = join(repoDir, path)
-  if (!fullPath.startsWith(`${repoDir}/`)) return undefined
+  if (!fullPath.startsWith(`${repoDir}${sep}`)) return undefined
   try {
     if (!existsSync(fullPath) || statSync(fullPath).size > MAX_READ_SIZE) return undefined
     return readFileSync(fullPath, 'utf-8')

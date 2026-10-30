@@ -28,6 +28,9 @@ import { WORKER_VERSION } from './version.js';
 import { Worker } from './worker.js';
 import type { WorkerDeps } from './worker.js';
 
+// Real git repositories: a few seconds a test on Windows, more when the suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
+
 const HOST = 'host-1';
 const REMOTE = 'https://bot:pw@github.com/o/r.git';
 const TASK_A = 'task_aaaaaaaaaaaaaaaa';
@@ -471,7 +474,7 @@ describe('task.assigned', () => {
     w.handle(assigned(makeTask()));
     await w.idle();
     expect(h.sent).toEqual([
-      { via: 'reliable', msg: { type: 'task.decline', taskId: TASK_A, reason: `branch-in-use: ${other}`, attempt: 3 } },
+      { via: 'reliable', msg: { type: 'task.decline', taskId: TASK_A, reason: `branch-in-use: ${other.replaceAll('\\', '/')}`, attempt: 3 } },
     ]);
     expect(h.sent.some((s) => s.msg.type === 'task.accept')).toBe(false);
     expect(h.calls).toHaveLength(0);

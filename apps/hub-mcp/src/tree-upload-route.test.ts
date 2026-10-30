@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { MAX_TREE_UPLOAD_BYTES } from './tree-upload.js'
 
+// The first request loads the whole app, which takes longer than 5 s when the suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000 })
+
 /**
  * Importing a plan file: cortex_task_tree_create(upload: true) hands out a link, and a plain
  * POST of the file to it creates the tree as the agent that asked, without an API key.

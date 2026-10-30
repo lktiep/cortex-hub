@@ -302,6 +302,8 @@ export async function runShell(
 
 export function lastLines(text: string, n: number): string {
   if (n <= 0) return '';
-  const body = text.endsWith('\n') ? text.slice(0, -1) : text;
+  // A Windows command ends its lines with \r\n; the \r would otherwise ride along into results.
+  const unix = text.replace(/\r\n/g, '\n');
+  const body = unix.endsWith('\n') ? unix.slice(0, -1) : unix;
   return body.split('\n').slice(-n).join('\n');
 }

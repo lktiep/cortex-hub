@@ -5,7 +5,7 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
 const reposDir = vi.hoisted(() => {
-  const dir = `${process.env.TMPDIR ?? '/tmp'}/intel-onboarding-${process.pid}`
+  const dir = `${process.env.TMPDIR ?? process.env.TEMP ?? '/tmp'}/intel-onboarding-${process.pid}`
   process.env.REPOS_DIR = dir
   return dir
 })

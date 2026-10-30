@@ -111,7 +111,8 @@ describe('checkPlan', () => {
 
 describe('PLAN_GUIDE', () => {
   it('is the body of templates/skills/plan/SKILL.md (run node scripts/sync-plan-guide.mjs)', () => {
-    const skill = readFileSync(new URL('../../../../templates/skills/plan/SKILL.md', import.meta.url), 'utf8')
+    // A Windows checkout (core.autocrlf) turns the file's line endings into CRLF.
+    const skill = readFileSync(new URL('../../../../templates/skills/plan/SKILL.md', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
     expect(PLAN_GUIDE).toBe(skill.replace(/^---\n[\s\S]*?\n---\n+/, ''))
   })
 })

@@ -35,7 +35,8 @@ function fakeHome(files: Record<string, string>, repoPath = '/unused'): string {
     mkdirSync(path.dirname(dest), { recursive: true });
     if (src.startsWith('raw:')) writeFileSync(dest, src.slice(4));
     else if (src === 'claude.json') {
-      writeFileSync(dest, readFileSync(fixture(src), 'utf8').replaceAll('__REPO__', repoPath));
+      // The fixture is JSON: a Windows path (C:\Users\…) must be escaped to go inside a string.
+      writeFileSync(dest, readFileSync(fixture(src), 'utf8').replaceAll('__REPO__', JSON.stringify(repoPath).slice(1, -1)));
     } else copyFileSync(fixture(src), dest);
   }
   return home;

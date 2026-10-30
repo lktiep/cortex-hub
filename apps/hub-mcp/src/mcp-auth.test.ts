@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 
+// The first request loads the whole app, which takes longer than 5 s when the suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000 })
+
 /**
  * /mcp tells a rejected key (401) apart from an auth service that did not answer (503), so a
  * client restarting with the hub does not take a good key for a bad one.

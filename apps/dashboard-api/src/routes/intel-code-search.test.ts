@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url'
 
 // intel.ts reads REPOS_DIR when it loads, and imports load before this file's body runs.
 const reposDir = vi.hoisted(() => {
-  const dir = `${process.env.TMPDIR ?? '/tmp'}/intel-code-search-${process.pid}`
+  const dir = `${process.env.TMPDIR ?? process.env.TEMP ?? '/tmp'}/intel-code-search-${process.pid}`
   process.env.REPOS_DIR = dir
   return dir
 })
@@ -330,7 +330,7 @@ describe('a graph lookup without a repo stays in the organization', () => {
     asked = []
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: { body?: string }) => {
       const repo = (JSON.parse(init?.body ?? '{}') as { repo?: string }).repo ?? ''
-      asked.push(repo.split('/').pop() ?? '')
+      asked.push(repo.split(/[\\/]/).pop() ?? '')
       if (!repo) return new Response('Multiple repositories indexed. Available: cortex-hub, web, hidden', { status: 500 })
       if (repo.endsWith('proj-hub')) return new Response('Function lookupApiKey → src/a.ts:3-5', { status: 200 })
       return new Response("Symbol 'lookupApiKey' not found", { status: 200 })

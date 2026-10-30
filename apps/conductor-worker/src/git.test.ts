@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BranchInUseError,
   branchCheckedOutAt,
@@ -28,6 +28,9 @@ import {
   isolateGitConfig,
 } from './test-utils/git-fixture.js';
 import type { GitFixture } from './test-utils/git-fixture.js';
+
+// Real git repositories: a few seconds a test on Windows, more when the suite runs in parallel.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 
 let fx: GitFixture;
 let configDir: string;
@@ -202,7 +205,8 @@ describe('prepareWorktree', () => {
     fx.run(fx.repo, ['worktree', 'add', '-b', 'feature/usb', theirs]);
     rmSync(theirs, { recursive: true, force: true });
     await prepareWorktree(fx.repo, wt('n'), 'task/n', 'main');
-    expect(fx.run(fx.repo, ['worktree', 'list', '--porcelain'])).toContain(`worktree ${theirs}\n`);
+    // git prints paths with '/' on Windows too.
+    expect(fx.run(fx.repo, ['worktree', 'list', '--porcelain'])).toContain(`worktree ${theirs.replaceAll('\\', '/')}\n`);
   });
 
   it('throws BranchInUseError when the branch is checked out elsewhere', async () => {

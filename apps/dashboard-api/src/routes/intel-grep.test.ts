@@ -9,7 +9,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // REPOS_DIR is read when intel.ts loads.
 const reposDir = vi.hoisted(() => {
-  const dir = `${process.env.TMPDIR ?? '/tmp'}/intel-grep-${process.pid}`
+  const dir = `${process.env.TMPDIR ?? process.env.TEMP ?? '/tmp'}/intel-grep-${process.pid}`
   process.env.REPOS_DIR = dir
   return dir
 })
