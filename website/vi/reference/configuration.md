@@ -27,6 +27,7 @@ Chép `infra/.env.example` thành `infra/.env` rồi điền vào. `docker compo
 | `EXTERNAL_API_URL`, `EXTERNAL_LLM_PROXY_URL` | không có | Tương tự, cho các đường link trên Settings |
 | `BRANCH_RETENTION_DAYS` | `14` | Xóa vector của một branch sau chừng ấy ngày không được index, hoặc khi branch đã merge hay bị xóa. Không bao giờ xóa branch mặc định. `0` là giữ tất cả |
 | `SESSION_IDLE_HOURS` | `72` | Đánh dấu một phiên đang mở là `expired` sau chừng ấy giờ không có lời gọi tool. `0` = không bao giờ |
+| `USAGE_LOG_RETENTION_DAYS` | `90` | Cứ sáu giờ xóa các dòng `usage_logs` (token dùng theo từng lời gọi) cũ hơn chừng ấy ngày. Các số tổng trên trang Usage khi đó chỉ tính trong khoảng này. `0` là giữ tất cả |
 | `CORTEX_LLM` | theo Settings | `off`: không bao giờ gọi chat model. `on`: bỏ qua công tắc trong Settings |
 | `MEMORY_LLM` | theo Settings | `off`: lưu bộ nhớ đúng như được viết, không trích xuất sự kiện |
 | `RECIPE_CAPTURE` | theo Settings | `off`: không tạo recipe từ các task và phiên đã xong |
