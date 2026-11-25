@@ -28,6 +28,7 @@ Copy `infra/.env.example` to `infra/.env` and fill it in. `docker compose` reads
 | `EXTERNAL_API_URL`, `EXTERNAL_LLM_PROXY_URL` | none | The same, for the links on Settings |
 | `BRANCH_RETENTION_DAYS` | `14` | Drop a branch's vectors after this many days without an index, or once it is merged or deleted. Never the default branch. `0` keeps all |
 | `SESSION_IDLE_HOURS` | `72` | Mark an active session `expired` after this many hours without a tool call. `0` = never |
+| `USAGE_LOG_RETENTION_DAYS` | `365` | Every six hours, delete `usage_logs` rows (token usage per call) older than this many days; embedding calls are also rolled up into one row per hour, with the same totals. The Usage page's all-time totals cover this window. `0` = no age limit |
 | `CORTEX_LLM` | follow Settings | `off`: never call a chat model. `on`: ignore the Settings switch |
 | `MEMORY_LLM` | follow Settings | `off`: store memories as written, without fact extraction |
 | `RECIPE_CAPTURE` | follow Settings | `off`: no recipes from finished tasks and sessions |

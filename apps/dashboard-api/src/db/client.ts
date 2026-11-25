@@ -6,6 +6,7 @@ import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { applyConductorMigrations } from './conductor-migrations.js'
 import { grantAllToolsToFullKeys } from './key-permissions-migration.js'
+import { migrateLegacyTimestamps, revertDoubleShiftedTimestamps } from './datetime-migration.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -108,6 +109,9 @@ for (const sql of queryLogsCols) {
   try { db.exec(sql) } catch { /* ignore if exists */ }
 }
 
+// Usage logs: calls a row stands for, more than 1 once rolled up per hour (services/usage-retention.ts)
+try { db.exec('ALTER TABLE usage_logs ADD COLUMN request_count INTEGER DEFAULT 1') } catch { /* ignore if exists */ }
+
 // Session handoffs: api key audit trail
 try { db.exec('ALTER TABLE session_handoffs ADD COLUMN api_key_name TEXT') } catch { /* ignore if exists */ }
 
@@ -143,175 +147,20 @@ if (existsSync(schemaPath)) {
   db.exec(schema)
 }
 
-// ── Self-Healing Date-Time Migration ──
-// Automatically converts any legacy timezone-less local timestamps in the SQLite database to strict ISO-8601 UTC strings YYYY-MM-DDTHH:MM:SSZ.
+// ── Timezone-less timestamps to UTC (see datetime-migration.ts) ──
 try {
-  const tablesAndCols = [
-    { table: 'setup_status', cols: ['completed_at'] },
-    { table: 'api_keys', cols: ['created_at', 'expires_at', 'last_used_at'] },
-    { table: 'query_logs', cols: ['created_at'] },
-    { table: 'session_handoffs', cols: ['created_at', 'expires_at', 'last_activity'] },
-    { table: 'organizations', cols: ['created_at', 'updated_at'] },
-    { table: 'projects', cols: ['created_at', 'updated_at', 'indexed_at'] },
-    { table: 'index_jobs', cols: ['created_at', 'started_at', 'completed_at'] },
-    { table: 'usage_logs', cols: ['created_at'] },
-    { table: 'conductor_tasks', cols: ['created_at', 'assigned_at', 'accepted_at', 'completed_at'] },
-    { table: 'conductor_task_logs', cols: ['created_at'] },
-    { table: 'conductor_comments', cols: ['created_at'] },
-    { table: 'hub_config', cols: ['updated_at'] },
-    { table: 'notification_preferences', cols: ['updated_at'] },
-    { table: 'knowledge_lineage', cols: ['created_at'] },
-    { table: 'knowledge_usage_log', cols: ['created_at'] },
-    { table: 'recipe_capture_log', cols: ['created_at'] },
-    { table: 'knowledge_documents', cols: ['created_at', 'updated_at', 'valid_from', 'invalidated_at'] },
-    { table: 'knowledge_chunks', cols: ['created_at'] },
-    { table: 'knowledge_links', cols: ['created_at'] },
-    { table: 'provider_accounts', cols: ['created_at', 'updated_at'] },
-    { table: 'model_routing', cols: ['updated_at'] },
-    { table: 'agent_ack', cols: ['updated_at'] },
-    { table: 'budget_settings', cols: ['updated_at'] },
-    { table: 'change_events', cols: ['created_at'] },
-    { table: 'quality_reports', cols: ['created_at'] },
-  ]
-
-  const toUtcIso = (localStr: string | null | undefined): string | null => {
-    if (!localStr) return null
-    const trimmed = localStr.trim()
-    if (!trimmed) return null
-    if (trimmed.includes('T') && trimmed.includes('Z')) return trimmed
-    let formatted = trimmed
-    if (!formatted.includes('T') && formatted.includes(' ')) {
-      formatted = formatted.replace(' ', 'T')
-    }
-    // Standard SQLite date-time defaults are written in UTC time.
-    // If there is no timezone indicator, treat it as UTC ('Z') to prevent Node.js 
-    // from incorrectly parsing it as local time and shifting the hours.
-    if (!formatted.includes('Z') && !formatted.match(/[+-]\d{2}:?\d{2}$/)) {
-      formatted = formatted + 'Z'
-    }
-    const parsed = new Date(formatted)
-    if (isNaN(parsed.getTime())) return trimmed
-    return parsed.toISOString().split('.')[0] + 'Z'
-  }
-
-  const migrateTx = db.transaction(() => {
-    for (const { table, cols } of tablesAndCols) {
-      try {
-        const tableCheck = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table)
-        if (!tableCheck) continue
-        const rows = db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[]
-        for (const row of rows) {
-          let needsUpdate = false
-          const updates: string[] = []
-          const params: unknown[] = []
-          for (const col of cols) {
-            if (row[col] !== undefined && row[col] !== null) {
-              const originalVal = String(row[col])
-              if (!originalVal.includes('Z') && !originalVal.match(/[+-]\d{2}:?\d{2}$/)) {
-                const utcIso = toUtcIso(originalVal)
-                if (utcIso && utcIso !== originalVal) {
-                  needsUpdate = true
-                  updates.push(`${col} = ?`)
-                  params.push(utcIso)
-                }
-              }
-            }
-          }
-          if (needsUpdate) {
-            let pkCol = 'id'
-            if (row.id === undefined) {
-              if (row.key !== undefined) pkCol = 'key'
-              else if (row.purpose !== undefined) pkCol = 'purpose'
-              else if (row.agent_id !== undefined && row.project_id !== undefined) {
-                db.prepare(`UPDATE ${table} SET ${updates.join(', ')} WHERE agent_id = ? AND project_id = ?`).run(...params, row.agent_id, row.project_id)
-                continue
-              }
-            }
-            db.prepare(`UPDATE ${table} SET ${updates.join(', ')} WHERE ${pkCol} = ?`).run(...params, row[pkCol])
-          }
-        }
-      } catch (err) {
-        console.warn(`[Migration] Failed migrating table ${table}:`, err)
-      }
-    }
-  })
-  migrateTx()
-
-  // ── One-Time Reversion of Incorrectly Double-Shifted May 22 Timestamps ──
-  try {
-    const recoveryV3Key = 'timezone_recovery_v3_revert_double_shift'
-    const alreadyReverted = db.prepare("SELECT value FROM hub_config WHERE key = ?").get(recoveryV3Key)
-    const rawOffset = process.env.RECOVERY_TIMEZONE_OFFSET_HOURS;
-    const offsetHours = rawOffset ? parseInt(rawOffset, 10) : NaN;
-    if (!alreadyReverted && !isNaN(offsetHours)) {
-      const offsetModifier = `${offsetHours >= 0 ? '+' : ''}${offsetHours} hours`;
-      const tablesAndColsToRevert = [
-        { table: 'api_keys', cols: ['created_at', 'last_used_at'] },
-        { table: 'query_logs', cols: ['created_at'] },
-        { table: 'projects', cols: ['created_at', 'updated_at', 'indexed_at'] },
-        { table: 'index_jobs', cols: ['created_at'] },
-        { table: 'usage_logs', cols: ['created_at'] },
-        { table: 'setup_status', cols: ['completed_at'] },
-        { table: 'model_routing', cols: ['updated_at'] },
-        { table: 'budget_settings', cols: ['updated_at'] },
-        { table: 'hub_config', cols: ['updated_at'] },
-      ]
-      db.transaction(() => {
-        for (const { table, cols } of tablesAndColsToRevert) {
-          try {
-            const tableCheck = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table)
-            if (!tableCheck) continue
-            const rows = db.prepare(`SELECT * FROM ${table}`).all() as Record<string, unknown>[]
-            for (const row of rows) {
-              let needsUpdate = false
-              const updates: string[] = []
-              const params: unknown[] = []
-              for (const col of cols) {
-                if (row[col] !== undefined && row[col] !== null) {
-                  const val = String(row[col])
-                  // Detect timestamps that were double-shifted to May 22/23
-                  // Range: 2026-05-22T23:00:00Z to 2026-05-23T06:59:59Z
-                  const isDoubleShifted = val.includes('Z') && (
-                    val.startsWith('2026-05-22T23:') ||
-                    val.startsWith('2026-05-23T00:') ||
-                    val.startsWith('2026-05-23T01:') ||
-                    val.startsWith('2026-05-23T02:') ||
-                    val.startsWith('2026-05-23T03:') ||
-                    val.startsWith('2026-05-23T04:') ||
-                    val.startsWith('2026-05-23T05:') ||
-                    val.startsWith('2026-05-23T06:')
-                  )
-                  if (isDoubleShifted) {
-                    const restored = (db.prepare(`SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?, ?) as r`).get(val, offsetModifier) as { r: string }).r
-                    needsUpdate = true
-                    updates.push(`${col} = ?`)
-                    params.push(restored)
-                  }
-                }
-              }
-              if (needsUpdate) {
-                let pkCol = 'id'
-                if (row.id === undefined) {
-                  if (row.key !== undefined) pkCol = 'key'
-                  else if (row.purpose !== undefined) pkCol = 'purpose'
-                }
-                db.prepare(`UPDATE ${table} SET ${updates.join(', ')} WHERE ${pkCol} = ?`).run(...params, row[pkCol])
-              }
-            }
-          } catch (e) {
-            console.warn(`[Recovery V3] Failed reverting table ${table}:`, e)
-          }
-        }
-        db.prepare("INSERT OR REPLACE INTO hub_config (key, value, updated_at) VALUES (?, 'true', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))").run(recoveryV3Key)
-        // Mark V2 recovery done as well to prevent it from ever executing on new/clean databases
-        db.prepare("INSERT OR REPLACE INTO hub_config (key, value, updated_at) VALUES (?, 'true', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))").run('timezone_recovery_v2_done')
-      })()
-    }
-  } catch (revertErr) {
-    console.warn('[Recovery V3] Timezone reversion failed:', revertErr)
-  }
+  const { scanned, converted } = migrateLegacyTimestamps(db)
+  if (converted > 0) console.log(`[Migration] ${converted} row(s) with a timezone-less timestamp now in UTC (${scanned} read)`)
 } catch (migrationErr) {
   console.warn('[Migration] Date-time migration failed:', migrationErr)
+}
+
+// One-time reversion of the timestamps double-shifted on 2026-05-22, when RECOVERY_TIMEZONE_OFFSET_HOURS is set.
+try {
+  const offsetHours = parseInt(process.env.RECOVERY_TIMEZONE_OFFSET_HOURS ?? '', 10)
+  if (!isNaN(offsetHours)) revertDoubleShiftedTimestamps(db, offsetHours)
+} catch (revertErr) {
+  console.warn('[Recovery V3] Timezone reversion failed:', revertErr)
 }
 
 // Create indexes on critical tables to prevent full table scans and timeouts

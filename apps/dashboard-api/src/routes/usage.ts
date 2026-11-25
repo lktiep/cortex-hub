@@ -9,7 +9,7 @@ usageRouter.get('/summary', (c) => {
     const totalRow = db
       .prepare(
         `SELECT 
-          COUNT(*) as total_requests,
+          COALESCE(SUM(request_count), 0) as total_requests,
           COALESCE(SUM(total_tokens), 0) as total_tokens,
           COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
           COALESCE(SUM(completion_tokens), 0) as completion_tokens
@@ -20,7 +20,7 @@ usageRouter.get('/summary', (c) => {
     const todayRow = db
       .prepare(
         `SELECT 
-          COUNT(*) as requests,
+          COALESCE(SUM(request_count), 0) as requests,
           COALESCE(SUM(total_tokens), 0) as tokens
          FROM usage_logs 
          WHERE date(created_at) = date('now')`
@@ -63,7 +63,7 @@ usageRouter.get('/by-model', (c) => {
       .prepare(
         `SELECT 
           model,
-          COUNT(*) as requests,
+          SUM(request_count) as requests,
           SUM(total_tokens) as total_tokens,
           SUM(prompt_tokens) as prompt_tokens,
           SUM(completion_tokens) as completion_tokens
@@ -85,7 +85,7 @@ usageRouter.get('/by-agent', (c) => {
       .prepare(
         `SELECT 
           agent_id,
-          COUNT(*) as requests,
+          SUM(request_count) as requests,
           SUM(total_tokens) as total_tokens,
           MAX(created_at) as last_active
          FROM usage_logs
@@ -107,7 +107,7 @@ usageRouter.get('/history', (c) => {
       .prepare(
         `SELECT 
           date(created_at) as day,
-          COUNT(*) as requests,
+          SUM(request_count) as requests,
           SUM(total_tokens) as tokens
          FROM usage_logs
          WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ? || ' days')

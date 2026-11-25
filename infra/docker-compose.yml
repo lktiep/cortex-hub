@@ -286,6 +286,10 @@ services:
       # Sessions nobody closed (/ce never ran, the Stop hook missed the hub) are
       # marked expired once they have had no tool call for this many hours. 0 = never.
       SESSION_IDLE_HOURS: ${SESSION_IDLE_HOURS:-72}
+      # usage_logs (token usage per LLM call): embedding rows are rolled up per hour,
+      # and rows older than this many days are deleted, every six hours. The Usage
+      # page reads 90 days back. 0 = no age limit.
+      USAGE_LOG_RETENTION_DAYS: ${USAGE_LOG_RETENTION_DAYS:-365}
       CORTEX_LLM: ${CORTEX_LLM:-}
       MEMORY_LLM: ${MEMORY_LLM:-}
       RECIPE_CAPTURE: ${RECIPE_CAPTURE:-}
