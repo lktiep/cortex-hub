@@ -109,6 +109,9 @@ for (const sql of queryLogsCols) {
   try { db.exec(sql) } catch { /* ignore if exists */ }
 }
 
+// Usage logs: calls a row stands for, more than 1 once rolled up per hour (services/usage-retention.ts)
+try { db.exec('ALTER TABLE usage_logs ADD COLUMN request_count INTEGER DEFAULT 1') } catch { /* ignore if exists */ }
+
 // Session handoffs: api key audit trail
 try { db.exec('ALTER TABLE session_handoffs ADD COLUMN api_key_name TEXT') } catch { /* ignore if exists */ }
 

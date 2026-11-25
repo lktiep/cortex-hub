@@ -108,7 +108,9 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     total_tokens INTEGER DEFAULT 0,
     project_id TEXT,
     request_type TEXT DEFAULT 'chat',  -- 'chat', 'embedding', 'tool'
-    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    -- Calls this row stands for: 1, or more for an hourly roll-up (services/usage-retention.ts)
+    request_count INTEGER DEFAULT 1
 );
 
 -- ── Conductor Tasks ──
